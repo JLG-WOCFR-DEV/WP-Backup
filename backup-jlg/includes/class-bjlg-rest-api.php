@@ -305,23 +305,51 @@ class BJLG_REST_API {
      * Vérifie un token JWT
      */
     private function verify_jwt_token($token) {
-        // Implémentation simplifiée - à améliorer avec une vraie validation JWT
         $parts = explode('.', $token);
         if (count($parts) !== 3) {
             return false;
         }
-        
-        $payload = json_decode(base64_decode($parts[1]), true);
-        if (!$payload || !isset($payload['exp'])) {
+
+        list($header, $payload, $signature) = $parts;
+
+        $decoded_header = $this->base64url_decode($header);
+        $decoded_payload = $this->base64url_decode($payload);
+
+        if ($decoded_header === false || $decoded_payload === false) {
             return false;
         }
-        
-        // Vérifier l'expiration
-        if ($payload['exp'] < time()) {
+
+        $payload_data = json_decode($decoded_payload, true);
+        if (!is_array($payload_data) || !isset($payload_data['exp'])) {
             return false;
         }
-        
+
+        if ($payload_data['exp'] < time()) {
+            return false;
+        }
+
+        if (!defined('AUTH_KEY')) {
+            return false;
+        }
+
+        $expected_signature = hash_hmac('sha256', $header . '.' . $payload, AUTH_KEY, true);
+        $expected_signature = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($expected_signature));
+
+        if (!hash_equals($expected_signature, $signature)) {
+            return false;
+        }
+
         return true;
+    }
+
+    private function base64url_decode($data) {
+        $data = strtr($data, '-_', '+/');
+        $padding = strlen($data) % 4;
+        if ($padding) {
+            $data .= str_repeat('=', 4 - $padding);
+        }
+
+        return base64_decode($data, true);
     }
     
     /**
