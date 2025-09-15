@@ -1,0 +1,380 @@
+<?php
+if (!defined('ABSPATH')) exit;
+
+/**
+ * Gère la table d'historique (audit trail) pour toutes les actions du plugin.
+ */
+class BJLG_History {
+
+    /**
+     * Crée la table de base de données personnalisée à l'activation du plugin.
+     * Utilise dbDelta pour être sûre et non destructive.
+     */
+    public static function create_table() {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'bjlg_history';
+        $charset_collate = $wpdb->get_charset_collate();
+        
+        $sql = "CREATE TABLE $table_name (
+            id mediumint(9) NOT NULL AUTO_INCREMENT,
+            timestamp datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
+            action_type varchar(50) NOT NULL,
+            status varchar(20) NOT NULL,
+            details text NOT NULL,
+            user_id bigint(20) DEFAULT NULL,
+            ip_address varchar(45) DEFAULT NULL,
+            PRIMARY KEY  (id),
+            KEY action_type (action_type),
+            KEY status (status),
+            KEY timestamp (timestamp),
+            KEY user_id (user_id)
+        ) $charset_collate;";
+
+        // Inclut le fichier nécessaire pour la fonction dbDelta
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+        dbDelta($sql);
+        
+        // Vérifier si la table a été créée
+        $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+        
+        if ($table_exists) {
+            BJLG_Debug::log("Table d'historique créée ou mise à jour avec succès.");
+        } else {
+            BJLG_Debug::log("ERREUR : Impossible de créer la table d'historique.");
+        }
+    }
+    
+    /**
+     * Enregistre une nouvelle action dans la table d'historique.
+     *
+     * @param string $action Le type d'action (ex: 'backup_created', 'restore_run').
+     * @param string $status Le statut de l'action ('success', 'failure', 'info').
+     * @param string $details Détails supplémentaires (nom de fichier, message d'erreur, etc.).
+     * @param int|null $user_id ID de l'utilisateur (null pour utilisateur actuel).
+     */
+    public static function log($action, $status, $details = '', $user_id = null) {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'bjlg_history';
+        
+        // Obtenir l'ID de l'utilisateur actuel si non spécifié
+        if ($user_id === null) {
+            $user_id = get_current_user_id();
+        }
+        
+        // Obtenir l'adresse IP
+        $ip_address = self::get_client_ip();
+        
+        $result = $wpdb->insert(
+            $table_name,
+            [
+                'timestamp'   => current_time('mysql'),
+                'action_type' => $action,
+                'status'      => $status,
+                'details'     => $details,
+                'user_id'     => $user_id ?: null,
+                'ip_address'  => $ip_address
+            ],
+            [
+                '%s', // format pour timestamp
+                '%s', // format pour action_type
+                '%s', // format pour status
+                '%s', // format pour details
+                '%d', // format pour user_id
+                '%s', // format pour ip_address
+            ]
+        );
+        
+        if ($result === false) {
+            BJLG_Debug::log("ERREUR lors de l'enregistrement dans l'historique : " . $wpdb->last_error);
+        }
+        
+        // Déclencher une action pour permettre des extensions
+        do_action('bjlg_history_logged', $action, $status, $details, $user_id);
+    }
+
+    /**
+     * Récupère les dernières entrées de l'historique pour affichage.
+     *
+     * @param int $limit Le nombre d'entrées à récupérer.
+     * @param array $filters Filtres optionnels (action_type, status, date_from, date_to).
+     * @return array
+     */
+    public static function get_history($limit = 50, $filters = []) {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'bjlg_history';
+        
+        $where_clauses = ['1=1'];
+        $values = [];
+        
+        // Appliquer les filtres
+        if (!empty($filters['action_type'])) {
+            $where_clauses[] = 'action_type = %s';
+            $values[] = $filters['action_type'];
+        }
+        
+        if (!empty($filters['status'])) {
+            $where_clauses[] = 'status = %s';
+            $values[] = $filters['status'];
+        }
+        
+        if (!empty($filters['user_id'])) {
+            $where_clauses[] = 'user_id = %d';
+            $values[] = intval($filters['user_id']);
+        }
+        
+        if (!empty($filters['date_from'])) {
+            $where_clauses[] = 'timestamp >= %s';
+            $values[] = $filters['date_from'];
+        }
+        
+        if (!empty($filters['date_to'])) {
+            $where_clauses[] = 'timestamp <= %s';
+            $values[] = $filters['date_to'];
+        }
+        
+        // Ajouter la limite
+        $values[] = intval($limit);
+        
+        $where_sql = implode(' AND ', $where_clauses);
+        
+        // Préparer la requête
+        $query = "SELECT * FROM $table_name WHERE $where_sql ORDER BY timestamp DESC LIMIT %d";
+        
+        if (!empty($values)) {
+            $query = $wpdb->prepare($query, ...$values);
+        }
+        
+        $results = $wpdb->get_results($query, ARRAY_A);
+        
+        // Enrichir les résultats avec les noms d'utilisateur
+        foreach ($results as &$entry) {
+            if (!empty($entry['user_id'])) {
+                $user = get_user_by('id', $entry['user_id']);
+                $entry['user_name'] = $user ? $user->display_name : 'Utilisateur supprimé';
+            } else {
+                $entry['user_name'] = 'Système';
+            }
+        }
+        
+        return $results;
+    }
+    
+    /**
+     * Obtient des statistiques sur l'historique
+     */
+    public static function get_stats($period = 'week') {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'bjlg_history';
+        
+        $date_limit = date('Y-m-d H:i:s', strtotime('-1 ' . $period));
+        
+        $stats = [
+            'total_actions' => 0,
+            'successful' => 0,
+            'failed' => 0,
+            'info' => 0,
+            'by_action' => [],
+            'by_user' => [],
+            'most_active_hour' => null
+        ];
+        
+        // Total des actions
+        $stats['total_actions'] = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COUNT(*) FROM $table_name WHERE timestamp > %s",
+                $date_limit
+            )
+        );
+        
+        // Par statut
+        $status_counts = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT status, COUNT(*) as count 
+                 FROM $table_name 
+                 WHERE timestamp > %s 
+                 GROUP BY status",
+                $date_limit
+            ),
+            ARRAY_A
+        );
+        
+        foreach ($status_counts as $row) {
+            $stats[$row['status']] = intval($row['count']);
+        }
+        
+        // Par type d'action
+        $action_counts = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT action_type, COUNT(*) as count 
+                 FROM $table_name 
+                 WHERE timestamp > %s 
+                 GROUP BY action_type 
+                 ORDER BY count DESC 
+                 LIMIT 10",
+                $date_limit
+            ),
+            ARRAY_A
+        );
+        
+        foreach ($action_counts as $row) {
+            $stats['by_action'][$row['action_type']] = intval($row['count']);
+        }
+        
+        // Par utilisateur
+        $user_counts = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT user_id, COUNT(*) as count 
+                 FROM $table_name 
+                 WHERE timestamp > %s AND user_id IS NOT NULL 
+                 GROUP BY user_id 
+                 ORDER BY count DESC 
+                 LIMIT 5",
+                $date_limit
+            ),
+            ARRAY_A
+        );
+        
+        foreach ($user_counts as $row) {
+            $user = get_user_by('id', $row['user_id']);
+            $user_name = $user ? $user->display_name : 'Utilisateur #' . $row['user_id'];
+            $stats['by_user'][$user_name] = intval($row['count']);
+        }
+        
+        // Heure la plus active
+        $hour_stats = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT HOUR(timestamp) as hour, COUNT(*) as count 
+                 FROM $table_name 
+                 WHERE timestamp > %s 
+                 GROUP BY HOUR(timestamp) 
+                 ORDER BY count DESC 
+                 LIMIT 1",
+                $date_limit
+            ),
+            ARRAY_A
+        );
+        
+        if ($hour_stats) {
+            $stats['most_active_hour'] = sprintf('%02d:00', $hour_stats['hour']);
+        }
+        
+        return $stats;
+    }
+    
+    /**
+     * Recherche dans l'historique
+     */
+    public static function search($search_term, $limit = 50) {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'bjlg_history';
+        
+        $search_term = '%' . $wpdb->esc_like($search_term) . '%';
+        
+        $query = $wpdb->prepare(
+            "SELECT * FROM $table_name 
+             WHERE action_type LIKE %s 
+                OR details LIKE %s 
+             ORDER BY timestamp DESC 
+             LIMIT %d",
+            $search_term,
+            $search_term,
+            $limit
+        );
+        
+        return $wpdb->get_results($query, ARRAY_A);
+    }
+    
+    /**
+     * Exporte l'historique en CSV
+     */
+    public static function export_csv($filters = []) {
+        $history = self::get_history(9999, $filters);
+        
+        $csv_data = [];
+        $csv_data[] = ['Date', 'Action', 'Statut', 'Détails', 'Utilisateur', 'IP'];
+        
+        foreach ($history as $entry) {
+            $csv_data[] = [
+                $entry['timestamp'],
+                $entry['action_type'],
+                $entry['status'],
+                $entry['details'],
+                $entry['user_name'] ?? '',
+                $entry['ip_address'] ?? ''
+            ];
+        }
+        
+        return $csv_data;
+    }
+    
+    /**
+     * Nettoie les anciennes entrées
+     */
+    public static function cleanup($days_to_keep = 30) {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'bjlg_history';
+        
+        $cutoff_date = date('Y-m-d H:i:s', strtotime('-' . $days_to_keep . ' days'));
+        
+        $deleted = $wpdb->query(
+            $wpdb->prepare(
+                "DELETE FROM $table_name WHERE timestamp < %s",
+                $cutoff_date
+            )
+        );
+        
+        if ($deleted > 0) {
+            BJLG_Debug::log("Historique nettoyé : $deleted entrées supprimées (plus de $days_to_keep jours).");
+        }
+        
+        return $deleted;
+    }
+    
+    /**
+     * Obtient l'adresse IP du client
+     */
+    private static function get_client_ip() {
+        $ip_keys = ['HTTP_CF_CONNECTING_IP', 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED', 
+                   'HTTP_X_CLUSTER_CLIENT_IP', 'HTTP_FORWARDED_FOR', 'HTTP_FORWARDED', 'REMOTE_ADDR'];
+        
+        foreach ($ip_keys as $key) {
+            if (array_key_exists($key, $_SERVER) === true) {
+                $ip = $_SERVER[$key];
+                
+                // Pour X-Forwarded-For, prendre la première IP
+                if (strpos($ip, ',') !== false) {
+                    $ip = explode(',', $ip)[0];
+                }
+                
+                $ip = trim($ip);
+                
+                if (filter_var($ip, FILTER_VALIDATE_IP, 
+                    FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
+                    return $ip;
+                }
+            }
+        }
+        
+        return $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
+    }
+    
+    /**
+     * Obtient les types d'actions disponibles
+     */
+    public static function get_action_types() {
+        return [
+            'backup_created' => 'Sauvegarde créée',
+            'backup_deleted' => 'Sauvegarde supprimée',
+            'restore_run' => 'Restauration exécutée',
+            'pre_restore_backup' => 'Sauvegarde pré-restauration',
+            'scheduled_backup' => 'Sauvegarde planifiée',
+            'cleanup_task_started' => 'Nettoyage démarré',
+            'cleanup_task_finished' => 'Nettoyage terminé',
+            'settings_updated' => 'Réglages mis à jour',
+            'webhook_triggered' => 'Webhook déclenché',
+            'api_key_created' => 'Clé API créée',
+            'encryption_key_generated' => 'Clé de chiffrement générée',
+            'support_package' => 'Pack de support créé'
+        ];
+    }
+}

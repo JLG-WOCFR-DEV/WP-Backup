@@ -1,0 +1,83 @@
+/* Styles Généraux
+--------------------------------------------- */
+
+.bjlg-wrap .bjlg-section {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    padding: 1px 20px 20px;
+    margin-top: 25px;
+    border-radius: 4px;
+    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+}
+
+.bjlg-wrap h2 {
+    font-size: 1.5em;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+    margin-bottom: 20px;
+}
+
+.bjlg-wrap h3 {
+    font-size: 1.2em;
+    margin-top: 25px;
+}
+
+/* Navigation par onglets
+--------------------------------------------- */
+
+.bjlg-wrap .nav-tab-wrapper {
+    margin-bottom: 10px;
+}
+
+/* Journaux de débogage et Outils
+--------------------------------------------- */
+
+.bjlg-log-textarea {
+    background-color: #f6f7f7; /* Fond gris très clair */
+    color: #000000;           /* Texte noir */
+    font-family: Consolas, Monaco, monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 1rem;
+    height: 60vh;
+    width: 100%;
+    max-width: 100%;
+    overflow-y: scroll;
+    white-space: pre-wrap;
+    border-radius: 4px;
+    border: 1px solid #ccd0d4;
+}
+
+#wp-debug-log {
+    color: #b32d2e; /* Erreurs en rouge foncé pour se démarquer */
+}
+
+/* Bilan de Santé
+--------------------------------------------- */
+
+.bjlg-health-check-table td {
+    vertical-align: middle;
+}
+
+/* Barre de progression
+--------------------------------------------- */
+
+.bjlg-progress-bar {
+    width: 100%;
+    background-color: #f3f3f3;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-top: 10px;
+}
+
+.bjlg-progress-bar-inner {
+    width: 0%;
+    height: 30px;
+    background-color: #0073aa; /* Bleu WordPress */
+    text-align: center;
+    line-height: 30px;
+    color: white;
+    font-weight: bold;
+    border-radius: 4px;
+    transition: width 0.4s ease;
+}
