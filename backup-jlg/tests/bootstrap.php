@@ -53,6 +53,23 @@ if (!function_exists('current_user_can')) {
     }
 }
 
+if (!isset($GLOBALS['bjlg_test_options'])) {
+    $GLOBALS['bjlg_test_options'] = [];
+}
+
+if (!function_exists('get_option')) {
+    function get_option($option, $default = false) {
+        return $GLOBALS['bjlg_test_options'][$option] ?? $default;
+    }
+}
+
+if (!function_exists('update_option')) {
+    function update_option($option, $value) {
+        $GLOBALS['bjlg_test_options'][$option] = $value;
+        return true;
+    }
+}
+
 if (!function_exists('sanitize_file_name')) {
     function sanitize_file_name($filename) {
         return preg_replace('/[^A-Za-z0-9\\-_.]/', '', (string) $filename);
