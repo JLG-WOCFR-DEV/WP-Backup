@@ -14,6 +14,8 @@ if (!defined('BJLG_BACKUP_DIR')) {
 }
 
 $GLOBALS['bjlg_test_current_user_can'] = true;
+$GLOBALS['bjlg_test_transients'] = [];
+$GLOBALS['bjlg_test_scheduled_events'] = [];
 
 if (!class_exists('BJLG_Test_JSON_Response')) {
     class BJLG_Test_JSON_Response extends RuntimeException {
@@ -75,6 +77,21 @@ if (!function_exists('sanitize_file_name')) {
     }
 }
 
+if (!function_exists('sanitize_text_field')) {
+    function sanitize_text_field($str) {
+        $str = (string) $str;
+        $str = strip_tags($str);
+        $str = preg_replace('/[\r\n\t ]+/', ' ', $str);
+        return trim($str);
+    }
+}
+
+if (!function_exists('wp_salt')) {
+    function wp_salt($scheme = 'auth') {
+        return 'bjlg-test-salt-' . $scheme;
+    }
+}
+
 if (!function_exists('wp_unslash')) {
     function wp_unslash($value) {
         return $value;
@@ -90,5 +107,37 @@ if (!function_exists('wp_send_json_error')) {
 if (!function_exists('wp_send_json_success')) {
     function wp_send_json_success($data = null, $status_code = null) {
         throw new BJLG_Test_JSON_Response($data, $status_code);
+    }
+}
+
+if (!function_exists('set_transient')) {
+    function set_transient($transient, $value, $expiration) {
+        $GLOBALS['bjlg_test_transients'][$transient] = $value;
+        return true;
+    }
+}
+
+if (!function_exists('get_transient')) {
+    function get_transient($transient) {
+        return $GLOBALS['bjlg_test_transients'][$transient] ?? false;
+    }
+}
+
+if (!function_exists('delete_transient')) {
+    function delete_transient($transient) {
+        unset($GLOBALS['bjlg_test_transients'][$transient]);
+        return true;
+    }
+}
+
+if (!function_exists('wp_schedule_single_event')) {
+    function wp_schedule_single_event($timestamp, $hook, $args = []) {
+        $GLOBALS['bjlg_test_scheduled_events'][] = [
+            'timestamp' => $timestamp,
+            'hook' => $hook,
+            'args' => $args,
+        ];
+
+        return true;
     }
 }

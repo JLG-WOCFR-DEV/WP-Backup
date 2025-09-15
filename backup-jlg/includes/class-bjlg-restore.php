@@ -138,8 +138,24 @@ class BJLG_Restore {
         
         $filename = basename(sanitize_file_name($_POST['filename']));
         $filepath = BJLG_BACKUP_DIR . $filename;
-        $password = isset($_POST['password']) ? $_POST['password'] : null;
-        
+
+        $password = null;
+        if (isset($_POST['password'])) {
+            $password = sanitize_text_field(wp_unslash($_POST['password']));
+            if ($password === '') {
+                $password = null;
+            }
+        }
+
+        try {
+            $encrypted_password = $this->encrypt_password_for_transient($password);
+        } catch (Exception $exception) {
+            if (class_exists('BJLG_Debug')) {
+                BJLG_Debug::log('Échec du chiffrement du mot de passe de restauration : ' . $exception->getMessage(), 'error');
+            }
+            wp_send_json_error(['message' => 'Impossible de sécuriser le mot de passe fourni.']);
+        }
+
         // Créer une tâche de restauration
         $task_id = 'bjlg_restore_' . md5(uniqid('restore', true));
         $task_data = [
@@ -148,7 +164,7 @@ class BJLG_Restore {
             'status_text' => 'Initialisation de la restauration...',
             'filename' => $filename,
             'filepath' => $filepath,
-            'password' => $password
+            'password_encrypted' => $encrypted_password
         ];
         
         set_transient($task_id, $task_data, HOUR_IN_SECONDS);
@@ -189,7 +205,18 @@ class BJLG_Restore {
         }
 
         $filepath = $task_data['filepath'];
-        $password = $task_data['password'] ?? null;
+        $encrypted_password = $task_data['password_encrypted'] ?? null;
+        $password = null;
+
+        if (!empty($encrypted_password)) {
+            try {
+                $password = $this->decrypt_password_from_transient($encrypted_password);
+            } catch (Exception $exception) {
+                if (class_exists('BJLG_Debug')) {
+                    BJLG_Debug::log("ERREUR: Échec du déchiffrement du mot de passe pour la tâche {$task_id} : " . $exception->getMessage(), 'error');
+                }
+            }
+        }
         $temp_extract_dir = BJLG_BACKUP_DIR . 'temp_restore_' . uniqid();
 
         try {
@@ -352,6 +379,124 @@ class BJLG_Restore {
                 'status_text' => 'Erreur : ' . $e->getMessage()
             ], HOUR_IN_SECONDS);
         }
+    }
+
+    /**
+     * Chiffre un mot de passe avant stockage dans un transient.
+     *
+     * Utilise AES-256-CBC avec un IV aléatoire et ajoute un HMAC-SHA256 pour
+     * garantir l'intégrité, le tout basé sur une clé dérivée des salts
+     * WordPress. Cela évite de conserver le secret en clair tout en restant
+     * déchiffrable par le site qui a créé la tâche de restauration.
+     *
+     * @param string|null $password
+     * @return string|null
+     */
+    private function encrypt_password_for_transient($password) {
+        if ($password === null) {
+            return null;
+        }
+
+        $key = $this->get_password_encryption_key();
+        $iv_length = openssl_cipher_iv_length('aes-256-cbc');
+        if ($iv_length === false) {
+            throw new RuntimeException('Méthode de chiffrement indisponible.');
+        }
+
+        $iv = random_bytes($iv_length);
+        $ciphertext = openssl_encrypt($password, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
+        if ($ciphertext === false) {
+            throw new RuntimeException('Impossible de chiffrer le mot de passe.');
+        }
+
+        $hmac = hash_hmac('sha256', $iv . $ciphertext, $key, true);
+
+        return base64_encode($iv . $hmac . $ciphertext);
+    }
+
+    /**
+     * Déchiffre un mot de passe stocké dans un transient.
+     *
+     * L'algorithme applique AES-256-CBC avec un vecteur d'initialisation aléatoire,
+     * complété par un HMAC-SHA256 pour vérifier l'intégrité. La clé symétrique est
+     * dérivée des différentes clés et salts WordPress disponibles, ce qui évite de
+     * conserver le secret en clair tout en restant déchiffrable par cette instance.
+     *
+     * @param string $encrypted_password
+     * @return string|null
+     */
+    private function decrypt_password_from_transient($encrypted_password) {
+        if ($encrypted_password === null || $encrypted_password === '') {
+            return null;
+        }
+
+        $key = $this->get_password_encryption_key();
+        $iv_length = openssl_cipher_iv_length('aes-256-cbc');
+        if ($iv_length === false) {
+            throw new RuntimeException('Méthode de déchiffrement indisponible.');
+        }
+
+        $decoded = base64_decode($encrypted_password, true);
+        if ($decoded === false || strlen($decoded) <= ($iv_length + 32)) {
+            throw new RuntimeException('Données chiffrées invalides.');
+        }
+
+        $iv = substr($decoded, 0, $iv_length);
+        $hmac = substr($decoded, $iv_length, 32);
+        $ciphertext = substr($decoded, $iv_length + 32);
+
+        $calculated_hmac = hash_hmac('sha256', $iv . $ciphertext, $key, true);
+        if (!hash_equals($hmac, $calculated_hmac)) {
+            throw new RuntimeException('Vérification d\'intégrité du mot de passe échouée.');
+        }
+
+        $password = openssl_decrypt($ciphertext, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
+        if ($password === false) {
+            throw new RuntimeException('Impossible de déchiffrer le mot de passe.');
+        }
+
+        return $password;
+    }
+
+    /**
+     * Dérive une clé symétrique à partir des salts WordPress.
+     *
+     * @return string
+     */
+    private function get_password_encryption_key() {
+        $salts = [];
+
+        if (function_exists('wp_salt')) {
+            $salts[] = wp_salt('auth');
+            $salts[] = wp_salt('secure_auth');
+            $salts[] = wp_salt('logged_in');
+            $salts[] = wp_salt('nonce');
+        }
+
+        $constants = [
+            'AUTH_KEY',
+            'SECURE_AUTH_KEY',
+            'LOGGED_IN_KEY',
+            'NONCE_KEY',
+            'AUTH_SALT',
+            'SECURE_AUTH_SALT',
+            'LOGGED_IN_SALT',
+            'NONCE_SALT'
+        ];
+
+        foreach ($constants as $constant) {
+            if (defined($constant)) {
+                $salts[] = constant($constant);
+            }
+        }
+
+        $key_material = implode('|', array_filter($salts));
+
+        if ($key_material === '') {
+            $key_material = 'bjlg-transient-password-fallback';
+        }
+
+        return hash('sha256', $key_material, true);
     }
 
     /**
