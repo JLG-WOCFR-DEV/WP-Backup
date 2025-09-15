@@ -354,10 +354,33 @@ class BJLG_REST_API {
         
         // Authentification par API Key
         if ($api_key && $this->verify_api_key($api_key)) {
+            $user = get_user_by('login', $username);
+
+            if (!$user) {
+                return new WP_Error(
+                    'user_not_found',
+                    'User not found',
+                    ['status' => 404]
+                );
+            }
+
+            if (!user_can($user, BJLG_CAPABILITY)) {
+                return new WP_Error(
+                    'insufficient_permissions',
+                    'User does not have backup permissions',
+                    ['status' => 403]
+                );
+            }
+
             return rest_ensure_response([
                 'success' => true,
                 'message' => 'Authentication successful',
-                'token' => $this->generate_jwt_token($username)
+                'token' => $this->generate_jwt_token($user->ID, $user->user_login),
+                'user' => [
+                    'id' => $user->ID,
+                    'username' => $user->user_login,
+                    'email' => $user->user_email
+                ]
             ]);
         }
         
@@ -383,7 +406,7 @@ class BJLG_REST_API {
         return rest_ensure_response([
             'success' => true,
             'message' => 'Authentication successful',
-            'token' => $this->generate_jwt_token($username),
+            'token' => $this->generate_jwt_token($user->ID, $user->user_login),
             'user' => [
                 'id' => $user->ID,
                 'username' => $user->user_login,
@@ -395,9 +418,10 @@ class BJLG_REST_API {
     /**
      * Génère un token JWT
      */
-    private function generate_jwt_token($username) {
+    private function generate_jwt_token($user_id, $username) {
         $header = json_encode(['typ' => 'JWT', 'alg' => 'HS256']);
         $payload = json_encode([
+            'user_id' => (int) $user_id,
             'username' => $username,
             'exp' => time() + (7 * DAY_IN_SECONDS),
             'iat' => time()
