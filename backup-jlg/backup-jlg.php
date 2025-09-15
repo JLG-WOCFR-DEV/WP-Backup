@@ -146,3 +146,4 @@ final class BJLG_Plugin {
 
 // Lancement du plugin
 BJLG_Plugin::instance();
+
