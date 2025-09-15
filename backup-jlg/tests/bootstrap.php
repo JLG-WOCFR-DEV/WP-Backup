@@ -53,6 +53,22 @@ if (!function_exists('current_user_can')) {
     }
 }
 
+if (!function_exists('esc_sql')) {
+    /**
+     * Simplified esc_sql implementation for tests.
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    function esc_sql($value) {
+        if (is_array($value)) {
+            return array_map('esc_sql', $value);
+        }
+
+        return addslashes((string) $value);
+    }
+}
+
 if (!function_exists('sanitize_file_name')) {
     function sanitize_file_name($filename) {
         return preg_replace('/[^A-Za-z0-9\\-_.]/', '', (string) $filename);

@@ -351,8 +351,6 @@ class BJLG_Backup {
      * Crée les instructions INSERT
      */
     private function create_insert_statement($table, $rows) {
-        global $wpdb;
-        
         if (empty($rows)) return '';
         
         $columns = array_keys($rows[0]);
@@ -362,16 +360,62 @@ class BJLG_Backup {
         foreach ($rows as $row) {
             $row_values = [];
             foreach ($row as $value) {
-                if (is_null($value)) {
-                    $row_values[] = 'NULL';
-                } else {
-                    $row_values[] = "'" . $wpdb->_real_escape($value) . "'";
-                }
+                $row_values[] = $this->format_sql_value($value);
             }
             $values[] = '(' . implode(', ', $row_values) . ')';
         }
-        
+
         return "INSERT INTO `{$table}` ({$columns_str}) VALUES\n" . implode(",\n", $values) . ";\n\n";
+    }
+
+    /**
+     * Prépare une valeur pour une instruction SQL INSERT.
+     *
+     * @param mixed $value
+     * @return string
+     */
+    private function format_sql_value($value) {
+        if (is_null($value)) {
+            return 'NULL';
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+
+        if (is_string($value)) {
+            if ($this->is_binary_string($value)) {
+                return '0x' . bin2hex($value);
+            }
+
+            return "'" . esc_sql($value) . "'";
+        }
+
+        $serialized = function_exists('maybe_serialize') ? maybe_serialize($value) : serialize($value);
+
+        return "'" . esc_sql($serialized) . "'";
+    }
+
+    /**
+     * Détermine si une chaîne contient des données binaires.
+     *
+     * @param mixed $value
+     * @return bool
+     */
+    private function is_binary_string($value) {
+        if (!is_string($value)) {
+            return false;
+        }
+
+        if (strpos($value, "\0") !== false) {
+            return true;
+        }
+
+        return @preg_match('//u', $value) !== 1;
     }
 
     /**
