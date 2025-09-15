@@ -1,0 +1,30 @@
+<?php
+declare(strict_types=1);
+
+use PHPUnit\Framework\TestCase;
+
+require_once __DIR__ . '/../includes/class-bjlg-actions.php';
+
+final class BJLG_ActionsTest extends TestCase
+{
+    protected function setUp(): void
+    {
+        $GLOBALS['bjlg_test_current_user_can'] = true;
+        $_POST = [];
+    }
+
+    public function test_handle_delete_backup_denies_user_without_capability(): void
+    {
+        $GLOBALS['bjlg_test_current_user_can'] = false;
+
+        $actions = new BJLG_Actions();
+
+        try {
+            $actions->handle_delete_backup();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $exception) {
+            $this->assertSame(['message' => 'Permission refusée.'], $exception->data);
+            $this->assertSame(403, $exception->status_code);
+        }
+    }
+}

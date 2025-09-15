@@ -14,6 +14,10 @@ class BJLG_Actions {
      * Supprime un fichier de sauvegarde via AJAX.
      */
     public function handle_delete_backup() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
         check_ajax_referer('bjlg_nonce', 'nonce');
 
         if (empty($_POST['filename'])) {
