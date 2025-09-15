@@ -286,64 +286,97 @@ class BJLG_Backup {
      */
     private function backup_database(&$zip, $incremental = false) {
         global $wpdb;
-        
+
         BJLG_Debug::log("Export de la base de données...");
-        
+
         $sql_filename = 'database.sql';
-        $sql_content = '';
-        
-        // Header SQL
-        $sql_content .= "-- Backup JLG Database Export\n";
-        $sql_content .= "-- Version: " . BJLG_VERSION . "\n";
-        $sql_content .= "-- Date: " . date('Y-m-d H:i:s') . "\n";
-        $sql_content .= "-- Site: " . get_site_url() . "\n\n";
-        $sql_content .= "SET NAMES utf8mb4;\n";
-        $sql_content .= "SET FOREIGN_KEY_CHECKS=0;\n\n";
-        
-        // Obtenir toutes les tables
-        $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
-        
-        foreach ($tables as $table_array) {
-            $table = $table_array[0];
-            
-            // Pour l'incrémental, vérifier si la table a changé
-            if ($incremental) {
-                $incremental_handler = new BJLG_Incremental();
-                if (!$incremental_handler->table_has_changed($table)) {
-                    BJLG_Debug::log("Table $table ignorée (pas de changement)");
-                    continue;
+
+        if (!function_exists('wp_tempnam')) {
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+        }
+
+        $temp_file = wp_tempnam('bjlg-db-');
+
+        if (!$temp_file) {
+            throw new Exception("Impossible de créer un fichier temporaire pour l'export SQL.");
+        }
+
+        $handle = fopen($temp_file, 'w');
+
+        if (!$handle) {
+            @unlink($temp_file);
+            throw new Exception("Impossible d'ouvrir le fichier temporaire pour l'export SQL.");
+        }
+
+        try {
+            $this->write_stream($handle, "-- Backup JLG Database Export\n");
+            $this->write_stream($handle, "-- Version: " . BJLG_VERSION . "\n");
+            $this->write_stream($handle, "-- Date: " . date('Y-m-d H:i:s') . "\n");
+            $this->write_stream($handle, "-- Site: " . get_site_url() . "\n\n");
+            $this->write_stream($handle, "SET NAMES utf8mb4;\n");
+            $this->write_stream($handle, "SET FOREIGN_KEY_CHECKS=0;\n\n");
+
+            // Obtenir toutes les tables
+            $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
+
+            foreach ($tables as $table_array) {
+                $table = $table_array[0];
+
+                // Pour l'incrémental, vérifier si la table a changé
+                if ($incremental) {
+                    $incremental_handler = new BJLG_Incremental();
+                    if (!$incremental_handler->table_has_changed($table)) {
+                        BJLG_Debug::log("Table $table ignorée (pas de changement)");
+                        continue;
+                    }
                 }
-            }
-            
-            // Structure de la table
-            $create_table = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
-            $sql_content .= "\n-- Table: {$table}\n";
-            $sql_content .= "DROP TABLE IF EXISTS `{$table}`;\n";
-            $sql_content .= $create_table[1] . ";\n\n";
-            
-            // Données de la table
-            $row_count = $wpdb->get_var("SELECT COUNT(*) FROM `{$table}`");
-            
-            if ($row_count > 0) {
-                $sql_content .= "-- Data for table: {$table}\n";
-                
-                // Traiter par lots pour économiser la mémoire
-                $batch_size = 1000;
-                for ($offset = 0; $offset < $row_count; $offset += $batch_size) {
-                    $rows = $wpdb->get_results("SELECT * FROM `{$table}` LIMIT {$offset}, {$batch_size}", ARRAY_A);
-                    
-                    if ($rows) {
-                        $sql_content .= $this->create_insert_statement($table, $rows);
+
+                // Structure de la table
+                $create_table = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
+                $this->write_stream($handle, "\n-- Table: {$table}\n");
+                $this->write_stream($handle, "DROP TABLE IF EXISTS `{$table}`;\n");
+                $this->write_stream($handle, $create_table[1] . ";\n\n");
+
+                // Données de la table
+                $row_count = $wpdb->get_var("SELECT COUNT(*) FROM `{$table}`");
+
+                if ($row_count > 0) {
+                    $this->write_stream($handle, "-- Data for table: {$table}\n");
+
+                    // Traiter par lots pour économiser la mémoire
+                    $batch_size = 1000;
+                    for ($offset = 0; $offset < $row_count; $offset += $batch_size) {
+                        $rows = $wpdb->get_results("SELECT * FROM `{$table}` LIMIT {$offset}, {$batch_size}", ARRAY_A);
+
+                        if ($rows) {
+                            $this->write_stream($handle, $this->create_insert_statement($table, $rows));
+                        }
                     }
                 }
             }
+
+            $this->write_stream($handle, "\nSET FOREIGN_KEY_CHECKS=1;\n");
+
+            if (!fclose($handle)) {
+                $handle = null;
+                throw new Exception("Impossible de finaliser l'écriture du fichier SQL.");
+            }
+
+            $handle = null;
+
+            if (!$zip->addFile($temp_file, $sql_filename)) {
+                throw new Exception("Impossible d'ajouter le fichier SQL à l'archive.");
+            }
+        } finally {
+            if (is_resource($handle)) {
+                fclose($handle);
+            }
+
+            if (file_exists($temp_file)) {
+                @unlink($temp_file);
+            }
         }
-        
-        $sql_content .= "\nSET FOREIGN_KEY_CHECKS=1;\n";
-        
-        // Ajouter au ZIP
-        $zip->addFromString($sql_filename, $sql_content);
-        
+
         BJLG_Debug::log("Export de la base de données terminé.");
     }
 
@@ -352,12 +385,12 @@ class BJLG_Backup {
      */
     private function create_insert_statement($table, $rows) {
         global $wpdb;
-        
+
         if (empty($rows)) return '';
-        
+
         $columns = array_keys($rows[0]);
         $columns_str = '`' . implode('`, `', $columns) . '`';
-        
+
         $values = [];
         foreach ($rows as $row) {
             $row_values = [];
@@ -370,8 +403,37 @@ class BJLG_Backup {
             }
             $values[] = '(' . implode(', ', $row_values) . ')';
         }
-        
+
         return "INSERT INTO `{$table}` ({$columns_str}) VALUES\n" . implode(",\n", $values) . ";\n\n";
+    }
+
+    /**
+     * Écrit une portion de contenu dans un flux et gère les erreurs d'écriture
+     */
+    private function write_stream($handle, $content) {
+        if (!is_resource($handle)) {
+            throw new Exception("Flux d'écriture SQL invalide.");
+        }
+
+        $bytes_remaining = strlen($content);
+
+        while ($bytes_remaining > 0) {
+            $written = fwrite($handle, $content);
+            if ($written === false) {
+                throw new Exception("Erreur lors de l'écriture du fichier SQL.");
+            }
+
+            if ($written === 0) {
+                throw new Exception("Impossible d'écrire complètement le fichier SQL.");
+            }
+
+            if ($written < $bytes_remaining) {
+                $content = substr($content, $written);
+                $bytes_remaining -= $written;
+            } else {
+                break;
+            }
+        }
     }
 
     /**
