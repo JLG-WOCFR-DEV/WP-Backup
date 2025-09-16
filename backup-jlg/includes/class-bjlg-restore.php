@@ -71,9 +71,42 @@ class BJLG_Restore {
 
             // Ajout des dossiers
             $upload_dir_info = wp_get_upload_dir();
-            $backup_manager->add_folder_to_zip($zip, WP_PLUGIN_DIR, 'wp-content/plugins/', []);
-            $backup_manager->add_folder_to_zip($zip, get_theme_root(), 'wp-content/themes/', []);
-            $backup_manager->add_folder_to_zip($zip, $upload_dir_info['basedir'], 'wp-content/uploads/', []);
+            $directories = [
+                [
+                    'path' => WP_PLUGIN_DIR,
+                    'zip' => 'wp-content/plugins/',
+                    'label' => 'plugins',
+                ],
+                [
+                    'path' => get_theme_root(),
+                    'zip' => 'wp-content/themes/',
+                    'label' => 'thèmes',
+                ],
+                [
+                    'path' => $upload_dir_info['basedir'],
+                    'zip' => 'wp-content/uploads/',
+                    'label' => 'uploads',
+                ],
+            ];
+
+            foreach ($directories as $directory) {
+                try {
+                    $backup_manager->add_folder_to_zip($zip, $directory['path'], $directory['zip'], []);
+                } catch (Exception $exception) {
+                    $message = sprintf(
+                        "Impossible d'ajouter le répertoire %s (%s) à la sauvegarde de sécurité : %s",
+                        $directory['label'],
+                        $directory['path'],
+                        $exception->getMessage()
+                    );
+
+                    if (class_exists('BJLG_Debug')) {
+                        BJLG_Debug::log($message);
+                    }
+
+                    throw new Exception($message, 0, $exception);
+                }
+            }
 
             $zip->close();
             

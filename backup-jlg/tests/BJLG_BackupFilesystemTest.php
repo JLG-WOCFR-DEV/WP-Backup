@@ -30,7 +30,7 @@ final class BJLG_BackupFilesystemTest extends TestCase
         }
     }
 
-    public function test_add_folder_to_zip_logs_and_returns_when_directory_cannot_be_opened(): void
+    public function test_add_folder_to_zip_throws_exception_when_directory_cannot_be_opened(): void
     {
         $backup = new BJLG_Backup();
 
@@ -47,7 +47,12 @@ final class BJLG_BackupFilesystemTest extends TestCase
 
         $nonexistentFolder = sys_get_temp_dir() . '/bjlg-missing-' . uniqid('', true);
 
-        $backup->add_folder_to_zip($zip, $nonexistentFolder, 'wp-content/plugins/');
+        try {
+            $backup->add_folder_to_zip($zip, $nonexistentFolder, 'wp-content/plugins/');
+            $this->fail('Une exception aurait dû être levée lorsque le répertoire est introuvable.');
+        } catch (Exception $exception) {
+            $this->assertStringContainsString($nonexistentFolder, $exception->getMessage());
+        }
 
         $this->assertSame([], $zip->addedFiles);
         $this->assertNotEmpty(BJLG_Debug::$logs);
