@@ -704,21 +704,12 @@ class BJLG_REST_API {
      * Endpoint : Obtenir une sauvegarde spécifique
      */
     public function get_backup($request) {
-        $id = $request->get_param('id');
-        $filepath = BJLG_BACKUP_DIR . $id;
-        
-        if (!file_exists($filepath) && !file_exists($filepath . '.zip')) {
-            return new WP_Error(
-                'backup_not_found',
-                'Backup not found',
-                ['status' => 404]
-            );
+        $filepath = $this->resolve_backup_path($request->get_param('id'));
+
+        if (is_wp_error($filepath)) {
+            return $filepath;
         }
-        
-        if (!file_exists($filepath)) {
-            $filepath .= '.zip';
-        }
-        
+
         return rest_ensure_response($this->format_backup_data($filepath));
     }
     
@@ -726,30 +717,21 @@ class BJLG_REST_API {
      * Endpoint : Supprimer une sauvegarde
      */
     public function delete_backup($request) {
-        $id = $request->get_param('id');
-        $filepath = BJLG_BACKUP_DIR . $id;
-        
-        if (!file_exists($filepath) && !file_exists($filepath . '.zip')) {
-            return new WP_Error(
-                'backup_not_found',
-                'Backup not found',
-                ['status' => 404]
-            );
+        $filepath = $this->resolve_backup_path($request->get_param('id'));
+
+        if (is_wp_error($filepath)) {
+            return $filepath;
         }
-        
-        if (!file_exists($filepath)) {
-            $filepath .= '.zip';
-        }
-        
+
         if (unlink($filepath)) {
             BJLG_History::log('backup_deleted', 'success', 'Deleted via API: ' . basename($filepath));
-            
+
             return rest_ensure_response([
                 'success' => true,
                 'message' => 'Backup deleted successfully'
             ]);
         }
-        
+
         return new WP_Error(
             'deletion_failed',
             'Failed to delete backup',
@@ -761,26 +743,18 @@ class BJLG_REST_API {
      * Endpoint : Télécharger une sauvegarde
      */
     public function download_backup($request) {
-        $id = $request->get_param('id');
         $token = $request->get_param('token');
-        
-        $filepath = BJLG_BACKUP_DIR . $id;
-        if (!file_exists($filepath) && file_exists($filepath . '.zip')) {
-            $filepath .= '.zip';
+
+        $filepath = $this->resolve_backup_path($request->get_param('id'));
+
+        if (is_wp_error($filepath)) {
+            return $filepath;
         }
-        
-        if (!file_exists($filepath)) {
-            return new WP_Error(
-                'backup_not_found',
-                'Backup not found',
-                ['status' => 404]
-            );
-        }
-        
+
         // Générer un lien de téléchargement temporaire
         $download_token = wp_generate_password(32, false);
         set_transient('bjlg_download_' . $download_token, $filepath, HOUR_IN_SECONDS);
-        
+
         return rest_ensure_response([
             'download_url' => add_query_arg([
                 'bjlg_download' => $download_token
@@ -795,23 +769,15 @@ class BJLG_REST_API {
      * Endpoint : Restaurer une sauvegarde
      */
     public function restore_backup($request) {
-        $id = $request->get_param('id');
         $components = $request->get_param('components');
         $create_restore_point = $request->get_param('create_restore_point');
-        
-        $filepath = BJLG_BACKUP_DIR . $id;
-        if (!file_exists($filepath) && file_exists($filepath . '.zip')) {
-            $filepath .= '.zip';
+
+        $filepath = $this->resolve_backup_path($request->get_param('id'));
+
+        if (is_wp_error($filepath)) {
+            return $filepath;
         }
-        
-        if (!file_exists($filepath)) {
-            return new WP_Error(
-                'backup_not_found',
-                'Backup not found',
-                ['status' => 404]
-            );
-        }
-        
+
         // Créer une tâche de restauration
         $task_id = 'bjlg_restore_' . md5(uniqid('api', true));
         $task_data = [
@@ -834,6 +800,76 @@ class BJLG_REST_API {
             'message' => 'Restore task created successfully',
             'status_url' => rest_url(self::API_NAMESPACE . '/tasks/' . $task_id)
         ]);
+    }
+
+    /**
+     * Résout et valide le chemin d'une sauvegarde à partir d'un identifiant brut.
+     *
+     * @param mixed $raw_id
+     * @return string|WP_Error
+     */
+    private function resolve_backup_path($raw_id) {
+        $sanitized_id = sanitize_file_name(basename((string) $raw_id));
+
+        if ($sanitized_id === '') {
+            return new WP_Error(
+                'invalid_backup_id',
+                'Invalid backup ID',
+                ['status' => 400]
+            );
+        }
+
+        $canonical_backup_dir = realpath(BJLG_BACKUP_DIR);
+
+        if ($canonical_backup_dir === false) {
+            return new WP_Error(
+                'invalid_backup_id',
+                'Invalid backup ID',
+                ['status' => 400]
+            );
+        }
+
+        $canonical_backup_dir = rtrim($canonical_backup_dir, "/\\") . DIRECTORY_SEPARATOR;
+
+        $candidate_paths = [BJLG_BACKUP_DIR . $sanitized_id];
+
+        if (strtolower(substr($sanitized_id, -4)) !== '.zip') {
+            $candidate_paths[] = BJLG_BACKUP_DIR . $sanitized_id . '.zip';
+        }
+
+        $canonical_length = strlen($canonical_backup_dir);
+
+        foreach ($candidate_paths as $candidate_path) {
+            if (!file_exists($candidate_path)) {
+                continue;
+            }
+
+            $resolved_path = realpath($candidate_path);
+
+            if ($resolved_path === false) {
+                return new WP_Error(
+                    'invalid_backup_id',
+                    'Invalid backup ID',
+                    ['status' => 400]
+                );
+            }
+
+            if (strlen($resolved_path) < $canonical_length || strncmp($resolved_path, $canonical_backup_dir, $canonical_length) !== 0) {
+                return new WP_Error(
+                    'invalid_backup_id',
+                    'Invalid backup ID',
+                    ['status' => 400]
+                );
+            }
+
+            return $resolved_path;
+        }
+
+        return new WP_Error(
+            'backup_not_found',
+            'Backup not found',
+            ['status' => 404]
+        );
     }
     
     /**

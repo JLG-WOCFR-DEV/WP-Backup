@@ -18,6 +18,86 @@ $GLOBALS['bjlg_test_transients'] = [];
 $GLOBALS['bjlg_test_scheduled_events'] = [];
 $GLOBALS['bjlg_test_options'] = [];
 
+if (!class_exists('WP_Error')) {
+    class WP_Error
+    {
+        /** @var array<string, array<int, string>> */
+        protected $errors = [];
+
+        /** @var array<string, mixed> */
+        protected $error_data = [];
+
+        /**
+         * @param string $code
+         * @param string $message
+         * @param mixed  $data
+         */
+        public function __construct($code = '', $message = '', $data = null)
+        {
+            if ($code !== '') {
+                $this->add($code, $message, $data);
+            }
+        }
+
+        /**
+         * @param string $code
+         * @param string $message
+         * @param mixed  $data
+         */
+        public function add($code, $message, $data = null): void
+        {
+            if (!isset($this->errors[$code])) {
+                $this->errors[$code] = [];
+            }
+
+            $this->errors[$code][] = (string) $message;
+
+            if ($data !== null) {
+                $this->error_data[$code] = $data;
+            }
+        }
+
+        public function get_error_code()
+        {
+            $codes = array_keys($this->errors);
+
+            return $codes[0] ?? '';
+        }
+
+        public function get_error_message($code = '')
+        {
+            if ($code === '') {
+                $code = $this->get_error_code();
+            }
+
+            if ($code === '') {
+                return '';
+            }
+
+            return $this->errors[$code][0] ?? '';
+        }
+
+        public function get_error_data($code = '')
+        {
+            if ($code === '') {
+                $code = $this->get_error_code();
+            }
+
+            if ($code === '') {
+                return null;
+            }
+
+            return $this->error_data[$code] ?? null;
+        }
+    }
+}
+
+if (!function_exists('is_wp_error')) {
+    function is_wp_error($thing) {
+        return $thing instanceof WP_Error;
+    }
+}
+
 if (!class_exists('BJLG_Test_JSON_Response')) {
     class BJLG_Test_JSON_Response extends RuntimeException {
         /** @var mixed */
