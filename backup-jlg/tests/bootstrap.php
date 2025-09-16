@@ -16,6 +16,7 @@ if (!defined('BJLG_BACKUP_DIR')) {
 $GLOBALS['bjlg_test_current_user_can'] = true;
 $GLOBALS['bjlg_test_transients'] = [];
 $GLOBALS['bjlg_test_scheduled_events'] = [];
+$GLOBALS['bjlg_test_options'] = [];
 
 if (!class_exists('BJLG_Test_JSON_Response')) {
     class BJLG_Test_JSON_Response extends RuntimeException {
@@ -52,6 +53,19 @@ if (!function_exists('check_ajax_referer')) {
 if (!function_exists('current_user_can')) {
     function current_user_can($capability) {
         return $GLOBALS['bjlg_test_current_user_can'] ?? false;
+    }
+}
+
+if (!function_exists('get_option')) {
+    function get_option($option, $default = false) {
+        return $GLOBALS['bjlg_test_options'][$option] ?? $default;
+    }
+}
+
+if (!function_exists('update_option')) {
+    function update_option($option, $value) {
+        $GLOBALS['bjlg_test_options'][$option] = $value;
+        return true;
     }
 }
 

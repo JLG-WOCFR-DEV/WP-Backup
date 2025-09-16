@@ -282,22 +282,26 @@ class BJLG_REST_API {
     private function verify_api_key($api_key) {
         $stored_keys = get_option('bjlg_api_keys', []);
         
-        foreach ($stored_keys as $key_data) {
+        foreach ($stored_keys as $index => &$key_data) {
             if (hash_equals($key_data['key'], $api_key)) {
                 // Vérifier l'expiration
                 if (isset($key_data['expires']) && $key_data['expires'] < time()) {
+                    unset($key_data);
                     return false;
                 }
-                
+
                 // Mettre à jour l'utilisation
                 $key_data['last_used'] = time();
                 $key_data['usage_count'] = ($key_data['usage_count'] ?? 0) + 1;
+                $stored_keys[$index] = $key_data;
                 update_option('bjlg_api_keys', $stored_keys);
-                
+
+                unset($key_data);
                 return true;
             }
         }
-        
+
+        unset($key_data);
         return false;
     }
     

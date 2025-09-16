@@ -48,6 +48,38 @@ final class BJLG_REST_APITest extends TestCase
         $this->assertFalse($method->invoke($api, $token));
     }
 
+    public function test_verify_api_key_updates_usage_statistics(): void
+    {
+        $GLOBALS['bjlg_test_options'] = [];
+
+        $api = new BJLG_REST_API();
+
+        $api_key = 'test-api-key';
+        $initial_usage_count = 2;
+        $initial_last_used = time() - 3600;
+
+        update_option('bjlg_api_keys', [[
+            'key' => $api_key,
+            'usage_count' => $initial_usage_count,
+            'last_used' => $initial_last_used,
+        ]]);
+
+        $reflection = new ReflectionClass(BJLG_REST_API::class);
+        $method = $reflection->getMethod('verify_api_key');
+        $method->setAccessible(true);
+
+        $before_verification = time();
+        $result = $method->invoke($api, $api_key);
+
+        $updated_keys = get_option('bjlg_api_keys');
+
+        $this->assertTrue($result);
+        $this->assertNotEmpty($updated_keys);
+        $this->assertSame($initial_usage_count + 1, $updated_keys[0]['usage_count']);
+        $this->assertArrayHasKey('last_used', $updated_keys[0]);
+        $this->assertGreaterThanOrEqual($before_verification, $updated_keys[0]['last_used']);
+    }
+
     private function base64UrlEncode(string $data): string
     {
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
