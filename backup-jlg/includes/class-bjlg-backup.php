@@ -473,59 +473,83 @@ class BJLG_Backup {
             }
         }
         
-        $this->add_folder_to_zip($zip, $source_dir, $zip_path, $exclude_patterns, $incremental, $modified_files);
+        try {
+            $this->add_folder_to_zip($zip, $source_dir, $zip_path, $exclude_patterns, $incremental, $modified_files);
+        } catch (Exception $exception) {
+            $message = sprintf(
+                "Impossible d'ajouter le répertoire \"%s\" à l'archive : %s",
+                $source_dir,
+                $exception->getMessage()
+            );
+            BJLG_Debug::log($message);
+
+            throw new Exception($message, 0, $exception);
+        }
     }
 
     /**
      * Ajoute récursivement un dossier au ZIP
+     *
+     * @throws Exception Si le dossier ne peut pas être ouvert.
      */
     public function add_folder_to_zip(&$zip, $folder, $zip_path, $exclude = [], $incremental = false, $modified_files = []) {
-        $handle = @opendir($folder);
-        if ($handle === false) {
-            BJLG_Debug::log("Impossible d'ouvrir le répertoire : $folder");
-            return;
+        if (!is_dir($folder)) {
+            $message = "Impossible d'ouvrir le répertoire : $folder";
+            BJLG_Debug::log($message);
+
+            throw new Exception($message);
         }
 
-        while (($file = readdir($handle)) !== false) {
-            if ($file == '.' || $file == '..') continue;
-            
-            $file_path = $folder . '/' . $file;
-            $relative_path = $zip_path . $file;
-            
-            // Vérifier les exclusions
-            $skip = false;
-            foreach ($exclude as $pattern) {
-                if (fnmatch($pattern, $file_path)) {
-                    $skip = true;
-                    break;
-                }
-            }
-            
-            if ($skip) continue;
-            
-            if (is_dir($file_path)) {
-                // Récursion pour les sous-dossiers
-                $this->add_folder_to_zip($zip, $file_path, $relative_path . '/', $exclude, $incremental, $modified_files);
-            } else {
-                // Pour l'incrémental, vérifier si le fichier est dans la liste des modifiés
-                if ($incremental && !empty($modified_files)) {
-                    if (!in_array($file_path, $modified_files)) {
-                        continue;
+        $handle = opendir($folder);
+        if ($handle === false) {
+            $message = "Impossible d'ouvrir le répertoire : $folder";
+            BJLG_Debug::log($message);
+
+            throw new Exception($message);
+        }
+
+        try {
+            while (($file = readdir($handle)) !== false) {
+                if ($file == '.' || $file == '..') continue;
+
+                $file_path = $folder . '/' . $file;
+                $relative_path = $zip_path . $file;
+
+                // Vérifier les exclusions
+                $skip = false;
+                foreach ($exclude as $pattern) {
+                    if (fnmatch($pattern, $file_path)) {
+                        $skip = true;
+                        break;
                     }
                 }
-                
-                // Ajouter le fichier
-                if (filesize($file_path) < 50 * 1024 * 1024) { // Moins de 50MB
-                    $zip->addFile($file_path, $relative_path);
+
+                if ($skip) continue;
+
+                if (is_dir($file_path)) {
+                    // Récursion pour les sous-dossiers
+                    $this->add_folder_to_zip($zip, $file_path, $relative_path . '/', $exclude, $incremental, $modified_files);
                 } else {
-                    // Pour les gros fichiers, utiliser le streaming
-                    $zip->addFile($file_path, $relative_path);
-                    $zip->setCompressionName($relative_path, ZipArchive::CM_STORE);
+                    // Pour l'incrémental, vérifier si le fichier est dans la liste des modifiés
+                    if ($incremental && !empty($modified_files)) {
+                        if (!in_array($file_path, $modified_files)) {
+                            continue;
+                        }
+                    }
+
+                    // Ajouter le fichier
+                    if (filesize($file_path) < 50 * 1024 * 1024) { // Moins de 50MB
+                        $zip->addFile($file_path, $relative_path);
+                    } else {
+                        // Pour les gros fichiers, utiliser le streaming
+                        $zip->addFile($file_path, $relative_path);
+                        $zip->setCompressionName($relative_path, ZipArchive::CM_STORE);
+                    }
                 }
             }
+        } finally {
+            closedir($handle);
         }
-        
-        closedir($handle);
     }
 
     /**
