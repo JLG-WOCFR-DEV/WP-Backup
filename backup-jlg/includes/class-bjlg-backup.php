@@ -282,68 +282,91 @@ class BJLG_Backup {
     }
 
     /**
-     * Sauvegarde la base de données
+     * Sauvegarde la base de données en écrivant le dump SQL dans un fichier temporaire
+     * pour limiter la consommation mémoire avant de l'ajouter à l'archive.
+     *
+     * @throws Exception Si le fichier temporaire ne peut pas être créé ou ajouté à l'archive.
      */
     private function backup_database(&$zip, $incremental = false) {
         global $wpdb;
-        
+
         BJLG_Debug::log("Export de la base de données...");
-        
+
         $sql_filename = 'database.sql';
-        $sql_content = '';
-        
-        // Header SQL
-        $sql_content .= "-- Backup JLG Database Export\n";
-        $sql_content .= "-- Version: " . BJLG_VERSION . "\n";
-        $sql_content .= "-- Date: " . date('Y-m-d H:i:s') . "\n";
-        $sql_content .= "-- Site: " . get_site_url() . "\n\n";
-        $sql_content .= "SET NAMES utf8mb4;\n";
-        $sql_content .= "SET FOREIGN_KEY_CHECKS=0;\n\n";
-        
-        // Obtenir toutes les tables
-        $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
-        
-        foreach ($tables as $table_array) {
-            $table = $table_array[0];
-            
-            // Pour l'incrémental, vérifier si la table a changé
-            if ($incremental) {
-                $incremental_handler = new BJLG_Incremental();
-                if (!$incremental_handler->table_has_changed($table)) {
-                    BJLG_Debug::log("Table $table ignorée (pas de changement)");
-                    continue;
+        $temp_file = function_exists('wp_tempnam') ? wp_tempnam('bjlg-db-export.sql') : tempnam(sys_get_temp_dir(), 'bjlg-db-');
+
+        if (!$temp_file) {
+            throw new Exception("Impossible de créer le fichier temporaire pour l'export SQL.");
+        }
+
+        $handle = fopen($temp_file, 'w');
+
+        if (!$handle) {
+            @unlink($temp_file);
+            throw new Exception("Impossible d'ouvrir le fichier temporaire pour l'export SQL.");
+        }
+
+        try {
+            // Header SQL
+            fwrite($handle, "-- Backup JLG Database Export\n");
+            fwrite($handle, "-- Version: " . BJLG_VERSION . "\n");
+            fwrite($handle, "-- Date: " . date('Y-m-d H:i:s') . "\n");
+            fwrite($handle, "-- Site: " . get_site_url() . "\n\n");
+            fwrite($handle, "SET NAMES utf8mb4;\n");
+            fwrite($handle, "SET FOREIGN_KEY_CHECKS=0;\n\n");
+
+            // Obtenir toutes les tables
+            $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
+
+            foreach ($tables as $table_array) {
+                $table = $table_array[0];
+
+                // Pour l'incrémental, vérifier si la table a changé
+                if ($incremental) {
+                    $incremental_handler = new BJLG_Incremental();
+                    if (!$incremental_handler->table_has_changed($table)) {
+                        BJLG_Debug::log("Table $table ignorée (pas de changement)");
+                        continue;
+                    }
                 }
-            }
-            
-            // Structure de la table
-            $create_table = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
-            $sql_content .= "\n-- Table: {$table}\n";
-            $sql_content .= "DROP TABLE IF EXISTS `{$table}`;\n";
-            $sql_content .= $create_table[1] . ";\n\n";
-            
-            // Données de la table
-            $row_count = $wpdb->get_var("SELECT COUNT(*) FROM `{$table}`");
-            
-            if ($row_count > 0) {
-                $sql_content .= "-- Data for table: {$table}\n";
-                
-                // Traiter par lots pour économiser la mémoire
-                $batch_size = 1000;
-                for ($offset = 0; $offset < $row_count; $offset += $batch_size) {
-                    $rows = $wpdb->get_results("SELECT * FROM `{$table}` LIMIT {$offset}, {$batch_size}", ARRAY_A);
-                    
-                    if ($rows) {
-                        $sql_content .= $this->create_insert_statement($table, $rows);
+
+                // Structure de la table
+                $create_table = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
+                fwrite($handle, "\n-- Table: {$table}\n");
+                fwrite($handle, "DROP TABLE IF EXISTS `{$table}`;\n");
+                fwrite($handle, $create_table[1] . ";\n\n");
+
+                // Données de la table
+                $row_count = $wpdb->get_var("SELECT COUNT(*) FROM `{$table}`");
+
+                if ($row_count > 0) {
+                    fwrite($handle, "-- Data for table: {$table}\n");
+
+                    // Traiter par lots pour économiser la mémoire
+                    $batch_size = 1000;
+                    for ($offset = 0; $offset < $row_count; $offset += $batch_size) {
+                        $rows = $wpdb->get_results("SELECT * FROM `{$table}` LIMIT {$offset}, {$batch_size}", ARRAY_A);
+
+                        if ($rows) {
+                            fwrite($handle, $this->create_insert_statement($table, $rows));
+                        }
                     }
                 }
             }
+
+            fwrite($handle, "\nSET FOREIGN_KEY_CHECKS=1;\n");
+        } finally {
+            fclose($handle);
         }
-        
-        $sql_content .= "\nSET FOREIGN_KEY_CHECKS=1;\n";
-        
-        // Ajouter au ZIP
-        $zip->addFromString($sql_filename, $sql_content);
-        
+
+        // Ajouter au ZIP via un fichier temporaire puis le supprimer
+        if (!$zip->addFile($temp_file, $sql_filename)) {
+            @unlink($temp_file);
+            throw new Exception("Impossible d'ajouter l'export SQL à l'archive.");
+        }
+
+        @unlink($temp_file);
+
         BJLG_Debug::log("Export de la base de données terminé.");
     }
 
