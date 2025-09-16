@@ -86,82 +86,195 @@ class BJLG_Encryption {
         if (!$this->is_enabled || !file_exists($filepath)) {
             return $filepath;
         }
-        
+
+        $input_handle = null;
+        $output_handle = null;
+        $encrypted_filepath = $filepath . '.enc';
+        $delete_on_failure = false;
+
         try {
             BJLG_Debug::log("Début du chiffrement du fichier : " . basename($filepath));
-            
-            // Lire le contenu du fichier
-            $plaintext = file_get_contents($filepath);
-            if ($plaintext === false) {
+
+            $original_size = @filesize($filepath);
+            if ($original_size === false) {
+                $original_size = 0;
+            }
+
+            $input_handle = fopen($filepath, 'rb');
+            if ($input_handle === false) {
                 throw new Exception("Impossible de lire le fichier");
             }
-            
-            // Générer un IV unique pour ce fichier
+
+            $output_handle = fopen($encrypted_filepath, 'wb');
+            if ($output_handle === false) {
+                throw new Exception("Impossible de créer le fichier chiffré");
+            }
+            $delete_on_failure = true;
+
             $iv = openssl_random_pseudo_bytes(self::IV_LENGTH);
-            
-            // Utiliser le mot de passe si fourni, sinon la clé par défaut
+            if ($iv === false || strlen($iv) !== self::IV_LENGTH) {
+                throw new Exception("Impossible de générer l'IV");
+            }
+
             $key = $password ? $this->derive_key_from_password($password) : $this->encryption_key;
-            
-            // Chiffrer le contenu
-            $ciphertext = openssl_encrypt(
-                $plaintext,
+
+            $block_size = openssl_cipher_iv_length(self::CIPHER_METHOD);
+            if (!$block_size) {
+                $block_size = self::IV_LENGTH;
+            }
+            $chunk_size = $block_size * 4096; // Lecture par blocs (64 Ko)
+
+            $hmac_context = hash_init('sha256', HASH_HMAC, $key);
+
+            if (fwrite($output_handle, 'BJLGENC1') !== 8 ||
+                fwrite($output_handle, chr(1)) !== 1 ||
+                fwrite($output_handle, $iv) !== self::IV_LENGTH) {
+                throw new Exception("Impossible d'écrire l'en-tête du fichier chiffré");
+            }
+
+            $hmac_position = ftell($output_handle);
+            if ($hmac_position === false) {
+                throw new Exception("Impossible de préparer l'écriture du HMAC");
+            }
+
+            if (fwrite($output_handle, str_repeat("\0", 32)) !== 32) {
+                throw new Exception("Impossible de réserver l'espace pour le HMAC");
+            }
+
+            $buffer = '';
+            $current_iv = $iv;
+
+            while (!feof($input_handle)) {
+                $data = fread($input_handle, $chunk_size);
+                if ($data === false) {
+                    throw new Exception("Erreur lors de la lecture du fichier");
+                }
+                if ($data === '') {
+                    break;
+                }
+
+                $buffer .= $data;
+                $blocks_in_buffer = intdiv(strlen($buffer), $block_size);
+
+                if ($blocks_in_buffer > 1) {
+                    $blocks_to_process = $blocks_in_buffer - 1;
+                    $length_to_process = $blocks_to_process * $block_size;
+
+                    $plain_chunk = substr($buffer, 0, $length_to_process);
+                    $buffer = substr($buffer, $length_to_process);
+
+                    if ($plain_chunk !== '') {
+                        $encrypted_chunk = openssl_encrypt(
+                            $plain_chunk,
+                            self::CIPHER_METHOD,
+                            $key,
+                            OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
+                            $current_iv
+                        );
+
+                        if ($encrypted_chunk === false) {
+                            throw new Exception("Échec du chiffrement OpenSSL");
+                        }
+
+                        if (fwrite($output_handle, $encrypted_chunk) !== strlen($encrypted_chunk)) {
+                            throw new Exception("Impossible d'écrire les données chiffrées");
+                        }
+
+                        hash_update($hmac_context, $encrypted_chunk);
+                        $current_iv = substr($encrypted_chunk, -$block_size);
+                    }
+                }
+            }
+
+            $padding_length = $block_size - (strlen($buffer) % $block_size);
+            if ($padding_length <= 0 || $padding_length > $block_size) {
+                $padding_length = $block_size;
+            }
+            $buffer .= str_repeat(chr($padding_length), $padding_length);
+
+            $final_chunk = openssl_encrypt(
+                $buffer,
                 self::CIPHER_METHOD,
                 $key,
-                OPENSSL_RAW_DATA,
-                $iv
+                OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
+                $current_iv
             );
-            
-            if ($ciphertext === false) {
+
+            if ($final_chunk === false) {
                 throw new Exception("Échec du chiffrement OpenSSL");
             }
-            
-            // Créer un hash pour vérifier l'intégrité
-            $hmac = hash_hmac('sha256', $ciphertext, $key, true);
-            
-            // Structure du fichier chiffré : [Magic Header][Version][IV][HMAC][Ciphertext]
-            $encrypted_content = 'BJLGENC1' . // Magic header (8 bytes)
-                                chr(1) .      // Version (1 byte)
-                                $iv .         // IV (16 bytes)
-                                $hmac .       // HMAC (32 bytes)
-                                $ciphertext;  // Données chiffrées
-            
-            // Sauvegarder le fichier chiffré
-            $encrypted_filepath = $filepath . '.enc';
-            if (file_put_contents($encrypted_filepath, $encrypted_content) === false) {
-                throw new Exception("Impossible d'écrire le fichier chiffré");
+
+            if (fwrite($output_handle, $final_chunk) !== strlen($final_chunk)) {
+                throw new Exception("Impossible d'écrire les données chiffrées");
             }
-            
-            // Supprimer le fichier original non chiffré
-            unlink($filepath);
-            
-            // Calculer les statistiques
-            $original_size = strlen($plaintext);
-            $encrypted_size = strlen($encrypted_content);
-            $overhead = (($encrypted_size - $original_size) / $original_size) * 100;
-            
+
+            hash_update($hmac_context, $final_chunk);
+            $hmac = hash_final($hmac_context, true);
+
+            if (fseek($output_handle, $hmac_position) !== 0) {
+                throw new Exception("Impossible d'écrire le HMAC");
+            }
+
+            if (fwrite($output_handle, $hmac) !== strlen($hmac)) {
+                throw new Exception("Impossible d'écrire le HMAC");
+            }
+
+            $delete_on_failure = false;
+
+            if (is_resource($input_handle)) {
+                fclose($input_handle);
+                $input_handle = null;
+            }
+            if (is_resource($output_handle)) {
+                fflush($output_handle);
+                fclose($output_handle);
+                $output_handle = null;
+            }
+
+            if (!@unlink($filepath)) {
+                BJLG_Debug::log("Impossible de supprimer le fichier source après chiffrement : " . basename($filepath));
+            }
+
+            $encrypted_size = @filesize($encrypted_filepath);
+            if ($encrypted_size === false) {
+                $encrypted_size = 0;
+            }
+
+            $overhead = $original_size > 0
+                ? (($encrypted_size - $original_size) / $original_size) * 100
+                : 0;
+
             BJLG_Debug::log(sprintf(
                 "Fichier chiffré avec succès. Taille originale: %s, Taille chiffrée: %s (overhead: %.2f%%)",
-                size_format($original_size),
-                size_format($encrypted_size),
+                function_exists('size_format') ? size_format($original_size) : $original_size . ' bytes',
+                function_exists('size_format') ? size_format($encrypted_size) : $encrypted_size . ' bytes',
                 $overhead
             ));
-            
-            BJLG_History::log('backup_encrypted', 'success', 
+
+            BJLG_History::log('backup_encrypted', 'success',
                 'Fichier: ' . basename($encrypted_filepath) . ' | Méthode: AES-256-CBC');
-            
-            // Nettoyer la mémoire
-            unset($plaintext);
-            unset($ciphertext);
-            
+
+            unset($buffer);
+            unset($final_chunk);
+
             return $encrypted_filepath;
-            
-        } catch (Exception $e) {
-            BJLG_Debug::log("ERREUR de chiffrement : " . $e->getMessage());
-            BJLG_History::log('backup_encrypted', 'failure', $e->getMessage());
-            
-            // En cas d'erreur, retourner le fichier original
-            return $filepath;
+
+    } catch (Exception $e) {
+        if (is_resource($input_handle)) {
+            fclose($input_handle);
         }
+        if (is_resource($output_handle)) {
+            fclose($output_handle);
+        }
+        if ($delete_on_failure && file_exists($encrypted_filepath)) {
+            @unlink($encrypted_filepath);
+        }
+
+        BJLG_Debug::log("ERREUR de chiffrement : " . $e->getMessage());
+        BJLG_History::log('backup_encrypted', 'failure', $e->getMessage());
+
+        return $filepath;
+    }
     }
     
     /**
@@ -171,70 +284,183 @@ class BJLG_Encryption {
         if (!file_exists($filepath) || substr($filepath, -4) !== '.enc') {
             return $filepath;
         }
-        
+
+        $input_handle = null;
+        $output_handle = null;
+        $temp_filepath = null;
+
         try {
             BJLG_Debug::log("Début du déchiffrement du fichier : " . basename($filepath));
-            
-            // Lire le fichier chiffré
-            $encrypted_content = file_get_contents($filepath);
-            if ($encrypted_content === false) {
+
+            $input_handle = fopen($filepath, 'rb');
+            if ($input_handle === false) {
                 throw new Exception("Impossible de lire le fichier chiffré");
             }
-            
-            // Vérifier le header magique
-            if (substr($encrypted_content, 0, 8) !== 'BJLGENC1') {
+
+            $header = fread($input_handle, 8);
+            if ($header === false || strlen($header) !== 8 || $header !== 'BJLGENC1') {
                 throw new Exception("Format de fichier invalide");
             }
-            
-            // Extraire les composants
-            $version = ord($encrypted_content[8]);
+
+            $version_data = fread($input_handle, 1);
+            if ($version_data === false || strlen($version_data) !== 1) {
+                throw new Exception("Version de chiffrement non supportée");
+            }
+            $version = ord($version_data);
             if ($version !== 1) {
                 throw new Exception("Version de chiffrement non supportée");
             }
-            
-            $iv = substr($encrypted_content, 9, self::IV_LENGTH);
-            $hmac = substr($encrypted_content, 9 + self::IV_LENGTH, 32);
-            $ciphertext = substr($encrypted_content, 9 + self::IV_LENGTH + 32);
-            
-            // Utiliser le mot de passe si fourni
+
+            $iv = fread($input_handle, self::IV_LENGTH);
+            if ($iv === false || strlen($iv) !== self::IV_LENGTH) {
+                throw new Exception("IV manquant ou corrompu");
+            }
+
+            $stored_hmac = fread($input_handle, 32);
+            if ($stored_hmac === false || strlen($stored_hmac) !== 32) {
+                throw new Exception("HMAC manquant ou corrompu");
+            }
+
             $key = $password ? $this->derive_key_from_password($password) : $this->encryption_key;
-            
-            // Vérifier l'intégrité avec HMAC
-            $calculated_hmac = hash_hmac('sha256', $ciphertext, $key, true);
-            if (!hash_equals($hmac, $calculated_hmac)) {
-                throw new Exception("Vérification d'intégrité échouée - fichier possiblement corrompu");
+
+            $block_size = openssl_cipher_iv_length(self::CIPHER_METHOD);
+            if (!$block_size) {
+                $block_size = self::IV_LENGTH;
             }
-            
-            // Déchiffrer
-            $plaintext = openssl_decrypt(
-                $ciphertext,
-                self::CIPHER_METHOD,
-                $key,
-                OPENSSL_RAW_DATA,
-                $iv
-            );
-            
-            if ($plaintext === false) {
-                throw new Exception("Échec du déchiffrement - clé incorrecte ?");
-            }
-            
-            // Sauvegarder le fichier déchiffré
-            $decrypted_filepath = substr($filepath, 0, -4); // Enlever .enc
-            if (file_put_contents($decrypted_filepath, $plaintext) === false) {
+            $chunk_size = $block_size * 4096;
+
+            $decrypted_filepath = substr($filepath, 0, -4);
+            $temp_filepath = $decrypted_filepath . '.tmp';
+
+            $output_handle = fopen($temp_filepath, 'wb');
+            if ($output_handle === false) {
                 throw new Exception("Impossible d'écrire le fichier déchiffré");
             }
-            
+
+            $hmac_context = hash_init('sha256', HASH_HMAC, $key);
+
+            $buffer = '';
+            $current_iv = $iv;
+
+            while (!feof($input_handle)) {
+                $data = fread($input_handle, $chunk_size);
+                if ($data === false) {
+                    throw new Exception("Erreur lors de la lecture du fichier chiffré");
+                }
+                if ($data === '') {
+                    break;
+                }
+
+                $buffer .= $data;
+                $blocks_in_buffer = intdiv(strlen($buffer), $block_size);
+
+                if ($blocks_in_buffer > 1) {
+                    $blocks_to_process = $blocks_in_buffer - 1;
+                    $length_to_process = $blocks_to_process * $block_size;
+
+                    $cipher_chunk = substr($buffer, 0, $length_to_process);
+                    $buffer = substr($buffer, $length_to_process);
+
+                    if ($cipher_chunk !== '') {
+                        hash_update($hmac_context, $cipher_chunk);
+
+                        $decrypted_chunk = openssl_decrypt(
+                            $cipher_chunk,
+                            self::CIPHER_METHOD,
+                            $key,
+                            OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
+                            $current_iv
+                        );
+
+                        if ($decrypted_chunk === false) {
+                            throw new Exception("Échec du déchiffrement - clé incorrecte ?");
+                        }
+
+                        $current_iv = substr($cipher_chunk, -$block_size);
+
+                        if (fwrite($output_handle, $decrypted_chunk) !== strlen($decrypted_chunk)) {
+                            throw new Exception("Impossible d'écrire le fichier déchiffré");
+                        }
+                    }
+                }
+            }
+
+            if ($buffer === '') {
+                throw new Exception("Données chiffrées manquantes");
+            }
+
+            hash_update($hmac_context, $buffer);
+            $calculated_hmac = hash_final($hmac_context, true);
+            if (!hash_equals($stored_hmac, $calculated_hmac)) {
+                throw new Exception("Vérification d'intégrité échouée - fichier possiblement corrompu");
+            }
+
+            $final_chunk = openssl_decrypt(
+                $buffer,
+                self::CIPHER_METHOD,
+                $key,
+                OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
+                $current_iv
+            );
+
+            if ($final_chunk === false) {
+                throw new Exception("Échec du déchiffrement - clé incorrecte ?");
+            }
+
+            $padding_length = ord(substr($final_chunk, -1));
+            if ($padding_length < 1 || $padding_length > $block_size) {
+                throw new Exception("Padding invalide détecté");
+            }
+
+            $padding = substr($final_chunk, -$padding_length);
+            if ($padding !== str_repeat(chr($padding_length), $padding_length)) {
+                throw new Exception("Padding invalide détecté");
+            }
+
+            $final_chunk = substr($final_chunk, 0, -$padding_length);
+
+            if ($final_chunk !== '') {
+                if (fwrite($output_handle, $final_chunk) !== strlen($final_chunk)) {
+                    throw new Exception("Impossible d'écrire le fichier déchiffré");
+                }
+            }
+
+            fflush($output_handle);
+            fclose($output_handle);
+            $output_handle = null;
+
+            fclose($input_handle);
+            $input_handle = null;
+
+            if (file_exists($decrypted_filepath) && !@unlink($decrypted_filepath)) {
+                @unlink($temp_filepath);
+                throw new Exception("Impossible de finaliser le fichier déchiffré");
+            }
+
+            if (!@rename($temp_filepath, $decrypted_filepath)) {
+                @unlink($temp_filepath);
+                throw new Exception("Impossible de finaliser le fichier déchiffré");
+            }
+
             BJLG_Debug::log("Fichier déchiffré avec succès : " . basename($decrypted_filepath));
             BJLG_History::log('backup_decrypted', 'success', 'Fichier: ' . basename($decrypted_filepath));
-            
-            // Nettoyer la mémoire
-            unset($plaintext);
-            unset($ciphertext);
-            unset($encrypted_content);
-            
+
+            unset($buffer);
+            unset($final_chunk);
+
             return $decrypted_filepath;
-            
+
         } catch (Exception $e) {
+            if (is_resource($output_handle)) {
+                fclose($output_handle);
+            }
+            if ($temp_filepath && file_exists($temp_filepath)) {
+                @unlink($temp_filepath);
+            }
+            if (is_resource($input_handle)) {
+                fclose($input_handle);
+            }
+
             BJLG_Debug::log("ERREUR de déchiffrement : " . $e->getMessage());
             BJLG_History::log('backup_decrypted', 'failure', $e->getMessage());
             throw $e; // Propager l'erreur car la restauration ne peut pas continuer
