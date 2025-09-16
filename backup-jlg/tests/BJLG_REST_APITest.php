@@ -124,6 +124,66 @@ final class BJLG_REST_APITest extends TestCase
         $this->assertArrayNotHasKey('plain_key', $filtered[0]);
     }
 
+    public function test_backup_endpoints_reject_symlink_outside_backup_directory(): void
+    {
+        if (!function_exists('symlink')) {
+            $this->markTestSkipped('Symlinks are not supported in this environment.');
+        }
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $target = __DIR__ . '/../bjlg-outside-' . uniqid('', true) . '.zip';
+        $symlinkName = 'bjlg-test-symlink-' . uniqid('', true) . '.zip';
+        $symlinkPath = BJLG_BACKUP_DIR . $symlinkName;
+
+        file_put_contents($target, 'outside');
+
+        if (file_exists($symlinkPath) || is_link($symlinkPath)) {
+            unlink($symlinkPath);
+        }
+
+        if (@symlink($target, $symlinkPath) === false) {
+            unlink($target);
+            $this->markTestSkipped('Unable to create symlink in backup directory.');
+        }
+
+        $request = new class($symlinkName) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id)
+            {
+                $this->params = [
+                    'id' => $id,
+                    'components' => ['all'],
+                    'create_restore_point' => true,
+                    'token' => null,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            foreach (['get_backup', 'delete_backup', 'download_backup', 'restore_backup'] as $method) {
+                $result = $api->{$method}($request);
+                $this->assertInstanceOf(WP_Error::class, $result, sprintf('Expected %s to return WP_Error.', $method));
+                $this->assertSame('invalid_backup_id', $result->get_error_code(), sprintf('Expected %s to reject traversal attempts.', $method));
+            }
+        } finally {
+            if (file_exists($symlinkPath) || is_link($symlinkPath)) {
+                unlink($symlinkPath);
+            }
+
+            if (file_exists($target)) {
+                unlink($target);
+            }
+        }
+    }
+
     private function base64UrlEncode(string $data): string
     {
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
