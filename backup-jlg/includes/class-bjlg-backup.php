@@ -1,5 +1,12 @@
 <?php
-if (!defined('ABSPATH')) exit;
+namespace BJLG;
+
+use Exception;
+use ZipArchive;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
  * Gère le processus complet de création de sauvegardes
@@ -25,10 +32,10 @@ class BJLG_Backup {
      * Initialise les handlers
      */
     public function init_handlers() {
-        if (class_exists('BJLG_Performance')) {
+        if (class_exists(BJLG_Performance::class)) {
             $this->performance_optimizer = new BJLG_Performance();
         }
-        if (class_exists('BJLG_Encryption')) {
+        if (class_exists(BJLG_Encryption::class)) {
             $this->encryption_handler = new BJLG_Encryption();
         }
     }

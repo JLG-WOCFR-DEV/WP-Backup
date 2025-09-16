@@ -1,10 +1,16 @@
 <?php
+namespace BJLG;
+
 /**
  * Classe de chiffrement AES-256 pour sécuriser les sauvegardes
  * Fichier : includes/class-bjlg-encryption.php
  */
 
-if (!defined('ABSPATH')) exit;
+use Exception;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 class BJLG_Encryption {
     

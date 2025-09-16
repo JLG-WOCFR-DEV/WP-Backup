@@ -1,10 +1,14 @@
 <?php
-if (!defined('ABSPATH')) exit;
+namespace BJLG;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
  * Intégration Google Drive (future version).
  */
-if (interface_exists('BJLG_Destination_Interface')) {
+if (interface_exists(BJLG_Destination_Interface::class)) {
 
     class BJLG_Google_Drive implements BJLG_Destination_Interface {
 

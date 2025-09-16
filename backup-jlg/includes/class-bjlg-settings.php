@@ -1,5 +1,11 @@
 <?php
-if (!defined('ABSPATH')) exit;
+namespace BJLG;
+
+use Exception;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
  * Gère la sauvegarde de tous les réglages du plugin via une seule action AJAX.

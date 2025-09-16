@@ -1,5 +1,11 @@
 <?php
-if (!defined('ABSPATH')) exit;
+namespace BJLG;
+
+use Exception;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
  * Gère la tâche cron quotidienne de nettoyage des sauvegardes et des logs.

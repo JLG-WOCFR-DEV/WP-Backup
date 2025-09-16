@@ -1,10 +1,14 @@
 <?php
+namespace BJLG;
+
 /**
  * Gère la limitation de taux pour l'API REST
  * Fichier : includes/class-bjlg-rate-limiter.php
  */
 
-if (!defined('ABSPATH')) exit;
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 class BJLG_Rate_Limiter {
 

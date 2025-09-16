@@ -1,10 +1,17 @@
 <?php
+namespace BJLG;
+
 /**
  * API REST pour Backup JLG
  * Fichier : includes/class-bjlg-rest-api.php
  */
 
-if (!defined('ABSPATH')) exit;
+use WP_Error;
+use ZipArchive;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 class BJLG_REST_API {
     
@@ -19,7 +26,7 @@ class BJLG_REST_API {
         add_action('add_option_bjlg_api_keys', [$this, 'handle_api_keys_added'], 10, 2);
 
         // Initialiser le rate limiter
-        if (class_exists('BJLG_Rate_Limiter')) {
+        if (class_exists(BJLG_Rate_Limiter::class)) {
             $this->rate_limiter = new BJLG_Rate_Limiter();
         }
     }

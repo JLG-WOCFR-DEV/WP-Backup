@@ -17,7 +17,7 @@ final class BJLG_ActionsTest extends TestCase
     {
         $GLOBALS['bjlg_test_current_user_can'] = false;
 
-        $actions = new BJLG_Actions();
+        $actions = new BJLG\BJLG_Actions();
 
         try {
             $actions->handle_delete_backup();
