@@ -480,8 +480,12 @@ class BJLG_Backup {
      * Ajoute récursivement un dossier au ZIP
      */
     public function add_folder_to_zip(&$zip, $folder, $zip_path, $exclude = [], $incremental = false, $modified_files = []) {
-        $handle = opendir($folder);
-        
+        $handle = @opendir($folder);
+        if ($handle === false) {
+            BJLG_Debug::log("Impossible d'ouvrir le répertoire : $folder");
+            return;
+        }
+
         while (($file = readdir($handle)) !== false) {
             if ($file == '.' || $file == '..') continue;
             
