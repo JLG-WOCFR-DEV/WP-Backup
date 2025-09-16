@@ -100,14 +100,14 @@ final class BJLG_Plugin {
     }
     
     private function init_services() {
-        new BJLG_Admin();
-        new BJLG_Actions();
+        new BJLG\BJLG_Admin();
+        new BJLG\BJLG_Actions();
 
-        $backup_manager = new BJLG_Backup();
-        new BJLG_Restore($backup_manager);
-        new BJLG_Scheduler(); new BJLG_Cleanup(); new BJLG_Encryption(); new BJLG_Health_Check();
-        new BJLG_Diagnostics(); new BJLG_Webhooks(); new BJLG_Incremental(); new BJLG_Performance();
-        new BJLG_REST_API(); new BJLG_Settings();
+        $backup_manager = new BJLG\BJLG_Backup();
+        new BJLG\BJLG_Restore($backup_manager);
+        new BJLG\BJLG_Scheduler(); new BJLG\BJLG_Cleanup(); new BJLG\BJLG_Encryption(); new BJLG\BJLG_Health_Check();
+        new BJLG\BJLG_Diagnostics(); new BJLG\BJLG_Webhooks(); new BJLG\BJLG_Incremental(); new BJLG\BJLG_Performance();
+        new BJLG\BJLG_REST_API(); new BJLG\BJLG_Settings();
     }
     
     public function enqueue_admin_assets($hook) {
@@ -129,7 +129,7 @@ final class BJLG_Plugin {
     public function activate() {
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-debug.php';
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-history.php';
-        BJLG_History::create_table();
+        BJLG\BJLG_History::create_table();
 
         if (!is_dir(BJLG_BACKUP_DIR)) {
             wp_mkdir_p(BJLG_BACKUP_DIR);

@@ -1,10 +1,17 @@
 <?php
+namespace BJLG;
+
 /**
  * Classe pour gérer les sauvegardes incrémentales
  * Fichier : includes/class-bjlg-incremental.php
  */
 
-if (!defined('ABSPATH')) exit;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 class BJLG_Incremental {
     

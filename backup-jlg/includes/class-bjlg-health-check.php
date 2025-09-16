@@ -1,5 +1,9 @@
 <?php
-if (!defined('ABSPATH')) exit;
+namespace BJLG;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
  * Gère les diagnostics et le bilan de santé du système et du plugin.

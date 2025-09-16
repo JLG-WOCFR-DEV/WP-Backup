@@ -1,10 +1,19 @@
 <?php
+namespace BJLG;
+
 /**
  * Optimisation des performances avec multi-threading et traitement parallèle
  * Fichier : includes/class-bjlg-performance.php
  */
 
-if (!defined('ABSPATH')) exit;
+use Exception;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
+use ZipArchive;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 class BJLG_Performance {
     

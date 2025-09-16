@@ -13,7 +13,7 @@ if (!function_exists('get_site_url')) {
     }
 }
 
-if (!class_exists('BJLG_Debug')) {
+if (!class_exists('BJLG\\BJLG_Debug')) {
     class BJLG_Debug
     {
         /** @var array<int, string> */
@@ -23,6 +23,8 @@ if (!class_exists('BJLG_Debug')) {
             self::$logs[] = (string) $message;
         }
     }
+
+    class_alias('BJLG_Debug', 'BJLG\\BJLG_Debug');
 }
 
 require_once __DIR__ . '/../includes/class-bjlg-backup.php';
@@ -31,9 +33,9 @@ final class BJLG_BackupDatabaseTest extends TestCase
 {
     public function test_create_insert_statement_escapes_special_and_binary_values(): void
     {
-        $backup = new BJLG_Backup();
+        $backup = new BJLG\BJLG_Backup();
 
-        $method = new ReflectionMethod(BJLG_Backup::class, 'create_insert_statement');
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'create_insert_statement');
         $method->setAccessible(true);
 
         $rows = [
@@ -62,7 +64,7 @@ final class BJLG_BackupDatabaseTest extends TestCase
 
     public function test_backup_database_streams_content_into_zip_via_temp_file(): void
     {
-        $backup = new BJLG_Backup();
+        $backup = new BJLG\BJLG_Backup();
 
         $zip = new class extends ZipArchive {
             /** @var array<int, array{0: string, 1: string}> */
@@ -120,7 +122,7 @@ final class BJLG_BackupDatabaseTest extends TestCase
             }
         };
 
-        $method = new ReflectionMethod(BJLG_Backup::class, 'backup_database');
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'backup_database');
         $method->setAccessible(true);
         $method->invoke($backup, $zip, false);
 

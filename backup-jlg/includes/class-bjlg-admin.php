@@ -1,5 +1,9 @@
 <?php
-if (!defined('ABSPATH')) exit;
+namespace BJLG;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
  * Gère la création et l'affichage de l'interface d'administration du plugin.
@@ -18,7 +22,7 @@ class BJLG_Admin {
      * Charge les classes de destination disponibles.
      */
     private function load_destinations() {
-        if (class_exists('BJLG_Google_Drive')) {
+        if (class_exists(BJLG_Google_Drive::class)) {
             $this->destinations['google_drive'] = new BJLG_Google_Drive();
         }
     }
@@ -270,7 +274,7 @@ class BJLG_Admin {
      * Section : Historique
      */
     private function render_history_section() {
-        $history = class_exists('BJLG_History') ? BJLG_History::get_history(50) : [];
+        $history = class_exists(BJLG_History::class) ? BJLG_History::get_history(50) : [];
         ?>
         <div class="bjlg-section">
             <h2>Historique des 50 dernières actions</h2>
@@ -349,7 +353,7 @@ class BJLG_Admin {
         $cleanup_settings = get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
         $schedule_settings = get_option('bjlg_schedule_settings', ['recurrence' => 'weekly', 'day' => 'sunday', 'time' => '23:59']);
         $wl_settings = get_option('bjlg_whitelabel_settings', ['plugin_name' => '', 'hide_from_non_admins' => false]);
-        $webhook_key = class_exists('BJLG_Webhooks') ? BJLG_Webhooks::get_webhook_key() : '';
+        $webhook_key = class_exists(BJLG_Webhooks::class) ? BJLG_Webhooks::get_webhook_key() : '';
         ?>
         <div class="bjlg-section">
             <h2>Configuration du Plugin</h2>
@@ -473,13 +477,13 @@ class BJLG_Admin {
             <p class="description">
                 Pour activer : ajoutez <code>define('BJLG_DEBUG', true);</code> dans votre <code>wp-config.php</code>
             </p>
-            <textarea class="bjlg-log-textarea" readonly><?php echo esc_textarea(class_exists('BJLG_Debug') ? BJLG_Debug::get_plugin_log_content() : 'Classe BJLG_Debug non trouvée.'); ?></textarea>
+            <textarea class="bjlg-log-textarea" readonly><?php echo esc_textarea(class_exists(BJLG_Debug::class) ? BJLG_Debug::get_plugin_log_content() : 'Classe BJLG_Debug non trouvée.'); ?></textarea>
 
             <h3>Journal d'erreurs PHP de WordPress</h3>
             <p class="description">
                 Pour activer : ajoutez <code>define('WP_DEBUG_LOG', true);</code> dans votre <code>wp-config.php</code>
             </p>
-            <textarea class="bjlg-log-textarea" readonly><?php echo esc_textarea(class_exists('BJLG_Debug') ? BJLG_Debug::get_wp_error_log_content() : 'Classe BJLG_Debug non trouvée.'); ?></textarea>
+            <textarea class="bjlg-log-textarea" readonly><?php echo esc_textarea(class_exists(BJLG_Debug::class) ? BJLG_Debug::get_wp_error_log_content() : 'Classe BJLG_Debug non trouvée.'); ?></textarea>
             
             <h3>Outils de Support</h3>
             <p>Générez un pack de support contenant les journaux et les informations système pour faciliter le diagnostic.</p>

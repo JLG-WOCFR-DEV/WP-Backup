@@ -1,5 +1,12 @@
 <?php
-if (!defined('ABSPATH')) exit;
+namespace BJLG;
+
+use Exception;
+use ZipArchive;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
  * Gère la création d'un pack de support pour le diagnostic.

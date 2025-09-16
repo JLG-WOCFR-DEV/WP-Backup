@@ -1,5 +1,9 @@
 <?php
-if (!defined('ABSPATH')) exit;
+namespace BJLG;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
  * Gère la planification avancée des sauvegardes automatiques.

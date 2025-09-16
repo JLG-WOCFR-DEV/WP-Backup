@@ -24,7 +24,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $_POST['filename'] = 'backup.zip';
         $_POST['password'] = "  pa\nss\tword  ";
 
-        $restore = new BJLG_Restore();
+        $restore = new BJLG\BJLG_Restore();
 
         try {
             $restore->handle_run_restore();
@@ -45,7 +45,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $this->assertNotSame($expected_sanitized, $encrypted_password);
         $this->assertStringNotContainsString($expected_sanitized, $encrypted_password);
 
-        $reflection = new ReflectionClass(BJLG_Restore::class);
+        $reflection = new ReflectionClass(BJLG\BJLG_Restore::class);
         $method = $reflection->getMethod('decrypt_password_from_transient');
         $method->setAccessible(true);
         $decrypted_password = $method->invoke($restore, $encrypted_password);

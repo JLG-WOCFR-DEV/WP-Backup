@@ -1,12 +1,16 @@
 <?php
+namespace BJLG;
+
 /**
  * Advanced Admin Features for Backup JLG
- * 
+ *
  * @package Backup_JLG
  * @since 2.0.0
  */
 
-if (!defined('ABSPATH')) exit;
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
  * Advanced admin functionality (placeholder for future features)

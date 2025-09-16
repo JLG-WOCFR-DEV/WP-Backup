@@ -1,5 +1,11 @@
 <?php
-if (!defined('ABSPATH')) exit;
+namespace BJLG;
+
+use Exception;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
  * Actions AJAX (suppression de sauvegarde, etc.)
@@ -68,14 +74,14 @@ class BJLG_Actions {
                 throw new Exception("Impossible de supprimer le fichier.");
             }
 
-            if (class_exists('BJLG_History')) {
+            if (class_exists(BJLG_History::class)) {
                 BJLG_History::log('backup_deleted', 'success', 'Fichier : ' . $filename);
             }
 
             wp_send_json_success(['message' => 'Fichier supprimé avec succès.']);
 
         } catch (Exception $e) {
-            if (class_exists('BJLG_History')) {
+            if (class_exists(BJLG_History::class)) {
                 BJLG_History::log('backup_deleted', 'failure', 'Fichier : ' . $filename . ' - Erreur : ' . $e->getMessage());
             }
             wp_send_json_error(['message' => $e->getMessage()]);

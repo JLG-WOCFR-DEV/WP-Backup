@@ -13,7 +13,7 @@ final class BJLG_REST_APITest extends TestCase
 {
     public function test_verify_jwt_token_returns_false_for_invalid_signature(): void
     {
-        $api = new BJLG_REST_API();
+        $api = new BJLG\BJLG_REST_API();
 
         $header = ['typ' => 'JWT', 'alg' => 'HS256'];
         $payload = [
@@ -41,7 +41,7 @@ final class BJLG_REST_APITest extends TestCase
 
         $token = $base64Header . '.' . $base64Payload . '.' . $invalidSignature;
 
-        $reflection = new ReflectionClass(BJLG_REST_API::class);
+        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
         $method = $reflection->getMethod('verify_jwt_token');
         $method->setAccessible(true);
 
@@ -52,7 +52,7 @@ final class BJLG_REST_APITest extends TestCase
     {
         $GLOBALS['bjlg_test_options'] = [];
 
-        $api = new BJLG_REST_API();
+        $api = new BJLG\BJLG_REST_API();
 
         $api_key = 'test-api-key';
         $hashed_key = wp_hash_password($api_key);
@@ -65,7 +65,7 @@ final class BJLG_REST_APITest extends TestCase
             'last_used' => $initial_last_used,
         ]]);
 
-        $reflection = new ReflectionClass(BJLG_REST_API::class);
+        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
         $method = $reflection->getMethod('verify_api_key');
         $method->setAccessible(true);
 
@@ -85,7 +85,7 @@ final class BJLG_REST_APITest extends TestCase
     {
         $GLOBALS['bjlg_test_options'] = [];
 
-        $api = new BJLG_REST_API();
+        $api = new BJLG\BJLG_REST_API();
 
         $api_key = 'legacy-api-key';
 
@@ -94,7 +94,7 @@ final class BJLG_REST_APITest extends TestCase
             'usage_count' => 0,
         ]]);
 
-        $reflection = new ReflectionClass(BJLG_REST_API::class);
+        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
         $method = $reflection->getMethod('verify_api_key');
         $method->setAccessible(true);
 
@@ -108,7 +108,7 @@ final class BJLG_REST_APITest extends TestCase
 
     public function test_filter_api_keys_before_save_hashes_plain_keys(): void
     {
-        $api = new BJLG_REST_API();
+        $api = new BJLG\BJLG_REST_API();
 
         $plain_key = 'plain-key';
 

@@ -1,5 +1,12 @@
 <?php
-if (!defined('ABSPATH')) exit;
+namespace BJLG;
+
+use Exception;
+use ZipArchive;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 require_once __DIR__ . '/class-bjlg-backup.php';
 
@@ -16,7 +23,7 @@ class BJLG_Restore {
     private $backup_manager;
 
     public function __construct($backup_manager = null) {
-        if ($backup_manager === null && class_exists('BJLG_Backup')) {
+        if ($backup_manager === null && class_exists(BJLG_Backup::class)) {
             $backup_manager = new BJLG_Backup();
         }
 
@@ -162,7 +169,7 @@ class BJLG_Restore {
         try {
             $encrypted_password = $this->encrypt_password_for_transient($password);
         } catch (Exception $exception) {
-            if (class_exists('BJLG_Debug')) {
+            if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log('Échec du chiffrement du mot de passe de restauration : ' . $exception->getMessage(), 'error');
             }
             wp_send_json_error(['message' => 'Impossible de sécuriser le mot de passe fourni.']);
@@ -224,7 +231,7 @@ class BJLG_Restore {
             try {
                 $password = $this->decrypt_password_from_transient($encrypted_password);
             } catch (Exception $exception) {
-                if (class_exists('BJLG_Debug')) {
+                if (class_exists(BJLG_Debug::class)) {
                     BJLG_Debug::log("ERREUR: Échec du déchiffrement du mot de passe pour la tâche {$task_id} : " . $exception->getMessage(), 'error');
                 }
             }

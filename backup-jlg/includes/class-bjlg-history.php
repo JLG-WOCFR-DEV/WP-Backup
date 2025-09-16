@@ -1,5 +1,9 @@
 <?php
-if (!defined('ABSPATH')) exit;
+namespace BJLG;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
  * Gère la table d'historique (audit trail) pour toutes les actions du plugin.
