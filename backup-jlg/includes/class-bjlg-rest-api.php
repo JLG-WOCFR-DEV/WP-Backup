@@ -279,9 +279,16 @@ class BJLG_REST_API {
      * Vérification des permissions admin
      */
     public function check_admin_permissions($request) {
-        if (!$this->check_permissions($request)) {
+        $permissions_check = $this->check_permissions($request);
+
+        if (is_wp_error($permissions_check)) {
+            return $permissions_check;
+        }
+
+        if (!$permissions_check) {
             return false;
         }
+
         return current_user_can('manage_options');
     }
     
