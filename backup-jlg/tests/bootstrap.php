@@ -44,6 +44,18 @@ if (!function_exists('add_action')) {
     }
 }
 
+if (!function_exists('add_filter')) {
+    function add_filter($hook, $callback, $priority = 10, $accepted_args = 1) {
+        // No-op for tests.
+    }
+}
+
+if (!function_exists('apply_filters')) {
+    function apply_filters($hook, $value) {
+        return $value;
+    }
+}
+
 if (!function_exists('check_ajax_referer')) {
     function check_ajax_referer($action = -1, $query_arg = false, $die = true) {
         return true;
@@ -66,6 +78,30 @@ if (!function_exists('update_option')) {
     function update_option($option, $value) {
         $GLOBALS['bjlg_test_options'][$option] = $value;
         return true;
+    }
+}
+
+if (!function_exists('wp_hash_password')) {
+    function wp_hash_password($password) {
+        return password_hash($password, PASSWORD_DEFAULT);
+    }
+}
+
+if (!function_exists('wp_check_password')) {
+    function wp_check_password($password, $hash) {
+        return password_verify($password, $hash);
+    }
+}
+
+if (!function_exists('wp_password_needs_rehash')) {
+    function wp_password_needs_rehash($hash) {
+        $info = password_get_info($hash);
+
+        if (!empty($info['algo'])) {
+            return password_needs_rehash($hash, PASSWORD_DEFAULT);
+        }
+
+        return false;
     }
 }
 

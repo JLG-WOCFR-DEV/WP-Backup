@@ -15,7 +15,9 @@ class BJLG_REST_API {
     
     public function __construct() {
         add_action('rest_api_init', [$this, 'register_routes']);
-        
+        add_filter('pre_update_option_bjlg_api_keys', [$this, 'filter_api_keys_before_save'], 10, 3);
+        add_action('add_option_bjlg_api_keys', [$this, 'handle_api_keys_added'], 10, 2);
+
         // Initialiser le rate limiter
         if (class_exists('BJLG_Rate_Limiter')) {
             $this->rate_limiter = new BJLG_Rate_Limiter();
@@ -281,27 +283,153 @@ class BJLG_REST_API {
      */
     private function verify_api_key($api_key) {
         $stored_keys = get_option('bjlg_api_keys', []);
-        
+
         foreach ($stored_keys as $index => &$key_data) {
-            if (hash_equals($key_data['key'], $api_key)) {
-                // Vérifier l'expiration
-                if (isset($key_data['expires']) && $key_data['expires'] < time()) {
-                    unset($key_data);
-                    return false;
-                }
+            $stored_value = isset($key_data['key']) ? $key_data['key'] : '';
 
-                // Mettre à jour l'utilisation
-                $key_data['last_used'] = time();
-                $key_data['usage_count'] = ($key_data['usage_count'] ?? 0) + 1;
-                $stored_keys[$index] = $key_data;
-                update_option('bjlg_api_keys', $stored_keys);
+            if (!is_string($stored_value) || $stored_value === '') {
+                continue;
+            }
 
+            $is_match = $this->check_api_key($api_key, $stored_value);
+            $needs_rehash = $this->should_rehash_api_key($stored_value);
+
+            if (!$is_match && !$this->is_api_key_hashed($stored_value) && hash_equals($stored_value, $api_key)) {
+                $is_match = true;
+                $needs_rehash = true;
+            }
+
+            if (!$is_match) {
+                continue;
+            }
+
+            if (isset($key_data['expires']) && $key_data['expires'] < time()) {
                 unset($key_data);
+                return false;
+            }
+
+            if ($needs_rehash) {
+                $key_data['key'] = $this->hash_api_key($api_key);
+            }
+
+            $key_data['last_used'] = time();
+            $key_data['usage_count'] = ($key_data['usage_count'] ?? 0) + 1;
+            $stored_keys[$index] = $key_data;
+            update_option('bjlg_api_keys', $stored_keys);
+
+            unset($key_data);
+            return true;
+        }
+
+        unset($key_data);
+        return false;
+    }
+
+    public function filter_api_keys_before_save($new_value, $old_value = null, $option = '') {
+        return $this->sanitize_api_keys($new_value);
+    }
+
+    public function handle_api_keys_added($option, $value) {
+        $sanitized = $this->sanitize_api_keys($value);
+
+        if ($sanitized !== $value) {
+            update_option($option, $sanitized);
+        }
+    }
+
+    private function sanitize_api_keys($keys) {
+        if (!is_array($keys)) {
+            return $keys;
+        }
+
+        foreach ($keys as $index => $key_data) {
+            if (!is_array($key_data)) {
+                continue;
+            }
+
+            if (isset($key_data['key']) && !$this->is_api_key_hashed($key_data['key'])) {
+                $keys[$index]['key'] = $this->hash_api_key($key_data['key']);
+            }
+
+            foreach (['plain_key', 'raw_key', 'display_key', 'api_key_plain', 'api_key_plaintext'] as $sensitive_field) {
+                if (isset($keys[$index][$sensitive_field])) {
+                    unset($keys[$index][$sensitive_field]);
+                }
+            }
+        }
+
+        return $keys;
+    }
+
+    private function hash_api_key($key) {
+        if (function_exists('wp_hash_password')) {
+            return wp_hash_password($key);
+        }
+
+        if (function_exists('password_hash')) {
+            return password_hash($key, PASSWORD_DEFAULT);
+        }
+
+        return hash('sha256', $key);
+    }
+
+    private function check_api_key($raw_key, $stored_value) {
+        if (!is_string($stored_value) || $stored_value === '') {
+            return false;
+        }
+
+        if ($this->is_api_key_hashed($stored_value)) {
+            if (function_exists('wp_check_password')) {
+                return wp_check_password($raw_key, $stored_value);
+            }
+
+            if (function_exists('password_verify')) {
+                return password_verify($raw_key, $stored_value);
+            }
+        }
+
+        return hash_equals($stored_value, $raw_key);
+    }
+
+    private function should_rehash_api_key($stored_value) {
+        if (!$this->is_api_key_hashed($stored_value)) {
+            return true;
+        }
+
+        if (function_exists('wp_password_needs_rehash')) {
+            return wp_password_needs_rehash($stored_value);
+        }
+
+        if (function_exists('password_needs_rehash')) {
+            $info = password_get_info($stored_value);
+            if (!empty($info['algo'])) {
+                return password_needs_rehash($stored_value, PASSWORD_DEFAULT);
+            }
+        }
+
+        return false;
+    }
+
+    private function is_api_key_hashed($value) {
+        if (!is_string($value) || $value === '') {
+            return false;
+        }
+
+        if (strpos($value, '$P$') === 0 || strpos($value, '$H$') === 0) {
+            return true;
+        }
+
+        if (strpos($value, '$argon2') === 0 || strpos($value, '$2y$') === 0 || strpos($value, '$2a$') === 0 || strpos($value, '$2b$') === 0) {
+            return true;
+        }
+
+        if (function_exists('password_get_info')) {
+            $info = password_get_info($value);
+            if (!empty($info['algo'])) {
                 return true;
             }
         }
 
-        unset($key_data);
         return false;
     }
     

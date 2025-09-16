@@ -55,11 +55,12 @@ final class BJLG_REST_APITest extends TestCase
         $api = new BJLG_REST_API();
 
         $api_key = 'test-api-key';
+        $hashed_key = wp_hash_password($api_key);
         $initial_usage_count = 2;
         $initial_last_used = time() - 3600;
 
         update_option('bjlg_api_keys', [[
-            'key' => $api_key,
+            'key' => $hashed_key,
             'usage_count' => $initial_usage_count,
             'last_used' => $initial_last_used,
         ]]);
@@ -78,6 +79,49 @@ final class BJLG_REST_APITest extends TestCase
         $this->assertSame($initial_usage_count + 1, $updated_keys[0]['usage_count']);
         $this->assertArrayHasKey('last_used', $updated_keys[0]);
         $this->assertGreaterThanOrEqual($before_verification, $updated_keys[0]['last_used']);
+    }
+
+    public function test_verify_api_key_migrates_plain_keys(): void
+    {
+        $GLOBALS['bjlg_test_options'] = [];
+
+        $api = new BJLG_REST_API();
+
+        $api_key = 'legacy-api-key';
+
+        update_option('bjlg_api_keys', [[
+            'key' => $api_key,
+            'usage_count' => 0,
+        ]]);
+
+        $reflection = new ReflectionClass(BJLG_REST_API::class);
+        $method = $reflection->getMethod('verify_api_key');
+        $method->setAccessible(true);
+
+        $this->assertTrue($method->invoke($api, $api_key));
+
+        $updated_keys = get_option('bjlg_api_keys');
+
+        $this->assertNotSame($api_key, $updated_keys[0]['key']);
+        $this->assertTrue(wp_check_password($api_key, $updated_keys[0]['key']));
+    }
+
+    public function test_filter_api_keys_before_save_hashes_plain_keys(): void
+    {
+        $api = new BJLG_REST_API();
+
+        $plain_key = 'plain-key';
+
+        $filtered = $api->filter_api_keys_before_save([
+            [
+                'key' => $plain_key,
+                'label' => 'My key',
+            ],
+        ]);
+
+        $this->assertNotSame($plain_key, $filtered[0]['key']);
+        $this->assertTrue(wp_check_password($plain_key, $filtered[0]['key']));
+        $this->assertArrayNotHasKey('plain_key', $filtered[0]);
     }
 
     private function base64UrlEncode(string $data): string
