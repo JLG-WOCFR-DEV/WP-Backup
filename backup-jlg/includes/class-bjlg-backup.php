@@ -479,7 +479,7 @@ class BJLG_Backup {
     /**
      * Ajoute récursivement un dossier au ZIP
      */
-    private function add_folder_to_zip(&$zip, $folder, $zip_path, $exclude = [], $incremental = false, $modified_files = []) {
+    public function add_folder_to_zip(&$zip, $folder, $zip_path, $exclude = [], $incremental = false, $modified_files = []) {
         $handle = opendir($folder);
         
         while (($file = readdir($handle)) !== false) {
@@ -540,7 +540,7 @@ class BJLG_Backup {
     /**
      * Exporte la base de données (méthode publique pour la sauvegarde pré-restauration)
      */
-    private function dump_database($filepath) {
+    public function dump_database($filepath) {
         global $wpdb;
         
         $handle = fopen($filepath, 'w');

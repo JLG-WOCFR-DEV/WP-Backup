@@ -1,12 +1,27 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+require_once __DIR__ . '/class-bjlg-backup.php';
+
 /**
  * Gère tout le processus de restauration, y compris la pré-sauvegarde de sécurité.
  */
 class BJLG_Restore {
 
-    public function __construct() {
+    /**
+     * Instance du gestionnaire de sauvegarde.
+     *
+     * @var BJLG_Backup|null
+     */
+    private $backup_manager;
+
+    public function __construct($backup_manager = null) {
+        if ($backup_manager === null && class_exists('BJLG_Backup')) {
+            $backup_manager = new BJLG_Backup();
+        }
+
+        $this->backup_manager = $backup_manager;
+
         add_action('wp_ajax_bjlg_create_pre_restore_backup', [$this, 'handle_create_pre_restore_backup']);
         add_action('wp_ajax_bjlg_run_restore', [$this, 'handle_run_restore']);
         add_action('wp_ajax_bjlg_upload_restore_file', [$this, 'handle_upload_restore_file']);
@@ -25,14 +40,11 @@ class BJLG_Restore {
         try {
             BJLG_Debug::log("Lancement de la sauvegarde de sécurité pré-restauration.");
             
-            $backup_manager = new BJLG_Backup();
-            $reflection = new ReflectionClass($backup_manager);
+            if (!($this->backup_manager instanceof BJLG_Backup)) {
+                throw new Exception('Gestionnaire de sauvegarde indisponible.');
+            }
 
-            $dump_database_method = $reflection->getMethod('dump_database');
-            $dump_database_method->setAccessible(true);
-            
-            $add_folder_to_zip_method = $reflection->getMethod('add_folder_to_zip');
-            $add_folder_to_zip_method->setAccessible(true);
+            $backup_manager = $this->backup_manager;
 
             $backup_filename = 'pre-restore-backup-' . date('Y-m-d-H-i-s') . '.zip';
             $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
@@ -54,14 +66,14 @@ class BJLG_Restore {
             $zip->addFromString('backup-manifest.json', json_encode($manifest, JSON_PRETTY_PRINT));
             
             // Export de la base de données
-            $dump_database_method->invoke($backup_manager, $sql_filepath);
+            $backup_manager->dump_database($sql_filepath);
             $zip->addFile($sql_filepath, 'database.sql');
 
             // Ajout des dossiers
             $upload_dir_info = wp_get_upload_dir();
-            $add_folder_to_zip_method->invoke($backup_manager, $zip, WP_PLUGIN_DIR, 'wp-content/plugins/', []);
-            $add_folder_to_zip_method->invoke($backup_manager, $zip, get_theme_root(), 'wp-content/themes/', []);
-            $add_folder_to_zip_method->invoke($backup_manager, $zip, $upload_dir_info['basedir'], 'wp-content/uploads/', []);
+            $backup_manager->add_folder_to_zip($zip, WP_PLUGIN_DIR, 'wp-content/plugins/', []);
+            $backup_manager->add_folder_to_zip($zip, get_theme_root(), 'wp-content/themes/', []);
+            $backup_manager->add_folder_to_zip($zip, $upload_dir_info['basedir'], 'wp-content/uploads/', []);
 
             $zip->close();
             

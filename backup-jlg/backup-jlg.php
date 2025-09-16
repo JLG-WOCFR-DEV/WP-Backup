@@ -100,7 +100,11 @@ final class BJLG_Plugin {
     }
     
     private function init_services() {
-        new BJLG_Admin(); new BJLG_Actions(); new BJLG_Backup(); new BJLG_Restore();
+        new BJLG_Admin();
+        new BJLG_Actions();
+
+        $backup_manager = new BJLG_Backup();
+        new BJLG_Restore($backup_manager);
         new BJLG_Scheduler(); new BJLG_Cleanup(); new BJLG_Encryption(); new BJLG_Health_Check();
         new BJLG_Diagnostics(); new BJLG_Webhooks(); new BJLG_Incremental(); new BJLG_Performance();
         new BJLG_REST_API(); new BJLG_Settings();
