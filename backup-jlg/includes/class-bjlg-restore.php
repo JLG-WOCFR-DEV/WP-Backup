@@ -142,20 +142,39 @@ class BJLG_Restore {
         }
 
         $uploaded_file = $_FILES['restore_file'];
-        
-        // Vérifications de sécurité
-        $allowed_types = ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'];
-        if (!in_array($uploaded_file['type'], $allowed_types)) {
-            wp_send_json_error(['message' => 'Type de fichier non autorisé.']);
+
+        $original_filename = isset($uploaded_file['name']) ? $uploaded_file['name'] : '';
+        $sanitized_filename = sanitize_file_name(wp_unslash($original_filename));
+        if ($sanitized_filename === '') {
+            wp_send_json_error(['message' => 'Nom de fichier invalide.']);
         }
 
-        $file_extension = strtolower(pathinfo($uploaded_file['name'], PATHINFO_EXTENSION));
-        if (!in_array($file_extension, ['zip', 'enc'])) {
-            wp_send_json_error(['message' => 'Extension de fichier non autorisée.']);
+        // Vérifications de sécurité
+        $allowed_mimes = [
+            'zip' => 'application/zip',
+            'enc' => 'application/octet-stream',
+        ];
+        $checked_file = wp_check_filetype_and_ext(
+            $uploaded_file['tmp_name'],
+            $sanitized_filename,
+            $allowed_mimes
+        );
+
+        if (empty($checked_file['ext']) || empty($checked_file['type']) || !array_key_exists($checked_file['ext'], $allowed_mimes)) {
+            wp_send_json_error(['message' => 'Type ou extension de fichier non autorisé.']);
+        }
+
+        if (!wp_mkdir_p(BJLG_BACKUP_DIR)) {
+            wp_send_json_error(['message' => 'Répertoire de sauvegarde inaccessible.']);
+        }
+
+        $is_writable = function_exists('wp_is_writable') ? wp_is_writable(BJLG_BACKUP_DIR) : is_writable(BJLG_BACKUP_DIR);
+        if (!$is_writable) {
+            wp_send_json_error(['message' => 'Répertoire de sauvegarde non accessible en écriture.']);
         }
 
         // Déplacer le fichier uploadé
-        $destination = BJLG_BACKUP_DIR . 'restore_' . uniqid() . '_' . basename($uploaded_file['name']);
+        $destination = BJLG_BACKUP_DIR . 'restore_' . uniqid() . '_' . $sanitized_filename;
         
         if (!move_uploaded_file($uploaded_file['tmp_name'], $destination)) {
             wp_send_json_error(['message' => 'Impossible de déplacer le fichier téléversé.']);
