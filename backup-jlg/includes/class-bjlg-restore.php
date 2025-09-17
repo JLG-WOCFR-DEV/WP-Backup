@@ -2,6 +2,7 @@
 namespace BJLG;
 
 use Exception;
+use RuntimeException;
 use ZipArchive;
 
 if (!defined('ABSPATH')) {
