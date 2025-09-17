@@ -422,46 +422,49 @@ class BJLG_Restore {
             }
 
             $progress = 50;
-            $progress_step = 40 / count($folders_to_restore);
-            
-            foreach ($folders_to_restore as $type => $destination) {
-                $progress += $progress_step;
-                
-                set_transient($task_id, [
-                    'progress' => round($progress),
-                    'status' => 'running',
-                    'status_text' => "Restauration des {$type}..."
-                ], HOUR_IN_SECONDS);
-                
-                $source_folder = "wp-content/{$type}";
-                
-                // Extraire vers le dossier temporaire
-                $files_to_extract = [];
-                for ($i = 0; $i < $zip->numFiles; $i++) {
-                    $file = $zip->getNameIndex($i);
-                    if (strpos($file, $source_folder) === 0) {
-                        $files_to_extract[] = $file;
-                    }
-                }
-                
-                if (!empty($files_to_extract)) {
-                    $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
 
-                    foreach ($files_to_extract as $file_to_extract) {
-                        if (!array_key_exists($file_to_extract, $allowed_entries)) {
-                            throw new Exception("Entrée d'archive invalide détectée : {$file_to_extract}");
+            if (!empty($folders_to_restore)) {
+                $progress_step = 40 / count($folders_to_restore);
+
+                foreach ($folders_to_restore as $type => $destination) {
+                    $progress += $progress_step;
+
+                    set_transient($task_id, [
+                        'progress' => round($progress),
+                        'status' => 'running',
+                        'status_text' => "Restauration des {$type}..."
+                    ], HOUR_IN_SECONDS);
+
+                    $source_folder = "wp-content/{$type}";
+
+                    // Extraire vers le dossier temporaire
+                    $files_to_extract = [];
+                    for ($i = 0; $i < $zip->numFiles; $i++) {
+                        $file = $zip->getNameIndex($i);
+                        if (strpos($file, $source_folder) === 0) {
+                            $files_to_extract[] = $file;
                         }
                     }
 
-                    $zip->extractTo($temp_extract_dir, $files_to_extract);
+                    if (!empty($files_to_extract)) {
+                        $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
 
-                    // Copier vers la destination finale
-                    $this->recursive_copy(
-                        $temp_extract_dir . '/' . $source_folder,
-                        $destination
-                    );
-                    
-                    BJLG_Debug::log("Restauration de {$type} terminée.");
+                        foreach ($files_to_extract as $file_to_extract) {
+                            if (!array_key_exists($file_to_extract, $allowed_entries)) {
+                                throw new Exception("Entrée d'archive invalide détectée : {$file_to_extract}");
+                            }
+                        }
+
+                        $zip->extractTo($temp_extract_dir, $files_to_extract);
+
+                        // Copier vers la destination finale
+                        $this->recursive_copy(
+                            $temp_extract_dir . '/' . $source_folder,
+                            $destination
+                        );
+
+                        BJLG_Debug::log("Restauration de {$type} terminée.");
+                    }
                 }
             }
 
