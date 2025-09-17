@@ -18,6 +18,9 @@ jQuery(document).ready(function($) {
             components.push($(this).val());
         });
 
+        const encrypt = $form.find('input[name="encrypt_backup"]').is(':checked');
+        const incremental = $form.find('input[name="incremental_backup"]').is(':checked');
+
         if (components.length === 0) {
             alert('Veuillez sélectionner au moins un composant à sauvegarder.');
             return;
@@ -29,7 +32,13 @@ jQuery(document).ready(function($) {
         $statusText.text('Initialisation...');
         $progressBar.css('width', '5%').text('5%');
 
-        const data = { action: 'bjlg_start_backup_task', nonce: bjlg_ajax.nonce, components: components };
+        const data = {
+            action: 'bjlg_start_backup_task',
+            nonce: bjlg_ajax.nonce,
+            components: components,
+            encrypt: encrypt,
+            incremental: incremental
+        };
         let debugReport = "--- 1. REQUÊTE DE LANCEMENT ---\nDonnées envoyées:\n" + JSON.stringify(data, null, 2);
         if ($debugOutput.length) $debugOutput.text(debugReport);
 
