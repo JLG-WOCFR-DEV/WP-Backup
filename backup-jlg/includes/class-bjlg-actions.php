@@ -101,7 +101,7 @@ class BJLG_Actions {
 
         $validation = $this->validate_download_token($token);
         if (is_wp_error($validation)) {
-            $status = (int) ($validation->get_error_data('status') ?? 403);
+            $status = $this->determine_error_status($validation);
             wp_send_json_error(['message' => $validation->get_error_message()], $status);
         }
 
@@ -124,7 +124,7 @@ class BJLG_Actions {
 
         $validation = $this->validate_download_token($token);
         if (is_wp_error($validation)) {
-            $status = (int) ($validation->get_error_data('status') ?? 403);
+            $status = $this->determine_error_status($validation);
             status_header($status);
             wp_die(esc_html($validation->get_error_message()), '', ['response' => $status]);
         }
@@ -178,6 +178,26 @@ class BJLG_Actions {
         }
 
         return [$real_filepath, $transient_key];
+    }
+
+    /**
+     * Determine the HTTP status code that should be used for a WP_Error response.
+     */
+    private function determine_error_status(WP_Error $error) {
+        $data = $error->get_error_data();
+
+        if (!is_array($data)) {
+            $error_code = $error->get_error_code();
+            if (!empty($error_code)) {
+                $data = $error->get_error_data($error_code);
+            }
+        }
+
+        if (is_array($data) && isset($data['status'])) {
+            return (int) $data['status'];
+        }
+
+        return 403;
     }
 
     /**
