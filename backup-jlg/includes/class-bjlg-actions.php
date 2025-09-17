@@ -17,6 +17,7 @@ class BJLG_Actions {
         add_action('wp_ajax_bjlg_delete_backup', [$this, 'handle_delete_backup']);
         add_action('wp_ajax_bjlg_download', [$this, 'handle_download_request']);
         add_action('wp_ajax_nopriv_bjlg_download', [$this, 'handle_download_request']);
+        add_action('init', [$this, 'maybe_handle_public_download']);
         add_action('template_redirect', [$this, 'maybe_handle_public_download']);
     }
 
