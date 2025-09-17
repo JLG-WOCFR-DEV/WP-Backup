@@ -1,15 +1,36 @@
 <?php
 declare(strict_types=1);
 
-use PHPUnit\Framework\TestCase;
-
-require_once __DIR__ . '/../includes/class-bjlg-rest-api.php';
-
-if (!defined('AUTH_KEY')) {
-    define('AUTH_KEY', 'test-auth-key');
+namespace BJLG {
+    if (!class_exists(__NAMESPACE__ . '\\BJLG_History')) {
+        class BJLG_History
+        {
+            public static function get_stats($period = 'week')
+            {
+                return [
+                    'total_actions' => 0,
+                    'successful' => 0,
+                    'failed' => 0,
+                    'info' => 0,
+                    'by_action' => [],
+                    'by_user' => [],
+                    'most_active_hour' => null,
+                ];
+            }
+        }
+    }
 }
 
-final class BJLG_REST_APITest extends TestCase
+namespace {
+    use PHPUnit\Framework\TestCase;
+
+    require_once __DIR__ . '/../includes/class-bjlg-rest-api.php';
+
+    if (!defined('AUTH_KEY')) {
+        define('AUTH_KEY', 'test-auth-key');
+    }
+
+    final class BJLG_REST_APITest extends TestCase
 {
     public function test_verify_jwt_token_returns_false_for_invalid_signature(): void
     {
@@ -184,6 +205,41 @@ final class BJLG_REST_APITest extends TestCase
         }
     }
 
+    public function test_get_stats_handles_disk_space_failure(): void
+    {
+        $GLOBALS['bjlg_test_disk_total_space_mock'] = static function (string $directory) {
+            return false;
+        };
+
+        $GLOBALS['bjlg_test_disk_free_space_mock'] = static function (string $directory) {
+            return 1024;
+        };
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $request = new class {
+            public function get_param($key)
+            {
+                if ($key === 'period') {
+                    return 'week';
+                }
+
+                return null;
+            }
+        };
+
+        $response = $api->get_stats($request);
+
+        $this->assertIsArray($response);
+        $this->assertArrayHasKey('disk', $response);
+        $this->assertArrayHasKey('usage_percent', $response['disk']);
+        $this->assertNull($response['disk']['usage_percent']);
+        $this->assertArrayHasKey('calculation_error', $response['disk']);
+        $this->assertTrue($response['disk']['calculation_error']);
+
+        unset($GLOBALS['bjlg_test_disk_total_space_mock'], $GLOBALS['bjlg_test_disk_free_space_mock']);
+    }
+
     public function test_format_backup_data_generates_download_token(): void
     {
         $GLOBALS['bjlg_test_transients'] = [];
@@ -223,4 +279,6 @@ final class BJLG_REST_APITest extends TestCase
     {
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
     }
+}
+
 }

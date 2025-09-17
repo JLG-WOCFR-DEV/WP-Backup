@@ -937,6 +937,22 @@ class BJLG_REST_API {
         $cleanup = new BJLG_Cleanup();
         $storage_stats = $cleanup->get_storage_stats();
         
+        $disk_total = $storage_stats['disk_total'];
+        $disk_free = $storage_stats['disk_free'];
+
+        $disk_calculation_error = false;
+        $disk_usage_percent = null;
+
+        if (!is_numeric($disk_total) || $disk_total <= 0 || !is_numeric($disk_free)) {
+            $disk_calculation_error = true;
+        } else {
+            $disk_usage_percent = round((($disk_total - $disk_free) / $disk_total) * 100, 2);
+        }
+
+        if (!empty($storage_stats['disk_space_error'])) {
+            $disk_calculation_error = true;
+        }
+
         return rest_ensure_response([
             'period' => $period,
             'backups' => [
@@ -950,7 +966,8 @@ class BJLG_REST_API {
             'disk' => [
                 'free' => $storage_stats['disk_free'],
                 'total' => $storage_stats['disk_total'],
-                'usage_percent' => round(($storage_stats['disk_total'] - $storage_stats['disk_free']) / $storage_stats['disk_total'] * 100, 2)
+                'usage_percent' => $disk_usage_percent,
+                'calculation_error' => $disk_calculation_error
             ]
         ]);
     }
