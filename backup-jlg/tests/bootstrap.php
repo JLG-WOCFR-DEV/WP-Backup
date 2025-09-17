@@ -122,6 +122,22 @@ if (!class_exists('BJLG_Test_JSON_Response')) {
     }
 }
 
+if (!class_exists('BJLG_Test_WP_Die')) {
+    class BJLG_Test_WP_Die extends RuntimeException {
+        /** @var int|null */
+        public $status_code;
+
+        /**
+         * @param string   $message
+         * @param int|null $status_code
+         */
+        public function __construct($message = '', $status_code = null) {
+            $this->status_code = $status_code;
+            parent::__construct((string) $message);
+        }
+    }
+}
+
 if (!function_exists('add_action')) {
     function add_action($hook, $callback) {
         // No-op for tests.
@@ -241,6 +257,26 @@ if (!function_exists('wp_send_json_error')) {
 if (!function_exists('wp_send_json_success')) {
     function wp_send_json_success($data = null, $status_code = null) {
         throw new BJLG_Test_JSON_Response($data, $status_code);
+    }
+}
+
+if (!function_exists('status_header')) {
+    function status_header($code) {
+        $GLOBALS['bjlg_test_last_status_header'] = $code;
+    }
+}
+
+if (!function_exists('wp_die')) {
+    function wp_die($message = '', $title = '', $args = []) {
+        $response_code = null;
+
+        if (is_array($args) && isset($args['response'])) {
+            $response_code = $args['response'];
+        } elseif (!is_array($args) && $args !== null) {
+            $response_code = (int) $args;
+        }
+
+        throw new BJLG_Test_WP_Die($message, $response_code);
     }
 }
 
