@@ -184,6 +184,41 @@ final class BJLG_REST_APITest extends TestCase
         }
     }
 
+    public function test_format_backup_data_generates_download_token(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $tempFile = tempnam(BJLG_BACKUP_DIR, 'bjlg-test-backup-');
+        file_put_contents($tempFile, 'backup-content');
+
+        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
+        $method = $reflection->getMethod('format_backup_data');
+        $method->setAccessible(true);
+
+        $data = $method->invoke($api, $tempFile);
+
+        $this->assertArrayHasKey('download_url', $data);
+        $this->assertArrayHasKey('download_token', $data);
+        $this->assertArrayHasKey('download_rest_url', $data);
+
+        $parsed_url = parse_url($data['download_url']);
+        $query_args = [];
+
+        if (!empty($parsed_url['query'])) {
+            parse_str($parsed_url['query'], $query_args);
+        }
+
+        $this->assertArrayHasKey('token', $query_args);
+        $this->assertSame($data['download_token'], $query_args['token']);
+        $this->assertSame($tempFile, get_transient('bjlg_download_' . $data['download_token']));
+
+        if (file_exists($tempFile)) {
+            unlink($tempFile);
+        }
+    }
+
     private function base64UrlEncode(string $data): string
     {
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
