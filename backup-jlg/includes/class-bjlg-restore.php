@@ -385,14 +385,20 @@ class BJLG_Restore {
                     'status' => 'running',
                     'status_text' => 'Restauration de la base de données...'
                 ], HOUR_IN_SECONDS);
-                
+
                 if ($zip->locateName('database.sql') !== false) {
+                    $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
+
+                    if (!array_key_exists('database.sql', $allowed_entries)) {
+                        throw new Exception("Entrée d'archive invalide détectée : database.sql");
+                    }
+
                     $zip->extractTo($temp_extract_dir, 'database.sql');
                     $sql_filepath = $temp_extract_dir . '/database.sql';
-                    
+
                     BJLG_Debug::log("Import de la base de données...");
                     $this->import_database($sql_filepath);
-                    
+
                     set_transient($task_id, [
                         'progress' => 50,
                         'status' => 'running',
@@ -439,8 +445,16 @@ class BJLG_Restore {
                 }
                 
                 if (!empty($files_to_extract)) {
+                    $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
+
+                    foreach ($files_to_extract as $file_to_extract) {
+                        if (!array_key_exists($file_to_extract, $allowed_entries)) {
+                            throw new Exception("Entrée d'archive invalide détectée : {$file_to_extract}");
+                        }
+                    }
+
                     $zip->extractTo($temp_extract_dir, $files_to_extract);
-                    
+
                     // Copier vers la destination finale
                     $this->recursive_copy(
                         $temp_extract_dir . '/' . $source_folder,
@@ -475,7 +489,7 @@ class BJLG_Restore {
 
         } catch (Exception $e) {
             BJLG_History::log('restore_run', 'failure', "Erreur : " . $e->getMessage());
-            
+
             // Nettoyage en cas d'erreur
             if (is_dir($temp_extract_dir)) {
                 $this->recursive_delete($temp_extract_dir);
@@ -486,6 +500,189 @@ class BJLG_Restore {
                 'status' => 'error',
                 'status_text' => 'Erreur : ' . $e->getMessage()
             ], HOUR_IN_SECONDS);
+        }
+    }
+
+    /**
+     * Construit la liste des entrées d'archive autorisées pour une extraction sécurisée.
+     *
+     * @param ZipArchive $zip
+     * @param string     $temp_extract_dir
+     * @return array<string, string>
+     * @throws Exception
+     */
+    private function build_allowed_zip_entries(ZipArchive $zip, $temp_extract_dir) {
+        $allowed_entries = [];
+
+        $base_realpath = realpath($temp_extract_dir);
+        if ($base_realpath === false) {
+            throw new Exception('Impossible de valider le répertoire temporaire.');
+        }
+
+        $base_realpath = $this->normalize_path_for_validation($base_realpath);
+
+        for ($index = 0; $index < $zip->numFiles; $index++) {
+            $entry_name = $zip->getNameIndex($index);
+
+            if ($entry_name === false) {
+                continue;
+            }
+
+            $normalized_entry = $this->normalize_zip_entry_name($entry_name);
+
+            if ($normalized_entry === '') {
+                $allowed_entries[$entry_name] = '';
+                continue;
+            }
+
+            if (strpos($normalized_entry, '..') !== false) {
+                throw new Exception("Entrée d'archive invalide détectée : {$entry_name}");
+            }
+
+            if ($normalized_entry[0] === '/' || preg_match('/^[A-Za-z]:/', $normalized_entry) === 1) {
+                throw new Exception("Entrée d'archive invalide détectée : {$entry_name}");
+            }
+
+            $relative_entry = ltrim($normalized_entry, '/');
+            $target_path = $this->join_paths($temp_extract_dir, $relative_entry);
+
+            if (substr($normalized_entry, -1) === '/') {
+                $directory_path = rtrim($target_path, '/\\');
+
+                if ($directory_path === '') {
+                    $directory_path = $temp_extract_dir;
+                }
+
+                $this->ensure_directory_exists($directory_path);
+
+                $real_target = realpath($directory_path);
+                if ($real_target === false) {
+                    throw new Exception("Entrée d'archive invalide détectée : {$entry_name}");
+                }
+
+                $real_target = $this->normalize_path_for_validation($real_target);
+                $this->assert_path_within_base($base_realpath, $real_target, $entry_name);
+
+                $allowed_entries[$entry_name] = $relative_entry;
+                continue;
+            }
+
+            $parent_directory = dirname($target_path);
+            if ($parent_directory !== '' && $parent_directory !== '.' && $parent_directory !== DIRECTORY_SEPARATOR) {
+                $this->ensure_directory_exists($parent_directory);
+            }
+
+            $real_parent = realpath($parent_directory ?: $temp_extract_dir);
+            if ($real_parent === false) {
+                throw new Exception("Entrée d'archive invalide détectée : {$entry_name}");
+            }
+
+            $real_parent = $this->normalize_path_for_validation($real_parent);
+            $this->assert_path_within_base($base_realpath, $real_parent, $entry_name);
+
+            $final_candidate = $this->normalize_path_for_validation($real_parent . '/' . basename($target_path));
+            $this->assert_path_within_base($base_realpath, $final_candidate, $entry_name);
+
+            $allowed_entries[$entry_name] = $relative_entry;
+        }
+
+        return $allowed_entries;
+    }
+
+    /**
+     * Normalise un nom d'entrée d'archive pour validation.
+     *
+     * @param string $entry_name
+     * @return string
+     */
+    private function normalize_zip_entry_name($entry_name) {
+        if (function_exists('wp_normalize_path')) {
+            $normalized = wp_normalize_path($entry_name);
+        } else {
+            $normalized = str_replace('\\', '/', (string) $entry_name);
+        }
+
+        while (strpos($normalized, './') === 0) {
+            $normalized = substr($normalized, 2);
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Normalise un chemin pour la comparaison des préfixes.
+     *
+     * @param string $path
+     * @return string
+     */
+    private function normalize_path_for_validation($path) {
+        if (function_exists('wp_normalize_path')) {
+            $normalized = wp_normalize_path($path);
+        } else {
+            $normalized = str_replace('\\', '/', (string) $path);
+        }
+
+        if ($normalized === '') {
+            return '';
+        }
+
+        if ($normalized !== '/') {
+            $normalized = rtrim($normalized, '/');
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Concatène un chemin de base avec un chemin relatif.
+     *
+     * @param string $base
+     * @param string $path
+     * @return string
+     */
+    private function join_paths($base, $path) {
+        $trimmed_base = rtrim($base, '/\\');
+
+        if ($path === '') {
+            return $trimmed_base;
+        }
+
+        return $trimmed_base . '/' . ltrim(str_replace('\\', '/', $path), '/');
+    }
+
+    /**
+     * Vérifie qu'un chemin est contenu dans un répertoire de base.
+     *
+     * @param string $base
+     * @param string $path
+     * @param string $entry_name
+     * @return void
+     * @throws Exception
+     */
+    private function assert_path_within_base($base, $path, $entry_name) {
+        if ($path === $base) {
+            return;
+        }
+
+        if (strpos($path, $base . '/') !== 0) {
+            throw new Exception("Entrée d'archive invalide détectée : {$entry_name}");
+        }
+    }
+
+    /**
+     * S'assure qu'un répertoire existe pour la validation des chemins.
+     *
+     * @param string $directory
+     * @return void
+     * @throws Exception
+     */
+    private function ensure_directory_exists($directory) {
+        if ($directory === '' || is_dir($directory)) {
+            return;
+        }
+
+        if (!@mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new Exception('Impossible de préparer le répertoire temporaire pour la validation.');
         }
     }
 
