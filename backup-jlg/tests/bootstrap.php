@@ -399,3 +399,33 @@ if (!function_exists('rest_url')) {
         return 'https://example.com/wp-json/' . ltrim($path, '/');
     }
 }
+
+if (!function_exists('rest_ensure_response')) {
+    function rest_ensure_response($response) {
+        return $response;
+    }
+}
+
+namespace BJLG {
+    if (!function_exists(__NAMESPACE__ . '\\disk_free_space')) {
+        function disk_free_space($directory)
+        {
+            if (isset($GLOBALS['bjlg_test_disk_free_space_mock']) && is_callable($GLOBALS['bjlg_test_disk_free_space_mock'])) {
+                return call_user_func($GLOBALS['bjlg_test_disk_free_space_mock'], $directory);
+            }
+
+            return \disk_free_space($directory);
+        }
+    }
+
+    if (!function_exists(__NAMESPACE__ . '\\disk_total_space')) {
+        function disk_total_space($directory)
+        {
+            if (isset($GLOBALS['bjlg_test_disk_total_space_mock']) && is_callable($GLOBALS['bjlg_test_disk_total_space_mock'])) {
+                return call_user_func($GLOBALS['bjlg_test_disk_total_space_mock'], $directory);
+            }
+
+            return \disk_total_space($directory);
+        }
+    }
+}

@@ -391,14 +391,18 @@ class BJLG_Cleanup {
      * Obtient des statistiques sur l'espace utilisé
      */
     public function get_storage_stats() {
+        $disk_free = @disk_free_space(BJLG_BACKUP_DIR);
+        $disk_total = @disk_total_space(BJLG_BACKUP_DIR);
+
         $stats = [
             'total_backups' => 0,
             'total_size' => 0,
             'oldest_backup' => null,
             'newest_backup' => null,
             'average_size' => 0,
-            'disk_free' => disk_free_space(BJLG_BACKUP_DIR),
-            'disk_total' => disk_total_space(BJLG_BACKUP_DIR)
+            'disk_free' => $disk_free !== false ? (float) $disk_free : null,
+            'disk_total' => $disk_total !== false ? (float) $disk_total : null,
+            'disk_space_error' => $disk_free === false || $disk_total === false
         ];
         
         $backups = glob(BJLG_BACKUP_DIR . '*.zip*');
