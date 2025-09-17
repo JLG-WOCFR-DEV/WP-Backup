@@ -97,9 +97,32 @@ class BJLG_Restore {
                 ],
             ];
 
+            $backup_dir_path = BJLG_BACKUP_DIR;
+            if (function_exists('wp_normalize_path')) {
+                $backup_dir_path = wp_normalize_path($backup_dir_path);
+            }
+            $backup_dir_path = rtrim($backup_dir_path, '/');
+
+            $normalized_backup_filepath = $backup_filepath;
+            if (function_exists('wp_normalize_path')) {
+                $normalized_backup_filepath = wp_normalize_path($backup_filepath);
+            }
+
+            $exclusions = array_values(array_unique(array_filter([
+                '*/bjlg-backups',
+                '*/bjlg-backups/*',
+                $backup_dir_path,
+                $backup_dir_path . '/*',
+                $normalized_backup_filepath,
+            ])));
+
+            if (class_exists('BJLG_Debug')) {
+                BJLG_Debug::log('Exclusions appliquées à la sauvegarde pré-restauration : ' . implode(', ', $exclusions));
+            }
+
             foreach ($directories as $directory) {
                 try {
-                    $backup_manager->add_folder_to_zip($zip, $directory['path'], $directory['zip'], []);
+                    $backup_manager->add_folder_to_zip($zip, $directory['path'], $directory['zip'], $exclusions);
                 } catch (Exception $exception) {
                     $message = sprintf(
                         "Impossible d'ajouter le répertoire %s (%s) à la sauvegarde de sécurité : %s",
@@ -113,6 +136,19 @@ class BJLG_Restore {
                     }
 
                     throw new Exception($message, 0, $exception);
+                }
+            }
+
+            if (class_exists('BJLG_Debug')) {
+                $has_backup_dir = (
+                    $zip->locateName('wp-content/uploads/bjlg-backups/', ZipArchive::FL_NOCASE) !== false
+                    || $zip->locateName('wp-content/uploads/bjlg-backups', ZipArchive::FL_NOCASE) !== false
+                );
+
+                if ($has_backup_dir) {
+                    BJLG_Debug::log("Contrôle de sécurité : le dossier bjlg-backups est encore présent dans l'archive pré-restauration.");
+                } else {
+                    BJLG_Debug::log("Contrôle de sécurité : le dossier bjlg-backups est exclu de l'archive pré-restauration.");
                 }
             }
 
