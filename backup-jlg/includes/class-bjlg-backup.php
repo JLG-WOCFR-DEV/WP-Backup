@@ -50,8 +50,9 @@ class BJLG_Backup {
         check_ajax_referer('bjlg_nonce', 'nonce');
 
         $components = isset($_POST['components']) ? array_map('sanitize_text_field', $_POST['components']) : [];
-        $encrypt = isset($_POST['encrypt']) && $_POST['encrypt'] === 'true';
-        $incremental = isset($_POST['incremental']) && $_POST['incremental'] === 'true';
+
+        $encrypt = $this->get_boolean_request_value('encrypt', 'encrypt_backup');
+        $incremental = $this->get_boolean_request_value('incremental', 'incremental_backup');
         
         if (empty($components)) {
             wp_send_json_error(['message' => 'Aucun composant sélectionné.']);
@@ -85,6 +86,43 @@ class BJLG_Backup {
             'task_id' => $task_id,
             'message' => 'Sauvegarde lancée en arrière-plan.'
         ]);
+    }
+
+    /**
+     * Récupère une valeur booléenne depuis la requête en acceptant plusieurs clés.
+     *
+     * @param string $primary_key
+     * @param string $fallback_key
+     * @return bool
+     */
+    private function get_boolean_request_value($primary_key, $fallback_key) {
+        $value = null;
+
+        if (isset($_POST[$primary_key])) {
+            $value = $_POST[$primary_key];
+        } elseif (isset($_POST[$fallback_key])) {
+            $value = $_POST[$fallback_key];
+        }
+
+        if ($value === null) {
+            return false;
+        }
+
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if ($value === '1' || $value === 1) {
+            return true;
+        }
+
+        if ($value === '0' || $value === 0) {
+            return false;
+        }
+
+        $filtered = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+        return $filtered === null ? false : $filtered;
     }
 
     /**
