@@ -52,4 +52,68 @@ final class BJLG_RestoreSecurityTest extends TestCase
 
         $this->assertSame($expected_sanitized, $decrypted_password);
     }
+
+    public function test_restore_rejects_directory_traversal_entries(): void
+    {
+        $malicious_target = rtrim(BJLG_BACKUP_DIR, '/\\') . '/malicious.php';
+
+        if (file_exists($malicious_target)) {
+            unlink($malicious_target);
+        }
+
+        $temporary_dir = sys_get_temp_dir() . '/bjlg-restore-test-' . uniqid();
+        if (!is_dir($temporary_dir)) {
+            mkdir($temporary_dir, 0755, true);
+        }
+
+        $zip_path = $temporary_dir . '/malicious.zip';
+        $zip = new ZipArchive();
+        $open_result = $zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+        $this->assertTrue($open_result === true || $open_result === ZipArchive::ER_OK);
+
+        $manifest = [
+            'type' => 'test',
+            'contains' => ['db'],
+        ];
+
+        $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $zip->addFromString('database.sql', 'SELECT 1;');
+        $zip->addFromString('../malicious.php', '<?php echo "hacked";');
+        $zip->close();
+
+        $destination = BJLG_BACKUP_DIR . 'malicious.zip';
+        copy($zip_path, $destination);
+
+        $restore = new BJLG\BJLG_Restore();
+
+        $task_id = 'bjlg_restore_' . uniqid();
+        set_transient($task_id, [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => '',
+            'filename' => basename($destination),
+            'filepath' => $destination,
+            'password_encrypted' => null,
+        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
+
+        $restore->run_restore_task($task_id);
+
+        $task_data = get_transient($task_id);
+        $this->assertIsArray($task_data);
+        $this->assertSame('error', $task_data['status']);
+        $this->assertStringContainsString("Entrée d'archive invalide détectée", $task_data['status_text']);
+        $this->assertFileDoesNotExist($malicious_target);
+
+        if (file_exists($destination)) {
+            unlink($destination);
+        }
+
+        if (file_exists($zip_path)) {
+            unlink($zip_path);
+        }
+
+        if (is_dir($temporary_dir)) {
+            rmdir($temporary_dir);
+        }
+    }
 }
