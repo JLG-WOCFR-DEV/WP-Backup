@@ -158,12 +158,27 @@ class BJLG_Backup {
             // Configuration initiale
             set_time_limit(0);
             @ini_set('memory_limit', '512M');
-            
+
             BJLG_Debug::log("Début de la sauvegarde - Task ID: $task_id");
-            
+
+            $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+            $components = isset($task_data['components']) ? (array) $task_data['components'] : [];
+            $components = array_map('sanitize_key', $components);
+            $components = array_values(array_unique(array_intersect($components, $allowed_components)));
+
+            $task_data['components'] = $components;
+            set_transient($task_id, $task_data, HOUR_IN_SECONDS);
+
+            if (empty($components)) {
+                BJLG_Debug::log("ERREUR: Aucun composant valide pour la tâche $task_id.");
+                BJLG_History::log('backup_created', 'failure', 'Aucun composant valide pour la sauvegarde.');
+                $this->update_task_progress($task_id, 100, 'error', 'Aucun composant valide pour la sauvegarde.');
+                return;
+            }
+
             // Mise à jour : Début
             $this->update_task_progress($task_id, 10, 'running', 'Préparation de la sauvegarde...');
-            
+
             // Déterminer le type de sauvegarde
             $backup_type = $task_data['incremental'] ? 'incremental' : 'full';
             
@@ -178,11 +193,11 @@ class BJLG_Backup {
             }
             
             // Créer le fichier de sauvegarde
-            $backup_filename = $this->generate_backup_filename($backup_type, $task_data['components']);
+            $backup_filename = $this->generate_backup_filename($backup_type, $components);
             $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
-            
+
             BJLG_Debug::log("Création du fichier : $backup_filename");
-            
+
             // Créer l'archive ZIP
             $zip = new ZipArchive();
             if ($zip->open($backup_filepath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== TRUE) {
@@ -190,17 +205,17 @@ class BJLG_Backup {
             }
             
             // Ajouter le manifeste
-            $manifest = $this->create_manifest($task_data['components'], $backup_type);
+            $manifest = $this->create_manifest($components, $backup_type);
             $zip->addFromString('backup-manifest.json', json_encode($manifest, JSON_PRETTY_PRINT));
-            
+
             $progress = 20;
-            $components_count = count($task_data['components']);
+            $components_count = count($components);
             $progress_per_component = 70 / $components_count;
-            
+
             // Traiter chaque composant
-            foreach ($task_data['components'] as $component) {
+            foreach ($components as $component) {
                 $this->update_task_progress($task_id, $progress, 'running', "Sauvegarde : $component");
-                
+
                 switch ($component) {
                     case 'db':
                         $this->backup_database($zip, $task_data['incremental']);
@@ -241,9 +256,9 @@ class BJLG_Backup {
             // Mettre à jour le manifeste incrémental si nécessaire
             if ($task_data['incremental']) {
                 $incremental_handler = new BJLG_Incremental();
-                $incremental_handler->update_manifest($backup_filepath, $task_data['components']);
+                $incremental_handler->update_manifest($backup_filepath, $components);
             }
-            
+
             // Enregistrer le succès
             BJLG_History::log('backup_created', 'success', sprintf(
                 'Fichier : %s | Taille : %s | Durée : %ds',
@@ -255,12 +270,12 @@ class BJLG_Backup {
             // Notification de succès
             do_action('bjlg_backup_complete', $backup_filename, [
                 'size' => $file_size,
-                'components' => $task_data['components'],
+                'components' => $components,
                 'encrypted' => $task_data['encrypt'],
                 'incremental' => $task_data['incremental'],
                 'duration' => $duration
             ]);
-            
+
             // Mise à jour finale
             $this->update_task_progress($task_id, 100, 'complete', 'Sauvegarde terminée avec succès !');
             
@@ -273,7 +288,7 @@ class BJLG_Backup {
             // Notification d'échec
             do_action('bjlg_backup_failed', $e->getMessage(), [
                 'task_id' => $task_id,
-                'components' => $task_data['components'] ?? []
+                'components' => $components
             ]);
             
             $this->update_task_progress($task_id, 100, 'error', 'Erreur : ' . $e->getMessage());

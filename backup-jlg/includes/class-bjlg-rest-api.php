@@ -674,17 +674,28 @@ class BJLG_REST_API {
      */
     public function create_backup($request) {
         $components = $request->get_param('components');
+        $filtered_components = $this->sanitize_components_list($components);
+        if (is_wp_error($filtered_components)) {
+            return $filtered_components;
+        }
+        if (empty($filtered_components)) {
+            return new WP_Error(
+                'invalid_components',
+                __('Aucun composant valide fourni pour la sauvegarde.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
         $type = $request->get_param('type');
         $encrypt = $request->get_param('encrypt');
         $description = $request->get_param('description');
-        
+
         // Créer une tâche de sauvegarde
         $task_id = 'bjlg_backup_' . md5(uniqid('api', true));
         $task_data = [
             'progress' => 5,
             'status' => 'pending',
             'status_text' => 'Initialisation (API)...',
-            'components' => $components,
+            'components' => $filtered_components,
             'encrypt' => $encrypt,
             'type' => $type,
             'description' => $description,
@@ -705,6 +716,34 @@ class BJLG_REST_API {
             'message' => 'Backup task created successfully',
             'status_url' => rest_url(self::API_NAMESPACE . '/tasks/' . $task_id)
         ]);
+    }
+
+    private function sanitize_components_list($components) {
+        $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+        $components = (array) $components;
+        $sanitized = [];
+
+        foreach ($components as $component) {
+            if (!is_string($component)) {
+                continue;
+            }
+
+            if (preg_match('#[\\/]#', $component)) {
+                return new WP_Error(
+                    'invalid_component_format',
+                    __('Format de composant invalide.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+
+            $component = sanitize_key($component);
+
+            if (in_array($component, $allowed_components, true) && !in_array($component, $sanitized, true)) {
+                $sanitized[] = $component;
+            }
+        }
+
+        return $sanitized;
     }
     
     /**
