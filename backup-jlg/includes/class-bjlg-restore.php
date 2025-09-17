@@ -33,6 +33,7 @@ class BJLG_Restore {
         add_action('wp_ajax_bjlg_run_restore', [$this, 'handle_run_restore']);
         add_action('wp_ajax_bjlg_upload_restore_file', [$this, 'handle_upload_restore_file']);
         add_action('wp_ajax_bjlg_check_restore_progress', [$this, 'handle_check_restore_progress']);
+        add_action('bjlg_run_restore_task', [$this, 'run_restore_task'], 10, 1);
     }
 
     /**
