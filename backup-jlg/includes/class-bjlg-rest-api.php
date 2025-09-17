@@ -762,11 +762,14 @@ class BJLG_REST_API {
         $download_token = wp_generate_password(32, false);
         set_transient('bjlg_download_' . $download_token, $filepath, HOUR_IN_SECONDS);
 
+        $download_url = add_query_arg([
+            'action' => 'bjlg_download',
+            'token' => $download_token,
+        ], admin_url('admin-ajax.php'));
+
         return rest_ensure_response([
-            'download_url' => add_query_arg([
-                'bjlg_download' => $download_token
-            ], site_url()),
-            'expires_in' => 3600,
+            'download_url' => $download_url,
+            'expires_in' => HOUR_IN_SECONDS,
             'filename' => basename($filepath),
             'size' => filesize($filepath)
         ]);
