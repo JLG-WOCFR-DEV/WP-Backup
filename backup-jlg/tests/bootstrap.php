@@ -13,6 +13,10 @@ if (!defined('BJLG_BACKUP_DIR')) {
     define('BJLG_BACKUP_DIR', sys_get_temp_dir() . '/');
 }
 
+if (!defined('HOUR_IN_SECONDS')) {
+    define('HOUR_IN_SECONDS', 3600);
+}
+
 $GLOBALS['bjlg_test_current_user_can'] = true;
 $GLOBALS['bjlg_test_transients'] = [];
 $GLOBALS['bjlg_test_scheduled_events'] = [];
@@ -240,6 +244,29 @@ if (!function_exists('wp_send_json_success')) {
     }
 }
 
+if (!function_exists('wp_generate_password')) {
+    function wp_generate_password($length = 12, $special_chars = true, $extra_special_chars = false) {
+        $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
+        if ($special_chars) {
+            $chars .= '!@#$%^&*()';
+        }
+
+        if ($extra_special_chars) {
+            $chars .= '-_[]{}<>~`+=,.;:/?|';
+        }
+
+        $password = '';
+        $max_index = strlen($chars) - 1;
+
+        for ($i = 0; $i < $length; $i++) {
+            $password .= $chars[random_int(0, $max_index)];
+        }
+
+        return $password;
+    }
+}
+
 if (!function_exists('set_transient')) {
     function set_transient($transient, $value, $expiration) {
         $GLOBALS['bjlg_test_transients'][$transient] = $value;
@@ -269,5 +296,70 @@ if (!function_exists('wp_schedule_single_event')) {
         ];
 
         return true;
+    }
+}
+
+if (!function_exists('admin_url')) {
+    function admin_url($path = '') {
+        return 'https://example.com/wp-admin/' . ltrim($path, '/');
+    }
+}
+
+if (!function_exists('add_query_arg')) {
+    function add_query_arg($args, $url) {
+        $parsed_url = parse_url($url);
+        $query = [];
+
+        if (!empty($parsed_url['query'])) {
+            parse_str($parsed_url['query'], $query);
+        }
+
+        foreach ($args as $key => $value) {
+            if ($value === false) {
+                unset($query[$key]);
+                continue;
+            }
+
+            $query[$key] = $value;
+        }
+
+        $parsed_url['query'] = http_build_query($query);
+
+        $scheme   = $parsed_url['scheme'] ?? 'https';
+        $host     = $parsed_url['host'] ?? 'example.com';
+        $port     = isset($parsed_url['port']) ? ':' . $parsed_url['port'] : '';
+        $path     = $parsed_url['path'] ?? '';
+        $queryStr = $parsed_url['query'] ? '?' . $parsed_url['query'] : '';
+
+        return $scheme . '://' . $host . $port . $path . $queryStr;
+    }
+}
+
+if (!function_exists('size_format')) {
+    function size_format($bytes, $decimals = 2) {
+        $bytes = (float) $bytes;
+
+        if ($bytes < 1024) {
+            return $bytes . ' B';
+        }
+
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $power = (int) floor(log($bytes, 1024));
+        $power = min($power, count($units) - 1);
+        $value = $bytes / (1024 ** $power);
+
+        return number_format_i18n($value, $decimals) . ' ' . $units[$power];
+    }
+}
+
+if (!function_exists('number_format_i18n')) {
+    function number_format_i18n($number, $decimals = 0) {
+        return number_format((float) $number, (int) $decimals, '.', ',');
+    }
+}
+
+if (!function_exists('rest_url')) {
+    function rest_url($path = '') {
+        return 'https://example.com/wp-json/' . ltrim($path, '/');
     }
 }

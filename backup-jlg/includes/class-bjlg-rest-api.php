@@ -1078,6 +1078,26 @@ class BJLG_REST_API {
         
         $manifest = $this->get_backup_manifest($filepath);
         
+        $download_token = wp_generate_password(32, false);
+        $transient_key = 'bjlg_download_' . $download_token;
+
+        set_transient($transient_key, $filepath, HOUR_IN_SECONDS);
+
+        $download_url = add_query_arg([
+            'action' => 'bjlg_download',
+            'token' => $download_token,
+        ], admin_url('admin-ajax.php'));
+
+        $rest_download_route = sprintf(
+            '/%s/backups/%s/download',
+            self::API_NAMESPACE,
+            rawurlencode($filename)
+        );
+
+        $rest_download_url = function_exists('rest_url')
+            ? rest_url(ltrim($rest_download_route, '/'))
+            : $rest_download_route;
+
         return [
             'id' => $filename,
             'filename' => $filename,
@@ -1088,11 +1108,10 @@ class BJLG_REST_API {
             'modified_at' => date('c', filemtime($filepath)),
             'is_encrypted' => $is_encrypted,
             'components' => $manifest['contains'] ?? [],
-            'download_url' => add_query_arg([
-                'action' => 'bjlg_download',
-                'file' => $filename,
-                'nonce' => wp_create_nonce('bjlg_download_' . $filename)
-            ], admin_url('admin-ajax.php')),
+            'download_url' => $download_url,
+            'download_token' => $download_token,
+            'download_expires_in' => HOUR_IN_SECONDS,
+            'download_rest_url' => $rest_download_url,
             'manifest' => $manifest
         ];
     }
