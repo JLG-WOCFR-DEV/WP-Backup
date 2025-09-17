@@ -184,6 +184,37 @@ final class BJLG_REST_APITest extends TestCase
         }
     }
 
+    public function test_resolve_backup_path_accepts_ids_with_extensions(): void
+    {
+        $api = new BJLG\BJLG_REST_API();
+
+        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
+        $method = $reflection->getMethod('resolve_backup_path');
+        $method->setAccessible(true);
+
+        $zipFilename = sprintf('bjlg-test-backup-%s.2024-01-01.zip', uniqid('', false));
+        $zipPath = BJLG_BACKUP_DIR . $zipFilename;
+
+        $encryptedFilename = sprintf('bjlg-test-backup-%s.zip.enc', uniqid('', false));
+        $encryptedPath = BJLG_BACKUP_DIR . $encryptedFilename;
+
+        file_put_contents($zipPath, 'zip');
+        file_put_contents($encryptedPath, 'enc');
+
+        try {
+            $this->assertSame(realpath($zipPath), $method->invoke($api, $zipFilename));
+            $this->assertSame(realpath($encryptedPath), $method->invoke($api, $encryptedFilename));
+        } finally {
+            if (file_exists($zipPath)) {
+                unlink($zipPath);
+            }
+
+            if (file_exists($encryptedPath)) {
+                unlink($encryptedPath);
+            }
+        }
+    }
+
     public function test_format_backup_data_generates_download_token(): void
     {
         $GLOBALS['bjlg_test_transients'] = [];

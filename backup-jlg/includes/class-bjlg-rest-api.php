@@ -119,7 +119,7 @@ class BJLG_REST_API {
         ]);
         
         // Routes : Opérations sur une sauvegarde spécifique
-        register_rest_route(self::API_NAMESPACE, '/backups/(?P<id>[a-zA-Z0-9_-]+)', [
+        register_rest_route(self::API_NAMESPACE, '/backups/(?P<id>[^/]+)', [
             [
                 'methods' => 'GET',
                 'callback' => [$this, 'get_backup'],
@@ -133,7 +133,7 @@ class BJLG_REST_API {
         ]);
         
         // Route : Télécharger une sauvegarde
-        register_rest_route(self::API_NAMESPACE, '/backups/(?P<id>[a-zA-Z0-9_-]+)/download', [
+        register_rest_route(self::API_NAMESPACE, '/backups/(?P<id>[^/]+)/download', [
             'methods' => 'GET',
             'callback' => [$this, 'download_backup'],
             'permission_callback' => [$this, 'check_permissions'],
@@ -146,7 +146,7 @@ class BJLG_REST_API {
         ]);
         
         // Route : Restaurer une sauvegarde
-        register_rest_route(self::API_NAMESPACE, '/backups/(?P<id>[a-zA-Z0-9_-]+)/restore', [
+        register_rest_route(self::API_NAMESPACE, '/backups/(?P<id>[^/]+)/restore', [
             'methods' => 'POST',
             'callback' => [$this, 'restore_backup'],
             'permission_callback' => [$this, 'check_permissions'],
