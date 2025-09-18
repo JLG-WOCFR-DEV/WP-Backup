@@ -93,8 +93,36 @@ class BJLG_Diagnostics {
             $zip->addFromString('statistiques-sauvegardes.json', json_encode($backup_stats, JSON_PRETTY_PRINT));
 
             $zip->close();
-            
-            $download_url = content_url('/bjlg-backups/' . $zip_filename);
+
+            $uploads = wp_get_upload_dir();
+            $download_url = '';
+            $backup_dir = wp_normalize_path(BJLG_BACKUP_DIR);
+
+            if (!empty($uploads['baseurl']) && !empty($uploads['basedir'])) {
+                $uploads_baseurl = trailingslashit($uploads['baseurl']);
+                $uploads_basedir = wp_normalize_path(trailingslashit($uploads['basedir']));
+
+                if (strpos($backup_dir, $uploads_basedir) === 0) {
+                    $relative = ltrim(substr($backup_dir, strlen($uploads_basedir)), '/');
+                    $download_url = trailingslashit($uploads_baseurl . $relative) . $zip_filename;
+                }
+            }
+
+            if ($download_url === '') {
+                $content_dir = wp_normalize_path(trailingslashit(WP_CONTENT_DIR));
+                if (strpos($backup_dir, $content_dir) === 0) {
+                    $relative = ltrim(substr($backup_dir, strlen($content_dir)), '/');
+                    $download_url = trailingslashit(content_url($relative)) . $zip_filename;
+                }
+            }
+
+            if ($download_url === '' && !empty($uploads['baseurl'])) {
+                $download_url = trailingslashit($uploads['baseurl']) . 'bjlg-backups/' . $zip_filename;
+            }
+
+            if ($download_url === '') {
+                $download_url = $zip_filename;
+            }
             $file_size = filesize($zip_filepath);
             
             BJLG_Debug::log("Pack de support créé avec succès : " . $zip_filename);
