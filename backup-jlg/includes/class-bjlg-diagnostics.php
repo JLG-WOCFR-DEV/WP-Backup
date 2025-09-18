@@ -268,15 +268,28 @@ private function get_php_info() {
     }
     
     private function format_history_as_csv($history) {
-        $csv = "Date,Type,Statut,Message\n";
-        foreach ($history as $entry) {
-            $csv .= sprintf("%s,%s,%s,%s\n",
-                $entry['timestamp'] ?? '',
-                $entry['type'] ?? '',
-                $entry['status'] ?? '',
-                str_replace(',', ';', $entry['message'] ?? '')
-            );
+        $handle = fopen('php://temp', 'r+');
+
+        if ($handle === false) {
+            return '';
         }
+
+        fputcsv($handle, ['Date', 'Action', 'Statut', 'Détails', 'Utilisateur'], ',', '"', '\\');
+
+        foreach ($history as $entry) {
+            fputcsv($handle, [
+                $entry['timestamp'] ?? '',
+                $entry['action_type'] ?? '',
+                $entry['status'] ?? '',
+                $entry['details'] ?? '',
+                $entry['user_name'] ?? '',
+            ], ',', '"', '\\');
+        }
+
+        rewind($handle);
+        $csv = stream_get_contents($handle) ?: '';
+        fclose($handle);
+
         return $csv;
     }
     
