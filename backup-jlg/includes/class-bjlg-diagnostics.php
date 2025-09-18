@@ -94,7 +94,31 @@ class BJLG_Diagnostics {
 
             $zip->close();
             
-            $download_url = content_url('/bjlg-backups/' . $zip_filename);
+            $uploads = wp_get_upload_dir();
+            $backup_dir = trailingslashit(BJLG_BACKUP_DIR);
+            $download_url = '';
+
+            if (!empty($uploads['baseurl']) && !empty($uploads['basedir'])) {
+                $baseurl = trailingslashit($uploads['baseurl']);
+                $basedir = trailingslashit(wp_normalize_path($uploads['basedir']));
+                $normalized_backup_dir = trailingslashit(wp_normalize_path($backup_dir));
+
+                if (strpos($normalized_backup_dir, $basedir) === 0) {
+                    $relative_path = trim(substr($normalized_backup_dir, strlen($basedir)), '/');
+                    if ($relative_path !== '') {
+                        $baseurl = trailingslashit($baseurl . $relative_path);
+                    }
+                    $download_url = $baseurl . $zip_filename;
+                }
+            }
+
+            if (empty($download_url)) {
+                $download_url = str_replace(
+                    wp_normalize_path(ABSPATH),
+                    trailingslashit(get_site_url()),
+                    wp_normalize_path($zip_filepath)
+                );
+            }
             $file_size = filesize($zip_filepath);
             
             BJLG_Debug::log("Pack de support créé avec succès : " . $zip_filename);
