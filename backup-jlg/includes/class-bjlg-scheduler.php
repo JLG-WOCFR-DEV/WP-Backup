@@ -17,6 +17,9 @@ class BJLG_Scheduler {
         add_action('wp_ajax_bjlg_save_schedule_settings', [$this, 'handle_save_schedule']);
         add_action('wp_ajax_bjlg_get_next_scheduled', [$this, 'handle_get_next_scheduled']);
         add_action('wp_ajax_bjlg_run_scheduled_now', [$this, 'handle_run_scheduled_now']);
+
+        // Hook Cron pour l'exécution automatique
+        add_action(self::SCHEDULE_HOOK, [$this, 'run_scheduled_backup']);
         
         // Filtres pour les intervalles personnalisés
         add_filter('cron_schedules', [$this, 'add_custom_schedules']);
@@ -297,6 +300,51 @@ class BJLG_Scheduler {
             'message' => 'Sauvegarde planifiée lancée manuellement.',
             'task_id' => $task_id
         ]);
+    }
+
+    /**
+     * Déclenche l'exécution automatique d'une sauvegarde planifiée.
+     */
+    public function run_scheduled_backup() {
+        $settings = get_option('bjlg_schedule_settings', []);
+
+        $components = $settings['components'] ?? ['db', 'plugins', 'themes', 'uploads'];
+        if (empty($components) || !is_array($components)) {
+            $components = ['db', 'plugins', 'themes', 'uploads'];
+        }
+
+        $task_id = 'bjlg_backup_' . md5(uniqid('scheduled', true));
+
+        $task_data = [
+            'progress' => 5,
+            'status' => 'pending',
+            'status_text' => 'Initialisation (planifiée)...',
+            'components' => $components,
+            'encrypt' => $settings['encrypt'] ?? false,
+            'incremental' => $settings['incremental'] ?? false,
+            'source' => 'scheduled',
+            'start_time' => time()
+        ];
+
+        $transient_set = set_transient($task_id, $task_data, HOUR_IN_SECONDS);
+
+        if (!$transient_set) {
+            BJLG_Debug::log("ERREUR : Impossible d'initialiser la tâche de sauvegarde planifiée $task_id.");
+            BJLG_History::log('scheduled_backup', 'failure', "Échec de l'initialisation de la sauvegarde planifiée.");
+            return;
+        }
+
+        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+
+        if (!$scheduled) {
+            delete_transient($task_id);
+            BJLG_Debug::log("ERREUR : Impossible de planifier l'événement de sauvegarde pour la tâche $task_id.");
+            BJLG_History::log('scheduled_backup', 'failure', "Échec de la planification de la sauvegarde planifiée.");
+            return;
+        }
+
+        BJLG_Debug::log("Sauvegarde planifiée déclenchée automatiquement - Task ID: $task_id");
+        BJLG_History::log('scheduled_backup', 'info', 'Sauvegarde planifiée déclenchée automatiquement.');
     }
     
     /**
