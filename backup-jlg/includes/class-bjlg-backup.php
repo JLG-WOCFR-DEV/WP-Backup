@@ -161,6 +161,12 @@ class BJLG_Backup {
 
             BJLG_Debug::log("Début de la sauvegarde - Task ID: $task_id");
 
+            $encrypt = filter_var($task_data['encrypt'] ?? false, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            $task_data['encrypt'] = ($encrypt === null) ? false : $encrypt;
+
+            $incremental = filter_var($task_data['incremental'] ?? false, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            $task_data['incremental'] = ($incremental === null) ? false : $incremental;
+
             $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
             $components = isset($task_data['components']) ? (array) $task_data['components'] : [];
             $components = array_map('sanitize_key', $components);
@@ -189,6 +195,7 @@ class BJLG_Backup {
                     BJLG_Debug::log("Pas de sauvegarde complète trouvée, bascule en mode complet.");
                     $backup_type = 'full';
                     $task_data['incremental'] = false;
+                    set_transient($task_id, $task_data, HOUR_IN_SECONDS);
                 }
             }
             

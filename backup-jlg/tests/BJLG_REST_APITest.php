@@ -205,6 +205,49 @@ namespace {
         }
     }
 
+    public function test_create_backup_stores_incremental_flag_from_rest_request(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+        $GLOBALS['bjlg_test_scheduled_events'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $request = new class {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct()
+            {
+                $this->params = [
+                    'components' => ['db', 'plugins'],
+                    'type' => 'incremental',
+                    'encrypt' => 'false',
+                    'description' => 'Incremental backup via REST',
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $response = $api->create_backup($request);
+
+        $this->assertIsArray($response);
+        $this->assertArrayHasKey('task_id', $response);
+
+        $task_id = $response['task_id'];
+
+        $this->assertArrayHasKey($task_id, $GLOBALS['bjlg_test_transients']);
+        $task_data = $GLOBALS['bjlg_test_transients'][$task_id];
+
+        $this->assertArrayHasKey('incremental', $task_data);
+        $this->assertTrue($task_data['incremental']);
+        $this->assertArrayHasKey('encrypt', $task_data);
+        $this->assertFalse($task_data['encrypt']);
+    }
+
     public function test_get_stats_handles_disk_space_failure(): void
     {
         $GLOBALS['bjlg_test_disk_total_space_mock'] = static function (string $directory) {
