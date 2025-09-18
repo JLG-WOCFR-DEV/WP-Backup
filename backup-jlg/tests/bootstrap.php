@@ -227,6 +227,13 @@ if (!function_exists('sanitize_file_name')) {
     }
 }
 
+if (!function_exists('sanitize_key')) {
+    function sanitize_key($key) {
+        $key = strtolower((string) $key);
+        return preg_replace('/[^a-z0-9_]/', '', $key);
+    }
+}
+
 if (!function_exists('sanitize_text_field')) {
     function sanitize_text_field($str) {
         $str = (string) $str;

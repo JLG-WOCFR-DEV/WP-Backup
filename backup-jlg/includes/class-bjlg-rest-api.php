@@ -686,7 +686,15 @@ class BJLG_REST_API {
             );
         }
         $type = $request->get_param('type');
-        $encrypt = $request->get_param('encrypt');
+        $type = ($type === 'incremental') ? 'incremental' : 'full';
+
+        $encrypt_param = $request->get_param('encrypt');
+        $encrypt = filter_var($encrypt_param, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        if ($encrypt === null) {
+            $encrypt = false;
+        }
+
+        $incremental = ($type === 'incremental');
         $description = $request->get_param('description');
 
         // Créer une tâche de sauvegarde
@@ -697,6 +705,7 @@ class BJLG_REST_API {
             'status_text' => 'Initialisation (API)...',
             'components' => $filtered_components,
             'encrypt' => $encrypt,
+            'incremental' => $incremental,
             'type' => $type,
             'description' => $description,
             'source' => 'api',
