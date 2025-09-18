@@ -56,11 +56,8 @@ class BJLG_Diagnostics {
             }
 
             // 2. Ajouter le log d'erreurs WP (limité aux 1000 dernières lignes)
-            $wp_log_path = WP_CONTENT_DIR . '/debug.log';
-            if (file_exists($wp_log_path)) {
-                $wp_log_content = BJLG_Debug::read_tail($wp_log_path, 1000);
-                $zip->addFromString('wp-debug.log', $wp_log_content);
-            }
+            $wp_log_content = BJLG_Debug::get_wp_error_log_content(1000);
+            $zip->addFromString('wp-debug.log', $wp_log_content);
 
             // 3. Ajouter le bilan de santé
             $health_checker = new BJLG_Health_Check();
