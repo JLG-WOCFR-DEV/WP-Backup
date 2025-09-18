@@ -94,7 +94,37 @@ class BJLG_Diagnostics {
 
             $zip->close();
             
-            $download_url = content_url('/bjlg-backups/' . $zip_filename);
+            $uploads = wp_get_upload_dir();
+            $download_url = '';
+            $normalized_backup_dir = trailingslashit(wp_normalize_path(BJLG_BACKUP_DIR));
+
+            if (!empty($uploads['baseurl']) && !empty($uploads['basedir'])) {
+                $normalized_basedir = trailingslashit(wp_normalize_path($uploads['basedir']));
+
+                if (strpos($normalized_backup_dir, $normalized_basedir) === 0) {
+                    $relative_subdir = ltrim(substr($normalized_backup_dir, strlen($normalized_basedir)), '/');
+                    $download_base = trailingslashit($uploads['baseurl']);
+
+                    if (!empty($relative_subdir)) {
+                        $download_base = trailingslashit($download_base . $relative_subdir);
+                    }
+
+                    $download_url = $download_base . $zip_filename;
+                }
+            }
+
+            if (empty($download_url)) {
+                $normalized_content_dir = trailingslashit(wp_normalize_path(WP_CONTENT_DIR));
+
+                if (strpos($normalized_backup_dir, $normalized_content_dir) === 0) {
+                    $relative_subdir = ltrim(substr($normalized_backup_dir, strlen($normalized_content_dir)), '/');
+                    $download_url = trailingslashit(content_url($relative_subdir)) . $zip_filename;
+                }
+            }
+
+            if (empty($download_url)) {
+                throw new Exception("Impossible de déterminer l'URL de téléchargement du pack de support.");
+            }
             $file_size = filesize($zip_filepath);
             
             BJLG_Debug::log("Pack de support créé avec succès : " . $zip_filename);
