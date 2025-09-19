@@ -527,17 +527,10 @@ class BJLG_Backup {
             BJLG_Debug::log("Répertoire introuvable : $source_dir");
             return;
         }
-        
+
         BJLG_Debug::log("Sauvegarde du répertoire : " . basename($source_dir));
-        
-        $exclude_patterns = [
-            '*/cache/*',
-            '*/node_modules/*',
-            '*/.git/*',
-            '*.log',
-            '*/backup-*',
-            '*/bjlg-backups/*'
-        ];
+
+        $exclude_patterns = $this->get_exclude_patterns($source_dir, $zip_path);
         
         // Pour l'incrémental, obtenir la liste des fichiers modifiés
         $modified_files = [];
@@ -563,6 +556,72 @@ class BJLG_Backup {
 
             throw new Exception($message, 0, $exception);
         }
+    }
+
+    /**
+     * Retourne la liste des motifs d'exclusion pour la sauvegarde d'un répertoire.
+     *
+     * @param string $source_dir
+     * @param string $zip_path
+     * @return array<int, string>
+     */
+    private function get_exclude_patterns($source_dir, $zip_path) {
+        $default_patterns = [
+            '*/cache/*',
+            '*/node_modules/*',
+            '*/.git/*',
+            '*.log',
+            '*/bjlg-backups/*',
+        ];
+
+        $option_patterns = [];
+        if (function_exists('get_option')) {
+            $stored_patterns = get_option('bjlg_backup_exclude_patterns', []);
+            $option_patterns = $this->normalize_exclude_patterns($stored_patterns);
+        }
+
+        $exclude_patterns = array_merge($default_patterns, $option_patterns);
+        $exclude_patterns = array_values(array_filter(array_unique($exclude_patterns), 'strlen'));
+
+        if (function_exists('apply_filters')) {
+            /** @var array<int, string> $filtered_patterns */
+            $filtered_patterns = apply_filters('bjlg_backup_exclude_patterns', $exclude_patterns, $source_dir, $zip_path);
+            if (is_array($filtered_patterns)) {
+                $exclude_patterns = array_values(array_filter(array_unique($filtered_patterns), 'strlen'));
+            }
+        }
+
+        return $exclude_patterns;
+    }
+
+    /**
+     * Normalise les motifs d'exclusion configurés via une option.
+     *
+     * @param mixed $patterns
+     * @return array<int, string>
+     */
+    private function normalize_exclude_patterns($patterns) {
+        if (is_string($patterns)) {
+            $patterns = preg_split('/[\r\n,]+/', $patterns) ?: [];
+        }
+
+        if (!is_array($patterns)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($patterns as $pattern) {
+            if (!is_string($pattern)) {
+                continue;
+            }
+
+            $trimmed = trim($pattern);
+            if ($trimmed !== '') {
+                $normalized[] = $trimmed;
+            }
+        }
+
+        return $normalized;
     }
 
     /**
