@@ -17,12 +17,81 @@ class BJLG_Scheduler {
         add_action('wp_ajax_bjlg_save_schedule_settings', [$this, 'handle_save_schedule']);
         add_action('wp_ajax_bjlg_get_next_scheduled', [$this, 'handle_get_next_scheduled']);
         add_action('wp_ajax_bjlg_run_scheduled_now', [$this, 'handle_run_scheduled_now']);
+
+        // Exécution de la sauvegarde planifiée
+        add_action(self::SCHEDULE_HOOK, [$this, 'run_scheduled_backup']);
         
         // Filtres pour les intervalles personnalisés
         add_filter('cron_schedules', [$this, 'add_custom_schedules']);
         
         // Vérifier et appliquer la planification au chargement
         add_action('init', [$this, 'check_schedule']);
+    }
+
+    /**
+     * Exécute la sauvegarde programmée via WP-Cron.
+     */
+    public function run_scheduled_backup() {
+        $defaults = [
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'encrypt' => false,
+            'incremental' => false,
+            'recurrence' => 'disabled'
+        ];
+
+        $settings = get_option('bjlg_schedule_settings', []);
+        $settings = wp_parse_args(is_array($settings) ? $settings : [], $defaults);
+
+        if ($settings['recurrence'] === 'disabled') {
+            BJLG_Debug::log('Sauvegarde planifiée ignorée : planification désactivée.');
+            return;
+        }
+
+        $components = isset($settings['components']) ? (array) $settings['components'] : $defaults['components'];
+        $components = array_map('sanitize_key', $components);
+        $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+        $components = array_values(array_unique(array_intersect($components, $allowed_components)));
+
+        if (empty($components)) {
+            BJLG_Debug::log("ERREUR : Aucun composant valide trouvé pour la sauvegarde planifiée.");
+            BJLG_History::log('scheduled_backup', 'failure', 'Aucun composant valide pour la sauvegarde planifiée.');
+            return;
+        }
+
+        $encrypt = filter_var($settings['encrypt'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        $encrypt = ($encrypt === null) ? false : $encrypt;
+
+        $incremental = filter_var($settings['incremental'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        $incremental = ($incremental === null) ? false : $incremental;
+
+        $task_id = 'bjlg_backup_' . md5(uniqid('scheduled', true));
+        $task_data = [
+            'progress' => 5,
+            'status' => 'pending',
+            'status_text' => 'Initialisation (planifiée)...',
+            'components' => $components,
+            'encrypt' => $encrypt,
+            'incremental' => $incremental,
+            'source' => 'scheduled'
+        ];
+
+        if (!set_transient($task_id, $task_data, HOUR_IN_SECONDS)) {
+            BJLG_Debug::log("ERREUR : Impossible d'initialiser la tâche planifiée $task_id.");
+            BJLG_History::log('scheduled_backup', 'failure', "Impossible d'initialiser la tâche de sauvegarde planifiée.");
+            return;
+        }
+
+        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+
+        if (!$scheduled) {
+            delete_transient($task_id);
+            BJLG_Debug::log("ERREUR : Échec de la planification de l'événement de sauvegarde $task_id.");
+            BJLG_History::log('scheduled_backup', 'failure', "Impossible de planifier l'exécution de la sauvegarde planifiée.");
+            return;
+        }
+
+        BJLG_Debug::log("Sauvegarde planifiée déclenchée automatiquement - Task ID: $task_id");
+        BJLG_History::log('scheduled_backup', 'info', 'Sauvegarde planifiée déclenchée automatiquement.');
     }
     
     /**
