@@ -22,6 +22,7 @@ if (!class_exists('BJLG\\BJLG_Debug')) {
 }
 
 require_once __DIR__ . '/../includes/class-bjlg-backup.php';
+require_once __DIR__ . '/../includes/class-bjlg-incremental.php';
 
 final class BJLG_BackupFilesystemTest extends TestCase
 {
@@ -96,5 +97,54 @@ final class BJLG_BackupFilesystemTest extends TestCase
 
         $added_files = array_map(static fn($entry) => $entry[0], $zip->addedFiles);
         $this->assertContains($plugin_file, $added_files, 'The backup-migration plugin should be included in the archive by default.');
+    }
+
+    public function test_incremental_backup_includes_windows_style_modified_file(): void
+    {
+        $root = sys_get_temp_dir() . '/bjlg-win-' . uniqid('', true);
+        $windows_dir = $root . '/C:\\temp';
+
+        if (!is_dir($windows_dir) && !mkdir($windows_dir, 0777, true) && !is_dir($windows_dir)) {
+            $this->fail('Unable to create the Windows-style directory for the test.');
+        }
+
+        $file_path = $windows_dir . '/example.txt';
+        file_put_contents($file_path, 'example');
+
+        try {
+            $incremental = new BJLG\BJLG_Incremental();
+            $modified_files = $incremental->get_modified_files($windows_dir);
+
+            $this->assertCount(1, $modified_files);
+            $expected_path = str_replace('\\', '/', (string) realpath($file_path));
+            $this->assertSame($expected_path, $modified_files[0]);
+
+            $zip = new class extends ZipArchive {
+                /** @var array<int, array{0: string, 1: string}> */
+                public $addedFiles = [];
+
+                public function addFile($filepath, $entryname, $start = 0, $length = 0, $flags = 0): bool
+                {
+                    $this->addedFiles[] = [$filepath, $entryname];
+                    return true;
+                }
+
+                public function setCompressionName($name, $method)
+                {
+                    return true;
+                }
+            };
+
+            $backup = new BJLG\BJLG_Backup();
+            $backup->add_folder_to_zip($zip, $windows_dir, 'windows/', [], true, $modified_files);
+
+            $this->assertCount(1, $zip->addedFiles);
+            $this->assertSame($file_path, $zip->addedFiles[0][0]);
+            $this->assertSame('windows/example.txt', $zip->addedFiles[0][1]);
+        } finally {
+            @unlink($file_path);
+            @rmdir($windows_dir);
+            @rmdir($root);
+        }
     }
 }

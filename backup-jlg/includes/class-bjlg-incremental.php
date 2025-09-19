@@ -171,20 +171,30 @@ class BJLG_Incremental {
             RecursiveIteratorIterator::LEAVES_ONLY
         );
         
+        $normalized_abspath = $this->normalize_path(ABSPATH);
+
         foreach ($iterator as $file) {
             if (!$file->isFile()) continue;
-            
+
             $filepath = $file->getRealPath();
-            $relative_path = str_replace(ABSPATH, '', $filepath);
-            
+            if ($filepath === false) {
+                $filepath = $file->getPathname();
+            }
+
+            $normalized_filepath = $this->normalize_path($filepath);
+            $relative_path = $normalized_filepath;
+            if ($normalized_abspath !== '' && strpos($normalized_filepath, $normalized_abspath) === 0) {
+                $relative_path = ltrim(substr($normalized_filepath, strlen($normalized_abspath)), '/');
+            }
+
             // Vérifier si le fichier a été modifié
             $mtime = $file->getMTime();
             $current_hash = $this->get_file_hash($filepath);
             $stored_hash = $this->last_backup_data['file_hashes'][$relative_path] ?? null;
-            
+
             if ($mtime > $last_scan_time || $current_hash !== $stored_hash) {
-                $modified_files[] = $filepath;
-                
+                $modified_files[] = $normalized_filepath;
+
                 // Mettre à jour le hash en cache
                 $this->file_hash_cache[$relative_path] = $current_hash;
             }
@@ -193,6 +203,24 @@ class BJLG_Incremental {
         BJLG_Debug::log("Fichiers modifiés trouvés : " . count($modified_files));
         
         return $modified_files;
+    }
+
+    /**
+     * Normalise un chemin de fichier en utilisant les conventions WordPress si disponibles.
+     *
+     * @param string $path
+     * @return string
+     */
+    private function normalize_path($path) {
+        if (!is_string($path) || $path === '') {
+            return '';
+        }
+
+        if (function_exists('wp_normalize_path')) {
+            return wp_normalize_path($path);
+        }
+
+        return str_replace('\\', '/', $path);
     }
     
     /**
