@@ -645,17 +645,34 @@ class BJLG_Backup {
             throw new Exception($message);
         }
 
+        if ($incremental && !empty($modified_files)) {
+            $normalized_modified = [];
+            foreach ($modified_files as $modified_file) {
+                if (!is_string($modified_file) || $modified_file === '') {
+                    continue;
+                }
+
+                $normalized = $this->normalize_path($modified_file);
+                if ($normalized !== '') {
+                    $normalized_modified[$normalized] = true;
+                }
+            }
+
+            $modified_files = array_keys($normalized_modified);
+        }
+
         try {
             while (($file = readdir($handle)) !== false) {
                 if ($file == '.' || $file == '..') continue;
 
                 $file_path = $folder . '/' . $file;
                 $relative_path = $zip_path . $file;
+                $normalized_file_path = $this->normalize_path($file_path);
 
                 // Vérifier les exclusions
                 $skip = false;
                 foreach ($exclude as $pattern) {
-                    if (fnmatch($pattern, $file_path)) {
+                    if (fnmatch($pattern, $normalized_file_path)) {
                         $skip = true;
                         break;
                     }
@@ -669,7 +686,7 @@ class BJLG_Backup {
                 } else {
                     // Pour l'incrémental, vérifier si le fichier est dans la liste des modifiés
                     if ($incremental && !empty($modified_files)) {
-                        if (!in_array($file_path, $modified_files)) {
+                        if (!in_array($normalized_file_path, $modified_files, true)) {
                             continue;
                         }
                     }
@@ -687,6 +704,24 @@ class BJLG_Backup {
         } finally {
             closedir($handle);
         }
+    }
+
+    /**
+     * Normalise un chemin de fichier pour les comparaisons.
+     *
+     * @param string $path
+     * @return string
+     */
+    private function normalize_path($path) {
+        if (!is_string($path) || $path === '') {
+            return '';
+        }
+
+        if (function_exists('wp_normalize_path')) {
+            return wp_normalize_path($path);
+        }
+
+        return str_replace('\\', '/', $path);
     }
 
     /**
