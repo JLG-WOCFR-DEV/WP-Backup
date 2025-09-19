@@ -17,6 +17,29 @@ if (!defined('HOUR_IN_SECONDS')) {
     define('HOUR_IN_SECONDS', 3600);
 }
 
+if (!defined('DAY_IN_SECONDS')) {
+    define('DAY_IN_SECONDS', 86400);
+}
+
+if (!defined('ARRAY_A')) {
+    define('ARRAY_A', 'ARRAY_A');
+}
+
+if (!defined('ARRAY_N')) {
+    define('ARRAY_N', 'ARRAY_N');
+}
+
+if (!defined('OBJECT')) {
+    define('OBJECT', 'OBJECT');
+}
+
+if (!isset($GLOBALS['bjlg_test_hooks'])) {
+    $GLOBALS['bjlg_test_hooks'] = [
+        'actions' => [],
+        'filters' => []
+    ];
+}
+
 $GLOBALS['bjlg_test_current_user_can'] = true;
 $GLOBALS['bjlg_test_transients'] = [];
 $GLOBALS['bjlg_test_scheduled_events'] = [];
@@ -139,20 +162,60 @@ if (!class_exists('BJLG_Test_WP_Die')) {
 }
 
 if (!function_exists('add_action')) {
-    function add_action($hook, $callback) {
-        // No-op for tests.
+    function add_action($hook, $callback, $priority = 10, $accepted_args = 1) {
+        $GLOBALS['bjlg_test_hooks']['actions'][$hook][$priority][] = [
+            'callback' => $callback,
+            'accepted_args' => (int) $accepted_args,
+        ];
     }
 }
 
 if (!function_exists('add_filter')) {
     function add_filter($hook, $callback, $priority = 10, $accepted_args = 1) {
-        // No-op for tests.
+        $GLOBALS['bjlg_test_hooks']['filters'][$hook][$priority][] = [
+            'callback' => $callback,
+            'accepted_args' => (int) $accepted_args,
+        ];
+    }
+}
+
+if (!function_exists('do_action')) {
+    function do_action($hook, ...$args) {
+        if (empty($GLOBALS['bjlg_test_hooks']['actions'][$hook])) {
+            return;
+        }
+
+        ksort($GLOBALS['bjlg_test_hooks']['actions'][$hook]);
+
+        foreach ($GLOBALS['bjlg_test_hooks']['actions'][$hook] as $callbacks) {
+            foreach ($callbacks as $definition) {
+                $accepted = $definition['accepted_args'] > 0 ? $definition['accepted_args'] : count($args);
+                $callback_args = array_slice($args, 0, $accepted);
+                call_user_func_array($definition['callback'], $callback_args);
+            }
+        }
     }
 }
 
 if (!function_exists('apply_filters')) {
-    function apply_filters($hook, $value) {
-        return $value;
+    function apply_filters($hook, $value, ...$args) {
+        if (empty($GLOBALS['bjlg_test_hooks']['filters'][$hook])) {
+            return $value;
+        }
+
+        ksort($GLOBALS['bjlg_test_hooks']['filters'][$hook]);
+
+        $all_args = array_merge([$value], $args);
+
+        foreach ($GLOBALS['bjlg_test_hooks']['filters'][$hook] as $callbacks) {
+            foreach ($callbacks as $definition) {
+                $accepted = $definition['accepted_args'] > 0 ? $definition['accepted_args'] : count($all_args);
+                $callback_args = array_slice($all_args, 0, $accepted);
+                $all_args[0] = call_user_func_array($definition['callback'], $callback_args);
+            }
+        }
+
+        return $all_args[0];
     }
 }
 

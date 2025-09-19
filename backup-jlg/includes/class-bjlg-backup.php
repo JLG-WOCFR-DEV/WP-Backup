@@ -260,12 +260,6 @@ class BJLG_Backup {
             $file_size = filesize($backup_filepath);
             $duration = time() - $task_data['start_time'];
             
-            // Mettre à jour le manifeste incrémental si nécessaire
-            if ($task_data['incremental']) {
-                $incremental_handler = new BJLG_Incremental();
-                $incremental_handler->update_manifest($backup_filepath, $components);
-            }
-
             // Enregistrer le succès
             BJLG_History::log('backup_created', 'success', sprintf(
                 'Fichier : %s | Taille : %s | Durée : %ds',
