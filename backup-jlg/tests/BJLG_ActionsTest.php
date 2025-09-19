@@ -1,7 +1,22 @@
 <?php
 declare(strict_types=1);
 
-use PHPUnit\Framework\TestCase;
+namespace BJLG {
+    if (!function_exists(__NAMESPACE__ . '\\realpath')) {
+        function realpath($path)
+        {
+            if (isset($GLOBALS['bjlg_test_realpath_mock']) && is_callable($GLOBALS['bjlg_test_realpath_mock'])) {
+                return call_user_func($GLOBALS['bjlg_test_realpath_mock'], $path);
+            }
+
+            return \realpath($path);
+        }
+    }
+}
+
+namespace {
+
+use PHPUnit\\Framework\\TestCase;
 
 require_once __DIR__ . '/../includes/class-bjlg-actions.php';
 
@@ -12,6 +27,7 @@ final class BJLG_ActionsTest extends TestCase
         $GLOBALS['bjlg_test_current_user_can'] = true;
         $GLOBALS['bjlg_test_transients'] = [];
         $GLOBALS['bjlg_test_last_status_header'] = null;
+        $GLOBALS['bjlg_test_realpath_mock'] = null;
         $_POST = [];
         $_REQUEST = [];
         $_GET = [];
@@ -21,7 +37,7 @@ final class BJLG_ActionsTest extends TestCase
     {
         $GLOBALS['bjlg_test_current_user_can'] = false;
 
-        $actions = new BJLG\BJLG_Actions();
+        $actions = new BJLG\\BJLG_Actions();
 
         try {
             $actions->handle_delete_backup();
@@ -49,7 +65,7 @@ final class BJLG_ActionsTest extends TestCase
      */
     public function test_handle_download_request_uses_status_from_validation(?string $token, int $expected_status): void
     {
-        $actions = new BJLG\BJLG_Actions();
+        $actions = new BJLG\\BJLG_Actions();
 
         if ($token !== null) {
             $_REQUEST['token'] = $token;
@@ -79,7 +95,7 @@ final class BJLG_ActionsTest extends TestCase
      */
     public function test_maybe_handle_public_download_uses_status_from_validation(string $token, int $expected_status): void
     {
-        $actions = new BJLG\BJLG_Actions();
+        $actions = new BJLG\\BJLG_Actions();
 
         $_GET['bjlg_download'] = $token;
 
@@ -91,4 +107,29 @@ final class BJLG_ActionsTest extends TestCase
             $this->assertSame($expected_status, $GLOBALS['bjlg_test_last_status_header']);
         }
     }
+
+    public function test_handle_delete_backup_returns_error_when_backup_directory_is_missing(): void
+    {
+        $actions = new BJLG\\BJLG_Actions();
+
+        $_POST['filename'] = 'missing-backup.zip';
+
+        $GLOBALS['bjlg_test_realpath_mock'] = static function (string $path) {
+            if ($path === BJLG_BACKUP_DIR) {
+                return false;
+            }
+
+            return \realpath($path);
+        };
+
+        try {
+            $actions->handle_delete_backup();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $exception) {
+            $this->assertSame(['message' => 'Répertoire de sauvegarde introuvable.'], $exception->data);
+            $this->assertSame(500, $exception->status_code);
+        }
+    }
+}
+
 }

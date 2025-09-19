@@ -36,6 +36,12 @@ class BJLG_Actions {
         }
 
         $filename = '';
+        $real_backup_dir = realpath(BJLG_BACKUP_DIR);
+
+        if ($real_backup_dir === false) {
+            wp_send_json_error(['message' => 'Répertoire de sauvegarde introuvable.'], 500);
+        }
+
         try {
             // Valider et nettoyer le nom du fichier pour la sécurité
             $filename = basename(sanitize_file_name(wp_unslash($_POST['filename'])));
@@ -46,31 +52,37 @@ class BJLG_Actions {
             // Construire le chemin initial vers le fichier
             $filepath = BJLG_BACKUP_DIR . $filename;
 
-            // Obtenir les chemins absolus et canoniques pour la sécurité
-            $real_backup_dir = realpath(BJLG_BACKUP_DIR);
+            // Obtenir le chemin canonique du fichier pour la sécurité
             $real_filepath = realpath($filepath);
+
+            // Normaliser les séparateurs de répertoire (barres obliques) pour une comparaison fiable
+            $normalized_backup_dir = rtrim(str_replace('\\', '/', $real_backup_dir), '/') . '/';
 
             // Si realpath échoue (par ex. fichier inexistant), on vérifie quand même le chemin de base
             if ($real_filepath === false) {
-                 if (strpos(realpath(dirname($filepath)), $real_backup_dir) !== 0) {
-                    throw new Exception("Chemin de fichier non valide.");
-                 }
-                 // Le fichier n'existe pas, donc on envoie l'erreur appropriée
-                 throw new Exception("Fichier introuvable.");
-            }
-            
-            // Normaliser les séparateurs de répertoire (barres obliques) pour une comparaison fiable
-            $normalized_backup_dir = str_replace('\\', '/', $real_backup_dir);
-            $normalized_filepath = str_replace('\\', '/', $real_filepath);
+                $real_file_directory = realpath(dirname($filepath));
 
-            // S'assurer que le chemin du répertoire se termine par un slash pour la comparaison
-            $normalized_backup_dir = rtrim($normalized_backup_dir, '/') . '/';
+                if ($real_file_directory === false) {
+                    throw new Exception("Chemin de fichier non valide.");
+                }
+
+                $normalized_file_directory = rtrim(str_replace('\\', '/', $real_file_directory), '/') . '/';
+
+                if (strpos($normalized_file_directory, $normalized_backup_dir) !== 0) {
+                    throw new Exception("Chemin de fichier non valide.");
+                }
+
+                // Le fichier n'existe pas, donc on envoie l'erreur appropriée
+                throw new Exception("Fichier introuvable.");
+            }
+
+            $normalized_filepath = str_replace('\\', '/', $real_filepath);
 
             // Contrôle de sécurité final : le chemin du fichier doit commencer par le chemin du répertoire de sauvegarde
             if (strpos($normalized_filepath, $normalized_backup_dir) !== 0) {
-                 throw new Exception("Accès au fichier non autorisé.");
+                throw new Exception("Accès au fichier non autorisé.");
             }
-            
+
             if (!is_writable($real_filepath)) {
                 throw new Exception("Fichier non supprimable (permissions).");
             }
