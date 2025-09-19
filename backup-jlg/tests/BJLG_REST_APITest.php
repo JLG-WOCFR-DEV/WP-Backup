@@ -17,6 +17,11 @@ namespace BJLG {
                     'most_active_hour' => null,
                 ];
             }
+
+            public static function log($action, $status, $message)
+            {
+                // Intentionally left blank for tests.
+            }
         }
     }
 }
@@ -31,10 +36,17 @@ namespace {
     }
 
     final class BJLG_REST_APITest extends TestCase
-{
-    public function test_verify_jwt_token_returns_false_for_invalid_signature(): void
     {
-        $api = new BJLG\BJLG_REST_API();
+        protected function setUp(): void
+        {
+            parent::setUp();
+
+            $GLOBALS['bjlg_test_options'] = [];
+        }
+
+        public function test_verify_jwt_token_returns_false_for_invalid_signature(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
 
         $header = ['typ' => 'JWT', 'alg' => 'HS256'];
         $payload = [
@@ -204,6 +216,83 @@ namespace {
             }
         }
     }
+
+        public function test_update_settings_rejects_empty_payload(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $original_cleanup = ['by_number' => 3, 'by_age' => 1];
+            $GLOBALS['bjlg_test_options']['bjlg_cleanup_settings'] = $original_cleanup;
+
+            $request = new class {
+                public function get_json_params()
+                {
+                    return [];
+                }
+            };
+
+            $result = $api->update_settings($request);
+
+            $this->assertInstanceOf(WP_Error::class, $result);
+            $this->assertSame('invalid_payload', $result->get_error_code());
+            $this->assertSame($original_cleanup, get_option('bjlg_cleanup_settings'));
+        }
+
+        public function test_update_settings_rejects_invalid_cleanup_structure(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $original_cleanup = ['by_number' => 5, 'by_age' => 2];
+            $GLOBALS['bjlg_test_options']['bjlg_cleanup_settings'] = $original_cleanup;
+
+            $request = new class {
+                public function get_json_params()
+                {
+                    return [
+                        'cleanup' => ['by_number' => 'not-an-int'],
+                    ];
+                }
+            };
+
+            $result = $api->update_settings($request);
+
+            $this->assertInstanceOf(WP_Error::class, $result);
+            $this->assertSame('invalid_cleanup_settings', $result->get_error_code());
+            $this->assertSame($original_cleanup, get_option('bjlg_cleanup_settings'));
+        }
+
+        public function test_create_schedule_rejects_incomplete_payload(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $original_schedule = [
+                'recurrence' => 'weekly',
+                'day' => 'monday',
+                'time' => '01:00',
+                'components' => ['db', 'plugins'],
+                'encrypt' => false,
+                'incremental' => false,
+            ];
+            $GLOBALS['bjlg_test_options']['bjlg_schedule_settings'] = $original_schedule;
+
+            $request = new class {
+                public function get_json_params()
+                {
+                    return [
+                        'recurrence' => 'weekly',
+                        'time' => '01:00',
+                    ];
+                }
+            };
+
+            $result = $api->create_schedule($request);
+
+            $this->assertInstanceOf(WP_Error::class, $result);
+            $this->assertSame('invalid_schedule_settings', $result->get_error_code());
+            $this->assertSame($original_schedule, get_option('bjlg_schedule_settings'));
+        }
+    }
+}
 
     public function test_create_backup_stores_incremental_flag_from_rest_request(): void
     {

@@ -754,7 +754,200 @@ class BJLG_REST_API {
 
         return $sanitized;
     }
-    
+
+    private function prepare_settings_payload(array $params) {
+        $validated = [];
+
+        foreach ($params as $key => $value) {
+            switch ($key) {
+                case 'cleanup':
+                    $validated_value = $this->validate_cleanup_settings($value);
+                    break;
+                case 'schedule':
+                    $validated_value = $this->validate_schedule_settings($value);
+                    break;
+                case 'encryption':
+                case 'notifications':
+                case 'performance':
+                case 'webhooks':
+                    $validated_value = $this->validate_generic_settings($value, $key);
+                    break;
+                default:
+                    return new WP_Error(
+                        'invalid_setting_key',
+                        sprintf(__('The "%s" setting cannot be updated via the REST API.', 'backup-jlg'), $key),
+                        ['status' => 400]
+                    );
+            }
+
+            if (is_wp_error($validated_value)) {
+                return $validated_value;
+            }
+
+            $validated[$key] = $validated_value;
+        }
+
+        if (empty($validated)) {
+            return new WP_Error(
+                'invalid_payload',
+                __('No valid settings were provided.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        return $validated;
+    }
+
+    private function validate_generic_settings($value, $key) {
+        if (!is_array($value)) {
+            return new WP_Error(
+                'invalid_setting_structure',
+                sprintf(__('The "%s" setting must be a JSON object.', 'backup-jlg'), $key),
+                ['status' => 400]
+            );
+        }
+
+        return $value;
+    }
+
+    private function validate_cleanup_settings($value) {
+        if (!is_array($value)) {
+            return new WP_Error(
+                'invalid_cleanup_settings',
+                __('Cleanup settings must be provided as a JSON object.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        foreach (['by_number', 'by_age'] as $required_key) {
+            if (!array_key_exists($required_key, $value)) {
+                return new WP_Error(
+                    'invalid_cleanup_settings',
+                    sprintf(__('Missing cleanup setting "%s".', 'backup-jlg'), $required_key),
+                    ['status' => 400]
+                );
+            }
+        }
+
+        $by_number = filter_var($value['by_number'], FILTER_VALIDATE_INT);
+        $by_age = filter_var($value['by_age'], FILTER_VALIDATE_INT);
+
+        if ($by_number === false || $by_age === false) {
+            return new WP_Error(
+                'invalid_cleanup_settings',
+                __('Cleanup settings must contain valid integers.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        return [
+            'by_number' => $by_number,
+            'by_age' => $by_age,
+        ];
+    }
+
+    private function validate_schedule_settings($value) {
+        if (!is_array($value)) {
+            return new WP_Error(
+                'invalid_schedule_settings',
+                __('Schedule settings must be provided as a JSON object.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        $required_keys = ['recurrence', 'day', 'time', 'components', 'encrypt', 'incremental'];
+
+        foreach ($required_keys as $required_key) {
+            if (!array_key_exists($required_key, $value)) {
+                return new WP_Error(
+                    'invalid_schedule_settings',
+                    sprintf(__('Missing schedule setting "%s".', 'backup-jlg'), $required_key),
+                    ['status' => 400]
+                );
+            }
+        }
+
+        $recurrence = sanitize_key((string) $value['recurrence']);
+        $valid_recurrences = ['disabled', 'hourly', 'twice_daily', 'daily', 'weekly', 'monthly'];
+
+        if (!in_array($recurrence, $valid_recurrences, true)) {
+            return new WP_Error(
+                'invalid_schedule_settings',
+                __('Invalid schedule recurrence value.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        $day = sanitize_key((string) $value['day']);
+        $valid_days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+        if (!in_array($day, $valid_days, true)) {
+            return new WP_Error(
+                'invalid_schedule_settings',
+                __('Invalid schedule day value.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        $time = sanitize_text_field((string) $value['time']);
+
+        if (!preg_match('/^([0-1]?\d|2[0-3]):([0-5]\d)$/', $time)) {
+            return new WP_Error(
+                'invalid_schedule_settings',
+                __('Invalid schedule time format. Expected HH:MM.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        $components = $this->sanitize_components_list($value['components']);
+
+        if (is_wp_error($components)) {
+            return $components;
+        }
+
+        if (empty($components)) {
+            return new WP_Error(
+                'invalid_schedule_settings',
+                __('At least one valid component must be provided for the schedule.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        $encrypt = $this->interpret_boolean($value['encrypt']);
+        $incremental = $this->interpret_boolean($value['incremental']);
+
+        if ($encrypt === null || $incremental === null) {
+            return new WP_Error(
+                'invalid_schedule_settings',
+                __('Schedule boolean settings must be true or false.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        return [
+            'recurrence' => $recurrence,
+            'day' => $day,
+            'time' => $time,
+            'components' => $components,
+            'encrypt' => $encrypt,
+            'incremental' => $incremental,
+        ];
+    }
+
+    private function interpret_boolean($value) {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        $filtered = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+        if ($filtered === null) {
+            return null;
+        }
+
+        return $filtered;
+    }
+
     /**
      * Endpoint : Obtenir une sauvegarde spécifique
      */
@@ -1061,14 +1254,28 @@ class BJLG_REST_API {
      */
     public function update_settings($request) {
         $params = $request->get_json_params();
-        
-        foreach ($params as $key => $value) {
+
+        if (!is_array($params) || empty($params)) {
+            return new WP_Error(
+                'invalid_payload',
+                __('The request payload must be a JSON object with settings data.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        $validated_settings = $this->prepare_settings_payload($params);
+
+        if (is_wp_error($validated_settings)) {
+            return $validated_settings;
+        }
+
+        foreach ($validated_settings as $key => $value) {
             $option_name = 'bjlg_' . $key . '_settings';
             update_option($option_name, $value);
         }
-        
+
         BJLG_History::log('settings_updated', 'success', 'Settings updated via API');
-        
+
         return rest_ensure_response([
             'success' => true,
             'message' => 'Settings updated successfully'
@@ -1094,13 +1301,27 @@ class BJLG_REST_API {
      */
     public function create_schedule($request) {
         $params = $request->get_json_params();
-        
-        update_option('bjlg_schedule_settings', $params);
-        
+
+        if (!is_array($params) || empty($params)) {
+            return new WP_Error(
+                'invalid_payload',
+                __('The request payload must be a JSON object with schedule data.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        $validated_schedule = $this->validate_schedule_settings($params);
+
+        if (is_wp_error($validated_schedule)) {
+            return $validated_schedule;
+        }
+
+        update_option('bjlg_schedule_settings', $validated_schedule);
+
         // Réinitialiser la planification
         $scheduler = new BJLG_Scheduler();
         $scheduler->check_schedule();
-        
+
         return rest_ensure_response([
             'success' => true,
             'message' => 'Schedule created successfully'
