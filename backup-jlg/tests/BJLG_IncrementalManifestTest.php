@@ -257,6 +257,7 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $this->assertArrayHasKey('file', $full_backup);
         $this->assertArrayHasKey('size', $full_backup);
         $this->assertArrayHasKey('components', $full_backup);
+        $this->assertArrayHasKey('path', $full_backup);
 
         $backup_path = BJLG_BACKUP_DIR . $full_backup['file'];
         $this->createdPaths[] = $backup_path;
@@ -264,6 +265,50 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $this->assertFileExists($backup_path);
         $this->assertGreaterThan(0, $full_backup['size']);
         $this->assertSame($components, $full_backup['components']);
+        $this->assertSame(realpath($backup_path), realpath((string) $full_backup['path']));
+    }
+
+    public function test_manifest_updates_even_without_registered_hook(): void
+    {
+        unset($GLOBALS['bjlg_test_hooks']['actions']['bjlg_backup_complete']);
+
+        $task_id = 'bjlg_backup_' . uniqid('test', true);
+        $components = ['db', 'plugins', 'themes', 'uploads'];
+
+        set_transient($task_id, [
+            'progress' => 5,
+            'status' => 'pending',
+            'status_text' => 'Initialisation',
+            'components' => $components,
+            'encrypt' => false,
+            'incremental' => false,
+            'source' => 'tests',
+            'start_time' => time(),
+        ], HOUR_IN_SECONDS);
+
+        $backup = new BJLG\BJLG_Backup();
+        $backup->run_backup_task($task_id);
+
+        $this->assertFileExists($this->manifestPath);
+
+        $manifest = json_decode((string) file_get_contents($this->manifestPath), true);
+        $this->assertIsArray($manifest);
+        $this->assertArrayHasKey('full_backup', $manifest);
+
+        $full_backup = $manifest['full_backup'];
+        $this->assertIsArray($full_backup);
+        $this->assertArrayHasKey('file', $full_backup);
+        $this->assertArrayHasKey('path', $full_backup);
+        $this->assertArrayHasKey('components', $full_backup);
+        $this->assertArrayHasKey('size', $full_backup);
+
+        $this->assertNotEmpty($full_backup['path']);
+        $this->assertFileExists($full_backup['path']);
+        $this->createdPaths[] = $full_backup['path'];
+
+        $this->assertGreaterThan(0, $full_backup['size']);
+        $this->assertSame($components, $full_backup['components']);
+        $this->assertSame(realpath(BJLG_BACKUP_DIR . $full_backup['file']), realpath((string) $full_backup['path']));
     }
 
     private function ensureWordPressDirectories(): void

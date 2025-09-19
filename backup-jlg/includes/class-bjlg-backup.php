@@ -268,14 +268,31 @@ class BJLG_Backup {
                 $duration
             ));
             
-            // Notification de succès
-            do_action('bjlg_backup_complete', $backup_filename, [
+            $completion_timestamp = time();
+            $manifest_details = [
+                'file' => $backup_filename,
+                'path' => $backup_filepath,
                 'size' => $file_size,
                 'components' => $components,
                 'encrypted' => $task_data['encrypt'],
                 'incremental' => $task_data['incremental'],
-                'duration' => $duration
-            ]);
+                'duration' => $duration,
+                'timestamp' => $completion_timestamp,
+            ];
+
+            // Notification de succès
+            do_action('bjlg_backup_complete', $backup_filename, $manifest_details);
+
+            if (class_exists(BJLG_Incremental::class)) {
+                $incremental_handler = BJLG_Incremental::get_latest_instance();
+                if (!$incremental_handler) {
+                    $incremental_handler = new BJLG_Incremental();
+                }
+
+                if ($incremental_handler) {
+                    $incremental_handler->update_manifest($backup_filename, $manifest_details);
+                }
+            }
 
             // Mise à jour finale
             $this->update_task_progress($task_id, 100, 'complete', 'Sauvegarde terminée avec succès !');

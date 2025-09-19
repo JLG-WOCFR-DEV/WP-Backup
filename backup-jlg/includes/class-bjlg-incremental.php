@@ -14,15 +14,27 @@ if (!defined('ABSPATH')) {
 }
 
 class BJLG_Incremental {
-    
+
     private $manifest_file;
     private $last_backup_data;
     private $file_hash_cache = [];
-    
+
+    /**
+     * @var string|null Empreinte de la dernière mise à jour pour éviter les doublons.
+     */
+    private $last_manifest_signature = null;
+
+    /**
+     * @var self|null Référence vers la dernière instance initialisée.
+     */
+    private static $latest_instance = null;
+
     public function __construct() {
         $this->manifest_file = BJLG_BACKUP_DIR . '.incremental-manifest.json';
         $this->load_manifest();
-        
+
+        self::$latest_instance = $this;
+
         // Hooks
         add_filter('bjlg_backup_type', [$this, 'determine_backup_type'], 10, 2);
         add_action('bjlg_backup_complete', [$this, 'update_manifest'], 10, 2);
@@ -80,6 +92,7 @@ class BJLG_Incremental {
             'last_scan' => null,
             'version' => '2.0'
         ];
+        $this->last_manifest_signature = null;
         $this->save_manifest();
     }
     
@@ -103,15 +116,30 @@ class BJLG_Incremental {
             BJLG_Debug::log("Pas de sauvegarde complète de référence.");
             return false;
         }
-        
+
         // Vérifier que la sauvegarde complète existe toujours
-        $full_backup_file = $this->last_backup_data['full_backup']['file'];
-        if (!file_exists(BJLG_BACKUP_DIR . $full_backup_file)) {
+        $full_backup_entry = $this->last_backup_data['full_backup'];
+        $full_backup_path = '';
+
+        if (is_array($full_backup_entry)) {
+            if (!empty($full_backup_entry['path']) && is_string($full_backup_entry['path'])) {
+                $full_backup_path = $full_backup_entry['path'];
+            } elseif (!empty($full_backup_entry['file']) && is_string($full_backup_entry['file'])) {
+                $full_backup_path = BJLG_BACKUP_DIR . ltrim($full_backup_entry['file'], '\\/');
+            }
+        }
+
+        if ($full_backup_path === '') {
+            BJLG_Debug::log("Chemin de la sauvegarde complète introuvable dans le manifeste.");
+            return false;
+        }
+
+        if (!file_exists($full_backup_path)) {
             BJLG_Debug::log("La sauvegarde complète de référence n'existe plus.");
             $this->reset_manifest();
             return false;
         }
-        
+
         // Vérifier l'âge de la dernière sauvegarde complète
         $full_backup_time = $this->last_backup_data['full_backup']['timestamp'];
         $days_old = (time() - $full_backup_time) / DAY_IN_SECONDS;
@@ -235,29 +263,15 @@ class BJLG_Incremental {
     public function update_manifest($backup_reference, $details = []) {
         $details = is_array($details) ? $details : [];
 
+        $backup_filepath = $this->resolve_backup_path($backup_reference, $details);
         $backup_filename = '';
-        if (is_string($backup_reference) && $backup_reference !== '') {
-            $backup_filename = basename($backup_reference);
-        }
 
-        if (isset($details['file']) && is_string($details['file'])) {
-            $backup_filename = basename($details['file']);
-        }
-
-        $backup_filepath = '';
-        if (isset($details['path']) && is_string($details['path'])) {
-            $backup_filepath = $details['path'];
+        if ($backup_filepath !== '') {
             $backup_filename = basename($backup_filepath);
-        }
-
-        if ($backup_filepath === '' && is_string($backup_reference) && $backup_reference !== '') {
-            if ($this->is_absolute_path($backup_reference) && file_exists($backup_reference)) {
-                $backup_filepath = $backup_reference;
-                $backup_filename = basename($backup_reference);
-            } else {
-                $candidate = BJLG_BACKUP_DIR . ltrim($backup_reference, '\\/');
-                $backup_filepath = $candidate;
-            }
+        } elseif (isset($details['file']) && is_string($details['file'])) {
+            $backup_filename = basename($details['file']);
+        } elseif (is_string($backup_reference) && $backup_reference !== '') {
+            $backup_filename = basename($backup_reference);
         }
 
         if ($backup_filepath === '' && $backup_filename !== '') {
@@ -266,20 +280,23 @@ class BJLG_Incremental {
 
         $components = [];
         if (isset($details['components']) && is_array($details['components'])) {
-            $components = array_values($details['components']);
-        } elseif (is_array($details) && $details !== [] && $this->is_list($details)) {
-            $components = array_values($details);
+            $components = array_values(array_map('strval', $details['components']));
         }
-        $components = array_values(array_map('strval', $components));
 
         $size = isset($details['size']) ? (int) $details['size'] : 0;
-        if ($size <= 0 && $backup_filepath && file_exists($backup_filepath)) {
+        if ($size <= 0 && $backup_filepath !== '' && file_exists($backup_filepath)) {
             $size = filesize($backup_filepath);
+        }
+
+        $timestamp = isset($details['timestamp']) ? (int) $details['timestamp'] : 0;
+        if ($timestamp <= 0) {
+            $timestamp = time();
         }
 
         $backup_info = [
             'file' => $backup_filename,
-            'timestamp' => time(),
+            'path' => $backup_filepath,
+            'timestamp' => $timestamp,
             'components' => $components,
             'size' => $size
         ];
@@ -290,6 +307,23 @@ class BJLG_Incremental {
         } elseif (strpos($backup_filename, 'incremental') !== false) {
             $is_incremental = true;
         }
+
+        $signature_data = [
+            'file' => $backup_info['file'],
+            'path' => $backup_info['path'],
+            'timestamp' => $backup_info['timestamp'],
+            'size' => $backup_info['size'],
+            'components' => $backup_info['components'],
+            'incremental' => $is_incremental ? '1' : '0'
+        ];
+        $signature = md5(json_encode($signature_data));
+
+        if ($this->last_manifest_signature === $signature) {
+            BJLG_Debug::log("Aucune mise à jour du manifeste nécessaire (données identiques).");
+            return;
+        }
+
+        $this->last_manifest_signature = $signature;
 
         if ($is_incremental) {
             $this->last_backup_data['incremental_backups'][] = $backup_info;
@@ -315,6 +349,68 @@ class BJLG_Incremental {
     }
 
     /**
+     * Récupère la dernière instance initialisée.
+     *
+     * @return self|null
+     */
+    public static function get_latest_instance() {
+        return self::$latest_instance;
+    }
+
+    /**
+     * Détermine le chemin absolu du fichier de sauvegarde à partir des détails fournis.
+     *
+     * @param mixed $backup_reference
+     * @param array<string, mixed> $details
+     * @return string
+     */
+    private function resolve_backup_path($backup_reference, array $details) {
+        $candidates = [];
+
+        if (isset($details['path']) && is_string($details['path']) && $details['path'] !== '') {
+            $candidates[] = $details['path'];
+        }
+
+        if (isset($details['file']) && is_string($details['file']) && $details['file'] !== '') {
+            $candidates[] = $details['file'];
+        }
+
+        if (is_string($backup_reference) && $backup_reference !== '') {
+            $candidates[] = $backup_reference;
+        }
+
+        $fallback = '';
+
+        foreach ($candidates as $candidate) {
+            if (!is_string($candidate) || $candidate === '') {
+                continue;
+            }
+
+            if ($this->is_absolute_path($candidate)) {
+                if (file_exists($candidate)) {
+                    return $candidate;
+                }
+
+                if ($fallback === '') {
+                    $fallback = $candidate;
+                }
+                continue;
+            }
+
+            $absolute = BJLG_BACKUP_DIR . ltrim($candidate, '\\/');
+            if (file_exists($absolute)) {
+                return $absolute;
+            }
+
+            if ($fallback === '') {
+                $fallback = $absolute;
+            }
+        }
+
+        return $fallback;
+    }
+
+    /**
      * Vérifie si un chemin est absolu.
      */
     private function is_absolute_path($path) {
@@ -325,17 +421,6 @@ class BJLG_Incremental {
         return $path[0] === '/' || $path[0] === '\\' || preg_match('#^[A-Za-z]:[\\/]#', $path) === 1;
     }
 
-    /**
-     * Vérifie si un tableau utilise des clés numériques séquentielles.
-     */
-    private function is_list(array $array) {
-        if ($array === []) {
-            return true;
-        }
-
-        return array_keys($array) === range(0, count($array) - 1);
-    }
-    
     /**
      * Met à jour tous les checksums de la base de données
      */
