@@ -232,44 +232,108 @@ class BJLG_Incremental {
     /**
      * Met à jour le manifeste après une sauvegarde
      */
-    public function update_manifest($backup_file, $components) {
+    public function update_manifest($backup_reference, $details = []) {
+        $details = is_array($details) ? $details : [];
+
+        $backup_filename = '';
+        if (is_string($backup_reference) && $backup_reference !== '') {
+            $backup_filename = basename($backup_reference);
+        }
+
+        if (isset($details['file']) && is_string($details['file'])) {
+            $backup_filename = basename($details['file']);
+        }
+
+        $backup_filepath = '';
+        if (isset($details['path']) && is_string($details['path'])) {
+            $backup_filepath = $details['path'];
+            $backup_filename = basename($backup_filepath);
+        }
+
+        if ($backup_filepath === '' && is_string($backup_reference) && $backup_reference !== '') {
+            if ($this->is_absolute_path($backup_reference) && file_exists($backup_reference)) {
+                $backup_filepath = $backup_reference;
+                $backup_filename = basename($backup_reference);
+            } else {
+                $candidate = BJLG_BACKUP_DIR . ltrim($backup_reference, '\\/');
+                $backup_filepath = $candidate;
+            }
+        }
+
+        if ($backup_filepath === '' && $backup_filename !== '') {
+            $backup_filepath = BJLG_BACKUP_DIR . ltrim($backup_filename, '\\/');
+        }
+
+        $components = [];
+        if (isset($details['components']) && is_array($details['components'])) {
+            $components = array_values($details['components']);
+        } elseif (is_array($details) && $details !== [] && $this->is_list($details)) {
+            $components = array_values($details);
+        }
+        $components = array_values(array_map('strval', $components));
+
+        $size = isset($details['size']) ? (int) $details['size'] : 0;
+        if ($size <= 0 && $backup_filepath && file_exists($backup_filepath)) {
+            $size = filesize($backup_filepath);
+        }
+
         $backup_info = [
-            'file' => basename($backup_file),
+            'file' => $backup_filename,
             'timestamp' => time(),
             'components' => $components,
-            'size' => filesize($backup_file)
+            'size' => $size
         ];
-        
-        // Déterminer le type de sauvegarde
-        if (strpos(basename($backup_file), 'incremental') !== false) {
-            // Sauvegarde incrémentale
+
+        $is_incremental = false;
+        if (isset($details['incremental'])) {
+            $is_incremental = (bool) $details['incremental'];
+        } elseif (strpos($backup_filename, 'incremental') !== false) {
+            $is_incremental = true;
+        }
+
+        if ($is_incremental) {
             $this->last_backup_data['incremental_backups'][] = $backup_info;
-            
-            // Limiter à 10 sauvegardes incrémentales
+
             if (count($this->last_backup_data['incremental_backups']) > 10) {
                 array_shift($this->last_backup_data['incremental_backups']);
             }
         } else {
-            // Sauvegarde complète - réinitialiser
             $this->last_backup_data['full_backup'] = $backup_info;
             $this->last_backup_data['incremental_backups'] = [];
-            
-            // Mettre à jour tous les checksums
             $this->update_all_checksums();
         }
-        
-        // Mettre à jour les hashes des fichiers depuis le cache
+
         foreach ($this->file_hash_cache as $path => $hash) {
             $this->last_backup_data['file_hashes'][$path] = $hash;
         }
-        
-        // Mettre à jour le timestamp du dernier scan
+
         $this->last_backup_data['last_scan'] = time();
-        
-        // Sauvegarder
+
         $this->save_manifest();
-        
+
         BJLG_Debug::log("Manifeste incrémental mis à jour");
+    }
+
+    /**
+     * Vérifie si un chemin est absolu.
+     */
+    private function is_absolute_path($path) {
+        if ($path === '') {
+            return false;
+        }
+
+        return $path[0] === '/' || $path[0] === '\\' || preg_match('#^[A-Za-z]:[\\/]#', $path) === 1;
+    }
+
+    /**
+     * Vérifie si un tableau utilise des clés numériques séquentielles.
+     */
+    private function is_list(array $array) {
+        if ($array === []) {
+            return true;
+        }
+
+        return array_keys($array) === range(0, count($array) - 1);
     }
     
     /**
