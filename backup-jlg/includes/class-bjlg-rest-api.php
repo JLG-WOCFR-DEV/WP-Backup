@@ -1175,8 +1175,7 @@ class BJLG_REST_API {
         $period = $request->get_param('period');
         
         $history_stats = BJLG_History::get_stats($period);
-        $cleanup = new BJLG_Cleanup();
-        $storage_stats = $cleanup->get_storage_stats();
+        $storage_stats = BJLG_Cleanup::get_storage_stats_snapshot();
         
         $disk_total = $storage_stats['disk_total'];
         $disk_free = $storage_stats['disk_free'];

@@ -14,13 +14,30 @@ class BJLG_Cleanup {
 
     const CRON_HOOK = 'bjlg_daily_cleanup_hook';
 
+    /** @var self|null */
+    private static $instance = null;
+
+    public static function instance() {
+        if (self::$instance instanceof self) {
+            return self::$instance;
+        }
+
+        return new self();
+    }
+
     public function __construct() {
+        if (self::$instance instanceof self) {
+            return;
+        }
+
+        self::$instance = $this;
+
         // L'action qui sera réellement exécutée par le cron
         add_action(self::CRON_HOOK, [$this, 'run_cleanup']);
-        
+
         // Action manuelle de nettoyage
         add_action('wp_ajax_bjlg_manual_cleanup', [$this, 'handle_manual_cleanup']);
-        
+
         // Planifier la tâche si elle n'est pas déjà planifiée
         if (!wp_next_scheduled(self::CRON_HOOK)) {
             // Planifie l'événement pour qu'il s'exécute tous les jours à 3h du matin
@@ -391,6 +408,14 @@ class BJLG_Cleanup {
      * Obtient des statistiques sur l'espace utilisé
      */
     public function get_storage_stats() {
+        return self::get_storage_stats_snapshot();
+    }
+
+    public static function get_storage_stats_snapshot() {
+        return self::calculate_storage_stats();
+    }
+
+    private static function calculate_storage_stats() {
         $disk_free = @disk_free_space(BJLG_BACKUP_DIR);
         $disk_total = @disk_total_space(BJLG_BACKUP_DIR);
 
@@ -404,29 +429,29 @@ class BJLG_Cleanup {
             'disk_total' => $disk_total !== false ? (float) $disk_total : null,
             'disk_space_error' => $disk_free === false || $disk_total === false
         ];
-        
+
         $backups = glob(BJLG_BACKUP_DIR . '*.zip*');
-        
+
         if (!empty($backups)) {
             $stats['total_backups'] = count($backups);
-            
+
             $sizes = [];
             $dates = [];
-            
+
             foreach ($backups as $backup) {
                 $size = filesize($backup);
                 $date = filemtime($backup);
-                
+
                 $sizes[] = $size;
                 $dates[] = $date;
                 $stats['total_size'] += $size;
             }
-            
+
             $stats['average_size'] = $stats['total_size'] / $stats['total_backups'];
             $stats['oldest_backup'] = min($dates);
             $stats['newest_backup'] = max($dates);
         }
-        
+
         return $stats;
     }
 }

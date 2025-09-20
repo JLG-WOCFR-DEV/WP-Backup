@@ -44,7 +44,10 @@ if (!isset($GLOBALS['bjlg_test_hooks'])) {
 
 $GLOBALS['bjlg_test_current_user_can'] = true;
 $GLOBALS['bjlg_test_transients'] = [];
-$GLOBALS['bjlg_test_scheduled_events'] = [];
+$GLOBALS['bjlg_test_scheduled_events'] = [
+    'recurring' => [],
+    'single' => [],
+];
 $GLOBALS['bjlg_test_options'] = [];
 
 if (!class_exists('WP_Error')) {
@@ -169,6 +172,34 @@ if (!function_exists('add_action')) {
             'callback' => $callback,
             'accepted_args' => (int) $accepted_args,
         ];
+    }
+}
+
+if (!function_exists('has_action')) {
+    function has_action($hook, $callback = false) {
+        if (empty($GLOBALS['bjlg_test_hooks']['actions'][$hook])) {
+            return false;
+        }
+
+        if ($callback === false) {
+            $count = 0;
+
+            foreach ($GLOBALS['bjlg_test_hooks']['actions'][$hook] as $callbacks) {
+                $count += count($callbacks);
+            }
+
+            return $count;
+        }
+
+        foreach ($GLOBALS['bjlg_test_hooks']['actions'][$hook] as $priority => $callbacks) {
+            foreach ($callbacks as $definition) {
+                if ($definition['callback'] === $callback) {
+                    return $priority;
+                }
+            }
+        }
+
+        return false;
     }
 }
 
@@ -397,11 +428,47 @@ if (!function_exists('delete_transient')) {
 
 if (!function_exists('wp_schedule_single_event')) {
     function wp_schedule_single_event($timestamp, $hook, $args = []) {
-        $GLOBALS['bjlg_test_scheduled_events'][] = [
+        $GLOBALS['bjlg_test_scheduled_events']['single'][] = [
             'timestamp' => $timestamp,
             'hook' => $hook,
             'args' => $args,
         ];
+
+        return true;
+    }
+}
+
+if (!function_exists('wp_schedule_event')) {
+    function wp_schedule_event($timestamp, $recurrence, $hook, $args = []) {
+        $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook] = [
+            'timestamp' => $timestamp,
+            'recurrence' => $recurrence,
+            'args' => $args,
+        ];
+
+        return true;
+    }
+}
+
+if (!function_exists('wp_next_scheduled')) {
+    function wp_next_scheduled($hook) {
+        if (isset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook])) {
+            return $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook]['timestamp'];
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('wp_clear_scheduled_hook')) {
+    function wp_clear_scheduled_hook($hook) {
+        unset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook]);
+
+        foreach ($GLOBALS['bjlg_test_scheduled_events']['single'] as $index => $event) {
+            if ($event['hook'] === $hook) {
+                unset($GLOBALS['bjlg_test_scheduled_events']['single'][$index]);
+            }
+        }
 
         return true;
     }

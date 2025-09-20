@@ -16,7 +16,7 @@ namespace BJLG {
 
 namespace {
 
-use PHPUnit\\Framework\\TestCase;
+use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/class-bjlg-actions.php';
 
@@ -37,7 +37,7 @@ final class BJLG_ActionsTest extends TestCase
     {
         $GLOBALS['bjlg_test_current_user_can'] = false;
 
-        $actions = new BJLG\\BJLG_Actions();
+        $actions = new BJLG\BJLG_Actions();
 
         try {
             $actions->handle_delete_backup();
@@ -65,7 +65,7 @@ final class BJLG_ActionsTest extends TestCase
      */
     public function test_handle_download_request_uses_status_from_validation(?string $token, int $expected_status): void
     {
-        $actions = new BJLG\\BJLG_Actions();
+        $actions = new BJLG\BJLG_Actions();
 
         if ($token !== null) {
             $_REQUEST['token'] = $token;
@@ -95,7 +95,7 @@ final class BJLG_ActionsTest extends TestCase
      */
     public function test_maybe_handle_public_download_uses_status_from_validation(string $token, int $expected_status): void
     {
-        $actions = new BJLG\\BJLG_Actions();
+        $actions = new BJLG\BJLG_Actions();
 
         $_GET['bjlg_download'] = $token;
 
@@ -110,7 +110,7 @@ final class BJLG_ActionsTest extends TestCase
 
     public function test_handle_delete_backup_returns_error_when_backup_directory_is_missing(): void
     {
-        $actions = new BJLG\\BJLG_Actions();
+        $actions = new BJLG\BJLG_Actions();
 
         $_POST['filename'] = 'missing-backup.zip';
 

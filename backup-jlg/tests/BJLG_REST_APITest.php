@@ -29,6 +29,7 @@ namespace BJLG {
 namespace {
     use PHPUnit\Framework\TestCase;
 
+    require_once __DIR__ . '/../includes/class-bjlg-cleanup.php';
     require_once __DIR__ . '/../includes/class-bjlg-rest-api.php';
 
     if (!defined('AUTH_KEY')) {
@@ -42,6 +43,10 @@ namespace {
             parent::setUp();
 
             $GLOBALS['bjlg_test_options'] = [];
+            $GLOBALS['bjlg_test_hooks'] = [
+                'actions' => [],
+                'filters' => [],
+            ];
         }
 
         public function test_verify_jwt_token_returns_false_for_invalid_signature(): void
@@ -334,8 +339,6 @@ namespace {
             $this->assertSame('invalid_schedule_settings', $result->get_error_code());
             $this->assertSame($original_schedule, get_option('bjlg_schedule_settings'));
         }
-    }
-}
 
     public function test_create_backup_stores_incremental_flag_from_rest_request(): void
     {
@@ -413,6 +416,37 @@ namespace {
         $this->assertTrue($response['disk']['calculation_error']);
 
         unset($GLOBALS['bjlg_test_disk_total_space_mock'], $GLOBALS['bjlg_test_disk_free_space_mock']);
+    }
+
+    public function test_get_stats_does_not_register_cleanup_hooks_multiple_times(): void
+    {
+        $cleanup = BJLG\BJLG_Cleanup::instance();
+        $initial_hooks = has_action(BJLG\BJLG_Cleanup::CRON_HOOK);
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $request = new class {
+            public function get_param($key)
+            {
+                if ($key === 'period') {
+                    return 'week';
+                }
+
+                return null;
+            }
+        };
+
+        $api->get_stats($request);
+        $after_first_call = has_action(BJLG\BJLG_Cleanup::CRON_HOOK);
+
+        $api->get_stats($request);
+        $after_second_call = has_action(BJLG\BJLG_Cleanup::CRON_HOOK);
+
+        $this->assertSame($initial_hooks, $after_first_call);
+        $this->assertSame($after_first_call, $after_second_call);
+
+        $registered_priority = has_action(BJLG\BJLG_Cleanup::CRON_HOOK, [$cleanup, 'run_cleanup']);
+        $this->assertNotFalse($registered_priority);
     }
 
     public function test_format_backup_data_generates_download_token(): void
