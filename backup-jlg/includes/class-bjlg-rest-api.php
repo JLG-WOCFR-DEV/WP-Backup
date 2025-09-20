@@ -293,7 +293,7 @@ class BJLG_REST_API {
                 return $jwt_check;
             }
 
-            return (bool) $jwt_check;
+            return $jwt_check;
         }
 
         // Vérifier l'authentification WordPress standard
@@ -523,6 +523,9 @@ class BJLG_REST_API {
             );
         }
 
+        $user_id = isset($payload_data['user_id']) ? (int) $payload_data['user_id'] : 0;
+        $username = isset($payload_data['username']) ? (string) $payload_data['username'] : '';
+
         if (!defined('AUTH_KEY')) {
             return new WP_Error(
                 'jwt_signature_error',
@@ -542,16 +545,21 @@ class BJLG_REST_API {
             );
         }
 
-        $user_id = isset($payload_data['user_id']) ? (int) $payload_data['user_id'] : null;
-        $username = isset($payload_data['username']) ? $payload_data['username'] : null;
+        if ($user_id <= 0 && $username === '') {
+            return new WP_Error(
+                'jwt_invalid_user',
+                __('Le token JWT ne contient pas d’utilisateur valide.', 'backup-jlg'),
+                ['status' => 401]
+            );
+        }
 
         $user = false;
 
-        if ($user_id) {
+        if ($user_id > 0) {
             $user = get_user_by('id', $user_id);
         }
 
-        if (!$user && $username) {
+        if (!$user && $username !== '') {
             $user = get_user_by('login', $username);
         }
 
