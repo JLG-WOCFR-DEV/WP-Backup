@@ -3,7 +3,9 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/../includes/class-bjlg-debug.php';
 require_once __DIR__ . '/../includes/class-bjlg-restore.php';
+require_once __DIR__ . '/../includes/class-bjlg-encryption.php';
 
 final class BJLG_RestoreSecurityTest extends TestCase
 {
@@ -115,5 +117,60 @@ final class BJLG_RestoreSecurityTest extends TestCase
         if (is_dir($temporary_dir)) {
             rmdir($temporary_dir);
         }
+    }
+
+    public function test_restoring_encrypted_backup_removes_plaintext_archive(): void
+    {
+        update_option('bjlg_encryption_settings', ['enabled' => true]);
+
+        $zip_path = BJLG_BACKUP_DIR . 'encrypted-restore-' . uniqid('', true) . '.zip';
+        $zip = new ZipArchive();
+        $open_result = $zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+        $this->assertTrue($open_result === true || $open_result === ZipArchive::ER_OK);
+
+        $manifest = [
+            'type' => 'test',
+            'contains' => [],
+        ];
+
+        $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $zip->close();
+
+        $encryption = new BJLG\BJLG_Encryption();
+        $encrypted_path = $encryption->encrypt_backup_file($zip_path);
+        $this->assertFileDoesNotExist($zip_path);
+        $this->assertFileExists($encrypted_path);
+
+        $decrypted_path = substr($encrypted_path, 0, -4);
+
+        $restore = new BJLG\BJLG_Restore();
+        $task_id = 'bjlg_restore_' . uniqid();
+
+        set_transient($task_id, [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => '',
+            'filename' => basename($encrypted_path),
+            'filepath' => $encrypted_path,
+            'password_encrypted' => null,
+        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
+
+        $restore->run_restore_task($task_id);
+
+        $task_data = get_transient($task_id);
+        $this->assertIsArray($task_data);
+        $this->assertSame('complete', $task_data['status']);
+
+        $this->assertFileExists($encrypted_path);
+        $this->assertFileDoesNotExist($decrypted_path);
+
+        if (file_exists($encrypted_path)) {
+            unlink($encrypted_path);
+        }
+        if (file_exists($decrypted_path)) {
+            unlink($decrypted_path);
+        }
+
+        update_option('bjlg_encryption_settings', ['enabled' => false]);
     }
 }
