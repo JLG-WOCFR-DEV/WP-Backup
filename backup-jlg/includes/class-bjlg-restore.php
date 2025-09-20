@@ -276,7 +276,7 @@ class BJLG_Restore {
             'password_encrypted' => $encrypted_password
         ];
         
-        set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
+        BJLG_Backup::store_task_state($task_id, $task_data);
         
         // Planifier l'exécution
         wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
@@ -335,11 +335,11 @@ class BJLG_Restore {
             BJLG_Debug::log("Début de la restauration pour le fichier : " . basename($filepath));
 
             // Mise à jour : Vérification
-            set_transient($task_id, [
+            BJLG_Backup::store_task_state($task_id, [
                 'progress' => 10,
                 'status' => 'running',
                 'status_text' => 'Vérification du fichier de sauvegarde...'
-            ], BJLG_Backup::get_task_ttl());
+            ]);
 
             if (!file_exists($filepath)) {
                 throw new Exception("Le fichier de sauvegarde n'a pas été trouvé.");
@@ -347,11 +347,11 @@ class BJLG_Restore {
 
             // Déchiffrement si nécessaire
             if (substr($filepath, -4) === '.enc') {
-                set_transient($task_id, [
+                BJLG_Backup::store_task_state($task_id, [
                     'progress' => 20,
                     'status' => 'running',
                     'status_text' => 'Déchiffrement de l\'archive...'
-                ], BJLG_Backup::get_task_ttl());
+                ]);
                 
                 $encryption = new BJLG_Encryption();
                 $filepath = $encryption->decrypt_backup_file($filepath, $password);
@@ -381,11 +381,11 @@ class BJLG_Restore {
 
             // Restauration de la base de données
             if (in_array('db', $components_to_restore)) {
-                set_transient($task_id, [
+                BJLG_Backup::store_task_state($task_id, [
                     'progress' => 30,
                     'status' => 'running',
                     'status_text' => 'Restauration de la base de données...'
-                ], BJLG_Backup::get_task_ttl());
+                ]);
 
                 if ($zip->locateName('database.sql') !== false) {
                     $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
@@ -400,11 +400,11 @@ class BJLG_Restore {
                     BJLG_Debug::log("Import de la base de données...");
                     $this->import_database($sql_filepath);
 
-                    set_transient($task_id, [
+                    BJLG_Backup::store_task_state($task_id, [
                         'progress' => 50,
                         'status' => 'running',
                         'status_text' => 'Base de données restaurée.'
-                    ], BJLG_Backup::get_task_ttl());
+                    ]);
                 }
             }
 
@@ -430,11 +430,11 @@ class BJLG_Restore {
                 foreach ($folders_to_restore as $type => $destination) {
                     $progress += $progress_step;
 
-                    set_transient($task_id, [
+                    BJLG_Backup::store_task_state($task_id, [
                         'progress' => round($progress),
                         'status' => 'running',
                         'status_text' => "Restauration des {$type}..."
-                    ], BJLG_Backup::get_task_ttl());
+                    ]);
 
                     $source_folder = "wp-content/{$type}";
 
@@ -472,11 +472,11 @@ class BJLG_Restore {
             $zip->close();
             
             // Nettoyage
-            set_transient($task_id, [
+            BJLG_Backup::store_task_state($task_id, [
                 'progress' => 95,
                 'status' => 'running',
                 'status_text' => 'Nettoyage...'
-            ], BJLG_Backup::get_task_ttl());
+            ]);
             
             $this->recursive_delete($temp_extract_dir);
             
@@ -485,11 +485,11 @@ class BJLG_Restore {
             
             BJLG_History::log('restore_run', 'success', "Fichier : " . basename($filepath));
             
-            set_transient($task_id, [
+            BJLG_Backup::store_task_state($task_id, [
                 'progress' => 100,
                 'status' => 'complete',
                 'status_text' => 'Restauration terminée avec succès !'
-            ], BJLG_Backup::get_task_ttl());
+            ]);
 
         } catch (Exception $e) {
             BJLG_History::log('restore_run', 'failure', "Erreur : " . $e->getMessage());
@@ -499,11 +499,11 @@ class BJLG_Restore {
                 $this->recursive_delete($temp_extract_dir);
             }
             
-            set_transient($task_id, [
+            BJLG_Backup::store_task_state($task_id, [
                 'progress' => 100,
                 'status' => 'error',
                 'status_text' => 'Erreur : ' . $e->getMessage()
-            ], BJLG_Backup::get_task_ttl());
+            ]);
         }
     }
 
