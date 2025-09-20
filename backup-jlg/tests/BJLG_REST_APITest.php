@@ -47,44 +47,113 @@ namespace {
                 'actions' => [],
                 'filters' => [],
             ];
+
+            if (function_exists('bjlg_test_reset_users')) {
+                bjlg_test_reset_users();
+            }
+
+            $GLOBALS['bjlg_test_current_user_can'] = null;
         }
 
         public function test_verify_jwt_token_returns_false_for_invalid_signature(): void
         {
             $api = new BJLG\BJLG_REST_API();
 
-        $header = ['typ' => 'JWT', 'alg' => 'HS256'];
-        $payload = [
-            'user_id' => 1,
-            'username' => 'test',
-            'exp' => time() + 3600,
-            'iat' => time(),
-        ];
+            $header = ['typ' => 'JWT', 'alg' => 'HS256'];
+            $payload = [
+                'user_id' => 1,
+                'username' => 'test',
+                'exp' => time() + 3600,
+                'iat' => time(),
+            ];
 
-        $base64Header = $this->base64UrlEncode((string) json_encode($header));
-        $base64Payload = $this->base64UrlEncode((string) json_encode($payload));
+            $base64Header = $this->base64UrlEncode((string) json_encode($header));
+            $base64Payload = $this->base64UrlEncode((string) json_encode($payload));
 
-        $signature = hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY, true);
-        $validSignature = $this->base64UrlEncode($signature);
+            $signature = hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY, true);
+            $validSignature = $this->base64UrlEncode($signature);
 
-        $invalidSignature = $this->base64UrlEncode(
-            hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY . 'invalid', true)
-        );
-
-        if (hash_equals($validSignature, $invalidSignature)) {
             $invalidSignature = $this->base64UrlEncode(
-                hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY . 'fallback', true)
+                hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY . 'invalid', true)
             );
+
+            if (hash_equals($validSignature, $invalidSignature)) {
+                $invalidSignature = $this->base64UrlEncode(
+                    hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY . 'fallback', true)
+                );
+            }
+
+            $token = $base64Header . '.' . $base64Payload . '.' . $invalidSignature;
+
+            $this->assertFalse($this->invokeVerifyJwtToken($api, $token));
+            $this->assertSame(0, get_current_user_id());
         }
 
-        $token = $base64Header . '.' . $base64Payload . '.' . $invalidSignature;
+        public function test_verify_jwt_token_returns_false_when_user_is_missing(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
 
-        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
-        $method = $reflection->getMethod('verify_jwt_token');
-        $method->setAccessible(true);
+            $token = $this->invokeGenerateJwtToken($api, 42, 'ghost-user');
 
-        $this->assertFalse($method->invoke($api, $token));
-    }
+            $this->assertFalse($this->invokeVerifyJwtToken($api, $token));
+            $this->assertSame(0, get_current_user_id());
+        }
+
+        public function test_verify_jwt_token_returns_false_when_user_loses_capability(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $user = bjlg_test_add_user(7, [BJLG_CAPABILITY, 'read'], [
+                'user_login' => 'privileged',
+            ]);
+
+            $token = $this->invokeGenerateJwtToken($api, $user->ID, $user->user_login);
+
+            $user->remove_cap(BJLG_CAPABILITY);
+
+            $this->assertFalse($this->invokeVerifyJwtToken($api, $token));
+            $this->assertSame(0, get_current_user_id());
+        }
+
+        public function test_check_admin_permissions_accepts_valid_jwt_user(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $user = bjlg_test_add_user(11, [BJLG_CAPABILITY], [
+                'user_login' => 'admin-user',
+            ]);
+
+            $token = $this->invokeGenerateJwtToken($api, $user->ID, $user->user_login);
+
+            $request = new class($token) {
+                /** @var string */
+                private $token;
+
+                public function __construct($token)
+                {
+                    $this->token = $token;
+                }
+
+                public function get_header($name)
+                {
+                    if (strcasecmp($name, 'Authorization') === 0) {
+                        return 'Bearer ' . $this->token;
+                    }
+
+                    return null;
+                }
+
+                public function get_param($name)
+                {
+                    return null;
+                }
+            };
+
+            $GLOBALS['bjlg_test_current_user_can'] = null;
+
+            $this->assertTrue($api->check_admin_permissions($request));
+            $this->assertSame($user->ID, get_current_user_id());
+        }
 
     public function test_verify_api_key_updates_usage_statistics(): void
     {
@@ -482,6 +551,27 @@ namespace {
         if (file_exists($tempFile)) {
             unlink($tempFile);
         }
+    }
+
+    private function invokeVerifyJwtToken(BJLG\BJLG_REST_API $api, string $token)
+    {
+        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
+        $method = $reflection->getMethod('verify_jwt_token');
+        $method->setAccessible(true);
+
+        return $method->invoke($api, $token);
+    }
+
+    private function invokeGenerateJwtToken(BJLG\BJLG_REST_API $api, int $user_id, string $username): string
+    {
+        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
+        $method = $reflection->getMethod('generate_jwt_token');
+        $method->setAccessible(true);
+
+        /** @var string $token */
+        $token = $method->invoke($api, $user_id, $username);
+
+        return $token;
     }
 
     private function base64UrlEncode(string $data): string

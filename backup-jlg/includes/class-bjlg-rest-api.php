@@ -474,6 +474,10 @@ class BJLG_REST_API {
             return false;
         }
 
+        if (empty($payload_data['user_id'])) {
+            return false;
+        }
+
         if (!defined('AUTH_KEY')) {
             return false;
         }
@@ -483,6 +487,24 @@ class BJLG_REST_API {
 
         if (!hash_equals($expected_signature, $signature)) {
             return false;
+        }
+
+        $user_id = (int) $payload_data['user_id'];
+        if ($user_id <= 0) {
+            return false;
+        }
+
+        $user = get_user_by('id', $user_id);
+        if (!$user instanceof \WP_User) {
+            return false;
+        }
+
+        if (!user_can($user, BJLG_CAPABILITY)) {
+            return false;
+        }
+
+        if (function_exists('wp_set_current_user')) {
+            wp_set_current_user($user_id);
         }
 
         return true;

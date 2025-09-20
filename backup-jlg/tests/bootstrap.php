@@ -42,7 +42,10 @@ if (!isset($GLOBALS['bjlg_test_hooks'])) {
     ];
 }
 
-$GLOBALS['bjlg_test_current_user_can'] = true;
+$GLOBALS['bjlg_test_current_user_can'] = null;
+$GLOBALS['bjlg_test_users'] = [];
+$GLOBALS['bjlg_test_current_user'] = null;
+$GLOBALS['bjlg_test_current_user_id'] = 0;
 $GLOBALS['bjlg_test_transients'] = [];
 $GLOBALS['bjlg_test_scheduled_events'] = [
     'recurring' => [],
@@ -120,6 +123,102 @@ if (!class_exists('WP_Error')) {
             }
 
             return $this->error_data[$code] ?? null;
+        }
+    }
+}
+
+if (!class_exists('WP_User')) {
+    class WP_User
+    {
+        /** @var int */
+        public $ID;
+
+        /** @var string */
+        public $user_login;
+
+        /** @var string */
+        public $user_email;
+
+        /** @var array<string, bool> */
+        public $caps = [];
+
+        /** @var array<string, bool> */
+        public $allcaps = [];
+
+        /** @var array<int, string> */
+        public $roles = [];
+
+        /**
+         * @param int   $id
+         * @param array<string, mixed> $data
+         */
+        public function __construct($id = 0, array $data = [])
+        {
+            $this->ID = (int) $id;
+            $this->user_login = $data['user_login'] ?? ('user' . $this->ID);
+            $this->user_email = $data['user_email'] ?? ($this->user_login . '@example.com');
+            $this->roles = $data['roles'] ?? [];
+
+            $caps = $data['caps'] ?? [];
+
+            foreach ($caps as $cap) {
+                $this->add_cap($cap);
+            }
+        }
+
+        public function add_cap($cap): void
+        {
+            $this->caps[$cap] = true;
+            $this->allcaps[$cap] = true;
+        }
+
+        public function remove_cap($cap): void
+        {
+            unset($this->caps[$cap], $this->allcaps[$cap]);
+        }
+
+        public function has_cap($cap): bool
+        {
+            return !empty($this->allcaps[$cap]);
+        }
+    }
+}
+
+if (!function_exists('bjlg_test_reset_users')) {
+    function bjlg_test_reset_users(): void
+    {
+        $GLOBALS['bjlg_test_users'] = [];
+        $GLOBALS['bjlg_test_current_user'] = null;
+        $GLOBALS['bjlg_test_current_user_id'] = 0;
+    }
+}
+
+if (!function_exists('bjlg_test_add_user')) {
+    /**
+     * @param int $user_id
+     * @param array<int, string> $caps
+     * @param array<string, mixed> $data
+     */
+    function bjlg_test_add_user($user_id, array $caps = [], array $data = []): WP_User
+    {
+        $data['caps'] = $caps;
+        $user = new WP_User($user_id, $data);
+        $GLOBALS['bjlg_test_users'][(int) $user_id] = $user;
+
+        return $user;
+    }
+}
+
+if (!function_exists('bjlg_test_remove_user')) {
+    function bjlg_test_remove_user($user_id): void
+    {
+        $user_id = (int) $user_id;
+
+        unset($GLOBALS['bjlg_test_users'][$user_id]);
+
+        if (($GLOBALS['bjlg_test_current_user_id'] ?? 0) === $user_id) {
+            $GLOBALS['bjlg_test_current_user_id'] = 0;
+            $GLOBALS['bjlg_test_current_user'] = null;
         }
     }
 }
@@ -258,9 +357,83 @@ if (!function_exists('check_ajax_referer')) {
     }
 }
 
+if (!function_exists('get_user_by')) {
+    function get_user_by($field, $value)
+    {
+        if (in_array($field, ['id', 'ID'], true)) {
+            $value = (int) $value;
+            return $GLOBALS['bjlg_test_users'][$value] ?? false;
+        }
+
+        foreach ($GLOBALS['bjlg_test_users'] as $user) {
+            if ($field === 'login' && $user->user_login === $value) {
+                return $user;
+            }
+
+            if ($field === 'email' && $user->user_email === $value) {
+                return $user;
+            }
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('user_can')) {
+    function user_can($user, $capability)
+    {
+        if ($user instanceof WP_User) {
+            return $user->has_cap($capability);
+        }
+
+        if (is_numeric($user)) {
+            $user = get_user_by('id', (int) $user);
+            return $user instanceof WP_User ? $user->has_cap($capability) : false;
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('wp_set_current_user')) {
+    function wp_set_current_user($user_id)
+    {
+        $user = get_user_by('id', (int) $user_id);
+
+        if ($user instanceof WP_User) {
+            $GLOBALS['bjlg_test_current_user'] = $user;
+            $GLOBALS['bjlg_test_current_user_id'] = $user->ID;
+
+            return $user;
+        }
+
+        $GLOBALS['bjlg_test_current_user'] = null;
+        $GLOBALS['bjlg_test_current_user_id'] = 0;
+
+        return new WP_User();
+    }
+}
+
+if (!function_exists('get_current_user_id')) {
+    function get_current_user_id()
+    {
+        return (int) ($GLOBALS['bjlg_test_current_user_id'] ?? 0);
+    }
+}
+
 if (!function_exists('current_user_can')) {
     function current_user_can($capability) {
-        return $GLOBALS['bjlg_test_current_user_can'] ?? false;
+        if (array_key_exists('bjlg_test_current_user_can', $GLOBALS) && $GLOBALS['bjlg_test_current_user_can'] !== null) {
+            return (bool) $GLOBALS['bjlg_test_current_user_can'];
+        }
+
+        $user = $GLOBALS['bjlg_test_current_user'] ?? null;
+
+        if ($user instanceof WP_User) {
+            return user_can($user, $capability);
+        }
+
+        return false;
     }
 }
 
