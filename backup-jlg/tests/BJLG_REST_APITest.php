@@ -1,31 +1,6 @@
 <?php
 declare(strict_types=1);
 
-namespace BJLG {
-    if (!class_exists(__NAMESPACE__ . '\\BJLG_History')) {
-        class BJLG_History
-        {
-            public static function get_stats($period = 'week')
-            {
-                return [
-                    'total_actions' => 0,
-                    'successful' => 0,
-                    'failed' => 0,
-                    'info' => 0,
-                    'by_action' => [],
-                    'by_user' => [],
-                    'most_active_hour' => null,
-                ];
-            }
-
-            public static function log($action, $status, $message)
-            {
-                // Intentionally left blank for tests.
-            }
-        }
-    }
-}
-
 namespace {
     use PHPUnit\Framework\TestCase;
 
@@ -47,6 +22,83 @@ namespace {
                 'actions' => [],
                 'filters' => [],
             ];
+            $GLOBALS['bjlg_registered_routes'] = [];
+        }
+
+        public function test_backups_route_per_page_validation_rejects_zero(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+            $api->register_routes();
+
+            $namespace = BJLG\BJLG_REST_API::API_NAMESPACE;
+            $this->assertArrayHasKey($namespace, $GLOBALS['bjlg_registered_routes']);
+            $this->assertArrayHasKey('/backups', $GLOBALS['bjlg_registered_routes'][$namespace]);
+
+            $route = $GLOBALS['bjlg_registered_routes'][$namespace]['/backups'];
+            $this->assertIsArray($route);
+
+            $collection_endpoint = $route[0];
+            $this->assertArrayHasKey('args', $collection_endpoint);
+            $this->assertArrayHasKey('per_page', $collection_endpoint['args']);
+
+            $validator = $collection_endpoint['args']['per_page']['validate_callback'];
+            $this->assertIsCallable($validator);
+
+            $result = $validator(0, null, null);
+            $this->assertInstanceOf(\WP_Error::class, $result);
+            $this->assertSame('rest_invalid_param', $result->get_error_code());
+
+            $error_data = $result->get_error_data('rest_invalid_param');
+            $this->assertIsArray($error_data);
+            $this->assertSame(400, $error_data['status']);
+
+            $this->assertTrue($validator(5, null, null));
+        }
+
+        public function test_get_backups_enforces_minimum_per_page(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $files = [];
+
+            for ($i = 0; $i < 2; $i++) {
+                $filename = BJLG_BACKUP_DIR . 'bjlg-test-' . uniqid('', true) . '.zip';
+                file_put_contents($filename, 'backup');
+                touch($filename, time() - $i);
+                $files[] = $filename;
+            }
+
+            $request = new class {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct()
+                {
+                    $this->params = [
+                        'page' => 1,
+                        'per_page' => 0,
+                        'type' => 'all',
+                        'sort' => 'date_desc',
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+
+            $response = $api->get_backups($request);
+
+            $this->assertIsArray($response);
+            $this->assertArrayHasKey('pagination', $response);
+            $this->assertSame(1, $response['pagination']['per_page']);
+
+            foreach ($files as $file) {
+                if (file_exists($file)) {
+                    unlink($file);
+                }
+            }
         }
 
         public function test_verify_jwt_token_returns_false_for_invalid_signature(): void

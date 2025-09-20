@@ -80,7 +80,26 @@ class BJLG_REST_API {
                     'per_page' => [
                         'default' => 10,
                         'validate_callback' => function($param) {
-                            return is_numeric($param) && $param <= 100;
+                            $value = filter_var(
+                                $param,
+                                FILTER_VALIDATE_INT,
+                                [
+                                    'options' => [
+                                        'min_range' => 1,
+                                        'max_range' => 100,
+                                    ],
+                                ]
+                            );
+
+                            if ($value === false) {
+                                return new WP_Error(
+                                    'rest_invalid_param',
+                                    __('Le paramètre per_page doit être un entier compris entre 1 et 100.', 'backup-jlg'),
+                                    ['status' => 400]
+                                );
+                            }
+
+                            return true;
                         }
                     ],
                     'type' => [
@@ -618,6 +637,9 @@ class BJLG_REST_API {
         $per_page = $request->get_param('per_page');
         $type = $request->get_param('type');
         $sort = $request->get_param('sort');
+
+        $page = max(1, (int) $page);
+        $per_page = max(1, min(100, (int) $per_page));
         
         $backups = [];
         $files = glob(BJLG_BACKUP_DIR . '*.zip*');
@@ -664,8 +686,11 @@ class BJLG_REST_API {
                 'per_page' => $per_page
             ]
         ]);
-        
-        $response->header('X-Total-Count', $total);
+
+        if (is_object($response) && method_exists($response, 'header')) {
+            $response->header('X-Total-Count', $total);
+        }
+
         return $response;
     }
     

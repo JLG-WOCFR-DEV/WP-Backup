@@ -12,7 +12,12 @@ if (!defined('BJLG_CAPABILITY')) {
 }
 
 if (!defined('BJLG_BACKUP_DIR')) {
-    define('BJLG_BACKUP_DIR', sys_get_temp_dir() . '/');
+    $test_backup_dir = sys_get_temp_dir() . '/bjlg-tests/';
+    if (!is_dir($test_backup_dir)) {
+        mkdir($test_backup_dir, 0777, true);
+    }
+
+    define('BJLG_BACKUP_DIR', $test_backup_dir);
 }
 
 if (!defined('HOUR_IN_SECONDS')) {
@@ -49,6 +54,7 @@ $GLOBALS['bjlg_test_scheduled_events'] = [
     'single' => [],
 ];
 $GLOBALS['bjlg_test_options'] = [];
+$GLOBALS['bjlg_registered_routes'] = [];
 
 if (!class_exists('WP_Error')) {
     class WP_Error
@@ -122,6 +128,39 @@ if (!class_exists('WP_Error')) {
             return $this->error_data[$code] ?? null;
         }
     }
+}
+
+if (!function_exists('__')) {
+    function __($text, $domain = 'default') {
+        return $text;
+    }
+}
+
+if (!class_exists('BJLG_History')) {
+    class BJLG_History
+    {
+        public static function get_stats($period = 'week')
+        {
+            return [
+                'total_actions' => 0,
+                'successful' => 0,
+                'failed' => 0,
+                'info' => 0,
+                'by_action' => [],
+                'by_user' => [],
+                'most_active_hour' => null,
+            ];
+        }
+
+        public static function log($action, $status, $message)
+        {
+            // Intentionally left blank for tests.
+        }
+    }
+}
+
+if (!class_exists('BJLG\\BJLG_History')) {
+    class_alias('BJLG_History', 'BJLG\\BJLG_History');
 }
 
 if (!function_exists('is_wp_error')) {
@@ -542,6 +581,20 @@ if (!function_exists('rest_url')) {
 if (!function_exists('rest_ensure_response')) {
     function rest_ensure_response($response) {
         return $response;
+    }
+}
+
+if (!function_exists('register_rest_route')) {
+    function register_rest_route($namespace, $route, $args = [], $override = false) {
+        $namespace = trim((string) $namespace, '/');
+
+        if (!isset($GLOBALS['bjlg_registered_routes'][$namespace])) {
+            $GLOBALS['bjlg_registered_routes'][$namespace] = [];
+        }
+
+        $GLOBALS['bjlg_registered_routes'][$namespace][$route] = $args;
+
+        return true;
     }
 }
 
