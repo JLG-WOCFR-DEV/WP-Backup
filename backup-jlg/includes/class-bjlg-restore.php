@@ -316,6 +316,8 @@ class BJLG_Restore {
         $filepath = $task_data['filepath'];
         $encrypted_password = $task_data['password_encrypted'] ?? null;
         $password = null;
+        $original_archive_path = $filepath;
+        $decrypted_archive_path = null;
 
         if (!empty($encrypted_password)) {
             try {
@@ -331,7 +333,7 @@ class BJLG_Restore {
         try {
             set_time_limit(0);
             @ini_set('memory_limit', '256M');
-            
+
             BJLG_Debug::log("Début de la restauration pour le fichier : " . basename($filepath));
 
             // Mise à jour : Vérification
@@ -352,9 +354,10 @@ class BJLG_Restore {
                     'status' => 'running',
                     'status_text' => 'Déchiffrement de l\'archive...'
                 ], BJLG_Backup::get_task_ttl());
-                
+
                 $encryption = new BJLG_Encryption();
-                $filepath = $encryption->decrypt_backup_file($filepath, $password);
+                $decrypted_archive_path = $encryption->decrypt_backup_file($filepath, $password);
+                $filepath = $decrypted_archive_path;
             }
 
             // Création du répertoire temporaire
@@ -483,8 +486,8 @@ class BJLG_Restore {
             // Vider les caches
             $this->clear_all_caches();
             
-            BJLG_History::log('restore_run', 'success', "Fichier : " . basename($filepath));
-            
+            BJLG_History::log('restore_run', 'success', "Fichier : " . basename($original_archive_path));
+
             set_transient($task_id, [
                 'progress' => 100,
                 'status' => 'complete',
@@ -498,12 +501,24 @@ class BJLG_Restore {
             if (is_dir($temp_extract_dir)) {
                 $this->recursive_delete($temp_extract_dir);
             }
-            
+
             set_transient($task_id, [
                 'progress' => 100,
                 'status' => 'error',
                 'status_text' => 'Erreur : ' . $e->getMessage()
             ], BJLG_Backup::get_task_ttl());
+        } finally {
+            if ($decrypted_archive_path && $decrypted_archive_path !== $original_archive_path) {
+                if (file_exists($decrypted_archive_path)) {
+                    if (@unlink($decrypted_archive_path)) {
+                        BJLG_Debug::log('Suppression du fichier déchiffré temporaire : ' . basename($decrypted_archive_path));
+                    } else {
+                        $cleanup_message = 'Impossible de supprimer le fichier déchiffré temporaire : ' . $decrypted_archive_path;
+                        BJLG_Debug::log($cleanup_message, 'error');
+                        BJLG_History::log('restore_cleanup', 'failure', $cleanup_message);
+                    }
+                }
+            }
         }
     }
 
