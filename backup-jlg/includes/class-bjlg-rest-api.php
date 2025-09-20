@@ -806,7 +806,7 @@ class BJLG_REST_API {
             'start_time' => time()
         ];
         
-        set_transient($task_id, $task_data, BJLG_Backup::TASK_TTL);
+        set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
         
         // Planifier l'exécution
         wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
@@ -1095,7 +1095,7 @@ class BJLG_REST_API {
 
         // Générer un lien de téléchargement temporaire
         $download_token = wp_generate_password(32, false);
-        set_transient('bjlg_download_' . $download_token, $filepath, BJLG_Backup::TASK_TTL);
+        set_transient('bjlg_download_' . $download_token, $filepath, BJLG_Backup::get_task_ttl());
 
         $download_url = add_query_arg([
             'action' => 'bjlg_download',
@@ -1104,7 +1104,7 @@ class BJLG_REST_API {
 
         return rest_ensure_response([
             'download_url' => $download_url,
-            'expires_in' => BJLG_Backup::TASK_TTL,
+            'expires_in' => BJLG_Backup::get_task_ttl(),
             'filename' => basename($filepath),
             'size' => filesize($filepath)
         ]);
@@ -1134,7 +1134,7 @@ class BJLG_REST_API {
             'create_restore_point' => $create_restore_point
         ];
         
-        set_transient($task_id, $task_data, BJLG_Backup::TASK_TTL);
+        set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
         
         // Planifier l'exécution
         wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
@@ -1470,7 +1470,7 @@ class BJLG_REST_API {
         $download_token = wp_generate_password(32, false);
         $transient_key = 'bjlg_download_' . $download_token;
 
-        set_transient($transient_key, $filepath, BJLG_Backup::TASK_TTL);
+        set_transient($transient_key, $filepath, BJLG_Backup::get_task_ttl());
 
         $download_url = add_query_arg([
             'action' => 'bjlg_download',
@@ -1499,7 +1499,7 @@ class BJLG_REST_API {
             'components' => $manifest['contains'] ?? [],
             'download_url' => $download_url,
             'download_token' => $download_token,
-            'download_expires_in' => BJLG_Backup::TASK_TTL,
+            'download_expires_in' => BJLG_Backup::get_task_ttl(),
             'download_rest_url' => $rest_download_url,
             'manifest' => $manifest
         ];

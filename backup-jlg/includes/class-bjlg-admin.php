@@ -193,7 +193,7 @@ class BJLG_Admin {
                         <?php foreach ($backups as $backup_file):
                             $filename = basename($backup_file);
                             $download_token = wp_generate_password(32, false);
-                            set_transient('bjlg_download_' . $download_token, $backup_file, BJLG_Backup::TASK_TTL);
+                            set_transient('bjlg_download_' . $download_token, $backup_file, BJLG_Backup::get_task_ttl());
                             $file_url = add_query_arg([
                                 'action' => 'bjlg_download',
                                 'token' => $download_token,

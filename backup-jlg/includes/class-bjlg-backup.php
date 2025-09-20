@@ -15,6 +15,15 @@ class BJLG_Backup {
 
     public const TASK_TTL = DAY_IN_SECONDS;
 
+    /**
+     * Récupère la durée de vie maximale d'une tâche stockée dans un transient.
+     *
+     * @return int
+     */
+    public static function get_task_ttl() {
+        return (int) apply_filters('bjlg_task_ttl', self::TASK_TTL);
+    }
+
     private $performance_optimizer;
     private $encryption_handler;
     
@@ -76,7 +85,7 @@ class BJLG_Backup {
         ];
         
         // Sauvegarder temporairement
-        set_transient($task_id, $task_data, self::TASK_TTL);
+        set_transient($task_id, $task_data, self::get_task_ttl());
         
         BJLG_Debug::log("Nouvelle tâche de sauvegarde créée : $task_id");
         BJLG_History::log('backup_started', 'info', 'Composants : ' . implode(', ', $components));
@@ -175,7 +184,7 @@ class BJLG_Backup {
             $components = array_values(array_unique(array_intersect($components, $allowed_components)));
 
             $task_data['components'] = $components;
-            set_transient($task_id, $task_data, self::TASK_TTL);
+            set_transient($task_id, $task_data, self::get_task_ttl());
 
             if (empty($components)) {
                 BJLG_Debug::log("ERREUR: Aucun composant valide pour la tâche $task_id.");
@@ -197,7 +206,7 @@ class BJLG_Backup {
                     BJLG_Debug::log("Pas de sauvegarde complète trouvée, bascule en mode complet.");
                     $backup_type = 'full';
                     $task_data['incremental'] = false;
-                    set_transient($task_id, $task_data, self::TASK_TTL);
+                    set_transient($task_id, $task_data, self::get_task_ttl());
                 }
             }
             
@@ -735,7 +744,7 @@ class BJLG_Backup {
             $task_data['progress'] = $progress;
             $task_data['status'] = $status;
             $task_data['status_text'] = $status_text;
-            set_transient($task_id, $task_data, self::TASK_TTL);
+            set_transient($task_id, $task_data, self::get_task_ttl());
         }
     }
 
