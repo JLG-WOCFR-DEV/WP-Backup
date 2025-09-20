@@ -13,6 +13,9 @@ if (!defined('ABSPATH')) {
  */
 class BJLG_Backup {
 
+    /**
+     * Durée de vie par défaut d'une tâche stockée dans un transient.
+     */
     public const TASK_TTL = DAY_IN_SECONDS;
 
     /**
@@ -21,7 +24,30 @@ class BJLG_Backup {
      * @return int
      */
     public static function get_task_ttl() {
-        return (int) apply_filters('bjlg_task_ttl', self::TASK_TTL);
+        $ttl = apply_filters('bjlg_task_ttl', self::TASK_TTL);
+
+        if (!is_numeric($ttl)) {
+            $ttl = self::TASK_TTL;
+        }
+
+        $ttl = (int) $ttl;
+
+        if ($ttl < 0) {
+            $ttl = self::TASK_TTL;
+        }
+
+        return $ttl;
+    }
+
+    /**
+     * Enregistre ou rafraîchit l'état d'une tâche dans un transient.
+     *
+     * @param string $task_id
+     * @param array  $task_data
+     * @return bool
+     */
+    public static function save_task_state($task_id, array $task_data) {
+        return set_transient($task_id, $task_data, self::get_task_ttl());
     }
 
     private $performance_optimizer;
@@ -85,7 +111,7 @@ class BJLG_Backup {
         ];
         
         // Sauvegarder temporairement
-        set_transient($task_id, $task_data, self::get_task_ttl());
+        self::save_task_state($task_id, $task_data);
         
         BJLG_Debug::log("Nouvelle tâche de sauvegarde créée : $task_id");
         BJLG_History::log('backup_started', 'info', 'Composants : ' . implode(', ', $components));
@@ -184,7 +210,7 @@ class BJLG_Backup {
             $components = array_values(array_unique(array_intersect($components, $allowed_components)));
 
             $task_data['components'] = $components;
-            set_transient($task_id, $task_data, self::get_task_ttl());
+            self::save_task_state($task_id, $task_data);
 
             if (empty($components)) {
                 BJLG_Debug::log("ERREUR: Aucun composant valide pour la tâche $task_id.");
@@ -206,7 +232,7 @@ class BJLG_Backup {
                     BJLG_Debug::log("Pas de sauvegarde complète trouvée, bascule en mode complet.");
                     $backup_type = 'full';
                     $task_data['incremental'] = false;
-                    set_transient($task_id, $task_data, self::get_task_ttl());
+                    self::save_task_state($task_id, $task_data);
                 }
             }
             
@@ -744,7 +770,7 @@ class BJLG_Backup {
             $task_data['progress'] = $progress;
             $task_data['status'] = $status;
             $task_data['status_text'] = $status_text;
-            set_transient($task_id, $task_data, self::get_task_ttl());
+            self::save_task_state($task_id, $task_data);
         }
     }
 
