@@ -303,6 +303,48 @@ if (!function_exists('current_user_can')) {
     }
 }
 
+if (!function_exists('get_user_by')) {
+    function get_user_by($field, $value) {
+        $users = $GLOBALS['bjlg_test_users'] ?? [];
+
+        if ($field === 'id' || $field === 'ID') {
+            $id = (int) $value;
+
+            if (isset($users[$id])) {
+                return $users[$id];
+            }
+
+            return false;
+        }
+
+        if ($field === 'login' || $field === 'user_login') {
+            foreach ($users as $user) {
+                if (isset($user->user_login) && $user->user_login === $value) {
+                    return $user;
+                }
+            }
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('user_can')) {
+    function user_can($user, $capability) {
+        if (is_object($user)) {
+            if (isset($user->allcaps) && is_array($user->allcaps)) {
+                return !empty($user->allcaps[$capability]);
+            }
+
+            if (isset($user->caps) && is_array($user->caps)) {
+                return !empty($user->caps[$capability]);
+            }
+        }
+
+        return false;
+    }
+}
+
 if (!function_exists('get_option')) {
     function get_option($option, $default = false) {
         return $GLOBALS['bjlg_test_options'][$option] ?? $default;
