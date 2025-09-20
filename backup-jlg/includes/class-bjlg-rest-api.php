@@ -1026,7 +1026,7 @@ class BJLG_REST_API {
 
         // Générer un lien de téléchargement temporaire
         $download_token = wp_generate_password(32, false);
-        set_transient('bjlg_download_' . $download_token, $filepath, HOUR_IN_SECONDS);
+        set_transient('bjlg_download_' . $download_token, $filepath, BJLG_Backup::TASK_TTL);
 
         $download_url = add_query_arg([
             'action' => 'bjlg_download',
@@ -1035,7 +1035,7 @@ class BJLG_REST_API {
 
         return rest_ensure_response([
             'download_url' => $download_url,
-            'expires_in' => HOUR_IN_SECONDS,
+            'expires_in' => BJLG_Backup::TASK_TTL,
             'filename' => basename($filepath),
             'size' => filesize($filepath)
         ]);
@@ -1401,7 +1401,7 @@ class BJLG_REST_API {
         $download_token = wp_generate_password(32, false);
         $transient_key = 'bjlg_download_' . $download_token;
 
-        set_transient($transient_key, $filepath, HOUR_IN_SECONDS);
+        set_transient($transient_key, $filepath, BJLG_Backup::TASK_TTL);
 
         $download_url = add_query_arg([
             'action' => 'bjlg_download',
@@ -1430,7 +1430,7 @@ class BJLG_REST_API {
             'components' => $manifest['contains'] ?? [],
             'download_url' => $download_url,
             'download_token' => $download_token,
-            'download_expires_in' => HOUR_IN_SECONDS,
+            'download_expires_in' => BJLG_Backup::TASK_TTL,
             'download_rest_url' => $rest_download_url,
             'manifest' => $manifest
         ];
