@@ -1287,12 +1287,22 @@ class BJLG_REST_API {
      */
     public function get_schedules($request) {
         $schedule = get_option('bjlg_schedule_settings', []);
+
+        if (!is_array($schedule)) {
+            $schedule = [];
+        }
+
+        $schedule = wp_parse_args($schedule, [
+            'recurrence' => 'disabled',
+        ]);
+
+        $recurrence = $schedule['recurrence'];
         $next_run = wp_next_scheduled(BJLG_Scheduler::SCHEDULE_HOOK);
-        
+
         return rest_ensure_response([
             'current_schedule' => $schedule,
             'next_run' => $next_run ? date('c', $next_run) : null,
-            'enabled' => $schedule['recurrence'] !== 'disabled'
+            'enabled' => $recurrence !== 'disabled'
         ]);
     }
     
