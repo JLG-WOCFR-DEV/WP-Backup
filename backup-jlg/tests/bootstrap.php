@@ -361,6 +361,14 @@ if (!function_exists('get_user_by')) {
             }
         }
 
+        if ($field === 'email' || $field === 'user_email') {
+            foreach ($users as $user) {
+                if (isset($user->user_email) && $user->user_email === $value) {
+                    return $user;
+                }
+            }
+        }
+
         return false;
     }
 }

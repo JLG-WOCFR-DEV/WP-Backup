@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-if (!class_exists('BJLG\\BJLG_Debug')) {
+if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
     class BJLG_Debug
     {
         /** @var array<int, string> */

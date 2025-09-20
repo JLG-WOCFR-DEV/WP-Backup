@@ -280,7 +280,13 @@ class BJLG_REST_API {
         // Vérifier l'authentification via API Key
         $api_key = $request->get_header('X-API-Key');
         if ($api_key) {
-            return $this->verify_api_key($api_key);
+            $key_record = $this->verify_api_key($api_key);
+
+            if (is_wp_error($key_record)) {
+                return $key_record;
+            }
+
+            return (bool) $key_record;
         }
         
         // Vérifier l'authentification via Bearer Token
@@ -351,13 +357,49 @@ class BJLG_REST_API {
                 $key_data['key'] = $this->hash_api_key($api_key);
             }
 
+            $resolved_user_id = $this->resolve_api_key_user_id($key_data);
+
+            if ($resolved_user_id <= 0) {
+                unset($key_data);
+
+                return new WP_Error(
+                    'api_key_missing_user',
+                    __('Cette clé API n\'est associée à aucun utilisateur.', 'backup-jlg'),
+                    ['status' => 403]
+                );
+            }
+
+            $user = get_user_by('id', $resolved_user_id);
+
+            if (!$user) {
+                unset($key_data);
+
+                return new WP_Error(
+                    'api_key_user_not_found',
+                    __('L\'utilisateur associé à cette clé API est introuvable.', 'backup-jlg'),
+                    ['status' => 403]
+                );
+            }
+
+            if (!user_can($user, BJLG_CAPABILITY)) {
+                unset($key_data);
+
+                return new WP_Error(
+                    'api_key_insufficient_permissions',
+                    __('Les permissions de l\'utilisateur lié à cette clé API sont insuffisantes.', 'backup-jlg'),
+                    ['status' => 403]
+                );
+            }
+
+            $key_data['user_id'] = (int) $user->ID;
+            $key_data['roles'] = $this->extract_roles_for_key($key_data, $user);
             $key_data['last_used'] = time();
             $key_data['usage_count'] = ($key_data['usage_count'] ?? 0) + 1;
             $stored_keys[$index] = $key_data;
             update_option('bjlg_api_keys', $stored_keys);
 
             unset($key_data);
-            return true;
+            return $stored_keys[$index];
         }
 
         unset($key_data);
@@ -383,6 +425,7 @@ class BJLG_REST_API {
 
         foreach ($keys as $index => $key_data) {
             if (!is_array($key_data)) {
+                unset($keys[$index]);
                 continue;
             }
 
@@ -395,9 +438,102 @@ class BJLG_REST_API {
                     unset($keys[$index][$sensitive_field]);
                 }
             }
+
+            $user_id = $this->resolve_api_key_user_id($keys[$index]);
+
+            if ($user_id <= 0) {
+                unset($keys[$index]);
+                continue;
+            }
+
+            $keys[$index]['user_id'] = $user_id;
+            $user = get_user_by('id', $user_id);
+            $keys[$index]['roles'] = $this->extract_roles_for_key($keys[$index], $user);
         }
 
-        return $keys;
+        return array_values($keys);
+    }
+
+    private function resolve_api_key_user_id($key_data) {
+        if (!is_array($key_data)) {
+            return 0;
+        }
+
+        $candidates = [];
+
+        if (isset($key_data['user_id'])) {
+            $candidates[] = $key_data['user_id'];
+        }
+
+        foreach (['user', 'user_login', 'username'] as $field) {
+            if (isset($key_data[$field])) {
+                $candidates[] = $key_data[$field];
+            }
+        }
+
+        if (isset($key_data['user_email'])) {
+            $candidates[] = $key_data['user_email'];
+        }
+
+        foreach ($candidates as $candidate) {
+            if (is_numeric($candidate)) {
+                $user = get_user_by('id', (int) $candidate);
+
+                if ($user) {
+                    return (int) $user->ID;
+                }
+            }
+
+            if (!is_string($candidate)) {
+                continue;
+            }
+
+            $clean_candidate = sanitize_text_field($candidate);
+
+            if ($clean_candidate === '') {
+                continue;
+            }
+
+            $user = get_user_by('login', $clean_candidate);
+
+            if ($user) {
+                return (int) $user->ID;
+            }
+
+            $user = get_user_by('email', $clean_candidate);
+
+            if ($user) {
+                return (int) $user->ID;
+            }
+        }
+
+        return 0;
+    }
+
+    private function extract_roles_for_key($key_data, $user) {
+        $roles = [];
+
+        if (is_object($user) && isset($user->roles) && is_array($user->roles)) {
+            foreach ($user->roles as $role) {
+                if (!is_string($role) || $role === '') {
+                    continue;
+                }
+
+                $roles[] = sanitize_key($role);
+            }
+        }
+
+        if (empty($roles) && is_array($key_data) && isset($key_data['roles']) && is_array($key_data['roles'])) {
+            foreach ($key_data['roles'] as $role) {
+                if (!is_string($role) || $role === '') {
+                    continue;
+                }
+
+                $roles[] = sanitize_key($role);
+            }
+        }
+
+        return array_values(array_unique($roles));
     }
 
     private function hash_api_key($key) {
@@ -621,16 +757,38 @@ class BJLG_REST_API {
         $username = $request->get_param('username');
         $password = $request->get_param('password');
         $api_key = $request->get_param('api_key');
-        
+
         // Authentification par API Key
-        if ($api_key && $this->verify_api_key($api_key)) {
-            $user = get_user_by('login', $username);
+        if ($api_key) {
+            $key_record = $this->verify_api_key($api_key);
+
+            if (is_wp_error($key_record)) {
+                return $key_record;
+            }
+
+            if (!is_array($key_record) || empty($key_record['user_id'])) {
+                return new WP_Error(
+                    'api_key_missing_user',
+                    __('Cette clé API n\'est associée à aucun utilisateur.', 'backup-jlg'),
+                    ['status' => 403]
+                );
+            }
+
+            $user = get_user_by('id', (int) $key_record['user_id']);
 
             if (!$user) {
                 return new WP_Error(
                     'user_not_found',
                     'User not found',
                     ['status' => 404]
+                );
+            }
+
+            if ($username && strcasecmp($username, (string) $user->user_login) !== 0) {
+                return new WP_Error(
+                    'api_key_user_mismatch',
+                    __('Cette clé API ne peut pas être utilisée pour cet utilisateur.', 'backup-jlg'),
+                    ['status' => 403]
                 );
             }
 

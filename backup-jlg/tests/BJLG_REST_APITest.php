@@ -26,6 +26,20 @@ namespace {
             $GLOBALS['bjlg_test_users'] = [];
         }
 
+        private function makeUser(int $id, string $login, ?array $caps = null, ?array $roles = null): object
+        {
+            $caps = $caps ?? [BJLG_CAPABILITY => true];
+            $roles = $roles ?? ['administrator'];
+
+            return (object) [
+                'ID' => $id,
+                'user_login' => $login,
+                'user_email' => $login . '@example.com',
+                'allcaps' => $caps,
+                'roles' => $roles,
+            ];
+        }
+
         public function test_backups_route_per_page_validation_rejects_zero(): void
         {
             $api = new BJLG\BJLG_REST_API();
@@ -238,10 +252,17 @@ namespace {
         $initial_usage_count = 2;
         $initial_last_used = time() - 3600;
 
+        $user = $this->makeUser(101, 'api-user');
+        $GLOBALS['bjlg_test_users'] = [
+            $user->ID => $user,
+        ];
+
         update_option('bjlg_api_keys', [[
             'key' => $hashed_key,
             'usage_count' => $initial_usage_count,
             'last_used' => $initial_last_used,
+            'user_id' => $user->ID,
+            'roles' => ['administrator'],
         ]]);
 
         $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
@@ -253,11 +274,17 @@ namespace {
 
         $updated_keys = get_option('bjlg_api_keys');
 
-        $this->assertTrue($result);
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('user_id', $result);
+        $this->assertSame($user->ID, $result['user_id']);
+        $this->assertArrayHasKey('roles', $result);
+        $this->assertContains('administrator', $result['roles']);
         $this->assertNotEmpty($updated_keys);
         $this->assertSame($initial_usage_count + 1, $updated_keys[0]['usage_count']);
         $this->assertArrayHasKey('last_used', $updated_keys[0]);
         $this->assertGreaterThanOrEqual($before_verification, $updated_keys[0]['last_used']);
+        $this->assertSame($user->ID, $updated_keys[0]['user_id']);
+        $this->assertContains('administrator', $updated_keys[0]['roles']);
     }
 
     public function test_verify_api_key_migrates_plain_keys(): void
@@ -268,21 +295,33 @@ namespace {
 
         $api_key = 'legacy-api-key';
 
+        $user = $this->makeUser(202, 'legacy-user');
+        $GLOBALS['bjlg_test_users'] = [
+            $user->ID => $user,
+        ];
+
         update_option('bjlg_api_keys', [[
             'key' => $api_key,
             'usage_count' => 0,
+            'user_login' => $user->user_login,
         ]]);
 
         $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
         $method = $reflection->getMethod('verify_api_key');
         $method->setAccessible(true);
 
-        $this->assertTrue($method->invoke($api, $api_key));
+        $result = $method->invoke($api, $api_key);
+
+        $this->assertIsArray($result);
+        $this->assertSame($user->ID, $result['user_id']);
+        $this->assertContains('administrator', $result['roles']);
 
         $updated_keys = get_option('bjlg_api_keys');
 
         $this->assertNotSame($api_key, $updated_keys[0]['key']);
         $this->assertTrue(wp_check_password($api_key, $updated_keys[0]['key']));
+        $this->assertSame($user->ID, $updated_keys[0]['user_id']);
+        $this->assertContains('administrator', $updated_keys[0]['roles']);
     }
 
     public function test_filter_api_keys_before_save_hashes_plain_keys(): void
@@ -291,16 +330,68 @@ namespace {
 
         $plain_key = 'plain-key';
 
+        $user = $this->makeUser(303, 'api-form-user');
+        $GLOBALS['bjlg_test_users'] = [
+            $user->ID => $user,
+        ];
+
         $filtered = $api->filter_api_keys_before_save([
             [
                 'key' => $plain_key,
                 'label' => 'My key',
+                'user' => $user->user_login,
             ],
         ]);
 
         $this->assertNotSame($plain_key, $filtered[0]['key']);
         $this->assertTrue(wp_check_password($plain_key, $filtered[0]['key']));
         $this->assertArrayNotHasKey('plain_key', $filtered[0]);
+        $this->assertSame($user->ID, $filtered[0]['user_id']);
+        $this->assertContains('administrator', $filtered[0]['roles']);
+    }
+
+    public function test_authenticate_rejects_api_key_for_different_user(): void
+    {
+        $api = new BJLG\BJLG_REST_API();
+
+        $owner = $this->makeUser(404, 'api-owner');
+        $other = $this->makeUser(405, 'other-user');
+        $GLOBALS['bjlg_test_users'] = [
+            $owner->ID => $owner,
+            $other->ID => $other,
+        ];
+
+        $api_key = 'strict-key';
+
+        update_option('bjlg_api_keys', [[
+            'key' => wp_hash_password($api_key),
+            'user_id' => $owner->ID,
+            'roles' => $owner->roles,
+        ]]);
+
+        $request = new class($api_key, $other->user_login) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct(string $key, string $username)
+            {
+                $this->params = [
+                    'api_key' => $key,
+                    'username' => $username,
+                    'password' => 'unused',
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $result = $api->authenticate($request);
+
+        $this->assertInstanceOf(\WP_Error::class, $result);
+        $this->assertSame('api_key_user_mismatch', $result->get_error_code());
     }
 
     public function test_backup_endpoints_reject_symlink_outside_backup_directory(): void
