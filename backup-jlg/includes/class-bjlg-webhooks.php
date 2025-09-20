@@ -122,7 +122,7 @@ class BJLG_Webhooks {
             'source' => 'webhook'
         ];
         
-        set_transient($task_id, $task_data, BJLG_Backup::TASK_TTL);
+        set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
         
         // Planifier l'exécution immédiate
         wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
