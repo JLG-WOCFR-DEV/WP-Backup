@@ -73,7 +73,7 @@ final class BJLG_BackupDatabaseTest extends TestCase
             /** @var array<string, string|false> */
             public $fileContents = [];
 
-            public function addFile($filepath, $entryname, $start = 0, $length = 0, $flags = 0): bool
+            public function addFile(string $filepath, string $entryname = "", int $start = 0, int $length = ZipArchive::LENGTH_TO_END, int $flags = ZipArchive::FL_OVERWRITE): bool
             {
                 $this->addedFiles[] = [$filepath, $entryname];
                 $this->fileContents[$entryname] = @file_get_contents($filepath);

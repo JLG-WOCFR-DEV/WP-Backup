@@ -329,11 +329,11 @@ class BJLG_Performance {
         foreach ($tasks as $index => $task) {
             $progress = round((($index + 1) / $total_tasks) * 100);
             
-            set_transient($task_id, [
+            BJLG_Backup::store_task_state($task_id, [
                 'progress' => $progress,
                 'status' => 'running',
                 'status_text' => "Traitement de {$task['type']} (" . (isset($task['subtype']) ? $task['subtype'] : '') . ")..."
-            ], BJLG_Backup::get_task_ttl());
+            ]);
             
             try {
                 $result = $this->execute_single_task($task);

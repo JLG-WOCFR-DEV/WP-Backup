@@ -289,7 +289,7 @@ class BJLG_Scheduler {
             'source' => 'manual_scheduled'
         ];
         
-        set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
+        BJLG_Backup::store_task_state($task_id, $task_data);
         
         BJLG_Debug::log("Exécution manuelle de la sauvegarde planifiée - Task ID: $task_id");
         BJLG_History::log('scheduled_backup', 'info', 'Exécution manuelle de la sauvegarde planifiée');
@@ -326,7 +326,7 @@ class BJLG_Scheduler {
             'start_time' => time()
         ];
 
-        $transient_set = set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
+        $transient_set = BJLG_Backup::store_task_state($task_id, $task_data);
 
         if (!$transient_set) {
             BJLG_Debug::log("ERREUR : Impossible d'initialiser la tâche de sauvegarde planifiée $task_id.");
