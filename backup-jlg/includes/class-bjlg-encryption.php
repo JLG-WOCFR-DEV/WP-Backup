@@ -33,7 +33,7 @@ class BJLG_Encryption {
         add_action('wp_ajax_bjlg_test_encryption', [$this, 'ajax_test_encryption']);
         add_action('wp_ajax_bjlg_verify_password', [$this, 'ajax_verify_password']);
     }
-    
+
     /**
      * Charge les paramètres de chiffrement
      */
@@ -560,7 +560,7 @@ class BJLG_Encryption {
             wp_send_json_error(['message' => 'Permission refusée']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
-        
+
         try {
             // Créer un fichier test
             $test_content = "Test de chiffrement AES-256 - " . date('Y-m-d H:i:s');
@@ -598,14 +598,202 @@ class BJLG_Encryption {
                     'Test' => 'Chiffrement et déchiffrement validés'
                 ]
             ]);
-            
+
         } catch (Exception $e) {
             wp_send_json_error([
                 'message' => 'Test échoué : ' . $e->getMessage()
             ]);
         }
     }
-    
+
+    /**
+     * AJAX: Vérifie si un mot de passe peut déchiffrer un fichier donné.
+     */
+    public function ajax_verify_password() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée']);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $password = isset($_POST['password']) ? sanitize_text_field(wp_unslash($_POST['password'])) : '';
+        if ($password === '') {
+            wp_send_json_error(['message' => 'Mot de passe manquant']);
+        }
+
+        $file_param = isset($_POST['file']) ? wp_unslash($_POST['file']) : '';
+        $file_param = is_string($file_param) ? trim($file_param) : '';
+
+        if ($file_param === '') {
+            wp_send_json_error(['message' => 'Aucun fichier fourni pour la vérification']);
+        }
+
+        $file_param = sanitize_text_field($file_param);
+        $base_dir = wp_normalize_path(BJLG_BACKUP_DIR);
+        if (substr($base_dir, -1) !== '/') {
+            $base_dir .= '/';
+        }
+
+        $candidate = wp_normalize_path($file_param);
+        if (strpos($candidate, '..') !== false) {
+            wp_send_json_error(['message' => 'Chemin de fichier invalide']);
+        }
+
+        if (strpos($candidate, $base_dir) === 0) {
+            $full_path = $candidate;
+        } else {
+            $full_path = $base_dir . ltrim($candidate, '/');
+        }
+
+        $real_path = realpath($full_path);
+        if ($real_path === false) {
+            wp_send_json_error(['message' => 'Fichier introuvable']);
+        }
+
+        $normalized_real = wp_normalize_path($real_path);
+        if (strpos($normalized_real, $base_dir) !== 0) {
+            wp_send_json_error(['message' => 'Fichier non autorisé']);
+        }
+
+        if (!$this->is_encrypted_file($real_path)) {
+            wp_send_json_error(['message' => 'Le fichier spécifié n\'est pas chiffré']);
+        }
+
+        $handle = @fopen($real_path, 'rb');
+        if ($handle === false) {
+            wp_send_json_error(['message' => 'Impossible de lire le fichier chiffré']);
+        }
+
+        try {
+            $header = fread($handle, 8);
+            if ($header === false || strlen($header) !== 8 || $header !== 'BJLGENC1') {
+                throw new Exception('Format de fichier chiffré invalide');
+            }
+
+            $version_data = fread($handle, 1);
+            if ($version_data === false || strlen($version_data) !== 1) {
+                throw new Exception('Version de chiffrement non supportée');
+            }
+
+            $version = ord($version_data);
+            if ($version !== 1) {
+                throw new Exception('Version de chiffrement non supportée');
+            }
+
+            $iv = fread($handle, self::IV_LENGTH);
+            if ($iv === false || strlen($iv) !== self::IV_LENGTH) {
+                throw new Exception('IV manquant ou corrompu');
+            }
+
+            $stored_hmac = fread($handle, 32);
+            if ($stored_hmac === false || strlen($stored_hmac) !== 32) {
+                throw new Exception('HMAC manquant ou corrompu');
+            }
+
+            $key = $this->derive_key_from_password($password);
+
+            $block_size = openssl_cipher_iv_length(self::CIPHER_METHOD);
+            if (!$block_size) {
+                $block_size = self::IV_LENGTH;
+            }
+
+            $chunk_size = $block_size * 4096;
+            $hmac_context = hash_init('sha256', HASH_HMAC, $key);
+            $buffer = '';
+            $current_iv = $iv;
+
+            while (!feof($handle)) {
+                $data = fread($handle, $chunk_size);
+                if ($data === false) {
+                    throw new Exception('Erreur lors de la lecture du fichier chiffré');
+                }
+
+                if ($data === '') {
+                    break;
+                }
+
+                $buffer .= $data;
+                $blocks_in_buffer = intdiv(strlen($buffer), $block_size);
+
+                if ($blocks_in_buffer > 1) {
+                    $blocks_to_process = $blocks_in_buffer - 1;
+                    $length_to_process = $blocks_to_process * $block_size;
+
+                    $cipher_chunk = substr($buffer, 0, $length_to_process);
+                    $buffer = substr($buffer, $length_to_process);
+
+                    if ($cipher_chunk !== '') {
+                        hash_update($hmac_context, $cipher_chunk);
+
+                        $decrypted_chunk = openssl_decrypt(
+                            $cipher_chunk,
+                            self::CIPHER_METHOD,
+                            $key,
+                            OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
+                            $current_iv
+                        );
+
+                        if ($decrypted_chunk === false) {
+                            throw new Exception('Mot de passe incorrect ou données corrompues');
+                        }
+
+                        $current_iv = substr($cipher_chunk, -$block_size);
+                    }
+                }
+            }
+
+            if ($buffer === '') {
+                throw new Exception('Données chiffrées manquantes');
+            }
+
+            hash_update($hmac_context, $buffer);
+            $calculated_hmac = hash_final($hmac_context, true);
+            if (!hash_equals($stored_hmac, $calculated_hmac)) {
+                throw new Exception('Mot de passe incorrect ou fichier corrompu (HMAC)');
+            }
+
+            $final_chunk = openssl_decrypt(
+                $buffer,
+                self::CIPHER_METHOD,
+                $key,
+                OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
+                $current_iv
+            );
+
+            if ($final_chunk === false) {
+                throw new Exception('Mot de passe incorrect ou données corrompues');
+            }
+
+            $padding_length = ord(substr($final_chunk, -1));
+            if ($padding_length < 1 || $padding_length > $block_size) {
+                throw new Exception('Padding invalide détecté');
+            }
+
+            $padding = substr($final_chunk, -$padding_length);
+            if ($padding !== str_repeat(chr($padding_length), $padding_length)) {
+                throw new Exception('Padding invalide détecté');
+            }
+
+            BJLG_Debug::log('Mot de passe de chiffrement validé pour ' . basename($real_path));
+
+            fclose($handle);
+
+            wp_send_json_success([
+                'message' => 'Mot de passe valide',
+                'file' => basename($real_path)
+            ]);
+        } catch (Exception $e) {
+            BJLG_Debug::log('Échec de validation du mot de passe : ' . $e->getMessage());
+            if (is_resource($handle)) {
+                fclose($handle);
+            }
+
+            wp_send_json_error([
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
     /**
      * Vérifie si un fichier est chiffré
      */
