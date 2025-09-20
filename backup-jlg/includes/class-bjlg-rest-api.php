@@ -737,7 +737,7 @@ class BJLG_REST_API {
             'start_time' => time()
         ];
         
-        set_transient($task_id, $task_data, HOUR_IN_SECONDS);
+        set_transient($task_id, $task_data, BJLG_Backup::TASK_TTL);
         
         // Planifier l'exécution
         wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
@@ -1065,7 +1065,7 @@ class BJLG_REST_API {
             'create_restore_point' => $create_restore_point
         ];
         
-        set_transient($task_id, $task_data, HOUR_IN_SECONDS);
+        set_transient($task_id, $task_data, BJLG_Backup::TASK_TTL);
         
         // Planifier l'exécution
         wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);

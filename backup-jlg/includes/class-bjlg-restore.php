@@ -276,7 +276,7 @@ class BJLG_Restore {
             'password_encrypted' => $encrypted_password
         ];
         
-        set_transient($task_id, $task_data, HOUR_IN_SECONDS);
+        set_transient($task_id, $task_data, BJLG_Backup::TASK_TTL);
         
         // Planifier l'exécution
         wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
@@ -339,7 +339,7 @@ class BJLG_Restore {
                 'progress' => 10,
                 'status' => 'running',
                 'status_text' => 'Vérification du fichier de sauvegarde...'
-            ], HOUR_IN_SECONDS);
+            ], BJLG_Backup::TASK_TTL);
 
             if (!file_exists($filepath)) {
                 throw new Exception("Le fichier de sauvegarde n'a pas été trouvé.");
@@ -351,7 +351,7 @@ class BJLG_Restore {
                     'progress' => 20,
                     'status' => 'running',
                     'status_text' => 'Déchiffrement de l\'archive...'
-                ], HOUR_IN_SECONDS);
+                ], BJLG_Backup::TASK_TTL);
                 
                 $encryption = new BJLG_Encryption();
                 $filepath = $encryption->decrypt_backup_file($filepath, $password);
@@ -385,7 +385,7 @@ class BJLG_Restore {
                     'progress' => 30,
                     'status' => 'running',
                     'status_text' => 'Restauration de la base de données...'
-                ], HOUR_IN_SECONDS);
+                ], BJLG_Backup::TASK_TTL);
 
                 if ($zip->locateName('database.sql') !== false) {
                     $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
@@ -404,7 +404,7 @@ class BJLG_Restore {
                         'progress' => 50,
                         'status' => 'running',
                         'status_text' => 'Base de données restaurée.'
-                    ], HOUR_IN_SECONDS);
+                    ], BJLG_Backup::TASK_TTL);
                 }
             }
 
@@ -434,7 +434,7 @@ class BJLG_Restore {
                         'progress' => round($progress),
                         'status' => 'running',
                         'status_text' => "Restauration des {$type}..."
-                    ], HOUR_IN_SECONDS);
+                    ], BJLG_Backup::TASK_TTL);
 
                     $source_folder = "wp-content/{$type}";
 
@@ -476,7 +476,7 @@ class BJLG_Restore {
                 'progress' => 95,
                 'status' => 'running',
                 'status_text' => 'Nettoyage...'
-            ], HOUR_IN_SECONDS);
+            ], BJLG_Backup::TASK_TTL);
             
             $this->recursive_delete($temp_extract_dir);
             
@@ -489,7 +489,7 @@ class BJLG_Restore {
                 'progress' => 100,
                 'status' => 'complete',
                 'status_text' => 'Restauration terminée avec succès !'
-            ], HOUR_IN_SECONDS);
+            ], BJLG_Backup::TASK_TTL);
 
         } catch (Exception $e) {
             BJLG_History::log('restore_run', 'failure', "Erreur : " . $e->getMessage());
@@ -503,7 +503,7 @@ class BJLG_Restore {
                 'progress' => 100,
                 'status' => 'error',
                 'status_text' => 'Erreur : ' . $e->getMessage()
-            ], HOUR_IN_SECONDS);
+            ], BJLG_Backup::TASK_TTL);
         }
     }
 
