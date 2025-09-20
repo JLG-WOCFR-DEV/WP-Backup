@@ -433,12 +433,20 @@ class BJLG_Backup {
             // Obtenir toutes les tables
             $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
 
+            $incremental_handler = null;
+            if ($incremental && class_exists(BJLG_Incremental::class)) {
+                $incremental_handler = BJLG_Incremental::get_latest_instance();
+
+                if (!$incremental_handler) {
+                    $incremental_handler = new BJLG_Incremental();
+                }
+            }
+
             foreach ($tables as $table_array) {
                 $table = $table_array[0];
 
                 // Pour l'incrémental, vérifier si la table a changé
-                if ($incremental) {
-                    $incremental_handler = new BJLG_Incremental();
+                if ($incremental && $incremental_handler) {
                     if (!$incremental_handler->table_has_changed($table)) {
                         BJLG_Debug::log("Table $table ignorée (pas de changement)");
                         continue;
