@@ -217,6 +217,49 @@ namespace {
         }
     }
 
+    public function test_download_backup_accepts_ids_with_file_extensions(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+        $filepath = BJLG_BACKUP_DIR . $filename;
+
+        file_put_contents($filepath, 'backup-data');
+
+        $request = new class($filename) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id)
+            {
+                $this->params = [
+                    'id' => $id,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            $response = $api->download_backup($request);
+
+            $this->assertIsArray($response);
+            $this->assertArrayHasKey('download_url', $response);
+            $this->assertSame($filename, $response['filename']);
+            $this->assertArrayHasKey('size', $response);
+            $this->assertGreaterThan(0, $response['size']);
+        } finally {
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+        }
+    }
+
         public function test_update_settings_rejects_empty_payload(): void
         {
             $api = new BJLG\BJLG_REST_API();

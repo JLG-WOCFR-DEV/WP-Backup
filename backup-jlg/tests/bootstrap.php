@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+namespace {
+
 if (!defined('ABSPATH')) {
     define('ABSPATH', __DIR__ . '/../');
 }
@@ -474,6 +476,8 @@ if (!function_exists('rest_ensure_response')) {
     function rest_ensure_response($response) {
         return $response;
     }
+}
+
 }
 
 namespace BJLG {
