@@ -13,7 +13,7 @@ if (!function_exists('get_site_url')) {
     }
 }
 
-if (!class_exists('BJLG\\BJLG_Debug')) {
+if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
     class BJLG_Debug
     {
         /** @var array<int, string> */

@@ -3,7 +3,9 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-require_once __DIR__ . '/../includes/class-bjlg-debug.php';
+if (!class_exists('BJLG\\BJLG_Debug')) {
+    require_once __DIR__ . '/../includes/class-bjlg-debug.php';
+}
 require_once __DIR__ . '/../includes/class-bjlg-restore.php';
 require_once __DIR__ . '/../includes/class-bjlg-encryption.php';
 
