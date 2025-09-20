@@ -11,6 +11,30 @@ if (!defined('BJLG_CAPABILITY')) {
     define('BJLG_CAPABILITY', 'manage_options');
 }
 
+if (!function_exists('esc_html')) {
+    function esc_html($text) {
+        return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+if (!defined('WP_CONTENT_DIR')) {
+    $wp_content_dir = sys_get_temp_dir() . '/bjlg-wp-content';
+    if (!is_dir($wp_content_dir)) {
+        mkdir($wp_content_dir, 0777, true);
+    }
+
+    define('WP_CONTENT_DIR', $wp_content_dir);
+}
+
+if (!defined('WP_PLUGIN_DIR')) {
+    $wp_plugin_dir = WP_CONTENT_DIR . '/plugins';
+    if (!is_dir($wp_plugin_dir)) {
+        mkdir($wp_plugin_dir, 0777, true);
+    }
+
+    define('WP_PLUGIN_DIR', $wp_plugin_dir);
+}
+
 if (!defined('BJLG_BACKUP_DIR')) {
     $test_backup_dir = sys_get_temp_dir() . '/bjlg-tests/';
     if (!is_dir($test_backup_dir)) {
@@ -55,6 +79,18 @@ $GLOBALS['bjlg_test_scheduled_events'] = [
 ];
 $GLOBALS['bjlg_test_options'] = [];
 $GLOBALS['bjlg_registered_routes'] = [];
+
+if (!isset($GLOBALS['wpdb'])) {
+    $GLOBALS['wpdb'] = new class {
+        /** @var string */
+        public $options = 'wp_options';
+
+        public function query($query)
+        {
+            return true;
+        }
+    };
+}
 
 if (!class_exists('WP_Error')) {
     class WP_Error
@@ -417,6 +453,42 @@ if (!function_exists('sanitize_text_field')) {
         $str = strip_tags($str);
         $str = preg_replace('/[\r\n\t ]+/', ' ', $str);
         return trim($str);
+    }
+}
+
+if (!function_exists('wp_cache_flush')) {
+    function wp_cache_flush() {
+        return true;
+    }
+}
+
+if (!function_exists('wp_cache_delete')) {
+    function wp_cache_delete($key, $group = '') {
+        return true;
+    }
+}
+
+if (!function_exists('get_theme_root')) {
+    function get_theme_root() {
+        $root = WP_CONTENT_DIR . '/themes';
+        if (!is_dir($root)) {
+            mkdir($root, 0777, true);
+        }
+
+        return $root;
+    }
+}
+
+if (!function_exists('wp_get_upload_dir')) {
+    function wp_get_upload_dir() {
+        $basedir = WP_CONTENT_DIR . '/uploads';
+        if (!is_dir($basedir)) {
+            mkdir($basedir, 0777, true);
+        }
+
+        return [
+            'basedir' => $basedir,
+        ];
     }
 }
 

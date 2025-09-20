@@ -73,7 +73,7 @@ final class BJLG_BackupDatabaseTest extends TestCase
             /** @var array<string, string|false> */
             public $fileContents = [];
 
-            public function addFile($filepath, $entryname, $start = 0, $length = 0, $flags = 0): bool
+            public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
             {
                 $this->addedFiles[] = [$filepath, $entryname];
                 $this->fileContents[$entryname] = @file_get_contents($filepath);
@@ -124,7 +124,7 @@ final class BJLG_BackupDatabaseTest extends TestCase
 
         $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'backup_database');
         $method->setAccessible(true);
-        $method->invoke($backup, $zip, false);
+        $method->invokeArgs($backup, [&$zip, false]);
 
         $this->assertNotEmpty($zip->addedFiles);
 
