@@ -23,6 +23,7 @@ namespace {
                 'filters' => [],
             ];
             $GLOBALS['bjlg_registered_routes'] = [];
+            $GLOBALS['bjlg_test_users'] = [];
         }
 
         public function test_backups_route_per_page_validation_rejects_zero(): void
@@ -101,42 +102,98 @@ namespace {
             }
         }
 
-        public function test_verify_jwt_token_returns_false_for_invalid_signature(): void
+        public function test_verify_jwt_token_returns_error_for_invalid_signature(): void
         {
             $api = new BJLG\BJLG_REST_API();
 
-        $header = ['typ' => 'JWT', 'alg' => 'HS256'];
-        $payload = [
-            'user_id' => 1,
-            'username' => 'test',
-            'exp' => time() + 3600,
-            'iat' => time(),
-        ];
+            $validToken = $this->generateJwtToken();
+            $parts = explode('.', $validToken);
 
-        $base64Header = $this->base64UrlEncode((string) json_encode($header));
-        $base64Payload = $this->base64UrlEncode((string) json_encode($payload));
-
-        $signature = hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY, true);
-        $validSignature = $this->base64UrlEncode($signature);
-
-        $invalidSignature = $this->base64UrlEncode(
-            hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY . 'invalid', true)
-        );
-
-        if (hash_equals($validSignature, $invalidSignature)) {
             $invalidSignature = $this->base64UrlEncode(
-                hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY . 'fallback', true)
+                hash_hmac('sha256', $parts[0] . '.' . $parts[1], AUTH_KEY . 'invalid', true)
             );
+
+            if (hash_equals($parts[2], $invalidSignature)) {
+                $invalidSignature = $this->base64UrlEncode(
+                    hash_hmac('sha256', $parts[0] . '.' . $parts[1], AUTH_KEY . 'fallback', true)
+                );
+            }
+
+            $parts[2] = $invalidSignature;
+            $token = implode('.', $parts);
+
+            $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
+            $method = $reflection->getMethod('verify_jwt_token');
+            $method->setAccessible(true);
+
+            $result = $method->invoke($api, $token);
+
+            $this->assertInstanceOf(\WP_Error::class, $result);
+            $this->assertSame('jwt_invalid_signature', $result->get_error_code());
         }
 
-        $token = $base64Header . '.' . $base64Payload . '.' . $invalidSignature;
+        public function test_verify_jwt_token_returns_error_when_user_missing(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
 
-        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
-        $method = $reflection->getMethod('verify_jwt_token');
-        $method->setAccessible(true);
+            $token = $this->generateJwtToken([
+                'user_id' => 999,
+                'username' => 'ghost-user',
+            ]);
 
-        $this->assertFalse($method->invoke($api, $token));
-    }
+            $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
+            $method = $reflection->getMethod('verify_jwt_token');
+            $method->setAccessible(true);
+
+            $result = $method->invoke($api, $token);
+
+            $this->assertInstanceOf(\WP_Error::class, $result);
+            $this->assertSame('jwt_user_not_found', $result->get_error_code());
+        }
+
+        public function test_check_permissions_rejects_token_when_capability_revoked(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $user = (object) [
+                'ID' => 42,
+                'user_login' => 'revoked-user',
+                'allcaps' => [
+                    'read' => true,
+                ],
+            ];
+
+            $GLOBALS['bjlg_test_users'] = [
+                $user->ID => $user,
+            ];
+
+            $token = $this->generateJwtToken([
+                'user_id' => $user->ID,
+                'username' => $user->user_login,
+            ]);
+
+            $request = new class($token) {
+                /** @var array<string, string> */
+                private $headers;
+
+                public function __construct(string $token)
+                {
+                    $this->headers = [
+                        'Authorization' => 'Bearer ' . $token,
+                    ];
+                }
+
+                public function get_header($key)
+                {
+                    return $this->headers[$key] ?? null;
+                }
+            };
+
+            $result = $api->check_permissions($request);
+
+            $this->assertInstanceOf(\WP_Error::class, $result);
+            $this->assertSame('jwt_insufficient_permissions', $result->get_error_code());
+        }
 
     public function test_verify_api_key_updates_usage_statistics(): void
     {
@@ -534,6 +591,23 @@ namespace {
         if (file_exists($tempFile)) {
             unlink($tempFile);
         }
+    }
+
+    private function generateJwtToken(array $overrides = []): string
+    {
+        $header = ['typ' => 'JWT', 'alg' => 'HS256'];
+        $payload = array_merge([
+            'user_id' => 1,
+            'username' => 'test-user',
+            'exp' => time() + 3600,
+            'iat' => time(),
+        ], $overrides);
+
+        $base64Header = $this->base64UrlEncode((string) json_encode($header));
+        $base64Payload = $this->base64UrlEncode((string) json_encode($payload));
+        $signature = hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY, true);
+
+        return $base64Header . '.' . $base64Payload . '.' . $this->base64UrlEncode($signature);
     }
 
     private function base64UrlEncode(string $data): string

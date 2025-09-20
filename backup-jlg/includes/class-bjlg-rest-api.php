@@ -287,9 +287,15 @@ class BJLG_REST_API {
         $auth_header = $request->get_header('Authorization');
         if ($auth_header && strpos($auth_header, 'Bearer ') === 0) {
             $token = substr($auth_header, 7);
-            return $this->verify_jwt_token($token);
+            $jwt_check = $this->verify_jwt_token($token);
+
+            if (is_wp_error($jwt_check)) {
+                return $jwt_check;
+            }
+
+            return (bool) $jwt_check;
         }
-        
+
         // Vérifier l'authentification WordPress standard
         return current_user_can(BJLG_CAPABILITY);
     }
@@ -472,7 +478,11 @@ class BJLG_REST_API {
     private function verify_jwt_token($token) {
         $parts = explode('.', $token);
         if (count($parts) !== 3) {
-            return false;
+            return new WP_Error(
+                'jwt_invalid_token',
+                __('Token JWT invalide.', 'backup-jlg'),
+                ['status' => 401]
+            );
         }
 
         list($header, $payload, $signature) = $parts;
@@ -481,27 +491,86 @@ class BJLG_REST_API {
         $decoded_payload = $this->base64url_decode($payload);
 
         if ($decoded_header === false || $decoded_payload === false) {
-            return false;
+            return new WP_Error(
+                'jwt_invalid_token',
+                __('Le token JWT est mal formé.', 'backup-jlg'),
+                ['status' => 401]
+            );
         }
 
         $payload_data = json_decode($decoded_payload, true);
-        if (!is_array($payload_data) || !isset($payload_data['exp'])) {
-            return false;
+        if (!is_array($payload_data)) {
+            return new WP_Error(
+                'jwt_invalid_token',
+                __('Impossible de décoder le token JWT.', 'backup-jlg'),
+                ['status' => 401]
+            );
         }
 
-        if ($payload_data['exp'] < time()) {
-            return false;
+        if (!isset($payload_data['exp']) || !is_numeric($payload_data['exp'])) {
+            return new WP_Error(
+                'jwt_invalid_token',
+                __('Le token JWT est invalide.', 'backup-jlg'),
+                ['status' => 401]
+            );
+        }
+
+        if ((int) $payload_data['exp'] < time()) {
+            return new WP_Error(
+                'jwt_expired_token',
+                __('Le token JWT a expiré.', 'backup-jlg'),
+                ['status' => 401]
+            );
         }
 
         if (!defined('AUTH_KEY')) {
-            return false;
+            return new WP_Error(
+                'jwt_signature_error',
+                __('Clé d’authentification WordPress manquante.', 'backup-jlg'),
+                ['status' => 500]
+            );
         }
 
         $expected_signature = hash_hmac('sha256', $header . '.' . $payload, AUTH_KEY, true);
         $expected_signature = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($expected_signature));
 
         if (!hash_equals($expected_signature, $signature)) {
-            return false;
+            return new WP_Error(
+                'jwt_invalid_signature',
+                __('La signature du token JWT est invalide.', 'backup-jlg'),
+                ['status' => 401]
+            );
+        }
+
+        $user_id = isset($payload_data['user_id']) ? (int) $payload_data['user_id'] : null;
+        $username = isset($payload_data['username']) ? $payload_data['username'] : null;
+
+        $user = false;
+
+        if ($user_id) {
+            $user = get_user_by('id', $user_id);
+        }
+
+        if (!$user && $username) {
+            $user = get_user_by('login', $username);
+        }
+
+        if (!$user) {
+            return new WP_Error(
+                'jwt_user_not_found',
+                __('Utilisateur introuvable pour ce token.', 'backup-jlg'),
+                ['status' => 401]
+            );
+        }
+
+        $has_capability = function_exists('user_can') ? user_can($user, BJLG_CAPABILITY) : false;
+
+        if (!$has_capability) {
+            return new WP_Error(
+                'jwt_insufficient_permissions',
+                __('Les permissions de cet utilisateur ne sont plus valides.', 'backup-jlg'),
+                ['status' => 403]
+            );
         }
 
         return true;
