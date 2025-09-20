@@ -41,7 +41,7 @@ final class BJLG_BackupFilesystemTest extends TestCase
             /** @var array<int, array{0: string, 1: string}> */
             public $addedFiles = [];
 
-            public function addFile($filepath, $entryname, $start = 0, $length = 0, $flags = 0): bool
+            public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
             {
                 $this->addedFiles[] = [$filepath, $entryname];
                 return true;
@@ -70,7 +70,7 @@ final class BJLG_BackupFilesystemTest extends TestCase
             /** @var array<int, array{0: string, 1: string}> */
             public $addedFiles = [];
 
-            public function addFile($filepath, $entryname, $start = 0, $length = 0, $flags = 0): bool
+            public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
             {
                 $this->addedFiles[] = [$filepath, $entryname];
                 return true;
@@ -123,13 +123,13 @@ final class BJLG_BackupFilesystemTest extends TestCase
                 /** @var array<int, array{0: string, 1: string}> */
                 public $addedFiles = [];
 
-                public function addFile($filepath, $entryname, $start = 0, $length = 0, $flags = 0): bool
+                public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
                 {
                     $this->addedFiles[] = [$filepath, $entryname];
                     return true;
                 }
 
-                public function setCompressionName($name, $method)
+                public function setCompressionName($name, $method, $compflags = 0): bool
                 {
                     return true;
                 }
