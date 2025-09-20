@@ -13,6 +13,8 @@ if (!defined('ABSPATH')) {
  */
 class BJLG_Backup {
 
+    public const TASK_TTL = DAY_IN_SECONDS;
+
     private $performance_optimizer;
     private $encryption_handler;
     
@@ -74,7 +76,7 @@ class BJLG_Backup {
         ];
         
         // Sauvegarder temporairement
-        set_transient($task_id, $task_data, HOUR_IN_SECONDS);
+        set_transient($task_id, $task_data, self::TASK_TTL);
         
         BJLG_Debug::log("Nouvelle tâche de sauvegarde créée : $task_id");
         BJLG_History::log('backup_started', 'info', 'Composants : ' . implode(', ', $components));
@@ -173,7 +175,7 @@ class BJLG_Backup {
             $components = array_values(array_unique(array_intersect($components, $allowed_components)));
 
             $task_data['components'] = $components;
-            set_transient($task_id, $task_data, HOUR_IN_SECONDS);
+            set_transient($task_id, $task_data, self::TASK_TTL);
 
             if (empty($components)) {
                 BJLG_Debug::log("ERREUR: Aucun composant valide pour la tâche $task_id.");
@@ -195,7 +197,7 @@ class BJLG_Backup {
                     BJLG_Debug::log("Pas de sauvegarde complète trouvée, bascule en mode complet.");
                     $backup_type = 'full';
                     $task_data['incremental'] = false;
-                    set_transient($task_id, $task_data, HOUR_IN_SECONDS);
+                    set_transient($task_id, $task_data, self::TASK_TTL);
                 }
             }
             
@@ -733,7 +735,7 @@ class BJLG_Backup {
             $task_data['progress'] = $progress;
             $task_data['status'] = $status;
             $task_data['status_text'] = $status_text;
-            set_transient($task_id, $task_data, HOUR_IN_SECONDS);
+            set_transient($task_id, $task_data, self::TASK_TTL);
         }
     }
 

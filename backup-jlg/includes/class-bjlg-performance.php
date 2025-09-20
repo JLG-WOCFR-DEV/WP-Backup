@@ -333,7 +333,7 @@ class BJLG_Performance {
                 'progress' => $progress,
                 'status' => 'running',
                 'status_text' => "Traitement de {$task['type']} (" . (isset($task['subtype']) ? $task['subtype'] : '') . ")..."
-            ], HOUR_IN_SECONDS);
+            ], BJLG_Backup::TASK_TTL);
             
             try {
                 $result = $this->execute_single_task($task);
