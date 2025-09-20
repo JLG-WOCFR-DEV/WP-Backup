@@ -195,6 +195,38 @@ namespace {
             $this->assertSame('jwt_insufficient_permissions', $result->get_error_code());
         }
 
+        public function test_check_permissions_rejects_token_when_user_deleted(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $token = $this->generateJwtToken([
+                'user_id' => 314,
+                'username' => 'deleted-user',
+            ]);
+
+            $request = new class($token) {
+                /** @var array<string, string> */
+                private $headers;
+
+                public function __construct(string $token)
+                {
+                    $this->headers = [
+                        'Authorization' => 'Bearer ' . $token,
+                    ];
+                }
+
+                public function get_header($key)
+                {
+                    return $this->headers[$key] ?? null;
+                }
+            };
+
+            $result = $api->check_permissions($request);
+
+            $this->assertInstanceOf(\WP_Error::class, $result);
+            $this->assertSame('jwt_user_not_found', $result->get_error_code());
+        }
+
     public function test_verify_api_key_updates_usage_statistics(): void
     {
         $GLOBALS['bjlg_test_options'] = [];
