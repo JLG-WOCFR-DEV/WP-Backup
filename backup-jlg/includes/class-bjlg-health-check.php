@@ -83,15 +83,15 @@ class BJLG_Health_Check {
             if ($cleanup_timestamp < time()) {
                 $messages[] = "Nettoyage en retard de " . human_time_diff($cleanup_timestamp, time());
             } else {
-                $messages[] = "Nettoyage : " . get_date_from_gmt(gmdate('Y-m-d H:i:s', $cleanup_timestamp), 'd/m/Y H:i');
+                $messages[] = "Nettoyage : " . get_date_from_gmt($this->format_gmt_datetime($cleanup_timestamp), 'd/m/Y H:i');
             }
         }
-        
+
         if ($backup_timestamp) {
             if ($backup_timestamp < time()) {
                 $messages[] = "Sauvegarde en retard de " . human_time_diff($backup_timestamp, time());
             } else {
-                $messages[] = "Sauvegarde : " . get_date_from_gmt(gmdate('Y-m-d H:i:s', $backup_timestamp), 'd/m/Y H:i');
+                $messages[] = "Sauvegarde : " . get_date_from_gmt($this->format_gmt_datetime($backup_timestamp), 'd/m/Y H:i');
             }
         }
         
@@ -108,6 +108,13 @@ class BJLG_Health_Check {
             'status' => $has_warning ? 'warning' : 'success',
             'message' => implode(' | ', $messages)
         ];
+    }
+
+    /**
+     * Retourne la date/heure GMT formatée attendue par get_date_from_gmt().
+     */
+    private function format_gmt_datetime($timestamp) {
+        return gmdate('Y-m-d H:i:s', $timestamp);
     }
 
     /**
