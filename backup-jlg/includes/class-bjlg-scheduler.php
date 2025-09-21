@@ -145,7 +145,7 @@ class BJLG_Scheduler {
         
         // Obtenir la prochaine exécution
         $next_run = wp_next_scheduled(self::SCHEDULE_HOOK);
-        $next_run_formatted = $next_run ? get_date_from_gmt(date('Y-m-d H:i:s', $next_run), 'd/m/Y H:i:s') : 'Non planifié';
+        $next_run_formatted = $next_run ? get_date_from_gmt(gmdate('Y-m-d H:i:s', $next_run), 'd/m/Y H:i:s') : 'Non planifié';
         
         wp_send_json_success([
             'message' => 'Planification enregistrée !',
@@ -175,11 +175,11 @@ class BJLG_Scheduler {
             BJLG_Debug::log(sprintf(
                 "Nouvelle sauvegarde planifiée (%s). Prochaine exécution : %s",
                 $settings['recurrence'],
-                get_date_from_gmt(date('Y-m-d H:i:s', $first_timestamp), 'd/m/Y H:i:s')
+                get_date_from_gmt(gmdate('Y-m-d H:i:s', $first_timestamp), 'd/m/Y H:i:s')
             ));
             
             BJLG_History::log('schedule_updated', 'success', 
-                'Prochaine sauvegarde planifiée pour le ' . get_date_from_gmt(date('Y-m-d H:i:s', $first_timestamp), 'd/m/Y H:i:s')
+                'Prochaine sauvegarde planifiée pour le ' . get_date_from_gmt(gmdate('Y-m-d H:i:s', $first_timestamp), 'd/m/Y H:i:s')
             );
         } else {
             BJLG_Debug::log("ERREUR : Impossible de calculer le timestamp pour la planification.");
@@ -283,7 +283,7 @@ class BJLG_Scheduler {
         if ($next_run) {
             $response['next_run'] = $next_run;
             $response['next_run_formatted'] = get_date_from_gmt(
-                date('Y-m-d H:i:s', $next_run),
+                gmdate('Y-m-d H:i:s', $next_run),
                 'd/m/Y H:i:s'
             );
             $response['next_run_relative'] = human_time_diff($next_run, current_time('timestamp'));
