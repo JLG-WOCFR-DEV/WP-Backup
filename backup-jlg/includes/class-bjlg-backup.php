@@ -284,14 +284,54 @@ class BJLG_Backup {
             $zip->close();
             
             // Chiffrement si demandé
-            if ($task_data['encrypt'] && $this->encryption_handler) {
-                $this->update_task_progress($task_id, 95, 'running', 'Chiffrement de la sauvegarde...');
-                $encrypted_file = $this->encryption_handler->encrypt_backup_file($backup_filepath);
-                if ($encrypted_file !== $backup_filepath) {
-                    $backup_filepath = $encrypted_file;
-                    $backup_filename = basename($encrypted_file);
+            $requested_encryption = (bool) $task_data['encrypt'];
+            if ($requested_encryption) {
+                if ($this->encryption_handler) {
+                    $this->update_task_progress($task_id, 95, 'running', 'Chiffrement de la sauvegarde...');
+                    $encrypted_file = $this->encryption_handler->encrypt_backup_file($backup_filepath);
+
+                    if (is_string($encrypted_file) && $encrypted_file !== $backup_filepath) {
+                        $backup_filepath = $encrypted_file;
+                        $backup_filename = basename($encrypted_file);
+                    } else {
+                        $task_data['encrypt'] = false;
+                        self::save_task_state($task_id, $task_data);
+
+                        BJLG_Debug::log("Chiffrement non appliqué pour la sauvegarde {$backup_filename}.");
+                        BJLG_History::log(
+                            'backup_encryption_failed',
+                            'warning',
+                            'Le fichier de sauvegarde n\'a pas été chiffré comme prévu.'
+                        );
+
+                        $this->update_task_progress(
+                            $task_id,
+                            95,
+                            'running',
+                            'Chiffrement indisponible, sauvegarde conservée sans chiffrement.'
+                        );
+                    }
+                } else {
+                    $task_data['encrypt'] = false;
+                    self::save_task_state($task_id, $task_data);
+
+                    BJLG_Debug::log('Chiffrement demandé mais module indisponible.');
+                    BJLG_History::log(
+                        'backup_encryption_failed',
+                        'warning',
+                        'Chiffrement demandé mais module indisponible : sauvegarde non chiffrée.'
+                    );
+
+                    $this->update_task_progress(
+                        $task_id,
+                        95,
+                        'running',
+                        'Chiffrement indisponible, sauvegarde conservée sans chiffrement.'
+                    );
                 }
             }
+
+            $effective_encryption = (bool) $task_data['encrypt'];
             
             // Calculer les statistiques
             $file_size = filesize($backup_filepath);
@@ -299,10 +339,11 @@ class BJLG_Backup {
             
             // Enregistrer le succès
             BJLG_History::log('backup_created', 'success', sprintf(
-                'Fichier : %s | Taille : %s | Durée : %ds',
+                'Fichier : %s | Taille : %s | Durée : %ds | Chiffrement : %s',
                 $backup_filename,
                 size_format($file_size),
-                $duration
+                $duration,
+                $effective_encryption ? 'oui' : 'non'
             ));
             
             $completion_timestamp = time();
@@ -311,7 +352,7 @@ class BJLG_Backup {
                 'path' => $backup_filepath,
                 'size' => $file_size,
                 'components' => $components,
-                'encrypted' => $task_data['encrypt'],
+                'encrypted' => $effective_encryption,
                 'incremental' => $task_data['incremental'],
                 'duration' => $duration,
                 'timestamp' => $completion_timestamp,
@@ -332,7 +373,12 @@ class BJLG_Backup {
             }
 
             // Mise à jour finale
-            $this->update_task_progress($task_id, 100, 'complete', 'Sauvegarde terminée avec succès !');
+            $success_message = 'Sauvegarde terminée avec succès !';
+            if ($requested_encryption && !$effective_encryption) {
+                $success_message .= ' (Chiffrement non appliqué.)';
+            }
+
+            $this->update_task_progress($task_id, 100, 'complete', $success_message);
             
             BJLG_Debug::log("Sauvegarde terminée : $backup_filename (" . size_format($file_size) . ")");
             
