@@ -103,6 +103,8 @@ define('WP_MAX_MEMORY_LIMIT', '512M');
 3. **Restaurer** :
    - Cliquez sur "Restaurer" à côté d'une sauvegarde
    - Ou uploadez un fichier .zip
+   - Pour les sauvegardes chiffrées (`.enc`), fournissez le mot de passe exact (minimum 4 caractères). Les champs vides sont refusés
+     afin de garantir la protection des archives.
 
 ### API REST
 

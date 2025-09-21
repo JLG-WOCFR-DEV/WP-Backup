@@ -22,7 +22,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $_POST = [];
     }
 
-    public function test_password_is_sanitized_and_encrypted_before_storage(): void
+    public function test_password_is_preserved_and_encrypted_before_storage(): void
     {
         $_POST['nonce'] = 'nonce';
         $_POST['filename'] = 'backup.zip';
@@ -45,16 +45,18 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $encrypted_password = $task_data['password_encrypted'];
         $this->assertNotEmpty($encrypted_password);
 
-        $expected_sanitized = sanitize_text_field("  pa\nss\tword  ");
-        $this->assertNotSame($expected_sanitized, $encrypted_password);
-        $this->assertStringNotContainsString($expected_sanitized, $encrypted_password);
+        $raw_password = wp_unslash($_POST['password']);
+        $sanitized_password = sanitize_text_field($raw_password);
+        $this->assertNotSame($sanitized_password, $raw_password);
+        $this->assertNotSame($sanitized_password, $encrypted_password);
+        $this->assertStringNotContainsString($sanitized_password, $encrypted_password);
 
         $reflection = new ReflectionClass(BJLG\BJLG_Restore::class);
         $method = $reflection->getMethod('decrypt_password_from_transient');
         $method->setAccessible(true);
         $decrypted_password = $method->invoke($restore, $encrypted_password);
 
-        $this->assertSame($expected_sanitized, $decrypted_password);
+        $this->assertSame($raw_password, $decrypted_password);
     }
 
     public function test_restore_rejects_directory_traversal_entries(): void

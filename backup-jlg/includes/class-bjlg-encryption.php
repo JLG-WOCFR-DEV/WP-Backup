@@ -616,7 +616,14 @@ class BJLG_Encryption {
 
         check_ajax_referer('bjlg_nonce', 'nonce');
 
-        $password = isset($_POST['password']) ? sanitize_text_field(wp_unslash($_POST['password'])) : '';
+        $password = '';
+        if (isset($_POST['password'])) {
+            $maybe_password = wp_unslash($_POST['password']);
+            if (is_string($maybe_password)) {
+                $password = $maybe_password;
+            }
+        }
+
         if ($password === '') {
             wp_send_json_error(['message' => 'Mot de passe manquant']);
         }
