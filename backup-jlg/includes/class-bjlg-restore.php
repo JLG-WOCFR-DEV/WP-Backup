@@ -343,6 +343,8 @@ class BJLG_Restore {
             }
         }
         $temp_extract_dir = BJLG_BACKUP_DIR . 'temp_restore_' . uniqid();
+        $final_error_status = null;
+        $error_status_recorded = false;
 
         try {
             set_time_limit(0);
@@ -509,18 +511,36 @@ class BJLG_Restore {
             ], BJLG_Backup::get_task_ttl());
 
         } catch (Throwable $throwable) {
-            BJLG_History::log('restore_run', 'failure', "Erreur : " . $throwable->getMessage());
+            $error_message = 'Erreur : ' . $throwable->getMessage();
+            $final_error_status = [
+                'progress' => 100,
+                'status' => 'error',
+                'status_text' => $error_message,
+            ];
+
+            try {
+                BJLG_History::log('restore_run', 'failure', $error_message);
+            } catch (Throwable $history_exception) {
+                BJLG_Debug::log(
+                    "ERREUR: Impossible d'enregistrer l'échec de la restauration : " . $history_exception->getMessage(),
+                    'error'
+                );
+            }
 
             // Nettoyage en cas d'erreur
             if (is_dir($temp_extract_dir)) {
                 $this->recursive_delete($temp_extract_dir);
             }
 
-            set_transient($task_id, [
-                'progress' => 100,
-                'status' => 'error',
-                'status_text' => 'Erreur : ' . $throwable->getMessage()
-            ], BJLG_Backup::get_task_ttl());
+            try {
+                set_transient($task_id, $final_error_status, BJLG_Backup::get_task_ttl());
+                $error_status_recorded = true;
+            } catch (Throwable $transient_exception) {
+                BJLG_Debug::log(
+                    "ERREUR: Impossible de mettre à jour le statut de la tâche {$task_id} : " . $transient_exception->getMessage(),
+                    'error'
+                );
+            }
         } finally {
             if ($decrypted_archive_path && $decrypted_archive_path !== $original_archive_path) {
                 if (file_exists($decrypted_archive_path)) {
@@ -531,6 +551,18 @@ class BJLG_Restore {
                         BJLG_Debug::log($cleanup_message, 'error');
                         BJLG_History::log('restore_cleanup', 'failure', $cleanup_message);
                     }
+                }
+            }
+
+            if ($final_error_status !== null && !$error_status_recorded) {
+                try {
+                    set_transient($task_id, $final_error_status, BJLG_Backup::get_task_ttl());
+                    $error_status_recorded = true;
+                } catch (Throwable $transient_exception) {
+                    BJLG_Debug::log(
+                        "ERREUR: Impossible de mettre à jour le statut final de la tâche {$task_id} : " . $transient_exception->getMessage(),
+                        'error'
+                    );
                 }
             }
         }
@@ -858,6 +890,7 @@ class BJLG_Restore {
 
         $transaction_started = false;
         $should_commit = false;
+        $transaction_exception = null;
 
         try {
             // Désactiver temporairement les contraintes
@@ -868,61 +901,66 @@ class BJLG_Restore {
                 $transaction_started = true;
             }
 
-            while (($line = fgets($handle)) !== false) {
-                // Ignorer les commentaires et les lignes vides
-                if (substr($line, 0, 2) == '--' || trim($line) == '') {
-                    continue;
-                }
-
-                $query .= $line;
-
-                // Exécuter la requête quand on atteint un point-virgule à la fin d'une ligne
-                if (substr(trim($line), -1, 1) == ';') {
-                    $result = $wpdb->query($query);
-
-                    if ($result === false) {
-                        $error_msg = "Erreur SQL : " . $wpdb->last_error;
-                        BJLG_Debug::log($error_msg);
-                        $errors[] = $error_msg;
-
-                        // Continuer malgré les erreurs pour les tables optionnelles
-                        if (strpos($wpdb->last_error, 'already exists') === false) {
-                            // Ce n'est pas une erreur de table existante
-                            if (count($errors) > 10) {
-                                // Trop d'erreurs, abandonner
-                                throw new Exception("Trop d'erreurs lors de l'import SQL.");
-                            }
-                        }
-                    } else {
-                        $queries_executed++;
+            try {
+                while (($line = fgets($handle)) !== false) {
+                    // Ignorer les commentaires et les lignes vides
+                    if (substr($line, 0, 2) == '--' || trim($line) == '') {
+                        continue;
                     }
 
-                    $query = ''; // Réinitialiser pour la prochaine requête
+                    $query .= $line;
+
+                    // Exécuter la requête quand on atteint un point-virgule à la fin d'une ligne
+                    if (substr(trim($line), -1, 1) == ';') {
+                        $result = $wpdb->query($query);
+
+                        if ($result === false) {
+                            $error_msg = "Erreur SQL : " . $wpdb->last_error;
+                            BJLG_Debug::log($error_msg);
+                            $errors[] = $error_msg;
+
+                            // Continuer malgré les erreurs pour les tables optionnelles
+                            if (strpos($wpdb->last_error, 'already exists') === false) {
+                                // Ce n'est pas une erreur de table existante
+                                if (count($errors) > 10) {
+                                    // Trop d'erreurs, abandonner
+                                    throw new Exception("Trop d'erreurs lors de l'import SQL.");
+                                }
+                            }
+                        } else {
+                            $queries_executed++;
+                        }
+
+                        $query = ''; // Réinitialiser pour la prochaine requête
+                    }
                 }
-            }
 
-            $should_commit = true;
+                $should_commit = true;
 
-            BJLG_Debug::log("Import SQL terminé : {$queries_executed} requêtes exécutées.");
+                BJLG_Debug::log("Import SQL terminé : {$queries_executed} requêtes exécutées.");
 
-            if (!empty($errors)) {
-                BJLG_Debug::log("Erreurs rencontrées : " . implode(", ", array_slice($errors, 0, 5)));
+                if (!empty($errors)) {
+                    BJLG_Debug::log("Erreurs rencontrées : " . implode(", ", array_slice($errors, 0, 5)));
+                }
+            } catch (Throwable $throwable) {
+                $transaction_exception = $throwable;
+                throw $throwable;
+            } finally {
+                if ($transaction_started) {
+                    if ($transaction_exception === null && $should_commit) {
+                        $wpdb->query('COMMIT');
+                    } else {
+                        $wpdb->query('ROLLBACK');
+                    }
+                }
+
+                $wpdb->query('SET autocommit = 1');
+                $wpdb->query('SET foreign_key_checks = 1');
             }
         } finally {
             if (is_resource($handle)) {
                 fclose($handle);
             }
-
-            if ($transaction_started) {
-                if ($should_commit) {
-                    $wpdb->query('COMMIT');
-                } else {
-                    $wpdb->query('ROLLBACK');
-                }
-            }
-
-            $wpdb->query('SET autocommit = 1');
-            $wpdb->query('SET foreign_key_checks = 1');
         }
     }
 
