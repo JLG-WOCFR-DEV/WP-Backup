@@ -6,6 +6,8 @@ if (!defined('ABSPATH')) exit;
  */
 class BJLG_Debug_UI {
 
+    private const NONCE_ACTION = 'bjlg_module_selfcheck';
+
     public function __construct() {
         add_action('admin_menu', [$this, 'menu'], 9); // priorité haute pour garantir l’enregistrement
         add_action('admin_post_bjlg_save_modules', [$this, 'save_modules']);
@@ -119,7 +121,7 @@ class BJLG_Debug_UI {
                         cell.textContent = 'Analyse...';
                         const d = new FormData();
                         d.append('action','bjlg_module_selfcheck');
-                        d.append('nonce','<?php echo esc_js(wp_create_nonce(BJLG_NONCE_ACTION)); ?>');
+                        d.append('nonce','<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION)); ?>');
                         d.append('file', btn.getAttribute('data-file'));
                         fetch(ajaxurl, { method:'POST', body:d })
                            .then(r=>r.json())
@@ -148,7 +150,9 @@ class BJLG_Debug_UI {
     }
 
     public function ajax_selfcheck() {
-        check_ajax_referer(BJLG_NONCE_ACTION, 'nonce');
+        if (!check_ajax_referer(self::NONCE_ACTION, 'nonce', false)) {
+            wp_send_json_error(['message' => 'Nonce invalide']);
+        }
         if (empty($_POST['file'])) wp_send_json_error(['message'=>'Fichier manquant']);
 
         $file = basename(sanitize_file_name(wp_unslash($_POST['file'])));
