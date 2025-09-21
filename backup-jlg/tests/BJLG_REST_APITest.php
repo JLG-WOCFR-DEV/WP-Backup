@@ -40,6 +40,36 @@ namespace {
             ];
         }
 
+        /**
+         * @param array<int, string> $components
+         */
+        private function createBackupWithComponents(array $components): string
+        {
+            $filename = BJLG_BACKUP_DIR . 'bjlg-test-' . uniqid('', true) . '.zip';
+
+            $zip = new \ZipArchive();
+            $openResult = $zip->open($filename, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
+            $this->assertTrue($openResult === true || $openResult === \ZipArchive::ER_OK);
+
+            $manifest = [
+                'type' => 'full',
+                'contains' => $components,
+            ];
+
+            $zip->addFromString('backup-manifest.json', json_encode($manifest));
+            $zip->addFromString('dummy.txt', 'content');
+            $zip->close();
+
+            return $filename;
+        }
+
+        private function deleteBackupIfExists(string $path): void
+        {
+            if (is_file($path)) {
+                unlink($path);
+            }
+        }
+
         public function test_backups_route_per_page_validation_rejects_zero(): void
         {
             $api = new BJLG\BJLG_REST_API();
@@ -114,6 +144,61 @@ namespace {
                     unlink($file);
                 }
             }
+        }
+
+        public function test_get_backups_filters_database_and_files_types(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $databaseBackup = $this->createBackupWithComponents(['db']);
+            $uploadsBackup = $this->createBackupWithComponents(['uploads']);
+
+            $makeRequest = static function (string $type) {
+                return new class($type) {
+                    /** @var array<string, mixed> */
+                    private $params;
+
+                    public function __construct(string $type)
+                    {
+                        $this->params = [
+                            'page' => 1,
+                            'per_page' => 10,
+                            'type' => $type,
+                            'sort' => 'date_desc',
+                        ];
+                    }
+
+                    public function get_param($key)
+                    {
+                        return $this->params[$key] ?? null;
+                    }
+                };
+            };
+
+            $databaseResponse = $api->get_backups($makeRequest('database'));
+            $this->assertIsArray($databaseResponse);
+            $this->assertArrayHasKey('backups', $databaseResponse);
+
+            $databaseFilenames = array_map(static function ($backup) {
+                return $backup['filename'] ?? null;
+            }, $databaseResponse['backups']);
+
+            $this->assertContains(basename($databaseBackup), $databaseFilenames);
+            $this->assertNotContains(basename($uploadsBackup), $databaseFilenames);
+
+            $filesResponse = $api->get_backups($makeRequest('files'));
+            $this->assertIsArray($filesResponse);
+            $this->assertArrayHasKey('backups', $filesResponse);
+
+            $filesFilenames = array_map(static function ($backup) {
+                return $backup['filename'] ?? null;
+            }, $filesResponse['backups']);
+
+            $this->assertContains(basename($uploadsBackup), $filesFilenames);
+            $this->assertNotContains(basename($databaseBackup), $filesFilenames);
+
+            $this->deleteBackupIfExists($databaseBackup);
+            $this->deleteBackupIfExists($uploadsBackup);
         }
 
         public function test_verify_jwt_token_returns_error_for_invalid_signature(): void
