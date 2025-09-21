@@ -12,7 +12,27 @@ class BJLG_Scheduler {
 
     const SCHEDULE_HOOK = 'bjlg_scheduled_backup_hook';
 
-    public function __construct() {
+    /**
+     * Instance unique du planificateur.
+     *
+     * @var BJLG_Scheduler|null
+     */
+    private static $instance = null;
+
+    /**
+     * Retourne l'instance unique du planificateur.
+     *
+     * @return BJLG_Scheduler
+     */
+    public static function instance() {
+        if (is_null(self::$instance)) {
+            self::$instance = new self();
+        }
+
+        return self::$instance;
+    }
+
+    private function __construct() {
         // Actions AJAX
         add_action('wp_ajax_bjlg_save_schedule_settings', [$this, 'handle_save_schedule']);
         add_action('wp_ajax_bjlg_get_next_scheduled', [$this, 'handle_get_next_scheduled']);
@@ -26,6 +46,12 @@ class BJLG_Scheduler {
         
         // Vérifier et appliquer la planification au chargement
         add_action('init', [$this, 'check_schedule']);
+    }
+
+    private function __clone() {}
+
+    public function __wakeup() {
+        throw new \Exception('Cannot unserialize singleton');
     }
     
     /**

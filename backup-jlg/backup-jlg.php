@@ -105,7 +105,7 @@ final class BJLG_Plugin {
 
         $backup_manager = new BJLG\BJLG_Backup();
         new BJLG\BJLG_Restore($backup_manager);
-        new BJLG\BJLG_Scheduler(); BJLG\BJLG_Cleanup::instance(); new BJLG\BJLG_Encryption(); new BJLG\BJLG_Health_Check();
+        BJLG\BJLG_Scheduler::instance(); BJLG\BJLG_Cleanup::instance(); new BJLG\BJLG_Encryption(); new BJLG\BJLG_Health_Check();
         new BJLG\BJLG_Diagnostics(); new BJLG\BJLG_Webhooks(); new BJLG\BJLG_Incremental(); new BJLG\BJLG_Performance();
         new BJLG\BJLG_REST_API(); new BJLG\BJLG_Settings();
     }

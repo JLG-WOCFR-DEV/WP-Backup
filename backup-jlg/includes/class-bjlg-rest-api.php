@@ -1636,8 +1636,8 @@ class BJLG_REST_API {
 
         update_option('bjlg_schedule_settings', $validated_schedule);
 
-        // Réinitialiser la planification
-        $scheduler = new BJLG_Scheduler();
+        // Réinitialiser la planification sans multiplier les hooks
+        $scheduler = BJLG_Scheduler::instance();
         $scheduler->check_schedule();
 
         return rest_ensure_response([
