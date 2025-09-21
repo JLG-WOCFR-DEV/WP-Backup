@@ -109,26 +109,68 @@ class BJLG_Actions {
      * Gère la diffusion d'une sauvegarde via AJAX (authentifié ou non).
      */
     public function handle_download_request() {
-        $token = isset($_REQUEST['token']) ? sanitize_text_field(wp_unslash($_REQUEST['token'])) : '';
+        $token_present = array_key_exists('token', $_REQUEST);
+        $token = $token_present ? sanitize_text_field(wp_unslash($_REQUEST['token'])) : '';
 
-        $validation = $this->validate_download_token($token);
+        if ($token_present) {
+            $validation = $this->validate_download_token($token);
+            if (is_wp_error($validation)) {
+                $status = $this->determine_error_status($validation);
+                wp_send_json_error(['message' => $validation->get_error_message()], $status);
+            }
+
+            list($filepath, $transient_key) = $validation;
+
+            delete_transient($transient_key);
+
+            $this->stream_backup_file($filepath);
+            return;
+        }
+
+        $file_identifier = array_key_exists('file', $_REQUEST)
+            ? wp_unslash($_REQUEST['file'])
+            : '';
+
+        if ($file_identifier === '') {
+            wp_send_json_error(['message' => 'Identifiant de sauvegarde manquant.'], 400);
+        }
+
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
+        $filepath = $this->resolve_backup_identifier($file_identifier);
+
+        if (is_wp_error($filepath)) {
+            $status = $this->determine_error_status($filepath);
+            wp_send_json_error(['message' => $filepath->get_error_message()], $status);
+        }
+
+        $download_token = wp_generate_password(32, false);
+        $transient_key = 'bjlg_download_' . $download_token;
+
+        set_transient($transient_key, $filepath, BJLG_Backup::get_task_ttl());
+
+        $validation = $this->validate_download_token($download_token);
+
         if (is_wp_error($validation)) {
+            delete_transient($transient_key);
             $status = $this->determine_error_status($validation);
             wp_send_json_error(['message' => $validation->get_error_message()], $status);
         }
 
-        list($filepath, $transient_key) = $validation;
+        list($resolved_filepath, $resolved_transient_key) = $validation;
 
-        delete_transient($transient_key);
+        delete_transient($resolved_transient_key);
 
-        $this->stream_backup_file($filepath);
+        $this->stream_backup_file($resolved_filepath);
     }
 
     /**
      * Intercepte les requêtes publiques (API REST) pour diffuser une sauvegarde.
      */
     public function maybe_handle_public_download() {
-        if (empty($_GET['bjlg_download'])) {
+        if (!array_key_exists('bjlg_download', $_GET)) {
             return;
         }
 
@@ -190,6 +232,60 @@ class BJLG_Actions {
         }
 
         return [$real_filepath, $transient_key];
+    }
+
+    /**
+     * Résout de manière sécurisée le chemin d'une sauvegarde à partir d'un identifiant brut.
+     *
+     * @param mixed $raw_identifier
+     * @return string|WP_Error
+     */
+    private function resolve_backup_identifier($raw_identifier) {
+        $sanitized_id = sanitize_file_name(basename((string) $raw_identifier));
+
+        if ($sanitized_id === '') {
+            return new WP_Error('bjlg_invalid_identifier', 'Identifiant de sauvegarde invalide.', ['status' => 400]);
+        }
+
+        $canonical_backup_dir = realpath(BJLG_BACKUP_DIR);
+
+        if ($canonical_backup_dir === false) {
+            return new WP_Error('bjlg_invalid_backup_dir', 'Chemin de sauvegarde invalide.', ['status' => 500]);
+        }
+
+        $normalized_backup_dir = rtrim(str_replace('\\', '/', $canonical_backup_dir), '/') . '/';
+
+        $candidate_paths = [BJLG_BACKUP_DIR . $sanitized_id];
+
+        if (!preg_match('/\.zip(\.enc)?$/i', $sanitized_id)) {
+            $candidate_paths[] = BJLG_BACKUP_DIR . $sanitized_id . '.zip';
+        }
+
+        foreach ($candidate_paths as $candidate_path) {
+            if (!file_exists($candidate_path)) {
+                continue;
+            }
+
+            $resolved_path = realpath($candidate_path);
+
+            if ($resolved_path === false) {
+                continue;
+            }
+
+            $normalized_path = str_replace('\\', '/', $resolved_path);
+
+            if (strpos($normalized_path, $normalized_backup_dir) !== 0) {
+                continue;
+            }
+
+            if (!is_readable($resolved_path)) {
+                return new WP_Error('bjlg_unreadable_file', 'Le fichier de sauvegarde est inaccessible.', ['status' => 500]);
+            }
+
+            return $resolved_path;
+        }
+
+        return new WP_Error('bjlg_backup_not_found', 'Fichier de sauvegarde introuvable.', ['status' => 404]);
     }
 
     /**

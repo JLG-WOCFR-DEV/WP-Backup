@@ -192,11 +192,9 @@ class BJLG_Admin {
                     <tbody>
                         <?php foreach ($backups as $backup_file):
                             $filename = basename($backup_file);
-                            $download_token = wp_generate_password(32, false);
-                            set_transient('bjlg_download_' . $download_token, $backup_file, BJLG_Backup::get_task_ttl());
                             $file_url = add_query_arg([
                                 'action' => 'bjlg_download',
-                                'token' => $download_token,
+                                'file' => $filename,
                             ], admin_url('admin-ajax.php'));
                             $is_encrypted = (substr($filename, -4) === '.enc');
                             ?>

@@ -788,7 +788,7 @@ namespace {
         $this->assertNotFalse($registered_priority);
     }
 
-    public function test_format_backup_data_generates_download_token(): void
+    public function test_format_backup_data_provides_routes_without_creating_token(): void
     {
         $GLOBALS['bjlg_test_transients'] = [];
 
@@ -804,7 +804,7 @@ namespace {
         $data = $method->invoke($api, $tempFile);
 
         $this->assertArrayHasKey('download_url', $data);
-        $this->assertArrayHasKey('download_token', $data);
+        $this->assertArrayHasKey('download_route', $data);
         $this->assertArrayHasKey('download_rest_url', $data);
 
         $parsed_url = parse_url($data['download_url']);
@@ -814,9 +814,21 @@ namespace {
             parse_str($parsed_url['query'], $query_args);
         }
 
-        $this->assertArrayHasKey('token', $query_args);
-        $this->assertSame($data['download_token'], $query_args['token']);
-        $this->assertSame($tempFile, get_transient('bjlg_download_' . $data['download_token']));
+        $this->assertArrayHasKey('file', $query_args);
+        $this->assertSame(basename($tempFile), $query_args['file']);
+        $this->assertSame([], $GLOBALS['bjlg_test_transients']);
+
+        $expected_route = sprintf(
+            '/%s/backups/%s/download',
+            BJLG\BJLG_REST_API::API_NAMESPACE,
+            rawurlencode(basename($tempFile))
+        );
+
+        $this->assertSame($expected_route, $data['download_route']);
+        $this->assertSame(
+            'https://example.com/wp-json' . $expected_route,
+            $data['download_rest_url']
+        );
 
         if (file_exists($tempFile)) {
             unlink($tempFile);

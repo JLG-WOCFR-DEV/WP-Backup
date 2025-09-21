@@ -1684,16 +1684,6 @@ class BJLG_REST_API {
             $manifest = $this->get_backup_manifest($filepath);
         }
 
-        $download_token = wp_generate_password(32, false);
-        $transient_key = 'bjlg_download_' . $download_token;
-
-        set_transient($transient_key, $filepath, BJLG_Backup::get_task_ttl());
-
-        $download_url = add_query_arg([
-            'action' => 'bjlg_download',
-            'token' => $download_token,
-        ], admin_url('admin-ajax.php'));
-
         $rest_download_route = sprintf(
             '/%s/backups/%s/download',
             self::API_NAMESPACE,
@@ -1703,6 +1693,11 @@ class BJLG_REST_API {
         $rest_download_url = function_exists('rest_url')
             ? rest_url(ltrim($rest_download_route, '/'))
             : $rest_download_route;
+
+        $download_url = add_query_arg([
+            'action' => 'bjlg_download',
+            'file' => $filename,
+        ], admin_url('admin-ajax.php'));
 
         return [
             'id' => $filename,
@@ -1715,8 +1710,7 @@ class BJLG_REST_API {
             'is_encrypted' => $is_encrypted,
             'components' => $manifest['contains'] ?? [],
             'download_url' => $download_url,
-            'download_token' => $download_token,
-            'download_expires_in' => BJLG_Backup::get_task_ttl(),
+            'download_route' => $rest_download_route,
             'download_rest_url' => $rest_download_url,
             'manifest' => $manifest
         ];

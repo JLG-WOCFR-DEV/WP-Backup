@@ -79,6 +79,50 @@ final class BJLG_ActionsTest extends TestCase
         }
     }
 
+    public function test_handle_download_request_requires_identifier_when_no_token(): void
+    {
+        $actions = new BJLG\BJLG_Actions();
+
+        try {
+            $actions->handle_download_request();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $exception) {
+            $this->assertSame(['message' => 'Identifiant de sauvegarde manquant.'], $exception->data);
+            $this->assertSame(400, $exception->status_code);
+        }
+    }
+
+    public function test_handle_download_request_requires_capability_for_identifier_flow(): void
+    {
+        $GLOBALS['bjlg_test_current_user_can'] = false;
+
+        $actions = new BJLG\BJLG_Actions();
+
+        $_REQUEST['file'] = 'example.zip';
+
+        try {
+            $actions->handle_download_request();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $exception) {
+            $this->assertSame(['message' => 'Permission refusée.'], $exception->data);
+            $this->assertSame(403, $exception->status_code);
+        }
+    }
+
+    public function test_handle_download_request_returns_not_found_when_identifier_unknown(): void
+    {
+        $actions = new BJLG\BJLG_Actions();
+
+        $_REQUEST['file'] = 'missing-backup.zip';
+
+        try {
+            $actions->handle_download_request();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $exception) {
+            $this->assertSame(404, $exception->status_code);
+        }
+    }
+
     /**
      * @return array<string, array{0: string, 1: int}>
      */
