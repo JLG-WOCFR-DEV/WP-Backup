@@ -312,9 +312,10 @@ class BJLG_Scheduler {
             'components' => $settings['components'] ?? ['db', 'plugins', 'themes', 'uploads'],
             'encrypt' => $settings['encrypt'] ?? false,
             'incremental' => $settings['incremental'] ?? false,
-            'source' => 'manual_scheduled'
+            'source' => 'manual_scheduled',
+            'start_time' => time()
         ];
-        
+
         set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
         
         BJLG_Debug::log("Exécution manuelle de la sauvegarde planifiée - Task ID: $task_id");
