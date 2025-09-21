@@ -283,7 +283,7 @@ class BJLG_Backup {
             // Fermer l'archive
             $close_result = @$zip->close();
 
-            if ($close_result === false && !file_exists($backup_filepath)) {
+            if ($close_result !== true) {
                 throw new Exception("Impossible de finaliser l'archive ZIP.");
             }
             
