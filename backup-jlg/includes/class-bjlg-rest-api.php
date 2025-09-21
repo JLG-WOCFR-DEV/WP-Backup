@@ -893,13 +893,50 @@ class BJLG_REST_API {
         
         $manifests_cache = [];
 
+        // Déterminer les composants associés à certains filtres "type"
+        $component_filters = [];
+        if ($type === 'database') {
+            $component_filters = ['db'];
+        } elseif ($type === 'files') {
+            $component_filters = ['plugins', 'themes', 'uploads'];
+        }
+
         // Filtrer par type
         if ($type !== 'all') {
-            $files = array_filter($files, function($file) use ($type, &$manifests_cache) {
+            $files = array_filter($files, function($file) use ($type, $component_filters, &$manifests_cache) {
                 $manifest = $this->get_backup_manifest($file);
 
                 if ($manifest !== null) {
                     $manifests_cache[$file] = $manifest;
+                }
+
+                if (!empty($component_filters)) {
+                    $contains = [];
+                    if (is_array($manifest) && isset($manifest['contains']) && is_array($manifest['contains'])) {
+                        $contains = $manifest['contains'];
+                    }
+
+                    if (!empty(array_intersect($component_filters, $contains))) {
+                        return true;
+                    }
+
+                    $filename = basename($file);
+
+                    // Vérifier également les conventions de nommage historiques
+                    $aliases = $component_filters;
+                    if ($type === 'database') {
+                        $aliases[] = 'database';
+                    } elseif ($type === 'files') {
+                        $aliases[] = 'files';
+                    }
+
+                    foreach (array_unique($aliases) as $component) {
+                        if (strpos($filename, $component) !== false) {
+                            return true;
+                        }
+                    }
+
+                    return false;
                 }
 
                 return $this->backup_matches_type($file, $type, $manifest);
