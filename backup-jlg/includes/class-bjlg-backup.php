@@ -281,7 +281,11 @@ class BJLG_Backup {
             }
             
             // Fermer l'archive
-            $zip->close();
+            $close_result = @$zip->close();
+
+            if ($close_result === false && !file_exists($backup_filepath)) {
+                throw new Exception("Impossible de finaliser l'archive ZIP.");
+            }
             
             // Chiffrement si demandé
             $requested_encryption = (bool) $task_data['encrypt'];

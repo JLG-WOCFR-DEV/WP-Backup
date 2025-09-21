@@ -79,6 +79,9 @@ $GLOBALS['bjlg_test_scheduled_events'] = [
 ];
 $GLOBALS['bjlg_test_options'] = [];
 $GLOBALS['bjlg_registered_routes'] = [];
+$GLOBALS['bjlg_history_entries'] = [];
+$GLOBALS['current_user'] = null;
+$GLOBALS['current_user_id'] = 0;
 
 if (!isset($GLOBALS['wpdb'])) {
     $GLOBALS['wpdb'] = new class {
@@ -188,9 +191,15 @@ if (!class_exists('BJLG_History')) {
             ];
         }
 
-        public static function log($action, $status, $message)
+        public static function log($action, $status, $message, $user_id = null)
         {
-            // Intentionally left blank for tests.
+            if ($user_id === null && function_exists('get_current_user_id')) {
+                $user_id = get_current_user_id();
+            }
+
+            if (function_exists('do_action')) {
+                do_action('bjlg_history_logged', $action, $status, $message, $user_id);
+            }
         }
     }
 }
@@ -333,8 +342,43 @@ if (!function_exists('check_ajax_referer')) {
     }
 }
 
+if (!function_exists('wp_set_current_user')) {
+    function wp_set_current_user($user_id) {
+        $user_id = (int) $user_id;
+        $GLOBALS['current_user_id'] = $user_id;
+        $users = $GLOBALS['bjlg_test_users'] ?? [];
+        $GLOBALS['current_user'] = $users[$user_id] ?? null;
+
+        return $GLOBALS['current_user'];
+    }
+}
+
+if (!function_exists('wp_get_current_user')) {
+    function wp_get_current_user() {
+        return $GLOBALS['current_user'] ?? null;
+    }
+}
+
+if (!function_exists('get_current_user_id')) {
+    function get_current_user_id() {
+        return (int) ($GLOBALS['current_user_id'] ?? 0);
+    }
+}
+
 if (!function_exists('current_user_can')) {
     function current_user_can($capability) {
+        $current_user = $GLOBALS['current_user'] ?? null;
+
+        if (is_object($current_user)) {
+            if (isset($current_user->allcaps) && is_array($current_user->allcaps) && array_key_exists($capability, $current_user->allcaps)) {
+                return (bool) $current_user->allcaps[$capability];
+            }
+
+            if (isset($current_user->caps) && is_array($current_user->caps) && array_key_exists($capability, $current_user->caps)) {
+                return (bool) $current_user->caps[$capability];
+            }
+        }
+
         return $GLOBALS['bjlg_test_current_user_can'] ?? false;
     }
 }
