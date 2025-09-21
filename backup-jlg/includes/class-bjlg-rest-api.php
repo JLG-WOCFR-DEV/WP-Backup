@@ -891,11 +891,18 @@ class BJLG_REST_API {
             ]);
         }
         
+        $manifests_cache = [];
+
         // Filtrer par type
         if ($type !== 'all') {
-            $files = array_filter($files, function($file) use ($type) {
-                $filename = basename($file);
-                return strpos($filename, $type) !== false;
+            $files = array_filter($files, function($file) use ($type, &$manifests_cache) {
+                $manifest = $this->get_backup_manifest($file);
+
+                if ($manifest !== null) {
+                    $manifests_cache[$file] = $manifest;
+                }
+
+                return $this->backup_matches_type($file, $type, $manifest);
             });
         }
         
@@ -909,7 +916,12 @@ class BJLG_REST_API {
         
         // Construire la réponse
         foreach ($files as $file) {
-            $backups[] = $this->format_backup_data($file);
+            $manifest = $manifests_cache[$file] ?? null;
+            if ($manifest === null) {
+                $manifest = $this->get_backup_manifest($file);
+            }
+
+            $backups[] = $this->format_backup_data($file, $manifest);
         }
         
         $response = rest_ensure_response([
@@ -1618,10 +1630,10 @@ class BJLG_REST_API {
     /**
      * Formate les données d'une sauvegarde
      */
-    private function format_backup_data($filepath) {
+    private function format_backup_data($filepath, $manifest = null) {
         $filename = basename($filepath);
         $is_encrypted = (substr($filename, -4) === '.enc');
-        
+
         $type = 'standard';
         if (strpos($filename, 'full') !== false) {
             $type = 'full';
@@ -1630,9 +1642,11 @@ class BJLG_REST_API {
         } elseif (strpos($filename, 'pre-restore') !== false) {
             $type = 'pre-restore';
         }
-        
-        $manifest = $this->get_backup_manifest($filepath);
-        
+
+        if ($manifest === null) {
+            $manifest = $this->get_backup_manifest($filepath);
+        }
+
         $download_token = wp_generate_password(32, false);
         $transient_key = 'bjlg_download_' . $download_token;
 
@@ -1669,6 +1683,64 @@ class BJLG_REST_API {
             'download_rest_url' => $rest_download_url,
             'manifest' => $manifest
         ];
+    }
+
+    /**
+     * Détermine si un fichier de sauvegarde correspond à un type de filtre.
+     */
+    private function backup_matches_type($filepath, $type, $manifest = null) {
+        if ($type === 'all') {
+            return true;
+        }
+
+        if ($manifest === null) {
+            $manifest = $this->get_backup_manifest($filepath);
+        }
+
+        if (is_array($manifest)) {
+            $contains = isset($manifest['contains']) && is_array($manifest['contains'])
+                ? $manifest['contains']
+                : [];
+
+            switch ($type) {
+                case 'full':
+                case 'incremental':
+                    if (($manifest['type'] ?? null) === $type) {
+                        return true;
+                    }
+                    break;
+                case 'database':
+                    if (in_array('db', $contains, true)) {
+                        return true;
+                    }
+                    break;
+                case 'files':
+                    $file_components = ['plugins', 'themes', 'uploads'];
+                    if (!empty(array_intersect($file_components, $contains))) {
+                        return true;
+                    }
+                    break;
+            }
+        }
+
+        $filename = basename($filepath);
+
+        switch ($type) {
+            case 'full':
+            case 'incremental':
+                return strpos($filename, $type) !== false;
+            case 'database':
+                return strpos($filename, 'database') !== false || strpos($filename, 'db') !== false;
+            case 'files':
+                foreach (['files', 'plugins', 'themes', 'uploads'] as $component) {
+                    if (strpos($filename, $component) !== false) {
+                        return true;
+                    }
+                }
+                break;
+        }
+
+        return false;
     }
     
     /**
