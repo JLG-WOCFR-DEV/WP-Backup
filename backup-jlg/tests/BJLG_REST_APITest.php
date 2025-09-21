@@ -24,6 +24,24 @@ namespace {
             ];
             $GLOBALS['bjlg_registered_routes'] = [];
             $GLOBALS['bjlg_test_users'] = [];
+            $GLOBALS['bjlg_history_entries'] = [];
+            $GLOBALS['current_user'] = null;
+            $GLOBALS['current_user_id'] = 0;
+            $GLOBALS['bjlg_test_current_user_can'] = true;
+            $GLOBALS['bjlg_test_realpath_mock'] = null;
+
+            if (!is_dir(BJLG_BACKUP_DIR)) {
+                mkdir(BJLG_BACKUP_DIR, 0777, true);
+            }
+
+            add_action('bjlg_history_logged', static function ($action, $status, $message, $user_id) {
+                $GLOBALS['bjlg_history_entries'][] = [
+                    'action' => (string) $action,
+                    'status' => (string) $status,
+                    'details' => (string) $message,
+                    'user_id' => $user_id,
+                ];
+            }, 10, 4);
         }
 
         private function makeUser(int $id, string $login, ?array $caps = null, ?array $roles = null): object
@@ -381,11 +399,8 @@ namespace {
 
         $updated_keys = get_option('bjlg_api_keys');
 
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('user_id', $result);
-        $this->assertSame($user->ID, $result['user_id']);
-        $this->assertArrayHasKey('roles', $result);
-        $this->assertContains('administrator', $result['roles']);
+        $this->assertIsObject($result);
+        $this->assertSame($user->ID, $result->ID);
         $this->assertNotEmpty($updated_keys);
         $this->assertSame($initial_usage_count + 1, $updated_keys[0]['usage_count']);
         $this->assertArrayHasKey('last_used', $updated_keys[0]);
@@ -419,9 +434,8 @@ namespace {
 
         $result = $method->invoke($api, $api_key);
 
-        $this->assertIsArray($result);
-        $this->assertSame($user->ID, $result['user_id']);
-        $this->assertContains('administrator', $result['roles']);
+        $this->assertIsObject($result);
+        $this->assertSame($user->ID, $result->ID);
 
         $updated_keys = get_option('bjlg_api_keys');
 
@@ -429,6 +443,7 @@ namespace {
         $this->assertTrue(wp_check_password($api_key, $updated_keys[0]['key']));
         $this->assertSame($user->ID, $updated_keys[0]['user_id']);
         $this->assertContains('administrator', $updated_keys[0]['roles']);
+        $this->assertSame($user->ID, get_current_user_id());
     }
 
     public function test_filter_api_keys_before_save_hashes_plain_keys(): void
@@ -499,6 +514,134 @@ namespace {
 
         $this->assertInstanceOf(\WP_Error::class, $result);
         $this->assertSame('api_key_user_mismatch', $result->get_error_code());
+    }
+
+    /**
+     * @dataProvider provide_authenticated_rest_methods
+     */
+    public function test_authenticated_admin_request_sets_current_user_and_logs_history(string $auth_method): void
+    {
+        $api = new BJLG\BJLG_REST_API();
+        $api->register_routes();
+
+        $namespace = BJLG\BJLG_REST_API::API_NAMESPACE;
+        $this->assertArrayHasKey($namespace, $GLOBALS['bjlg_registered_routes']);
+        $this->assertArrayHasKey('/settings', $GLOBALS['bjlg_registered_routes'][$namespace]);
+
+        $put_endpoint = null;
+
+        foreach ($GLOBALS['bjlg_registered_routes'][$namespace]['/settings'] as $endpoint) {
+            if (is_array($endpoint) && isset($endpoint['methods']) && stripos((string) $endpoint['methods'], 'PUT') !== false) {
+                $put_endpoint = $endpoint;
+                break;
+            }
+        }
+
+        $this->assertIsArray($put_endpoint);
+        $this->assertArrayHasKey('permission_callback', $put_endpoint);
+        $this->assertArrayHasKey('callback', $put_endpoint);
+
+        $admin = $this->makeUser(777, 'rest-admin');
+        $GLOBALS['bjlg_test_users'] = [
+            $admin->ID => $admin,
+        ];
+
+        $api_key = 'integration-api-key';
+        update_option('bjlg_api_keys', []);
+
+        $headers = [];
+
+        if ($auth_method === 'api_key') {
+            update_option('bjlg_api_keys', [
+                [
+                    'key' => wp_hash_password($api_key),
+                    'user_id' => $admin->ID,
+                    'roles' => $admin->roles,
+                ],
+            ]);
+            $headers['X-API-Key'] = $api_key;
+        } else {
+            $token = $this->generateJwtToken([
+                'user_id' => $admin->ID,
+                'username' => $admin->user_login,
+            ]);
+            $headers['Authorization'] = 'Bearer ' . $token;
+        }
+
+        $payload = [
+            'cleanup' => [
+                'by_number' => 5,
+                'by_age' => 30,
+            ],
+        ];
+
+        $request = new class($headers, $payload) {
+            /** @var array<string, string> */
+            private $headers;
+
+            /** @var array<string, mixed> */
+            private $payload;
+
+            /**
+             * @param array<string, string> $headers
+             * @param array<string, mixed>  $payload
+             */
+            public function __construct(array $headers, array $payload)
+            {
+                $this->headers = $headers;
+                $this->payload = $payload;
+            }
+
+            public function get_header($key)
+            {
+                return $this->headers[$key] ?? null;
+            }
+
+            public function get_json_params()
+            {
+                return $this->payload;
+            }
+        };
+
+        $GLOBALS['bjlg_history_entries'] = [];
+        $previous_cap = $GLOBALS['bjlg_test_current_user_can'] ?? null;
+        $GLOBALS['bjlg_test_current_user_can'] = false;
+
+        $permissions = call_user_func($put_endpoint['permission_callback'], $request);
+        $this->assertTrue($permissions);
+
+        $response = call_user_func($put_endpoint['callback'], $request);
+
+        if ($previous_cap !== null) {
+            $GLOBALS['bjlg_test_current_user_can'] = $previous_cap;
+        }
+
+        $this->assertIsArray($response);
+        $this->assertArrayHasKey('success', $response);
+        $this->assertTrue($response['success']);
+        $this->assertSame($payload['cleanup'], get_option('bjlg_cleanup_settings'));
+
+        $this->assertNotEmpty($GLOBALS['bjlg_history_entries']);
+        $last_entry = $GLOBALS['bjlg_history_entries'][count($GLOBALS['bjlg_history_entries']) - 1];
+        $this->assertSame('settings_updated', $last_entry['action']);
+        $this->assertSame('success', $last_entry['status']);
+        $this->assertSame($admin->ID, $last_entry['user_id']);
+
+        $current_user = wp_get_current_user();
+        $this->assertIsObject($current_user);
+        $this->assertSame($admin->ID, $current_user->ID);
+        $this->assertSame($admin->ID, get_current_user_id());
+    }
+
+    /**
+     * @return array<int, array{0: string}>
+     */
+    public function provide_authenticated_rest_methods(): array
+    {
+        return [
+            ['api_key'],
+            ['jwt'],
+        ];
     }
 
     public function test_backup_endpoints_reject_symlink_outside_backup_directory(): void

@@ -128,7 +128,7 @@ class BJLG_Actions {
      * Intercepte les requêtes publiques (API REST) pour diffuser une sauvegarde.
      */
     public function maybe_handle_public_download() {
-        if (empty($_GET['bjlg_download'])) {
+        if (!isset($_GET['bjlg_download'])) {
             return;
         }
 

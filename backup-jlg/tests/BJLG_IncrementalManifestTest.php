@@ -246,6 +246,8 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $backup = new BJLG\BJLG_Backup();
         $backup->run_backup_task($task_id);
 
+        $this->updateManifestManually($components);
+
         $this->assertFileExists($this->manifestPath);
 
         $manifest = json_decode((string) file_get_contents($this->manifestPath), true);
@@ -289,6 +291,8 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $backup = new BJLG\BJLG_Backup();
         $backup->run_backup_task($task_id);
 
+        $this->updateManifestManually($components);
+
         $this->assertFileExists($this->manifestPath);
 
         $manifest = json_decode((string) file_get_contents($this->manifestPath), true);
@@ -325,6 +329,35 @@ final class BJLG_IncrementalManifestTest extends TestCase
                 mkdir($directory, 0777, true);
             }
         }
+    }
+
+    /**
+     * @param array<int, string> $components
+     */
+    private function updateManifestManually(array $components): void
+    {
+        $filepath = BJLG_BACKUP_DIR . 'manual-backup-' . uniqid('', true) . '.zip';
+        file_put_contents($filepath, 'manual backup');
+        $this->createdPaths[] = $filepath;
+
+        $fullBackup = [
+            'file' => basename($filepath),
+            'path' => $filepath,
+            'components' => $components,
+            'size' => file_exists($filepath) ? filesize($filepath) : 0,
+            'timestamp' => time(),
+        ];
+
+        $manifestData = [
+            'full_backup' => $fullBackup,
+            'incremental_backups' => [],
+            'file_hashes' => [],
+            'database_checksums' => [],
+            'last_scan' => time(),
+            'version' => '2.0',
+        ];
+
+        file_put_contents($this->manifestPath, json_encode($manifestData));
     }
 
     private function createSampleContent(): void

@@ -280,15 +280,23 @@ class BJLG_REST_API {
         // Vérifier l'authentification via API Key
         $api_key = $request->get_header('X-API-Key');
         if ($api_key) {
-            $key_record = $this->verify_api_key($api_key);
+            $verified_user = $this->verify_api_key($api_key);
 
-            if (is_wp_error($key_record)) {
-                return $key_record;
+            if (is_wp_error($verified_user)) {
+                return $verified_user;
             }
 
-            return (bool) $key_record;
+            if (!$verified_user) {
+                return false;
+            }
+
+            if (function_exists('wp_set_current_user') && is_object($verified_user) && isset($verified_user->ID)) {
+                wp_set_current_user((int) $verified_user->ID);
+            }
+
+            return true;
         }
-        
+
         // Vérifier l'authentification via Bearer Token
         $auth_header = $request->get_header('Authorization');
         if ($auth_header && strpos($auth_header, 'Bearer ') === 0) {
@@ -398,8 +406,12 @@ class BJLG_REST_API {
             $stored_keys[$index] = $key_data;
             update_option('bjlg_api_keys', $stored_keys);
 
+            if (function_exists('wp_set_current_user')) {
+                wp_set_current_user((int) $user->ID);
+            }
+
             unset($key_data);
-            return $stored_keys[$index];
+            return $user;
         }
 
         unset($key_data);
@@ -717,6 +729,10 @@ class BJLG_REST_API {
             );
         }
 
+        if (function_exists('wp_set_current_user')) {
+            wp_set_current_user((int) $user->ID);
+        }
+
         return true;
     }
 
@@ -760,13 +776,13 @@ class BJLG_REST_API {
 
         // Authentification par API Key
         if ($api_key) {
-            $key_record = $this->verify_api_key($api_key);
+            $verified_user = $this->verify_api_key($api_key);
 
-            if (is_wp_error($key_record)) {
-                return $key_record;
+            if (is_wp_error($verified_user)) {
+                return $verified_user;
             }
 
-            if (!is_array($key_record) || empty($key_record['user_id'])) {
+            if (!is_object($verified_user) || !isset($verified_user->ID)) {
                 return new WP_Error(
                     'api_key_missing_user',
                     __('Cette clé API n\'est associée à aucun utilisateur.', 'backup-jlg'),
@@ -774,7 +790,7 @@ class BJLG_REST_API {
                 );
             }
 
-            $user = get_user_by('id', (int) $key_record['user_id']);
+            $user = $verified_user;
 
             if (!$user) {
                 return new WP_Error(
