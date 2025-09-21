@@ -83,7 +83,7 @@ class BJLG_Health_Check {
             if ($cleanup_timestamp < time()) {
                 $messages[] = "Nettoyage en retard de " . human_time_diff($cleanup_timestamp, time());
             } else {
-                $messages[] = "Nettoyage : " . get_date_from_gmt(date('Y-m-d H:i:s', $cleanup_timestamp), 'd/m/Y H:i');
+                $messages[] = "Nettoyage : " . get_date_from_gmt(gmdate('Y-m-d H:i:s', $cleanup_timestamp), 'd/m/Y H:i');
             }
         }
         
@@ -91,7 +91,7 @@ class BJLG_Health_Check {
             if ($backup_timestamp < time()) {
                 $messages[] = "Sauvegarde en retard de " . human_time_diff($backup_timestamp, time());
             } else {
-                $messages[] = "Sauvegarde : " . get_date_from_gmt(date('Y-m-d H:i:s', $backup_timestamp), 'd/m/Y H:i');
+                $messages[] = "Sauvegarde : " . get_date_from_gmt(gmdate('Y-m-d H:i:s', $backup_timestamp), 'd/m/Y H:i');
             }
         }
         
