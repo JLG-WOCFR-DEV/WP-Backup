@@ -186,6 +186,17 @@ namespace {
             $this->assertContains(basename($databaseBackup), $databaseFilenames);
             $this->assertNotContains(basename($uploadsBackup), $databaseFilenames);
 
+            $databaseEntry = null;
+            foreach ($databaseResponse['backups'] as $backup) {
+                if (($backup['filename'] ?? '') === basename($databaseBackup)) {
+                    $databaseEntry = $backup;
+                    break;
+                }
+            }
+
+            $this->assertNotNull($databaseEntry);
+            $this->assertContains('db', $databaseEntry['components'] ?? []);
+
             $filesResponse = $api->get_backups($makeRequest('files'));
             $this->assertIsArray($filesResponse);
             $this->assertArrayHasKey('backups', $filesResponse);
@@ -196,6 +207,17 @@ namespace {
 
             $this->assertContains(basename($uploadsBackup), $filesFilenames);
             $this->assertNotContains(basename($databaseBackup), $filesFilenames);
+
+            $filesEntry = null;
+            foreach ($filesResponse['backups'] as $backup) {
+                if (($backup['filename'] ?? '') === basename($uploadsBackup)) {
+                    $filesEntry = $backup;
+                    break;
+                }
+            }
+
+            $this->assertNotNull($filesEntry);
+            $this->assertNotEmpty(array_intersect(['plugins', 'themes', 'uploads'], $filesEntry['components'] ?? []));
 
             $this->deleteBackupIfExists($databaseBackup);
             $this->deleteBackupIfExists($uploadsBackup);
