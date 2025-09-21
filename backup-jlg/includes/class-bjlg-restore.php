@@ -247,13 +247,26 @@ class BJLG_Restore {
         
         $filename = basename(sanitize_file_name($_POST['filename']));
         $filepath = BJLG_BACKUP_DIR . $filename;
+        $is_encrypted_backup = substr($filename, -4) === '.enc';
 
         $password = null;
-        if (isset($_POST['password'])) {
-            $password = sanitize_text_field(wp_unslash($_POST['password']));
+        if (array_key_exists('password', $_POST)) {
+            $maybe_password = wp_unslash($_POST['password']);
+            if (is_string($maybe_password)) {
+                $password = $maybe_password;
+            }
+        }
+
+        if ($password !== null) {
             if ($password === '') {
                 $password = null;
+            } elseif (strlen($password) < 4) {
+                wp_send_json_error(['message' => 'Le mot de passe doit contenir au moins 4 caractères.']);
             }
+        }
+
+        if ($is_encrypted_backup && $password === null) {
+            wp_send_json_error(['message' => 'Un mot de passe est requis pour restaurer une sauvegarde chiffrée.']);
         }
 
         try {
