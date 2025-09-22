@@ -1061,7 +1061,41 @@ namespace {
         $this->assertArrayHasKey('calculation_error', $response['disk']);
         $this->assertTrue($response['disk']['calculation_error']);
 
-        unset($GLOBALS['bjlg_test_disk_total_space_mock'], $GLOBALS['bjlg_test_disk_free_space_mock']);
+        unset($GLOBALS['bjlg_test_disk_total_space_mock'], $GLOBALS['bjlg_test_disk_free_space_mock'], $GLOBALS['wp_version']);
+    }
+
+    public function test_get_health_handles_missing_total_disk_space(): void
+    {
+        $GLOBALS['bjlg_test_disk_total_space_mock'] = static function (string $directory) {
+            return false;
+        };
+
+        $GLOBALS['bjlg_test_disk_free_space_mock'] = static function (string $directory) {
+            return 2048;
+        };
+
+        $GLOBALS['wp_version'] = '6.4.0';
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $request = new class {
+            public function get_param($key)
+            {
+                return null;
+            }
+        };
+
+        $response = $api->get_health($request);
+
+        $this->assertIsArray($response);
+        $this->assertArrayHasKey('status', $response);
+        $this->assertSame('warning', $response['status']);
+        $this->assertArrayHasKey('checks', $response);
+        $this->assertArrayHasKey('disk_space', $response['checks']);
+        $this->assertSame('warning', $response['checks']['disk_space']['status']);
+        $this->assertStringContainsString("Impossible de déterminer l'espace disque total", $response['checks']['disk_space']['message']);
+
+        unset($GLOBALS['bjlg_test_disk_total_space_mock'], $GLOBALS['bjlg_test_disk_free_space_mock'], $GLOBALS['wp_version']);
     }
 
     public function test_get_stats_does_not_register_cleanup_hooks_multiple_times(): void
