@@ -352,18 +352,18 @@ class BJLG_Health_Check {
      * Vérifie l'extension ZIP
      */
     private function check_zip_extension() {
-        if (!class_exists('ZipArchive')) {
+        if (!class_exists(\ZipArchive::class)) {
             return [
                 'status' => 'error',
                 'message' => 'Extension PHP ZIP manquante ! Requise pour créer les sauvegardes.'
             ];
         }
-        
+
         // Tester la création d'une archive
         $test_file = BJLG_BACKUP_DIR . 'test_' . uniqid() . '.zip';
-        $zip = new ZipArchive();
-        
-        if ($zip->open($test_file, ZipArchive::CREATE) === TRUE) {
+        $zip = new \ZipArchive();
+
+        if ($zip->open($test_file, \ZipArchive::CREATE) === TRUE) {
             $zip->addFromString('test.txt', 'test');
             $zip->close();
             @unlink($test_file);
