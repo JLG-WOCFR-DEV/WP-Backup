@@ -176,6 +176,13 @@ class BJLG_Health_Check {
         }
         
         $total_space = @disk_total_space(ABSPATH);
+        if ($total_space === false || $total_space <= 0) {
+            return [
+                'status' => 'warning',
+                'message' => "Impossible de déterminer l'espace disque total. L'utilisation du disque n'a pas pu être calculée.",
+            ];
+        }
+
         $used_space = $total_space - $free_space;
         $usage_percent = round(($used_space / $total_space) * 100, 2);
         
