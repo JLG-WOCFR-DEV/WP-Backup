@@ -82,7 +82,14 @@ jQuery(document).ready(function($) {
                     if (response.success && response.data) {
                         const data = response.data;
                         $statusText.text(data.status_text || 'Progression...');
-                        $progressBar.css('width', data.progress + '%').text(data.progress + '%');
+
+                        const progressValue = Number.parseFloat(data.progress);
+                        const hasNumericProgress = Number.isFinite(progressValue);
+                        const progressDisplay = hasNumericProgress ? progressValue.toFixed(1) : data.progress;
+
+                        $progressBar
+                            .css('width', progressDisplay + '%')
+                            .text(progressDisplay + '%');
                         
                         if (data.progress >= 100) {
                             clearInterval(interval);
