@@ -1345,8 +1345,26 @@ class BJLG_REST_API {
      * Endpoint : Restaurer une sauvegarde
      */
     public function restore_backup($request) {
-        $components = $request->get_param('components');
-        $create_restore_point = $request->get_param('create_restore_point');
+        $components = $this->normalize_restore_components($request->get_param('components'));
+        if (is_wp_error($components)) {
+            return $components;
+        }
+
+        if (empty($components)) {
+            return new WP_Error(
+                'invalid_components',
+                __('Aucun composant valide fourni pour la restauration.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        $raw_create_restore_point = $request->get_param('create_restore_point');
+        if ($raw_create_restore_point === null) {
+            $create_restore_point = true;
+        } else {
+            $filtered_value = filter_var($raw_create_restore_point, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            $create_restore_point = ($filtered_value !== null) ? $filtered_value : false;
+        }
 
         $filepath = $this->resolve_backup_path($request->get_param('id'));
 
@@ -1362,9 +1380,9 @@ class BJLG_REST_API {
             'status_text' => 'Initialisation de la restauration (API)...',
             'filepath' => $filepath,
             'components' => $components,
-            'create_restore_point' => $create_restore_point
+            'create_restore_point' => (bool) $create_restore_point
         ];
-        
+
         set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
         
         // Planifier l'exécution
@@ -1376,6 +1394,44 @@ class BJLG_REST_API {
             'message' => 'Restore task created successfully',
             'status_url' => rest_url(self::API_NAMESPACE . '/tasks/' . $task_id)
         ]);
+    }
+
+    private function normalize_restore_components($components) {
+        $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+        $components = (array) $components;
+        $sanitized = [];
+        $has_all = false;
+
+        foreach ($components as $component) {
+            if (!is_string($component)) {
+                continue;
+            }
+
+            if (preg_match('#[\\/]#', $component)) {
+                return new WP_Error(
+                    'invalid_component_format',
+                    __('Format de composant invalide.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+
+            $component = sanitize_key($component);
+
+            if ($component === 'all') {
+                $has_all = true;
+                continue;
+            }
+
+            if (in_array($component, $allowed_components, true) && !in_array($component, $sanitized, true)) {
+                $sanitized[] = $component;
+            }
+        }
+
+        if ($has_all) {
+            return $allowed_components;
+        }
+
+        return $sanitized;
     }
 
     /**

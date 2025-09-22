@@ -6,9 +6,26 @@ namespace {
 
     require_once __DIR__ . '/../includes/class-bjlg-cleanup.php';
     require_once __DIR__ . '/../includes/class-bjlg-rest-api.php';
+    require_once __DIR__ . '/../includes/class-bjlg-restore.php';
 
     if (!defined('AUTH_KEY')) {
         define('AUTH_KEY', 'test-auth-key');
+    }
+
+    class BJLG_Test_Restore_For_Rest extends BJLG\BJLG_Restore
+    {
+        /** @var int */
+        public $pre_backup_calls = 0;
+
+        protected function perform_pre_restore_backup(): array
+        {
+            $this->pre_backup_calls++;
+
+            return [
+                'filename' => 'test-pre-restore-' . $this->pre_backup_calls . '.zip',
+                'filepath' => BJLG_BACKUP_DIR . 'test-pre-restore-' . $this->pre_backup_calls . '.zip',
+            ];
+        }
     }
 
     final class BJLG_REST_APITest extends TestCase
@@ -743,6 +760,119 @@ namespace {
         } finally {
             if (file_exists($filepath)) {
                 unlink($filepath);
+            }
+        }
+    }
+
+    public function test_restore_endpoint_creates_pre_backup_for_database_only_request(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+        $GLOBALS['bjlg_history_entries'] = [];
+
+        $previous_wpdb = $GLOBALS['wpdb'] ?? null;
+        $GLOBALS['wpdb'] = new class {
+            /** @var array<int, string> */
+            public $queries = [];
+
+            /** @var string */
+            public $last_error = '';
+
+            /** @var string */
+            public $options = 'wp_options';
+
+            /**
+             * @param string $query
+             * @return int
+             */
+            public function query($query)
+            {
+                $this->queries[] = (string) $query;
+                $this->last_error = '';
+
+                return 1;
+            }
+        };
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $archive_path = BJLG_BACKUP_DIR . 'bjlg-rest-restore-' . uniqid('', true) . '.zip';
+
+        $zip = new \ZipArchive();
+        $open_result = $zip->open($archive_path, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
+        $this->assertTrue($open_result === true || $open_result === \ZipArchive::ER_OK);
+
+        $manifest = [
+            'type' => 'full',
+            'contains' => ['db', 'plugins'],
+        ];
+
+        $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $zip->addFromString('database.sql', "CREATE TABLE `wp_test` (id INT);\n");
+        $zip->addFromString('wp-content/plugins/sample/plugin.php', '<?php echo "sample";');
+        $zip->close();
+
+        $plugin_destination = WP_PLUGIN_DIR . '/sample/plugin.php';
+        if (file_exists($plugin_destination)) {
+            unlink($plugin_destination);
+        }
+
+        $request = new class($archive_path) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct(string $archive_path)
+            {
+                $this->params = [
+                    'id' => basename($archive_path),
+                    'components' => ['db'],
+                    'create_restore_point' => true,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $response = $api->restore_backup($request);
+
+        $this->assertIsArray($response);
+        $this->assertArrayHasKey('task_id', $response);
+
+        $task_id = $response['task_id'];
+        $task_data = get_transient($task_id);
+
+        $this->assertIsArray($task_data);
+        $this->assertSame(['db'], $task_data['components']);
+        $this->assertTrue($task_data['create_restore_point']);
+
+        try {
+            $restore = new BJLG_Test_Restore_For_Rest();
+            $restore->run_restore_task($task_id);
+
+            $final_status = get_transient($task_id);
+            $this->assertIsArray($final_status);
+            $this->assertSame('complete', $final_status['status']);
+            $this->assertSame(100, $final_status['progress']);
+
+            $this->assertSame(1, $restore->pre_backup_calls);
+            $this->assertNotEmpty($GLOBALS['wpdb']->queries);
+            $this->assertFalse(file_exists($plugin_destination));
+        } finally {
+            if ($previous_wpdb === null) {
+                unset($GLOBALS['wpdb']);
+            } else {
+                $GLOBALS['wpdb'] = $previous_wpdb;
+            }
+
+            if (file_exists($archive_path)) {
+                unlink($archive_path);
+            }
+
+            $plugin_directory = dirname($plugin_destination);
+            if (is_dir($plugin_directory) && count(scandir($plugin_directory)) <= 2) {
+                rmdir($plugin_directory);
             }
         }
     }
