@@ -46,21 +46,48 @@ class BJLG_Restore {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
-        
+
         try {
-            BJLG_Debug::log("Lancement de la sauvegarde de sécurité pré-restauration.");
-            
-            if (!($this->backup_manager instanceof BJLG_Backup)) {
-                throw new Exception('Gestionnaire de sauvegarde indisponible.');
+            $result = $this->perform_pre_restore_backup();
+
+            wp_send_json_success([
+                'message' => 'Sauvegarde de sécurité créée avec succès.',
+                'backup_file' => $result['filename']
+            ]);
+
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => 'La sauvegarde de sécurité a échoué : ' . $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Exécute la logique de sauvegarde préalable à la restauration.
+     *
+     * @return array{filename: string, filepath: string}
+     * @throws Exception
+     */
+    protected function perform_pre_restore_backup(): array {
+        BJLG_Debug::log("Lancement de la sauvegarde de sécurité pré-restauration.");
+
+        if (!($this->backup_manager instanceof BJLG_Backup)) {
+            throw new Exception('Gestionnaire de sauvegarde indisponible.');
+        }
+
+        $backup_manager = $this->backup_manager;
+
+        $backup_filename = 'pre-restore-backup-' . date('Y-m-d-H-i-s') . '.zip';
+        $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
+        $sql_filepath = BJLG_BACKUP_DIR . 'database_temp_prerestore.sql';
+
+        $zip = new ZipArchive();
+
+        $cleanup_sql_file = static function () use ($sql_filepath) {
+            if (file_exists($sql_filepath)) {
+                unlink($sql_filepath);
             }
+        };
 
-            $backup_manager = $this->backup_manager;
-
-            $backup_filename = 'pre-restore-backup-' . date('Y-m-d-H-i-s') . '.zip';
-            $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
-            $sql_filepath = BJLG_BACKUP_DIR . 'database_temp_prerestore.sql';
-
-            $zip = new ZipArchive();
+        try {
             if ($zip->open($backup_filepath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== TRUE) {
                 throw new Exception("Impossible de créer l'archive de pré-restauration.");
             }
@@ -74,7 +101,7 @@ class BJLG_Restore {
                 'reason' => 'Sauvegarde automatique avant restauration'
             ];
             $zip->addFromString('backup-manifest.json', json_encode($manifest, JSON_PRETTY_PRINT));
-            
+
             // Export de la base de données
             $backup_manager->dump_database($sql_filepath);
             $zip->addFile($sql_filepath, 'database.sql');
@@ -155,22 +182,34 @@ class BJLG_Restore {
             }
 
             $zip->close();
-            
-            if (file_exists($sql_filepath)) {
-                unlink($sql_filepath);
-            }
 
             BJLG_History::log('pre_restore_backup', 'success', 'Fichier : ' . $backup_filename);
             BJLG_Debug::log("Sauvegarde de sécurité terminée : " . $backup_filename);
-            
-            wp_send_json_success([
-                'message' => 'Sauvegarde de sécurité créée avec succès.',
-                'backup_file' => $backup_filename
-            ]);
 
-        } catch (Exception $e) {
-            BJLG_History::log('pre_restore_backup', 'failure', 'Erreur : ' . $e->getMessage());
-            wp_send_json_error(['message' => 'La sauvegarde de sécurité a échoué : ' . $e->getMessage()]);
+            return [
+                'filename' => $backup_filename,
+                'filepath' => $backup_filepath,
+            ];
+        } catch (Exception $exception) {
+            BJLG_History::log('pre_restore_backup', 'failure', 'Erreur : ' . $exception->getMessage());
+
+            if (class_exists('BJLG_Debug')) {
+                BJLG_Debug::log('Sauvegarde de sécurité pré-restauration échouée : ' . $exception->getMessage());
+            }
+
+            throw $exception;
+        } finally {
+            try {
+                if ($zip instanceof ZipArchive) {
+                    $zip->close();
+                }
+            } catch (Throwable $close_exception) {
+                if (class_exists('BJLG_Debug')) {
+                    BJLG_Debug::log('Impossible de fermer l\'archive de pré-restauration : ' . $close_exception->getMessage());
+                }
+            }
+
+            $cleanup_sql_file();
         }
     }
 
@@ -332,16 +371,23 @@ class BJLG_Restore {
         $password = null;
         $original_archive_path = $filepath;
         $decrypted_archive_path = null;
+        $create_restore_point = !empty($task_data['create_restore_point']);
+        $requested_components = $this->normalize_requested_components($task_data['components'] ?? null);
+        $current_status = is_array($task_data) ? $task_data : [];
 
         if (!empty($encrypted_password)) {
             try {
                 $password = $this->decrypt_password_from_transient($encrypted_password);
             } catch (Exception $exception) {
                 if (class_exists(BJLG_Debug::class)) {
-                    BJLG_Debug::log("ERREUR: Échec du déchiffrement du mot de passe pour la tâche {$task_id} : " . $exception->getMessage(), 'error');
+                    BJLG_Debug::log(
+                        "ERREUR: Échec du déchiffrement du mot de passe pour la tâche {$task_id} : " . $exception->getMessage(),
+                        'error'
+                    );
                 }
             }
         }
+
         $temp_extract_dir = BJLG_BACKUP_DIR . 'temp_restore_' . uniqid();
         $final_error_status = null;
         $error_status_recorded = false;
@@ -352,59 +398,96 @@ class BJLG_Restore {
 
             BJLG_Debug::log("Début de la restauration pour le fichier : " . basename($filepath));
 
-            // Mise à jour : Vérification
-            set_transient($task_id, [
+            if ($create_restore_point) {
+                $current_status = array_merge($current_status, [
+                    'progress' => 5,
+                    'status' => 'running',
+                    'status_text' => 'Création d\'un point de restauration...'
+                ]);
+                set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
+
+                $this->perform_pre_restore_backup();
+            }
+
+            $current_status = array_merge($current_status, [
                 'progress' => 10,
                 'status' => 'running',
                 'status_text' => 'Vérification du fichier de sauvegarde...'
-            ], BJLG_Backup::get_task_ttl());
+            ]);
+            set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
 
             if (!file_exists($filepath)) {
                 throw new Exception("Le fichier de sauvegarde n'a pas été trouvé.");
             }
 
-            // Déchiffrement si nécessaire
             if (substr($filepath, -4) === '.enc') {
-                set_transient($task_id, [
+                $current_status = array_merge($current_status, [
                     'progress' => 20,
                     'status' => 'running',
                     'status_text' => 'Déchiffrement de l\'archive...'
-                ], BJLG_Backup::get_task_ttl());
+                ]);
+                set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
 
                 $encryption = new BJLG_Encryption();
                 $decrypted_archive_path = $encryption->decrypt_backup_file($filepath, $password);
                 $filepath = $decrypted_archive_path;
             }
 
-            // Création du répertoire temporaire
             if (!mkdir($temp_extract_dir, 0755, true)) {
                 throw new Exception("Impossible de créer le répertoire temporaire.");
             }
 
-            // Ouverture de l'archive
-            $zip = new ZipArchive;
-            if ($zip->open($filepath) !== TRUE) {
+            $zip = new ZipArchive();
+            if ($zip->open($filepath) !== true) {
                 throw new Exception("Impossible d'ouvrir l'archive. Fichier corrompu ?");
             }
 
-            // Lecture du manifeste
             $manifest_json = $zip->getFromName('backup-manifest.json');
             if ($manifest_json === false) {
                 throw new Exception("Manifeste de sauvegarde manquant.");
             }
-            
+
             $manifest = json_decode($manifest_json, true);
-            $components_to_restore = $manifest['contains'] ?? [];
+            $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+            $manifest_components = [];
 
-            BJLG_Debug::log("Composants à restaurer : " . implode(', ', $components_to_restore));
+            if (is_array($manifest) && !empty($manifest['contains']) && is_array($manifest['contains'])) {
+                foreach ($manifest['contains'] as $component) {
+                    if (!is_string($component)) {
+                        continue;
+                    }
 
-            // Restauration de la base de données
-            if (in_array('db', $components_to_restore)) {
-                set_transient($task_id, [
+                    $component_key = sanitize_key($component);
+
+                    if (
+                        in_array($component_key, $allowed_components, true)
+                        && !in_array($component_key, $manifest_components, true)
+                    ) {
+                        $manifest_components[] = $component_key;
+                    }
+                }
+            }
+
+            $components_to_restore = array_values(array_intersect($manifest_components, $requested_components));
+
+            if (class_exists('BJLG_Debug')) {
+                BJLG_Debug::log(
+                    sprintf(
+                        'Composants demandés : %s | Présents dans le manifeste : %s | Retenus : %s',
+                        empty($requested_components) ? 'aucun' : implode(', ', $requested_components),
+                        empty($manifest_components) ? 'aucun' : implode(', ', $manifest_components),
+                        empty($components_to_restore) ? 'aucun' : implode(', ', $components_to_restore)
+                    )
+                );
+            }
+
+            if (in_array('db', $components_to_restore, true)) {
+                $current_status = array_merge($current_status, [
                     'progress' => 30,
                     'status' => 'running',
                     'status_text' => 'Restauration de la base de données...'
-                ], BJLG_Backup::get_task_ttl());
+                ]);
+                set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
 
                 if ($zip->locateName('database.sql') !== false) {
                     $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
@@ -419,29 +502,29 @@ class BJLG_Restore {
                     BJLG_Debug::log("Import de la base de données...");
                     $this->import_database($sql_filepath);
 
-                    set_transient($task_id, [
+                    $current_status = array_merge($current_status, [
                         'progress' => 50,
                         'status' => 'running',
                         'status_text' => 'Base de données restaurée.'
-                    ], BJLG_Backup::get_task_ttl());
+                    ]);
+                    set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
                 }
             }
 
-            // Restauration des fichiers
             $folders_to_restore = [];
-            
-            if (in_array('plugins', $components_to_restore)) {
+
+            if (in_array('plugins', $components_to_restore, true)) {
                 $folders_to_restore['plugins'] = WP_PLUGIN_DIR;
             }
-            if (in_array('themes', $components_to_restore)) {
+            if (in_array('themes', $components_to_restore, true)) {
                 $folders_to_restore['themes'] = get_theme_root();
             }
-            if (in_array('uploads', $components_to_restore)) {
+            if (in_array('uploads', $components_to_restore, true)) {
                 $upload_dir = wp_get_upload_dir();
                 $folders_to_restore['uploads'] = $upload_dir['basedir'];
             }
 
-            $progress = 50;
+            $progress = $current_status['progress'] ?? 50;
 
             if (!empty($folders_to_restore)) {
                 $progress_step = 40 / count($folders_to_restore);
@@ -449,19 +532,19 @@ class BJLG_Restore {
                 foreach ($folders_to_restore as $type => $destination) {
                     $progress += $progress_step;
 
-                    set_transient($task_id, [
-                        'progress' => round($progress),
+                    $current_status = array_merge($current_status, [
+                        'progress' => (int) round($progress),
                         'status' => 'running',
                         'status_text' => "Restauration des {$type}..."
-                    ], BJLG_Backup::get_task_ttl());
+                    ]);
+                    set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
 
                     $source_folder = "wp-content/{$type}";
-
-                    // Extraire vers le dossier temporaire
                     $files_to_extract = [];
+
                     for ($i = 0; $i < $zip->numFiles; $i++) {
                         $file = $zip->getNameIndex($i);
-                        if (strpos($file, $source_folder) === 0) {
+                        if ($file !== false && strpos($file, $source_folder) === 0) {
                             $files_to_extract[] = $file;
                         }
                     }
@@ -477,7 +560,6 @@ class BJLG_Restore {
 
                         $zip->extractTo($temp_extract_dir, $files_to_extract);
 
-                        // Copier vers la destination finale
                         $this->recursive_copy(
                             $temp_extract_dir . '/' . $source_folder,
                             $destination
@@ -489,34 +571,34 @@ class BJLG_Restore {
             }
 
             $zip->close();
-            
-            // Nettoyage
-            set_transient($task_id, [
+
+            $current_status = array_merge($current_status, [
                 'progress' => 95,
                 'status' => 'running',
                 'status_text' => 'Nettoyage...'
-            ], BJLG_Backup::get_task_ttl());
-            
+            ]);
+            set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
+
             $this->recursive_delete($temp_extract_dir);
-            
-            // Vider les caches
             $this->clear_all_caches();
-            
+
             BJLG_History::log('restore_run', 'success', "Fichier : " . basename($original_archive_path));
 
-            set_transient($task_id, [
+            $current_status = array_merge($current_status, [
                 'progress' => 100,
                 'status' => 'complete',
                 'status_text' => 'Restauration terminée avec succès !'
-            ], BJLG_Backup::get_task_ttl());
+            ]);
+            set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
 
         } catch (Throwable $throwable) {
             $error_message = 'Erreur : ' . $throwable->getMessage();
-            $final_error_status = [
+            $current_status = array_merge($current_status, [
                 'progress' => 100,
                 'status' => 'error',
                 'status_text' => $error_message,
-            ];
+            ]);
+            $final_error_status = $current_status;
 
             try {
                 BJLG_History::log('restore_run', 'failure', $error_message);
@@ -527,7 +609,6 @@ class BJLG_Restore {
                 );
             }
 
-            // Nettoyage en cas d'erreur
             if (is_dir($temp_extract_dir)) {
                 $this->recursive_delete($temp_extract_dir);
             }
@@ -652,6 +733,47 @@ class BJLG_Restore {
         }
 
         return $allowed_entries;
+    }
+
+    /**
+     * Normalise la liste des composants demandés pour la restauration.
+     *
+     * @param mixed $components
+     * @return array<int, string>
+     */
+    private function normalize_requested_components($components) {
+        $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+
+        if ($components === null) {
+            return $allowed_components;
+        }
+
+        $components = (array) $components;
+        $normalized = [];
+        $has_all = empty($components);
+
+        foreach ($components as $component) {
+            if (!is_string($component)) {
+                continue;
+            }
+
+            $component_key = sanitize_key($component);
+
+            if ($component_key === 'all') {
+                $has_all = true;
+                continue;
+            }
+
+            if (in_array($component_key, $allowed_components, true) && !in_array($component_key, $normalized, true)) {
+                $normalized[] = $component_key;
+            }
+        }
+
+        if ($has_all || empty($normalized)) {
+            return $allowed_components;
+        }
+
+        return $normalized;
     }
 
     /**
