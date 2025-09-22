@@ -1593,8 +1593,13 @@ class BJLG_REST_API {
             return $validated_settings;
         }
 
+        $option_name_map = [
+            'notifications' => 'bjlg_notification_settings',
+            'webhooks' => 'bjlg_webhook_settings',
+        ];
+
         foreach ($validated_settings as $key => $value) {
-            $option_name = 'bjlg_' . $key . '_settings';
+            $option_name = $option_name_map[$key] ?? 'bjlg_' . $key . '_settings';
             update_option($option_name, $value);
         }
 

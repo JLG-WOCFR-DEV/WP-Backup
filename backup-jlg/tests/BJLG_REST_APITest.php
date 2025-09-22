@@ -791,6 +791,40 @@ namespace {
             $this->assertSame($original_cleanup, get_option('bjlg_cleanup_settings'));
         }
 
+        public function test_update_settings_saves_notifications_and_webhooks(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $payload = [
+                'notifications' => ['email' => ['enabled' => true]],
+                'webhooks' => ['endpoints' => ['https://example.com/hook']],
+            ];
+
+            $request = new class($payload) {
+                /** @var array<string, mixed> */
+                private $payload;
+
+                /**
+                 * @param array<string, mixed> $payload
+                 */
+                public function __construct(array $payload)
+                {
+                    $this->payload = $payload;
+                }
+
+                public function get_json_params()
+                {
+                    return $this->payload;
+                }
+            };
+
+            $response = $api->update_settings($request);
+
+            $this->assertIsArray($response);
+            $this->assertSame($payload['notifications'], get_option('bjlg_notification_settings'));
+            $this->assertSame($payload['webhooks'], get_option('bjlg_webhook_settings'));
+        }
+
         public function test_create_schedule_rejects_incomplete_payload(): void
         {
             $api = new BJLG\BJLG_REST_API();

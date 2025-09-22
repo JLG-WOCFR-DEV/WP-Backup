@@ -309,6 +309,7 @@ header('X-XSS-Protection: 1; mode=block');
 - ✨ Sauvegardes incrémentales
 - ✨ Interface moderne
 - ✨ Système de notifications avancé
+- 🛠️ Correction : l'API REST met à jour correctement les réglages de notifications et de webhooks
 - 🐛 Correction du bug d'export SQL
 - 🔧 Optimisations générales
 
