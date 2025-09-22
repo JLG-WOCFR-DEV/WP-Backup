@@ -352,7 +352,7 @@ class BJLG_Health_Check {
      * Vérifie l'extension ZIP
      */
     private function check_zip_extension() {
-        if (!class_exists('\\ZipArchive')) {
+        if (!class_exists(\ZipArchive::class)) {
             return [
                 'status' => 'error',
                 'message' => 'Extension PHP ZIP manquante ! Requise pour créer les sauvegardes.'
