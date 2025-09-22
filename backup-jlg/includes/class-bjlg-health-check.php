@@ -145,7 +145,7 @@ class BJLG_Health_Check {
         }
         
         // Compter les sauvegardes
-        $backups = glob(BJLG_BACKUP_DIR . '*.zip*');
+        $backups = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
         $count = count($backups);
         $size = 0;
         foreach ($backups as $backup) {
