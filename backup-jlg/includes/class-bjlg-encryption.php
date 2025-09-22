@@ -51,17 +51,80 @@ class BJLG_Encryption {
     private function get_encryption_key() {
         // Option 1: Depuis wp-config.php (recommandé)
         if (defined('BJLG_ENCRYPTION_KEY')) {
-            return base64_decode(BJLG_ENCRYPTION_KEY);
+            $key = $this->decode_encryption_key(BJLG_ENCRYPTION_KEY, 'BJLG_ENCRYPTION_KEY');
+            if ($key !== null) {
+                return $key;
+            }
         }
-        
+
         // Option 2: Depuis la base de données (moins sécurisé)
         $stored_key = get_option('bjlg_encryption_key');
         if ($stored_key) {
-            return base64_decode($stored_key);
+            $key = $this->decode_encryption_key($stored_key, 'bjlg_encryption_key');
+            if ($key !== null) {
+                return $key;
+            }
         }
-        
+
         // Option 3: Générer une nouvelle clé
         return $this->generate_encryption_key();
+    }
+
+    /**
+     * Décode une clé de chiffrement encodée en base64.
+     *
+     * @param string $encoded_key
+     * @param string $source
+     * @return string|null
+     */
+    private function decode_encryption_key($encoded_key, $source) {
+        if (!is_string($encoded_key) || $encoded_key === '') {
+            $this->handle_invalid_encryption_key($source, 'clé vide.');
+            return null;
+        }
+
+        $normalized_key = trim($encoded_key);
+        if (strpos($normalized_key, 'base64:') === 0) {
+            $normalized_key = substr($normalized_key, 7);
+        }
+
+        $decoded_key = base64_decode($normalized_key, true);
+        if ($decoded_key === false) {
+            $this->handle_invalid_encryption_key($source, 'décodage base64 impossible.');
+            return null;
+        }
+
+        if (strlen($decoded_key) !== self::KEY_LENGTH) {
+            $this->handle_invalid_encryption_key(
+                $source,
+                sprintf(
+                    'longueur incorrecte (%d octets reçus, %d attendus).',
+                    strlen($decoded_key),
+                    self::KEY_LENGTH
+                )
+            );
+            return null;
+        }
+
+        return $decoded_key;
+    }
+
+    /**
+     * Gère une clé de chiffrement invalide en journalisant l'erreur.
+     *
+     * @param string $source
+     * @param string $reason
+     * @return void
+     */
+    private function handle_invalid_encryption_key($source, $reason) {
+        $message = sprintf(
+            "Clé de chiffrement invalide détectée dans %s : %s Une nouvelle clé sera générée si nécessaire.",
+            $source,
+            $reason
+        );
+
+        BJLG_Debug::error($message);
+        BJLG_History::log('invalid_encryption_key', 'error', $message);
     }
     
     /**
