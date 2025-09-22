@@ -277,7 +277,7 @@ class BJLG_Backup {
                 }
                 
                 $progress += $progress_per_component;
-                $this->update_task_progress($task_id, round($progress), 'running', "Composant $component terminé");
+                $this->update_task_progress($task_id, round($progress, 1), 'running', "Composant $component terminé");
             }
             
             // Fermer l'archive
@@ -825,6 +825,14 @@ class BJLG_Backup {
     private function update_task_progress($task_id, $progress, $status, $status_text) {
         $task_data = get_transient($task_id);
         if ($task_data) {
+            if (is_numeric($progress)) {
+                $progress = round((float) $progress, 1);
+
+                if (abs($progress - round($progress)) < 0.0001) {
+                    $progress = (int) round($progress);
+                }
+            }
+
             $task_data['progress'] = $progress;
             $task_data['status'] = $status;
             $task_data['status_text'] = $status_text;
