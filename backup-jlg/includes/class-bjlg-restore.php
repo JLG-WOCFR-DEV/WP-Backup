@@ -284,10 +284,12 @@ class BJLG_Restore {
         if (empty($_POST['filename'])) {
             wp_send_json_error(['message' => 'Nom de fichier manquant.']);
         }
-        
+
         $filename = basename(sanitize_file_name($_POST['filename']));
         $filepath = BJLG_BACKUP_DIR . $filename;
         $is_encrypted_backup = substr($filename, -4) === '.enc';
+
+        $create_backup_before_restore = !empty($_POST['create_backup_before_restore']);
 
         $password = null;
         if (array_key_exists('password', $_POST)) {
@@ -326,7 +328,8 @@ class BJLG_Restore {
             'status_text' => 'Initialisation de la restauration...',
             'filename' => $filename,
             'filepath' => $filepath,
-            'password_encrypted' => $encrypted_password
+            'password_encrypted' => $encrypted_password,
+            'create_restore_point' => $create_backup_before_restore,
         ];
         
         set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
