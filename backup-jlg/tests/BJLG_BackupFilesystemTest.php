@@ -209,6 +209,36 @@ final class BJLG_BackupFilesystemTest extends TestCase
             @rmdir($root);
         }
     }
+
+    public function test_generate_backup_filename_is_unique_within_same_second(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+        $reflection = new ReflectionMethod(BJLG\BJLG_Backup::class, 'generate_backup_filename');
+        $reflection->setAccessible(true);
+
+        $components = ['db', 'plugins', 'themes', 'uploads'];
+
+        $firstFilename = $reflection->invoke($backup, 'full', $components);
+        $this->assertIsString($firstFilename);
+        $this->assertStringContainsString('backup-full-', $firstFilename);
+
+        $firstPath = BJLG_BACKUP_DIR . $firstFilename;
+        file_put_contents($firstPath, '');
+
+        try {
+            $secondFilename = $reflection->invoke($backup, 'full', $components);
+        } finally {
+            @unlink($firstPath);
+        }
+
+        $this->assertIsString($secondFilename);
+        $this->assertStringContainsString('backup-full-', $secondFilename);
+        $this->assertNotSame(
+            $firstFilename,
+            $secondFilename,
+            'Two backups triggered within the same second should not share the same filename.'
+        );
+    }
 }
 
 }
