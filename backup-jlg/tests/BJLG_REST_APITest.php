@@ -4,11 +4,65 @@ declare(strict_types=1);
 namespace {
     use PHPUnit\Framework\TestCase;
 
+    if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
+        class BJLG_Debug
+        {
+            /** @var array<int, string> */
+            public static $logs = [];
+
+            /**
+             * @param mixed $message
+             */
+            public static function log($message): void
+            {
+                self::$logs[] = (string) $message;
+            }
+        }
+
+        class_alias('BJLG_Debug', 'BJLG\\BJLG_Debug');
+    }
+
     require_once __DIR__ . '/../includes/class-bjlg-cleanup.php';
     require_once __DIR__ . '/../includes/class-bjlg-rest-api.php';
     require_once __DIR__ . '/../includes/class-bjlg-restore.php';
     require_once __DIR__ . '/../includes/class-bjlg-webhooks.php';
     require_once __DIR__ . '/../includes/class-bjlg-backup.php';
+    require_once __DIR__ . '/../includes/class-bjlg-rate-limiter.php';
+
+    class BJLG_Test_Auth_Request
+    {
+        /** @var array<string, mixed> */
+        private $params;
+
+        /** @var array<string, string> */
+        private $headers;
+
+        /**
+         * @param array<string, mixed>  $params
+         * @param array<string, string> $headers
+         */
+        public function __construct(array $params = [], array $headers = [])
+        {
+            $this->params = $params;
+            $this->headers = [];
+
+            foreach ($headers as $name => $value) {
+                $this->headers[strtolower((string) $name)] = (string) $value;
+            }
+        }
+
+        public function get_param($key)
+        {
+            return $this->params[$key] ?? null;
+        }
+
+        public function get_header($name)
+        {
+            $normalized = strtolower((string) $name);
+
+            return $this->headers[$normalized] ?? '';
+        }
+    }
 
     if (!defined('AUTH_KEY')) {
         define('AUTH_KEY', 'test-auth-key');
@@ -48,6 +102,7 @@ namespace {
             $GLOBALS['current_user_id'] = 0;
             $GLOBALS['bjlg_test_current_user_can'] = true;
             $GLOBALS['bjlg_test_realpath_mock'] = null;
+            $GLOBALS['bjlg_test_transients'] = [];
 
             if (!is_dir(BJLG_BACKUP_DIR)) {
                 mkdir(BJLG_BACKUP_DIR, 0777, true);
@@ -1211,6 +1266,63 @@ namespace {
         unset($_GET['components']);
         unset($_SERVER['REMOTE_ADDR']);
         unset($_SERVER['HTTP_USER_AGENT']);
+    }
+
+    public function test_authenticate_remains_accessible_when_rate_limit_allows(): void
+    {
+        $api = new BJLG\BJLG_REST_API();
+
+        $apiKey = 'valid-key';
+        $user = $this->makeUser(1, 'admin');
+        $GLOBALS['bjlg_test_users'][$user->ID] = $user;
+
+        update_option('bjlg_api_keys', [
+            [
+                'key' => wp_hash_password($apiKey),
+                'user_id' => $user->ID,
+            ],
+        ]);
+
+        $request = new BJLG_Test_Auth_Request(
+            [
+                'api_key' => $apiKey,
+            ],
+            [
+                'X-API-Key' => $apiKey,
+            ]
+        );
+
+        $permission = $api->check_auth_permissions($request);
+        $this->assertTrue($permission);
+
+        $response = $api->authenticate($request);
+        $this->assertIsArray($response);
+        $this->assertArrayHasKey('success', $response);
+        $this->assertTrue($response['success']);
+        $this->assertSame('Authentication successful', $response['message']);
+        $this->assertArrayHasKey('token', $response);
+    }
+
+    public function test_auth_permission_is_blocked_after_consecutive_attempts(): void
+    {
+        $api = new BJLG\BJLG_REST_API();
+
+        $request = new BJLG_Test_Auth_Request([], [
+            'X-API-Key' => 'flood-client',
+        ]);
+
+        for ($i = 0; $i < BJLG\BJLG_Rate_Limiter::RATE_LIMIT_MINUTE; $i++) {
+            $result = $api->check_auth_permissions($request);
+            $this->assertTrue($result, 'La vérification devrait réussir tant que la limite n\'est pas dépassée.');
+        }
+
+        $blocked = $api->check_auth_permissions($request);
+        $this->assertInstanceOf(\WP_Error::class, $blocked);
+        $this->assertSame('rate_limit_exceeded', $blocked->get_error_code());
+
+        $errorData = $blocked->get_error_data('rate_limit_exceeded');
+        $this->assertIsArray($errorData);
+        $this->assertSame(429, $errorData['status']);
     }
 
     private function generateJwtToken(array $overrides = []): string
