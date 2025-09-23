@@ -192,6 +192,22 @@ namespace {
             $this->assertTrue($validator(5, null, null));
         }
 
+        public function test_auth_route_registers_custom_permission_callback(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+            $api->register_routes();
+
+            $namespace = BJLG\BJLG_REST_API::API_NAMESPACE;
+            $this->assertArrayHasKey($namespace, $GLOBALS['bjlg_registered_routes']);
+            $this->assertArrayHasKey('/auth', $GLOBALS['bjlg_registered_routes'][$namespace]);
+
+            $route = $GLOBALS['bjlg_registered_routes'][$namespace]['/auth'];
+
+            $this->assertIsArray($route);
+            $this->assertArrayHasKey('permission_callback', $route);
+            $this->assertSame([$api, 'check_auth_permissions'], $route['permission_callback']);
+        }
+
         public function test_get_backups_enforces_minimum_per_page(): void
         {
             $api = new BJLG\BJLG_REST_API();
