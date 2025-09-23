@@ -1147,10 +1147,36 @@ class BJLG_Restore {
         // Cache des options
         wp_cache_delete('alloptions', 'options');
         
-        // Cache des transients
+        // Cache des transients spécifiques au plugin
         global $wpdb;
-        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_%'");
-        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_site_transient_%'");
+
+        if (isset($wpdb)) {
+            $options_table = $wpdb->options ?? ($wpdb->prefix ?? 'wp_') . 'options';
+
+            if (method_exists($wpdb, 'get_col')) {
+                $transient_option_names = (array) $wpdb->get_col("SELECT option_name FROM {$options_table} WHERE option_name LIKE '\\_transient\\_bjlg\\_%'");
+                $this->delete_plugin_transients($transient_option_names, false);
+
+                if (function_exists('delete_site_transient')) {
+                    $site_transient_option_names = (array) $wpdb->get_col("SELECT option_name FROM {$options_table} WHERE option_name LIKE '\\_site\\_transient\\_bjlg\\_%'");
+                    $this->delete_plugin_transients($site_transient_option_names, true);
+
+                    if (isset($wpdb->sitemeta)) {
+                        $site_meta_table = $wpdb->sitemeta;
+                        $network_transient_keys = (array) $wpdb->get_col("SELECT meta_key FROM {$site_meta_table} WHERE meta_key LIKE '\\_site\\_transient\\_bjlg\\_%'");
+                        $this->delete_plugin_transients($network_transient_keys, true);
+                    }
+                }
+            } elseif (method_exists($wpdb, 'query')) {
+                $wpdb->query("DELETE FROM {$options_table} WHERE option_name LIKE '\\_transient\\_bjlg\\_%'");
+                $wpdb->query("DELETE FROM {$options_table} WHERE option_name LIKE '\\_site\\_transient\\_bjlg\\_%'");
+
+                if (isset($wpdb->sitemeta)) {
+                    $site_meta_table = $wpdb->sitemeta;
+                    $wpdb->query("DELETE FROM {$site_meta_table} WHERE meta_key LIKE '\\_site\\_transient\\_bjlg\\_%'");
+                }
+            }
+        }
         
         // Cache des objets
         if (function_exists('wp_cache_flush')) {
@@ -1171,5 +1197,41 @@ class BJLG_Restore {
         }
         
         BJLG_Debug::log("Tous les caches ont été vidés.");
+    }
+
+    /**
+     * Supprime les transients du plugin en utilisant les API WordPress.
+     *
+     * @param array<int, string> $option_names Liste des noms d'options ou métas contenant les transients.
+     * @param bool $site_scope Indique si l'on supprime des transients de site.
+     */
+    private function delete_plugin_transients(array $option_names, bool $site_scope): void {
+        $prefix = $site_scope ? '_site_transient_' : '_transient_';
+
+        foreach ($option_names as $option_name) {
+            $option_name = (string) $option_name;
+
+            if (strpos($option_name, $prefix) !== 0) {
+                continue;
+            }
+
+            $transient = substr($option_name, strlen($prefix));
+
+            if ($transient === '') {
+                continue;
+            }
+
+            if ($site_scope) {
+                if (function_exists('delete_site_transient')) {
+                    delete_site_transient($transient);
+                }
+
+                continue;
+            }
+
+            if (function_exists('delete_transient')) {
+                delete_transient($transient);
+            }
+        }
     }
 }
