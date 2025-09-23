@@ -767,7 +767,7 @@ class BJLG_Backup {
                 // Vérifier les exclusions
                 $skip = false;
                 foreach ($exclude as $pattern) {
-                    if (fnmatch($pattern, $normalized_file_path)) {
+                    if ($this->path_matches_pattern($pattern, $normalized_file_path)) {
                         $skip = true;
                         break;
                     }
@@ -799,6 +799,63 @@ class BJLG_Backup {
         } finally {
             closedir($handle);
         }
+    }
+
+    /**
+     * Vérifie si un chemin correspond à un motif en utilisant fnmatch ou un mécanisme de repli.
+     *
+     * @param string $pattern
+     * @param string $path
+     * @return bool
+     */
+    private function path_matches_pattern($pattern, $path) {
+        if (!is_string($pattern) || $pattern === '' || !is_string($path) || $path === '') {
+            return false;
+        }
+
+        $namespaced_fnmatch = __NAMESPACE__ . '\\fnmatch';
+
+        if (function_exists($namespaced_fnmatch)) {
+            return (bool) call_user_func($namespaced_fnmatch, $pattern, $path);
+        }
+
+        if (function_exists('fnmatch')) {
+            return (bool) fnmatch($pattern, $path);
+        }
+
+        $regex = $this->convert_glob_to_regex($pattern);
+
+        if ($regex === null) {
+            return false;
+        }
+
+        return (bool) preg_match($regex, $path);
+    }
+
+    /**
+     * Convertit un motif de type glob en expression régulière.
+     *
+     * @param string $pattern
+     * @return string|null
+     */
+    private function convert_glob_to_regex($pattern) {
+        if (!is_string($pattern) || $pattern === '') {
+            return null;
+        }
+
+        $quoted = preg_quote($pattern, '/');
+
+        $replacements = [
+            '\\*' => '.*',
+            '\\?' => '.',
+            '\\[!' => '[^',
+            '\\[' => '[',
+            '\\]' => ']',
+        ];
+
+        $regex = strtr($quoted, $replacements);
+
+        return '/^' . $regex . '$/';
     }
 
     /**
