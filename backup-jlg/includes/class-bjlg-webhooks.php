@@ -119,9 +119,10 @@ class BJLG_Webhooks {
             'components' => $components,
             'encrypt' => $encrypt,
             'incremental' => $incremental,
-            'source' => 'webhook'
+            'source' => 'webhook',
+            'start_time' => time()
         ];
-        
+
         set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
         
         // Planifier l'exécution immédiate
