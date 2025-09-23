@@ -285,8 +285,8 @@ class BJLG_Cleanup {
         ];
         
         foreach ($temp_patterns as $pattern) {
-            $temp_files = glob($pattern);
-            
+            $temp_files = glob($pattern) ?: [];
+
             foreach ($temp_files as $file) {
                 // Supprimer les fichiers de plus d'une heure
                 if ((time() - filemtime($file)) > HOUR_IN_SECONDS) {

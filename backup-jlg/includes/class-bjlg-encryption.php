@@ -892,7 +892,7 @@ class BJLG_Encryption {
      * Retourne les statistiques de chiffrement
      */
     public function get_encryption_stats() {
-        $backups = glob(BJLG_BACKUP_DIR . '*.zip*');
+        $backups = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
         $encrypted = 0;
         $unencrypted = 0;
         $total_encrypted_size = 0;
