@@ -1,6 +1,21 @@
 <?php
 declare(strict_types=1);
 
+namespace BJLG {
+    if (!function_exists(__NAMESPACE__ . '\\function_exists')) {
+        function function_exists($function)
+        {
+            if ($function === 'fnmatch' || $function === '\\fnmatch') {
+                return false;
+            }
+
+            return \function_exists($function);
+        }
+    }
+}
+
+namespace {
+
 use PHPUnit\Framework\TestCase;
 
 if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
@@ -147,4 +162,53 @@ final class BJLG_BackupFilesystemTest extends TestCase
             @rmdir($root);
         }
     }
+
+    public function test_add_folder_to_zip_uses_preg_match_fallback_when_fnmatch_missing(): void
+    {
+        $root = sys_get_temp_dir() . '/bjlg-fallback-' . uniqid('', true);
+        $logs_dir = $root . '/logs';
+
+        if (!is_dir($logs_dir) && !mkdir($logs_dir, 0777, true) && !is_dir($logs_dir)) {
+            $this->fail('Unable to create the logs directory for the test.');
+        }
+
+        $log_file = $logs_dir . '/error.log';
+        $text_file = $logs_dir . '/readme.txt';
+
+        file_put_contents($log_file, 'log');
+        file_put_contents($text_file, 'text');
+
+        $zip = new class extends ZipArchive {
+            /** @var array<int, array{0: string, 1: string}> */
+            public $addedFiles = [];
+
+            public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
+            {
+                $this->addedFiles[] = [$filepath, $entryname];
+                return true;
+            }
+
+            public function setCompressionName($name, $method, $compflags = 0): bool
+            {
+                return true;
+            }
+        };
+
+        try {
+            $backup = new BJLG\BJLG_Backup();
+            $backup->add_folder_to_zip($zip, $logs_dir, 'logs/', ['*.log']);
+
+            $added_files = array_map(static fn($entry) => $entry[0], $zip->addedFiles);
+
+            $this->assertContains($text_file, $added_files, 'The text file should be included when using the fallback.');
+            $this->assertNotContains($log_file, $added_files, 'The log file should be excluded by the fallback matching logic.');
+        } finally {
+            @unlink($log_file);
+            @unlink($text_file);
+            @rmdir($logs_dir);
+            @rmdir($root);
+        }
+    }
+}
+
 }
