@@ -209,6 +209,50 @@ final class BJLG_BackupFilesystemTest extends TestCase
             @rmdir($root);
         }
     }
+
+    public function test_generate_backup_filename_produces_unique_names_within_same_second(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $reflection = new ReflectionMethod(BJLG\BJLG_Backup::class, 'generate_backup_filename');
+        $reflection->setAccessible(true);
+
+        $attempts = 0;
+        $first = '';
+        $second = '';
+        $start_second = 0;
+        $end_second = 0;
+
+        do {
+            $attempts++;
+            $start_microtime = microtime(true);
+            $first = $reflection->invoke($backup, 'full', ['db', 'plugins', 'themes', 'uploads']);
+            $second = $reflection->invoke($backup, 'full', ['db', 'plugins', 'themes', 'uploads']);
+            $end_microtime = microtime(true);
+
+            $start_second = (int) $start_microtime;
+            $end_second = (int) $end_microtime;
+
+            if ($start_second !== $end_second && $attempts < 5) {
+                usleep(200000); // attendre un court instant avant une nouvelle tentative
+            }
+        } while ($start_second !== $end_second && $attempts < 5);
+
+        $this->assertSame(
+            $start_second,
+            $end_second,
+            'Unable to compare filenames generated within the same second.'
+        );
+
+        $this->assertNotSame(
+            $first,
+            $second,
+            'Backup filenames generated within the same second should be unique.'
+        );
+
+        $this->assertStringEndsWith('.zip', $first);
+        $this->assertStringEndsWith('.zip', $second);
+    }
 }
 
 }

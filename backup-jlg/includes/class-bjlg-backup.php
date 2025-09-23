@@ -411,15 +411,24 @@ class BJLG_Backup {
     private function generate_backup_filename($type, $components) {
         $date = date('Y-m-d-H-i-s');
         $prefix = ($type === 'incremental') ? 'incremental' : 'backup';
-        
+
         // Ajouter un identifiant des composants si ce n'est pas tout
         $all_components = ['db', 'plugins', 'themes', 'uploads'];
+        $components_str = 'full';
+
         if (count(array_diff($all_components, $components)) > 0) {
             $components_str = implode('-', $components);
-            return "{$prefix}-{$components_str}-{$date}.zip";
         }
-        
-        return "{$prefix}-full-{$date}.zip";
+
+        $base = "{$prefix}-{$components_str}-{$date}";
+
+        do {
+            $unique_suffix = str_replace('.', '', uniqid('', true));
+            $filename = "{$base}-{$unique_suffix}.zip";
+            $filepath = BJLG_BACKUP_DIR . $filename;
+        } while (file_exists($filepath) || file_exists($filepath . '.enc'));
+
+        return $filename;
     }
 
     /**
