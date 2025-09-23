@@ -192,6 +192,34 @@ namespace {
             $this->assertTrue($validator(5, null, null));
         }
 
+        public function test_history_route_limit_validation_rejects_out_of_range(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+            $api->register_routes();
+
+            $namespace = BJLG\BJLG_REST_API::API_NAMESPACE;
+            $this->assertArrayHasKey($namespace, $GLOBALS['bjlg_registered_routes']);
+            $this->assertArrayHasKey('/history', $GLOBALS['bjlg_registered_routes'][$namespace]);
+
+            $route = $GLOBALS['bjlg_registered_routes'][$namespace]['/history'];
+            $this->assertIsArray($route);
+            $this->assertArrayHasKey('args', $route);
+            $this->assertArrayHasKey('limit', $route['args']);
+
+            $validator = $route['args']['limit']['validate_callback'];
+            $this->assertIsCallable($validator);
+
+            $result = $validator(-1, null, null);
+            $this->assertInstanceOf(\WP_Error::class, $result);
+            $this->assertSame('rest_invalid_param', $result->get_error_code());
+
+            $error_data = $result->get_error_data('rest_invalid_param');
+            $this->assertIsArray($error_data);
+            $this->assertSame(400, $error_data['status']);
+
+            $this->assertTrue($validator(100, null, null));
+        }
+
         public function test_auth_route_registers_custom_permission_callback(): void
         {
             $api = new BJLG\BJLG_REST_API();
