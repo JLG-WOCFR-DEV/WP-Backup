@@ -102,6 +102,28 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $this->assertFalse($task_data['create_restore_point']);
     }
 
+    public function test_handle_run_restore_interprets_false_string_as_false(): void
+    {
+        $_POST['nonce'] = 'nonce';
+        $_POST['filename'] = 'backup.zip';
+        $_POST['create_backup_before_restore'] = 'false';
+
+        $restore = new BJLG\BJLG_Restore();
+
+        try {
+            $restore->handle_run_restore();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertArrayHasKey('task_id', $response->data);
+            $task_id = $response->data['task_id'];
+        }
+
+        $task_data = get_transient($task_id);
+        $this->assertIsArray($task_data);
+        $this->assertArrayHasKey('create_restore_point', $task_data);
+        $this->assertFalse($task_data['create_restore_point']);
+    }
+
     public function test_restore_rejects_directory_traversal_entries(): void
     {
         $malicious_target = rtrim(BJLG_BACKUP_DIR, '/\\') . '/malicious.php';
