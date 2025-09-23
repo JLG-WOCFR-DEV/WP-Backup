@@ -1508,13 +1508,15 @@ class BJLG_REST_API {
      * Endpoint : Statut du système
      */
     public function get_status($request) {
+        $backup_files = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
+
         $status = [
             'plugin_version' => BJLG_VERSION,
             'wordpress_version' => get_bloginfo('version'),
             'php_version' => PHP_VERSION,
             'backup_directory' => BJLG_BACKUP_DIR,
             'backup_directory_writable' => is_writable(BJLG_BACKUP_DIR),
-            'total_backups' => count(glob(BJLG_BACKUP_DIR . '*.zip*')),
+            'total_backups' => count($backup_files),
             'total_size' => $this->get_total_backup_size(),
             'disk_free_space' => disk_free_space(BJLG_BACKUP_DIR),
             'memory_limit' => ini_get('memory_limit'),
@@ -1913,8 +1915,8 @@ class BJLG_REST_API {
      */
     private function get_total_backup_size() {
         $total = 0;
-        $files = glob(BJLG_BACKUP_DIR . '*.zip*');
-        
+        $files = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
+
         foreach ($files as $file) {
             $total += filesize($file);
         }
