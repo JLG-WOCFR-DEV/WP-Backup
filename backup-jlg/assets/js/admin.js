@@ -116,6 +116,156 @@ jQuery(document).ready(function($) {
         }
     });
     
+    // --- GESTIONNAIRE DE RESTAURATION ASYNCHRONE ---
+    $('#bjlg-restore-form').on('submit', function(e) {
+        e.preventDefault();
+
+        const $form = $(this);
+        const $button = $form.find('button[type="submit"]');
+        const $statusWrapper = $('#bjlg-restore-status');
+        const $statusText = $('#bjlg-restore-status-text');
+        const $progressBar = $('#bjlg-restore-progress-bar');
+        const fileInput = document.getElementById('bjlg-restore-file-input');
+
+        if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+            alert('Veuillez sélectionner un fichier de sauvegarde à téléverser.');
+            return;
+        }
+
+        const createRestorePoint = $form
+            .find('input[name="create_backup_before_restore"]')
+            .is(':checked');
+
+        $button.prop('disabled', true);
+        $statusWrapper.show();
+        $statusText.text('Téléversement du fichier en cours...');
+        $progressBar.css('width', '0%').text('0%');
+
+        const formData = new FormData();
+        formData.append('action', 'bjlg_upload_restore_file');
+        formData.append('nonce', bjlg_ajax.nonce);
+        formData.append('restore_file', fileInput.files[0]);
+
+        $.ajax({
+            url: bjlg_ajax.ajax_url,
+            type: 'POST',
+            data: formData,
+            contentType: false,
+            processData: false
+        })
+        .done(function(response) {
+            if (response.success && response.data && response.data.filename) {
+                $statusText.text('Fichier téléversé. Préparation de la restauration...');
+                runRestore(response.data.filename, createRestorePoint);
+            } else {
+                const message = response && response.data && response.data.message
+                    ? response.data.message
+                    : 'Réponse invalide du serveur.';
+                $statusText.html('<span style="color:red;">❌ ' + message + '</span>');
+                $button.prop('disabled', false);
+            }
+        })
+        .fail(function(xhr) {
+            let errorMessage = 'Erreur de communication lors du téléversement.';
+            if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                errorMessage += ' ' + xhr.responseJSON.data.message;
+            }
+            $statusText.html('<span style="color:red;">❌ ' + errorMessage + '</span>');
+            $button.prop('disabled', false);
+        });
+
+        function runRestore(filename, createRestorePointChecked) {
+            const requestData = {
+                action: 'bjlg_run_restore',
+                nonce: bjlg_ajax.nonce,
+                filename: filename,
+                create_backup_before_restore: createRestorePointChecked ? 1 : 0
+            };
+
+            $statusText.text('Initialisation de la restauration...');
+
+            $.ajax({
+                url: bjlg_ajax.ajax_url,
+                type: 'POST',
+                data: requestData
+            })
+            .done(function(response) {
+                if (response.success && response.data && response.data.task_id) {
+                    pollRestoreProgress(response.data.task_id);
+                } else {
+                    const message = response && response.data && response.data.message
+                        ? response.data.message
+                        : 'Impossible de démarrer la restauration.';
+                    $statusText.html('<span style="color:red;">❌ ' + message + '</span>');
+                    $button.prop('disabled', false);
+                }
+            })
+            .fail(function(xhr) {
+                let errorMessage = 'Erreur de communication lors du démarrage de la restauration.';
+                if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                    errorMessage += ' ' + xhr.responseJSON.data.message;
+                }
+                $statusText.html('<span style="color:red;">❌ ' + errorMessage + '</span>');
+                $button.prop('disabled', false);
+            });
+        }
+
+        function pollRestoreProgress(taskId) {
+            const interval = setInterval(function() {
+                $.ajax({
+                    url: bjlg_ajax.ajax_url,
+                    type: 'POST',
+                    data: {
+                        action: 'bjlg_check_restore_progress',
+                        nonce: bjlg_ajax.nonce,
+                        task_id: taskId
+                    }
+                })
+                .done(function(response) {
+                    if (response.success && response.data) {
+                        const data = response.data;
+
+                        if (data.status_text) {
+                            $statusText.text(data.status_text);
+                        }
+
+                        const progressValue = Number.parseFloat(data.progress);
+                        if (Number.isFinite(progressValue)) {
+                            const clampedProgress = Math.max(0, Math.min(100, progressValue));
+                            $progressBar
+                                .css('width', clampedProgress + '%')
+                                .text(clampedProgress + '%');
+                        }
+
+                        if (data.status === 'error') {
+                            clearInterval(interval);
+                            const message = data.status_text || 'La restauration a échoué.';
+                            $statusText.html('<span style="color:red;">❌ ' + message + '</span>');
+                            $button.prop('disabled', false);
+                        } else if (data.status === 'complete' || (Number.isFinite(progressValue) && progressValue >= 100)) {
+                            clearInterval(interval);
+                            $progressBar.css('width', '100%').text('100%');
+                            $statusText.html('✔️ Restauration terminée ! La page va se recharger.');
+                            setTimeout(() => window.location.reload(), 3000);
+                        }
+                    } else {
+                        clearInterval(interval);
+                        const message = response && response.data && response.data.message
+                            ? response.data.message
+                            : 'Tâche de restauration introuvable.';
+                        $statusText.html('<span style="color:red;">❌ ' + message + '</span>');
+                        $button.prop('disabled', false);
+                    }
+                })
+                .fail(function() {
+                    clearInterval(interval);
+                    $statusText.html('<span style="color:red;">❌ Erreur de communication lors du suivi de la restauration.</span>');
+                    $button.prop('disabled', false);
+                });
+            }, 3000);
+        }
+    });
+
     // --- GESTIONNAIRE SAUVEGARDE DES RÉGLAGES ---
     $('.bjlg-settings-form').on('submit', function(e) {
         e.preventDefault();
