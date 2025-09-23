@@ -320,13 +320,25 @@ class BJLG_Restore {
 
         // Créer une tâche de restauration
         $task_id = 'bjlg_restore_' . md5(uniqid('restore', true));
+        $create_backup_before_restore = true;
+        if (array_key_exists('create_backup_before_restore', $_POST)) {
+            $raw_create_backup = wp_unslash($_POST['create_backup_before_restore']);
+            $filtered_value = filter_var($raw_create_backup, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            if ($filtered_value === null) {
+                $create_backup_before_restore = !empty($raw_create_backup);
+            } else {
+                $create_backup_before_restore = (bool) $filtered_value;
+            }
+        }
+
         $task_data = [
             'progress' => 0,
             'status' => 'pending',
             'status_text' => 'Initialisation de la restauration...',
             'filename' => $filename,
             'filepath' => $filepath,
-            'password_encrypted' => $encrypted_password
+            'password_encrypted' => $encrypted_password,
+            'create_restore_point' => (bool) $create_backup_before_restore
         ];
         
         set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());

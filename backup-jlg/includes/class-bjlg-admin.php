@@ -246,7 +246,7 @@ class BJLG_Admin {
         <div class="bjlg-section">
             <h2>Restaurer depuis un fichier</h2>
             <p>Si vous avez un fichier de sauvegarde sur votre ordinateur, vous pouvez le téléverser ici pour lancer une restauration.</p>
-            <form id="bjlg-restore-form" enctype="multipart/form-data">
+            <form id="bjlg-restore-form" method="post" enctype="multipart/form-data">
                 <table class="form-table">
                     <tbody>
                         <tr>
