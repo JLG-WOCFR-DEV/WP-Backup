@@ -47,7 +47,7 @@ class BJLG_REST_API {
         register_rest_route(self::API_NAMESPACE, '/auth', [
             'methods' => 'POST',
             'callback' => [$this, 'authenticate'],
-            'permission_callback' => '__return_true',
+            'permission_callback' => [$this, 'check_auth_permissions'],
             'args' => [
                 'username' => [
                     'required' => true,
@@ -180,7 +180,7 @@ class BJLG_REST_API {
                 ]
             ]
         ]);
-        
+
         // Routes : Statut et monitoring
         register_rest_route(self::API_NAMESPACE, '/status', [
             'methods' => 'GET',
@@ -263,7 +263,22 @@ class BJLG_REST_API {
             'permission_callback' => [$this, 'check_permissions'],
         ]);
     }
-    
+
+    /**
+     * Vérification des permissions pour l'authentification
+     */
+    public function check_auth_permissions($request) {
+        if ($this->rate_limiter && !$this->rate_limiter->check($request)) {
+            return new WP_Error(
+                'rate_limit_exceeded',
+                __('Trop de requêtes. Veuillez patienter.', 'backup-jlg'),
+                ['status' => 429]
+            );
+        }
+
+        return true;
+    }
+
     /**
      * Vérification des permissions de base
      */
