@@ -6,6 +6,24 @@ use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/class-bjlg-restore.php';
 
+if (!class_exists('BJLG\\BJLG_Debug')) {
+    class BJLG_Test_Debug_Logger
+    {
+        /** @var array<int, string> */
+        public static $logs = [];
+
+        /**
+         * @param mixed $message
+         */
+        public static function log($message): void
+        {
+            self::$logs[] = (string) $message;
+        }
+    }
+
+    class_alias('BJLG_Test_Debug_Logger', 'BJLG\\BJLG_Debug');
+}
+
 final class BJLG_RestoreTaskTest extends TestCase
 {
     /** @var mixed */
@@ -27,6 +45,13 @@ final class BJLG_RestoreTaskTest extends TestCase
             /** @var string */
             public $options = 'wp_options';
 
+            /** @var array{transients: array<int, string>, site_transients: array<int, string>, network_site_transients: array<int, string>} */
+            public $col_results = [
+                'transients' => [],
+                'site_transients' => [],
+                'network_site_transients' => [],
+            ];
+
             /**
              * @param string $query
              * @return int
@@ -37,6 +62,28 @@ final class BJLG_RestoreTaskTest extends TestCase
                 $this->last_error = '';
 
                 return 1;
+            }
+
+            /**
+             * @param string $query
+             * @return array<int, string>
+             */
+            public function get_col($query)
+            {
+                $this->queries[] = (string) $query;
+                $this->last_error = '';
+
+                $query = (string) $query;
+
+                if (strpos($query, '_site_transient_') !== false) {
+                    if (strpos($query, 'sitemeta') !== false) {
+                        return $this->col_results['network_site_transients'];
+                    }
+
+                    return $this->col_results['site_transients'];
+                }
+
+                return $this->col_results['transients'];
             }
         };
 
@@ -110,5 +157,27 @@ final class BJLG_RestoreTaskTest extends TestCase
         if (is_dir($temporary_dir)) {
             rmdir($temporary_dir);
         }
+    }
+
+    public function test_clear_all_caches_preserves_third_party_transients(): void
+    {
+        $restore = new BJLG\BJLG_Restore();
+
+        $wpdb = $GLOBALS['wpdb'];
+        $wpdb->col_results['transients'] = ['_transient_bjlg_restore_state'];
+
+        set_transient('bjlg_restore_state', 'plugin', HOUR_IN_SECONDS);
+        set_transient('woocommerce_session_abcd', 'session', HOUR_IN_SECONDS);
+
+        $reflection = new ReflectionClass(BJLG\BJLG_Restore::class);
+        $method = $reflection->getMethod('clear_all_caches');
+        $method->setAccessible(true);
+        $method->invoke($restore);
+
+        $this->assertFalse(get_transient('bjlg_restore_state'));
+        $this->assertSame('session', get_transient('woocommerce_session_abcd'));
+
+        $this->assertNotEmpty($wpdb->queries);
+        $this->assertStringContainsString("\\_transient\\_bjlg\\_%", $wpdb->queries[0]);
     }
 }
