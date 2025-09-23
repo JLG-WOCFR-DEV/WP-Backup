@@ -159,6 +159,74 @@ final class BJLG_RestoreTaskTest extends TestCase
         }
     }
 
+    public function test_run_restore_task_creates_pre_restore_backup_when_requested(): void
+    {
+        $temporary_dir = sys_get_temp_dir() . '/bjlg-restore-pre-backup-' . uniqid('', true);
+        if (!is_dir($temporary_dir)) {
+            mkdir($temporary_dir, 0755, true);
+        }
+
+        $zip_path = $temporary_dir . '/pre-backup.zip';
+
+        $zip = new ZipArchive();
+        $open_result = $zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+        $this->assertTrue($open_result === true || $open_result === ZipArchive::ER_OK);
+
+        $manifest = [
+            'type' => 'test',
+            'contains' => ['db'],
+        ];
+
+        $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $zip->addFromString('database.sql', "SELECT 1;\n");
+        $zip->close();
+
+        $destination = BJLG_BACKUP_DIR . 'pre-backup-' . uniqid('', true) . '.zip';
+        copy($zip_path, $destination);
+
+        $restore = new class extends BJLG\BJLG_Restore {
+            /** @var int */
+            public $pre_restore_backup_calls = 0;
+
+            protected function perform_pre_restore_backup(): array
+            {
+                $this->pre_restore_backup_calls++;
+
+                return [
+                    'filename' => 'dummy-pre-restore.zip',
+                    'filepath' => BJLG_BACKUP_DIR . 'dummy-pre-restore.zip',
+                ];
+            }
+        };
+
+        $task_id = 'bjlg_restore_' . uniqid('', true);
+        set_transient($task_id, [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => '',
+            'filename' => basename($destination),
+            'filepath' => $destination,
+            'password_encrypted' => null,
+            'create_restore_point' => true,
+        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
+
+        $restore->run_restore_task($task_id);
+
+        $this->assertSame(1, $restore->pre_restore_backup_calls);
+
+        if (file_exists($destination)) {
+            unlink($destination);
+        }
+
+        if (file_exists($zip_path)) {
+            unlink($zip_path);
+        }
+
+        if (is_dir($temporary_dir)) {
+            rmdir($temporary_dir);
+        }
+    }
+
     public function test_clear_all_caches_preserves_third_party_transients(): void
     {
         $restore = new BJLG\BJLG_Restore();

@@ -289,7 +289,18 @@ class BJLG_Restore {
         $filepath = BJLG_BACKUP_DIR . $filename;
         $is_encrypted_backup = substr($filename, -4) === '.enc';
 
-        $create_backup_before_restore = !empty($_POST['create_backup_before_restore']);
+        $create_backup_before_restore = false;
+        if (array_key_exists('create_backup_before_restore', $_POST)) {
+            $raw_create_backup_flag = $_POST['create_backup_before_restore'];
+
+            if (is_string($raw_create_backup_flag)) {
+                $raw_create_backup_flag = wp_unslash($raw_create_backup_flag);
+                $filtered_value = filter_var($raw_create_backup_flag, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                $create_backup_before_restore = ($filtered_value !== null) ? $filtered_value : !empty($raw_create_backup_flag);
+            } else {
+                $create_backup_before_restore = !empty($raw_create_backup_flag);
+            }
+        }
 
         $password = null;
         if (array_key_exists('password', $_POST)) {
