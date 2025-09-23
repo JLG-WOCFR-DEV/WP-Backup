@@ -7,6 +7,8 @@ namespace {
     require_once __DIR__ . '/../includes/class-bjlg-cleanup.php';
     require_once __DIR__ . '/../includes/class-bjlg-rest-api.php';
     require_once __DIR__ . '/../includes/class-bjlg-restore.php';
+    require_once __DIR__ . '/../includes/class-bjlg-webhooks.php';
+    require_once __DIR__ . '/../includes/class-bjlg-backup.php';
 
     if (!defined('AUTH_KEY')) {
         define('AUTH_KEY', 'test-auth-key');
@@ -1162,6 +1164,53 @@ namespace {
         if (file_exists($tempFile)) {
             unlink($tempFile);
         }
+    }
+
+    public function test_webhook_backup_duration_is_positive_and_reasonable(): void
+    {
+        $webhook_key = 'webhook-test-key';
+        update_option('bjlg_webhook_key', $webhook_key);
+
+        $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+        $_SERVER['HTTP_USER_AGENT'] = 'PHPUnit Test';
+        $_GET[BJLG\BJLG_Webhooks::WEBHOOK_QUERY_VAR] = $webhook_key;
+        $_GET['components'] = 'db';
+
+        $webhooks = new BJLG\BJLG_Webhooks();
+
+        $previous_single_events = $GLOBALS['bjlg_test_scheduled_events']['single'];
+
+        $task_id = null;
+
+        try {
+            $webhooks->listen_for_webhook();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown when webhook responds with JSON.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('task_id', $response->data);
+            $task_id = (string) $response->data['task_id'];
+        }
+
+        $this->assertNotEmpty($task_id ?? null, 'Webhook should provide a task identifier.');
+        $this->assertArrayHasKey($task_id, $GLOBALS['bjlg_test_transients']);
+
+        $task_data = $GLOBALS['bjlg_test_transients'][$task_id];
+        $this->assertArrayHasKey('start_time', $task_data);
+        $this->assertIsInt($task_data['start_time']);
+
+        sleep(1);
+
+        $duration = time() - $task_data['start_time'];
+        $this->assertGreaterThan(0, $duration, 'Duration should be strictly positive.');
+        $this->assertLessThan(120, $duration, 'Duration should be within a reasonable bound.');
+
+        $GLOBALS['bjlg_test_scheduled_events']['single'] = $previous_single_events;
+
+        unset($GLOBALS['bjlg_test_transients'][$task_id]);
+        unset($_GET[BJLG\BJLG_Webhooks::WEBHOOK_QUERY_VAR]);
+        unset($_GET['components']);
+        unset($_SERVER['REMOTE_ADDR']);
+        unset($_SERVER['HTTP_USER_AGENT']);
     }
 
     private function generateJwtToken(array $overrides = []): string
