@@ -216,7 +216,26 @@ class BJLG_REST_API {
                 'limit' => [
                     'default' => 50,
                     'validate_callback' => function($param) {
-                        return is_numeric($param) && $param <= 500;
+                        $value = filter_var(
+                            $param,
+                            FILTER_VALIDATE_INT,
+                            [
+                                'options' => [
+                                    'min_range' => 1,
+                                    'max_range' => 500,
+                                ],
+                            ]
+                        );
+
+                        if ($value === false) {
+                            return new WP_Error(
+                                'rest_invalid_param',
+                                __('Le paramètre limit doit être un entier compris entre 1 et 500.', 'backup-jlg'),
+                                ['status' => 400]
+                            );
+                        }
+
+                        return true;
                     }
                 ],
                 'action' => [
@@ -1617,11 +1636,13 @@ class BJLG_REST_API {
         $limit = $request->get_param('limit');
         $action = $request->get_param('action');
         $status = $request->get_param('status');
-        
+
         $filters = [];
         if ($action) $filters['action_type'] = $action;
         if ($status) $filters['status'] = $status;
-        
+
+        $limit = max(1, min(500, (int) $limit));
+
         $history = BJLG_History::get_history($limit, $filters);
         
         return rest_ensure_response([
