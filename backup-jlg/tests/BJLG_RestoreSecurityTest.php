@@ -188,6 +188,71 @@ final class BJLG_RestoreSecurityTest extends TestCase
         }
     }
 
+    public function test_restore_rejects_symlink_entries(): void
+    {
+        $temporary_dir = sys_get_temp_dir() . '/bjlg-restore-test-symlink-' . uniqid();
+        if (!is_dir($temporary_dir)) {
+            mkdir($temporary_dir, 0755, true);
+        }
+
+        $zip_path = $temporary_dir . '/symlink.zip';
+        $zip = new ZipArchive();
+        $open_result = $zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+        $this->assertTrue($open_result === true || $open_result === ZipArchive::ER_OK);
+
+        $manifest = [
+            'type' => 'test',
+            'contains' => ['plugins'],
+        ];
+
+        $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $zip->addEmptyDir('wp-content/');
+        $zip->addEmptyDir('wp-content/plugins/');
+        $zip->addFromString('wp-content/plugins/readme.txt', 'safe');
+
+        $symlink_entry = 'wp-content/plugins/evil-link';
+        $zip->addFromString($symlink_entry, 'ignored');
+        if (method_exists($zip, 'setExternalAttributesName')) {
+            $zip->setExternalAttributesName($symlink_entry, ZipArchive::OPSYS_UNIX, (0120777) << 16);
+        }
+
+        $zip->close();
+
+        $destination = BJLG_BACKUP_DIR . 'symlink.zip';
+        copy($zip_path, $destination);
+
+        $restore = new BJLG\BJLG_Restore();
+
+        $task_id = 'bjlg_restore_' . uniqid();
+        set_transient($task_id, [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => '',
+            'filename' => basename($destination),
+            'filepath' => $destination,
+            'password_encrypted' => null,
+        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
+
+        $restore->run_restore_task($task_id);
+
+        $task_data = get_transient($task_id);
+        $this->assertIsArray($task_data);
+        $this->assertSame('error', $task_data['status']);
+        $this->assertStringContainsString('lien symbolique', strtolower($task_data['status_text']));
+
+        if (file_exists($destination)) {
+            unlink($destination);
+        }
+
+        if (file_exists($zip_path)) {
+            unlink($zip_path);
+        }
+
+        if (is_dir($temporary_dir)) {
+            rmdir($temporary_dir);
+        }
+    }
+
     public function test_restoring_encrypted_backup_removes_plaintext_archive(): void
     {
         update_option('bjlg_encryption_settings', ['enabled' => true]);
