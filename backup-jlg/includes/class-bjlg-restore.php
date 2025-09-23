@@ -688,6 +688,11 @@ class BJLG_Restore {
                 continue;
             }
 
+            $entry_stat = $zip->statIndex($index, ZipArchive::FL_UNCHANGED);
+            if ($this->is_zip_entry_symlink($zip, $index, $entry_stat)) {
+                throw new Exception("Entrée d'archive non supportée (lien symbolique) détectée : {$entry_name}");
+            }
+
             $normalized_entry = $this->normalize_zip_entry_name($entry_name);
 
             if ($normalized_entry === '') {
@@ -1107,30 +1112,73 @@ class BJLG_Restore {
         if (!is_dir($source)) {
             return false;
         }
-        
-        if (!is_dir($destination)) {
-            mkdir($destination, 0755, true);
-        }
-        
+
+        $this->ensure_directory_exists($destination);
+
         $dir = opendir($source);
-        
-        while (($file = readdir($dir)) !== false) {
-            if ($file == '.' || $file == '..') {
-                continue;
+        if ($dir === false) {
+            throw new RuntimeException('Impossible d\'ouvrir le répertoire source pour la copie.');
+        }
+
+        try {
+            while (($file = readdir($dir)) !== false) {
+                if ($file == '.' || $file == '..') {
+                    continue;
+                }
+
+                $src_path = $source . '/' . $file;
+                $dst_path = $destination . '/' . $file;
+
+                if (is_link($src_path)) {
+                    throw new RuntimeException("Lien symbolique détecté lors de la restauration : {$src_path}");
+                }
+
+                if (is_dir($src_path)) {
+                    $this->recursive_copy($src_path, $dst_path);
+                } else {
+                    if (!@copy($src_path, $dst_path)) {
+                        throw new RuntimeException("Impossible de copier le fichier : {$src_path}");
+                    }
+                }
             }
-            
-            $src_path = $source . '/' . $file;
-            $dst_path = $destination . '/' . $file;
-            
-            if (is_dir($src_path)) {
-                $this->recursive_copy($src_path, $dst_path);
-            } else {
-                copy($src_path, $dst_path);
+        } finally {
+            closedir($dir);
+        }
+
+        return true;
+    }
+
+    /**
+     * Détermine si une entrée d'archive représente un lien symbolique.
+     *
+     * @param ZipArchive   $zip
+     * @param int          $index
+     * @param array|false  $entry_stat
+     * @return bool
+     */
+    private function is_zip_entry_symlink(ZipArchive $zip, $index, $entry_stat) {
+        $mode = null;
+
+        if (is_array($entry_stat) && array_key_exists('external_attributes', $entry_stat)) {
+            $mode = ((int) $entry_stat['external_attributes']) >> 16;
+        }
+
+        if ($mode === null && method_exists($zip, 'getExternalAttributesIndex')) {
+            $opsys = 0;
+            $attributes = 0;
+
+            if (@$zip->getExternalAttributesIndex($index, $opsys, $attributes)) {
+                $mode = ((int) $attributes) >> 16;
             }
         }
-        
-        closedir($dir);
-        return true;
+
+        if ($mode === null) {
+            return false;
+        }
+
+        $file_type = $mode & 0xF000;
+
+        return $file_type === 0xA000;
     }
 
     /**
