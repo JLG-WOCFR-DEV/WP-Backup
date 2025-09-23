@@ -1149,8 +1149,58 @@ class BJLG_Restore {
         
         // Cache des transients
         global $wpdb;
-        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_%'");
-        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_site_transient_%'");
+
+        if (isset($wpdb) && property_exists($wpdb, 'options')) {
+            $option_table = $wpdb->options;
+
+            $plugin_transient_options = [];
+            if (method_exists($wpdb, 'get_col')) {
+                $plugin_transient_options = (array) $wpdb->get_col(
+                    "SELECT option_name FROM {$option_table} WHERE option_name LIKE '_transient_bjlg_%'"
+                );
+            }
+
+            foreach ($plugin_transient_options as $option_name) {
+                if (!is_string($option_name) || strpos($option_name, '_transient_') !== 0) {
+                    continue;
+                }
+
+                $transient_key = substr($option_name, strlen('_transient_'));
+
+                if ($transient_key !== '') {
+                    delete_transient($transient_key);
+                }
+            }
+
+            $wpdb->query("DELETE FROM {$option_table} WHERE option_name LIKE '_transient_bjlg_%'");
+            $wpdb->query("DELETE FROM {$option_table} WHERE option_name LIKE '_transient_timeout_bjlg_%'");
+
+            $plugin_site_transient_options = [];
+            if (method_exists($wpdb, 'get_col')) {
+                $plugin_site_transient_options = (array) $wpdb->get_col(
+                    "SELECT option_name FROM {$option_table} WHERE option_name LIKE '_site_transient_bjlg_%'"
+                );
+            }
+
+            foreach ($plugin_site_transient_options as $option_name) {
+                if (!is_string($option_name) || strpos($option_name, '_site_transient_') !== 0) {
+                    continue;
+                }
+
+                $transient_key = substr($option_name, strlen('_site_transient_'));
+
+                if ($transient_key !== '') {
+                    if (function_exists('delete_site_transient')) {
+                        delete_site_transient($transient_key);
+                    } else {
+                        delete_transient($transient_key);
+                    }
+                }
+            }
+
+            $wpdb->query("DELETE FROM {$option_table} WHERE option_name LIKE '_site_transient_bjlg_%'");
+            $wpdb->query("DELETE FROM {$option_table} WHERE option_name LIKE '_site_transient_timeout_bjlg_%'");
+        }
         
         // Cache des objets
         if (function_exists('wp_cache_flush')) {

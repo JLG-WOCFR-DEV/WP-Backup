@@ -101,6 +101,7 @@ if (!isset($GLOBALS['bjlg_test_hooks'])) {
 
 $GLOBALS['bjlg_test_current_user_can'] = true;
 $GLOBALS['bjlg_test_transients'] = [];
+$GLOBALS['bjlg_test_site_transients'] = [];
 $GLOBALS['bjlg_test_scheduled_events'] = [
     'recurring' => [],
     'single' => [],
@@ -116,8 +117,20 @@ if (!isset($GLOBALS['wpdb'])) {
         /** @var string */
         public $options = 'wp_options';
 
+        /** @var array<int, string> */
+        public $queries = [];
+
+        /** @var array<int, array<int, string>> */
+        public $get_col_results = [];
+
+        /** @var string */
+        public $last_error = '';
+
         public function query($query)
         {
+            $this->queries[] = (string) $query;
+            $this->last_error = '';
+
             return true;
         }
 
@@ -127,6 +140,17 @@ if (!isset($GLOBALS['wpdb'])) {
                 'size' => 0,
                 'tables' => 0,
             ];
+        }
+
+        public function get_col($query)
+        {
+            $this->queries[] = (string) $query;
+
+            if (empty($this->get_col_results)) {
+                return [];
+            }
+
+            return array_shift($this->get_col_results);
         }
     };
 }
@@ -663,6 +687,26 @@ if (!function_exists('get_transient')) {
 if (!function_exists('delete_transient')) {
     function delete_transient($transient) {
         unset($GLOBALS['bjlg_test_transients'][$transient]);
+        return true;
+    }
+}
+
+if (!function_exists('set_site_transient')) {
+    function set_site_transient($transient, $value, $expiration) {
+        $GLOBALS['bjlg_test_site_transients'][$transient] = $value;
+        return true;
+    }
+}
+
+if (!function_exists('get_site_transient')) {
+    function get_site_transient($transient) {
+        return $GLOBALS['bjlg_test_site_transients'][$transient] ?? false;
+    }
+}
+
+if (!function_exists('delete_site_transient')) {
+    function delete_site_transient($transient) {
+        unset($GLOBALS['bjlg_test_site_transients'][$transient]);
         return true;
     }
 }
