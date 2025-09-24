@@ -11,6 +11,11 @@ require_once __DIR__ . '/../includes/class-bjlg-encryption.php';
 
 final class BJLG_RestoreSecurityTest extends TestCase
 {
+    /**
+     * @var string
+     */
+    private $existingBackupPath;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -20,6 +25,22 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $GLOBALS['bjlg_test_scheduled_events'] = [];
 
         $_POST = [];
+
+        if (!is_dir(BJLG_BACKUP_DIR)) {
+            mkdir(BJLG_BACKUP_DIR, 0777, true);
+        }
+
+        $this->existingBackupPath = BJLG_BACKUP_DIR . 'backup.zip';
+        file_put_contents($this->existingBackupPath, 'dummy-backup');
+    }
+
+    protected function tearDown(): void
+    {
+        if (file_exists($this->existingBackupPath)) {
+            unlink($this->existingBackupPath);
+        }
+
+        parent::tearDown();
     }
 
     public function test_password_is_preserved_and_encrypted_before_storage(): void
