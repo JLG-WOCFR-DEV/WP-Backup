@@ -13,6 +13,8 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
+
 class BJLG_REST_API {
     
     const API_NAMESPACE = 'backup-jlg/v1';
@@ -391,6 +393,7 @@ class BJLG_REST_API {
             }
 
             if (isset($key_data['expires']) && $key_data['expires'] < time()) {
+                $this->remove_api_key_entry($stored_keys, $index);
                 unset($key_data);
                 return false;
             }
@@ -402,6 +405,7 @@ class BJLG_REST_API {
             $resolved_user_id = $this->resolve_api_key_user_id($key_data);
 
             if ($resolved_user_id <= 0) {
+                $this->remove_api_key_entry($stored_keys, $index);
                 unset($key_data);
 
                 return new WP_Error(
@@ -414,6 +418,7 @@ class BJLG_REST_API {
             $user = get_user_by('id', $resolved_user_id);
 
             if (!$user) {
+                $this->remove_api_key_entry($stored_keys, $index);
                 unset($key_data);
 
                 return new WP_Error(
@@ -424,6 +429,7 @@ class BJLG_REST_API {
             }
 
             if (!user_can($user, BJLG_CAPABILITY)) {
+                $this->remove_api_key_entry($stored_keys, $index);
                 unset($key_data);
 
                 return new WP_Error(
@@ -450,6 +456,17 @@ class BJLG_REST_API {
 
         unset($key_data);
         return false;
+    }
+
+    /**
+     * Supprime une entrée de clé API et persiste la mise à jour.
+     *
+     * @param array $stored_keys
+     * @param int   $index
+     */
+    private function remove_api_key_entry(array $stored_keys, $index) {
+        unset($stored_keys[$index]);
+        update_option('bjlg_api_keys', array_values($stored_keys));
     }
 
     public function filter_api_keys_before_save($new_value, $old_value = null, $option = '') {
@@ -1311,7 +1328,7 @@ class BJLG_REST_API {
      * Endpoint : Obtenir une sauvegarde spécifique
      */
     public function get_backup($request) {
-        $filepath = $this->resolve_backup_path($request->get_param('id'));
+        $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
 
         if (is_wp_error($filepath)) {
             return $filepath;
@@ -1324,7 +1341,7 @@ class BJLG_REST_API {
      * Endpoint : Supprimer une sauvegarde
      */
     public function delete_backup($request) {
-        $filepath = $this->resolve_backup_path($request->get_param('id'));
+        $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
 
         if (is_wp_error($filepath)) {
             return $filepath;
@@ -1352,7 +1369,7 @@ class BJLG_REST_API {
     public function download_backup($request) {
         $token = $request->get_param('token');
 
-        $filepath = $this->resolve_backup_path($request->get_param('id'));
+        $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
 
         if (is_wp_error($filepath)) {
             return $filepath;
@@ -1400,7 +1417,7 @@ class BJLG_REST_API {
             $create_restore_point = ($filtered_value !== null) ? $filtered_value : false;
         }
 
-        $filepath = $this->resolve_backup_path($request->get_param('id'));
+        $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
 
         if (is_wp_error($filepath)) {
             return $filepath;
@@ -1468,76 +1485,6 @@ class BJLG_REST_API {
         return $sanitized;
     }
 
-    /**
-     * Résout et valide le chemin d'une sauvegarde à partir d'un identifiant brut.
-     *
-     * @param mixed $raw_id
-     * @return string|WP_Error
-     */
-    private function resolve_backup_path($raw_id) {
-        $sanitized_id = sanitize_file_name(basename((string) $raw_id));
-
-        if ($sanitized_id === '') {
-            return new WP_Error(
-                'invalid_backup_id',
-                'Invalid backup ID',
-                ['status' => 400]
-            );
-        }
-
-        $canonical_backup_dir = realpath(BJLG_BACKUP_DIR);
-
-        if ($canonical_backup_dir === false) {
-            return new WP_Error(
-                'invalid_backup_id',
-                'Invalid backup ID',
-                ['status' => 400]
-            );
-        }
-
-        $canonical_backup_dir = rtrim($canonical_backup_dir, "/\\") . DIRECTORY_SEPARATOR;
-
-        $candidate_paths = [BJLG_BACKUP_DIR . $sanitized_id];
-
-        if (strtolower(substr($sanitized_id, -4)) !== '.zip') {
-            $candidate_paths[] = BJLG_BACKUP_DIR . $sanitized_id . '.zip';
-        }
-
-        $canonical_length = strlen($canonical_backup_dir);
-
-        foreach ($candidate_paths as $candidate_path) {
-            if (!file_exists($candidate_path)) {
-                continue;
-            }
-
-            $resolved_path = realpath($candidate_path);
-
-            if ($resolved_path === false) {
-                return new WP_Error(
-                    'invalid_backup_id',
-                    'Invalid backup ID',
-                    ['status' => 400]
-                );
-            }
-
-            if (strlen($resolved_path) < $canonical_length || strncmp($resolved_path, $canonical_backup_dir, $canonical_length) !== 0) {
-                return new WP_Error(
-                    'invalid_backup_id',
-                    'Invalid backup ID',
-                    ['status' => 400]
-                );
-            }
-
-            return $resolved_path;
-        }
-
-        return new WP_Error(
-            'backup_not_found',
-            'Backup not found',
-            ['status' => 404]
-        );
-    }
-    
     /**
      * Endpoint : Statut du système
      */

@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 require_once __DIR__ . '/class-bjlg-backup.php';
+require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
 
 /**
  * Gère tout le processus de restauration, y compris la pré-sauvegarde de sécurité.
@@ -286,7 +287,27 @@ class BJLG_Restore {
         }
 
         $filename = basename(sanitize_file_name($_POST['filename']));
-        $filepath = BJLG_BACKUP_DIR . $filename;
+
+        $resolved_path = BJLG_Backup_Path_Resolver::resolve($filename);
+
+        if (is_wp_error($resolved_path)) {
+            $error_code = $resolved_path->get_error_code();
+            $status = 400;
+            $data = $resolved_path->get_error_data();
+
+            if (is_array($data) && isset($data['status'])) {
+                $status = (int) $data['status'];
+            }
+
+            if ($error_code === 'backup_not_found') {
+                wp_send_json_error(['message' => 'Fichier de sauvegarde introuvable.'], $status);
+            }
+
+            wp_send_json_error(['message' => 'La sauvegarde demandée est invalide.'], $status);
+        }
+
+        $filepath = $resolved_path;
+        $filename = basename($filepath);
         $is_encrypted_backup = substr($filename, -4) === '.enc';
 
         $create_backup_before_restore = false;
