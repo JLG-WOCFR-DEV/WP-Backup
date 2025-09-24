@@ -712,11 +712,16 @@ class BJLG_Restore {
             $target_path = $this->join_paths($temp_extract_dir, $relative_entry);
 
             if (substr($normalized_entry, -1) === '/') {
-                $directory_path = rtrim($target_path, '/\\');
+                $relative_directory = rtrim($relative_entry, '/');
+                $intended_directory = $relative_directory === ''
+                    ? $base_realpath
+                    : $this->normalize_path_for_validation($this->join_paths($base_realpath, $relative_directory));
 
-                if ($directory_path === '') {
-                    $directory_path = $temp_extract_dir;
-                }
+                $this->assert_path_within_base($base_realpath, $intended_directory, $entry_name);
+
+                $directory_path = $relative_directory === ''
+                    ? $temp_extract_dir
+                    : $this->join_paths($temp_extract_dir, $relative_directory);
 
                 $this->ensure_directory_exists($directory_path);
 
@@ -731,6 +736,16 @@ class BJLG_Restore {
                 $allowed_entries[$entry_name] = $relative_entry;
                 continue;
             }
+
+            $relative_parent = ltrim(dirname($relative_entry), '/');
+            $normalized_parent = $relative_parent === '' || $relative_parent === '.'
+                ? $base_realpath
+                : $this->normalize_path_for_validation($this->join_paths($base_realpath, $relative_parent));
+
+            $this->assert_path_within_base($base_realpath, $normalized_parent, $entry_name);
+
+            $final_intended_path = $this->normalize_path_for_validation($this->join_paths($base_realpath, $relative_entry));
+            $this->assert_path_within_base($base_realpath, $final_intended_path, $entry_name);
 
             $parent_directory = dirname($target_path);
             if ($parent_directory !== '' && $parent_directory !== '.' && $parent_directory !== DIRECTORY_SEPARATOR) {

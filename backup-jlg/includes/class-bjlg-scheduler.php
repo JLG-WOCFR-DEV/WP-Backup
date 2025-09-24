@@ -191,74 +191,95 @@ class BJLG_Scheduler {
      */
     private function calculate_first_run($settings) {
         $time_str = $settings['time']; // ex: "23:59"
-        list($hour, $minute) = explode(':', $time_str);
-        
-        $current_time = current_time('timestamp');
-        $today = date('Y-m-d', $current_time);
-        
+        list($hour, $minute) = array_map('intval', explode(':', $time_str));
+
+        if (function_exists('wp_timezone')) {
+            $timezone = wp_timezone();
+        } else {
+            $timezone_string = function_exists('wp_timezone_string') ? wp_timezone_string() : get_option('timezone_string', 'UTC');
+            if (empty($timezone_string)) {
+                $timezone_string = 'UTC';
+            }
+            $timezone = new \DateTimeZone($timezone_string);
+        }
+
+        $now = new \DateTimeImmutable('now', $timezone);
+
         switch ($settings['recurrence']) {
             case 'hourly':
-                // Prochaine heure pile
-                $next_run = strtotime(date('Y-m-d H:00:00', $current_time + HOUR_IN_SECONDS));
+                // Prochaine heure pile dans le fuseau WordPress
+                $next_run_time = $now->setTime((int) $now->format('H'), 0, 0)->modify('+1 hour');
                 break;
-                
+
             case 'twice_daily':
                 // Deux fois par jour à l'heure spécifiée et 12h plus tard
-                $morning_time = strtotime($today . ' ' . $time_str);
-                $evening_time = $morning_time + (12 * HOUR_IN_SECONDS);
-                
-                if ($current_time < $morning_time) {
-                    $next_run = $morning_time;
-                } elseif ($current_time < $evening_time) {
-                    $next_run = $evening_time;
+                $first_run = $now->setTime($hour, $minute, 0);
+                if ($now < $first_run) {
+                    $next_run_time = $first_run;
+                    break;
+                }
+
+                $second_run = $first_run->modify('+12 hours');
+                if ($now < $second_run) {
+                    $next_run_time = $second_run;
                 } else {
-                    $next_run = strtotime('tomorrow ' . $time_str);
+                    $next_run_time = $first_run->modify('+1 day');
                 }
                 break;
-                
+
             case 'daily':
-                $scheduled_time = strtotime($today . ' ' . $time_str);
-                if ($current_time < $scheduled_time) {
-                    $next_run = $scheduled_time;
+                $scheduled_time = $now->setTime($hour, $minute, 0);
+                if ($now < $scheduled_time) {
+                    $next_run_time = $scheduled_time;
                 } else {
-                    $next_run = strtotime('tomorrow ' . $time_str);
+                    $next_run_time = $scheduled_time->modify('+1 day');
                 }
                 break;
-                
+
             case 'weekly':
-                $day_str = $settings['day']; // ex: "sunday"
-                $next_day = strtotime("next $day_str $time_str");
-                
-                // Si c'est aujourd'hui mais pas encore l'heure
-                if (strtolower(date('l')) === $day_str) {
-                    $today_time = strtotime($today . ' ' . $time_str);
-                    if ($current_time < $today_time) {
-                        $next_run = $today_time;
-                    } else {
-                        $next_run = $next_day;
-                    }
-                } else {
-                    $next_run = $next_day;
+                $day_str = strtolower($settings['day']); // ex: "sunday"
+                $days_map = [
+                    'sunday' => 0,
+                    'monday' => 1,
+                    'tuesday' => 2,
+                    'wednesday' => 3,
+                    'thursday' => 4,
+                    'friday' => 5,
+                    'saturday' => 6,
+                ];
+
+                if (!isset($days_map[$day_str])) {
+                    return false;
                 }
+
+                $current_weekday = (int) $now->format('w');
+                $days_ahead = ($days_map[$day_str] - $current_weekday + 7) % 7;
+                $candidate = $now->modify('+' . $days_ahead . ' days')->setTime($hour, $minute, 0);
+
+                if ($days_ahead === 0 && $now >= $candidate) {
+                    $candidate = $candidate->modify('+7 days');
+                }
+
+                $next_run_time = $candidate;
                 break;
-                
+
             case 'monthly':
                 // Premier jour du mois à l'heure spécifiée
-                $first_of_month = strtotime(date('Y-m-01') . ' ' . $time_str);
-                
-                if ($current_time < $first_of_month) {
-                    $next_run = $first_of_month;
+                $first_of_month = $now->modify('first day of this month')->setTime($hour, $minute, 0);
+
+                if ($now < $first_of_month) {
+                    $next_run_time = $first_of_month;
                 } else {
                     // Premier jour du mois prochain
-                    $next_run = strtotime(date('Y-m-01', strtotime('next month')) . ' ' . $time_str);
+                    $next_run_time = $first_of_month->modify('first day of next month')->setTime($hour, $minute, 0);
                 }
                 break;
-                
+
             default:
-                $next_run = false;
+                return false;
         }
-        
-        return $next_run;
+
+        return $next_run_time->getTimestamp();
     }
     
     /**
