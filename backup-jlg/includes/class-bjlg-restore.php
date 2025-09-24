@@ -25,12 +25,18 @@ class BJLG_Restore {
      */
     private $backup_manager;
 
-    public function __construct($backup_manager = null) {
+    private $encryption_handler;
+
+    public function __construct($backup_manager = null, $encryption_handler = null) {
         if ($backup_manager === null && class_exists(BJLG_Backup::class)) {
             $backup_manager = new BJLG_Backup();
         }
 
         $this->backup_manager = $backup_manager;
+
+        if ($encryption_handler instanceof BJLG_Encryption) {
+            $this->encryption_handler = $encryption_handler;
+        }
 
         add_action('wp_ajax_bjlg_create_pre_restore_backup', [$this, 'handle_create_pre_restore_backup']);
         add_action('wp_ajax_bjlg_run_restore', [$this, 'handle_run_restore']);
@@ -463,7 +469,12 @@ class BJLG_Restore {
                 ]);
                 set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
 
-                $encryption = new BJLG_Encryption();
+                $encryption = $this->get_encryption_handler();
+
+                if (!($encryption instanceof BJLG_Encryption)) {
+                    throw new Exception('Module de chiffrement indisponible.');
+                }
+
                 $decrypted_archive_path = $encryption->decrypt_backup_file($filepath, $password);
                 $filepath = $decrypted_archive_path;
             }
@@ -1273,6 +1284,19 @@ class BJLG_Restore {
         }
         
         BJLG_Debug::log("Tous les caches ont été vidés.");
+    }
+
+    /**
+     * Retourne l'instance du gestionnaire de chiffrement (et l'initialise si nécessaire).
+     *
+     * @return BJLG_Encryption|null
+     */
+    private function get_encryption_handler() {
+        if (!$this->encryption_handler && class_exists(BJLG_Encryption::class)) {
+            $this->encryption_handler = new BJLG_Encryption();
+        }
+
+        return $this->encryption_handler;
     }
 
     /**

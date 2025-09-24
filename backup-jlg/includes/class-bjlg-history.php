@@ -64,28 +64,37 @@ class BJLG_History {
         if ($user_id === null) {
             $user_id = get_current_user_id();
         }
-        
+
+        if (!is_numeric($user_id) || (int) $user_id === 0) {
+            $user_id = null;
+        } else {
+            $user_id = (int) $user_id;
+        }
+
         // Obtenir l'adresse IP
         $ip_address = self::get_client_ip();
-        
+
+        $data = [
+            'timestamp'   => current_time('mysql'),
+            'action_type' => $action,
+            'status'      => $status,
+            'details'     => $details,
+        ];
+
+        $formats = ['%s', '%s', '%s', '%s'];
+
+        if ($user_id !== null) {
+            $data['user_id'] = $user_id;
+            $formats[] = '%d';
+        }
+
+        $data['ip_address'] = $ip_address;
+        $formats[] = '%s';
+
         $result = $wpdb->insert(
             $table_name,
-            [
-                'timestamp'   => current_time('mysql'),
-                'action_type' => $action,
-                'status'      => $status,
-                'details'     => $details,
-                'user_id'     => $user_id ?: null,
-                'ip_address'  => $ip_address
-            ],
-            [
-                '%s', // format pour timestamp
-                '%s', // format pour action_type
-                '%s', // format pour status
-                '%s', // format pour details
-                '%d', // format pour user_id
-                '%s', // format pour ip_address
-            ]
+            $data,
+            $formats
         );
         
         if ($result === false) {
