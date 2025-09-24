@@ -126,6 +126,16 @@ final class BJLG_BackupDatabaseTest extends TestCase
         $method->setAccessible(true);
         $method->invokeArgs($backup, [&$zip, false]);
 
+        $temporaryFilesProperty = new ReflectionProperty(BJLG\BJLG_Backup::class, 'temporary_files');
+        $temporaryFilesProperty->setAccessible(true);
+        $temporaryFiles = $temporaryFilesProperty->getValue($backup);
+
+        $this->assertIsArray($temporaryFiles);
+        $this->assertNotEmpty($temporaryFiles);
+        $tempPath = $temporaryFiles[0];
+        $this->assertIsString($tempPath);
+        $this->assertFileExists($tempPath);
+
         $this->assertNotEmpty($zip->addedFiles);
 
         $addedFile = $zip->addedFiles[0];
@@ -138,7 +148,10 @@ final class BJLG_BackupDatabaseTest extends TestCase
         $this->assertStringContainsString('-- Table: wp_test', $dumpContent);
         $this->assertStringContainsString('INSERT INTO `wp_test` (`id`, `name`)', $dumpContent);
 
-        $tempPath = $addedFile[0];
+        $cleanupMethod = new ReflectionMethod(BJLG\BJLG_Backup::class, 'cleanup_temporary_files');
+        $cleanupMethod->setAccessible(true);
+        $cleanupMethod->invoke($backup);
+
         $this->assertFileDoesNotExist($tempPath);
 
         if ($previous_wpdb === null) {

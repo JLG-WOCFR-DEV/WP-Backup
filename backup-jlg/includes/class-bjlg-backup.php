@@ -52,6 +52,9 @@ class BJLG_Backup {
 
     private $performance_optimizer;
     private $encryption_handler;
+
+    /** @var array<int, string> */
+    private $temporary_files = [];
     
     public function __construct() {
         // Hooks AJAX
@@ -185,6 +188,8 @@ class BJLG_Backup {
      * Exécute la tâche de sauvegarde en arrière-plan
      */
     public function run_backup_task($task_id) {
+        $this->cleanup_temporary_files();
+
         $task_data = get_transient($task_id);
         if (!$task_data) {
             BJLG_Debug::log("ERREUR: Tâche $task_id introuvable.");
@@ -395,19 +400,21 @@ class BJLG_Backup {
         } catch (Exception $e) {
             BJLG_Debug::log("ERREUR dans la sauvegarde : " . $e->getMessage());
             BJLG_History::log('backup_created', 'failure', 'Erreur : ' . $e->getMessage());
-            
+
             // Notification d'échec
             do_action('bjlg_backup_failed', $e->getMessage(), [
                 'task_id' => $task_id,
                 'components' => $components
             ]);
-            
+
             $this->update_task_progress($task_id, 100, 'error', 'Erreur : ' . $e->getMessage());
-            
+
             // Nettoyer les fichiers partiels
             if (isset($backup_filepath) && file_exists($backup_filepath)) {
                 @unlink($backup_filepath);
             }
+        } finally {
+            $this->cleanup_temporary_files();
         }
     }
 
@@ -486,6 +493,8 @@ class BJLG_Backup {
             throw new Exception("Impossible d'ouvrir le fichier temporaire pour l'export SQL.");
         }
 
+        $this->register_temporary_file($temp_file);
+
         try {
             // Header SQL
             fwrite($handle, "-- Backup JLG Database Export\n");
@@ -549,11 +558,8 @@ class BJLG_Backup {
 
         // Ajouter au ZIP via un fichier temporaire puis le supprimer
         if (!$zip->addFile($temp_file, $sql_filename)) {
-            @unlink($temp_file);
             throw new Exception("Impossible d'ajouter l'export SQL à l'archive.");
         }
-
-        @unlink($temp_file);
 
         BJLG_Debug::log("Export de la base de données terminé.");
     }
@@ -797,6 +803,11 @@ class BJLG_Backup {
 
                 if ($skip) continue;
 
+                if (is_link($file_path)) {
+                    BJLG_Debug::log("Lien symbolique ignoré : {$normalized_file_path}");
+                    continue;
+                }
+
                 if (is_dir($file_path)) {
                     // Récursion pour les sous-dossiers
                     $this->add_folder_to_zip($zip, $file_path, $relative_path . '/', $exclude, $incremental, $modified_files);
@@ -821,6 +832,43 @@ class BJLG_Backup {
         } finally {
             closedir($handle);
         }
+    }
+
+    /**
+     * Enregistre un fichier temporaire à nettoyer une fois la sauvegarde terminée.
+     *
+     * @param string $path
+     */
+    private function register_temporary_file($path) {
+        if (!is_string($path) || $path === '') {
+            return;
+        }
+
+        $this->temporary_files[] = $path;
+    }
+
+    /**
+     * Supprime les fichiers temporaires enregistrés.
+     */
+    private function cleanup_temporary_files() {
+        if (empty($this->temporary_files)) {
+            return;
+        }
+
+        foreach ($this->temporary_files as $index => $path) {
+            if (!is_string($path) || $path === '') {
+                unset($this->temporary_files[$index]);
+                continue;
+            }
+
+            if (file_exists($path)) {
+                @unlink($path);
+            }
+
+            unset($this->temporary_files[$index]);
+        }
+
+        $this->temporary_files = [];
     }
 
     /**
