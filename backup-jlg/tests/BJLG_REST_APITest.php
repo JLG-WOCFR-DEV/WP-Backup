@@ -921,10 +921,11 @@ namespace {
 
             $this->assertSame($token, $query_args['token'] ?? null);
             $this->assertCount(1, $GLOBALS['bjlg_test_transients']);
-            $this->assertSame(
-                $filepath,
-                $GLOBALS['bjlg_test_transients']['bjlg_download_' . $token] ?? null
-            );
+            $stored_payload = $GLOBALS['bjlg_test_transients']['bjlg_download_' . $token] ?? null;
+            $this->assertIsArray($stored_payload);
+            $this->assertSame($filepath, $stored_payload['file'] ?? null);
+            $this->assertSame(BJLG_CAPABILITY, $stored_payload['requires_cap'] ?? null);
+            $this->assertArrayHasKey('issued_at', $stored_payload);
         } finally {
             if (file_exists($filepath)) {
                 unlink($filepath);
@@ -1422,7 +1423,10 @@ namespace {
 
         $this->assertArrayHasKey('token', $query_args);
         $this->assertSame($data['download_token'], $query_args['token']);
-        $this->assertSame($tempFile, get_transient('bjlg_download_' . $data['download_token']));
+        $payload = get_transient('bjlg_download_' . $data['download_token']);
+        $this->assertIsArray($payload);
+        $this->assertSame($tempFile, $payload['file'] ?? null);
+        $this->assertSame(BJLG_CAPABILITY, $payload['requires_cap'] ?? null);
 
         if (file_exists($tempFile)) {
             unlink($tempFile);

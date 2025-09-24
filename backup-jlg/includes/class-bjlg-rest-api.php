@@ -1405,7 +1405,7 @@ class BJLG_REST_API {
         }
 
         $download_token = null;
-        $transient_ttl = BJLG_Backup::get_task_ttl();
+        $transient_ttl = BJLG_Actions::get_download_token_ttl($filepath);
 
         if (is_string($token)) {
             $token = trim($token);
@@ -1413,7 +1413,8 @@ class BJLG_REST_API {
 
         if (!empty($token)) {
             $transient_key = 'bjlg_download_' . $token;
-            $existing_path = get_transient($transient_key);
+            $existing_payload = get_transient($transient_key);
+            $existing_path = is_array($existing_payload) ? ($existing_payload['file'] ?? '') : $existing_payload;
 
             if (empty($existing_path)) {
                 return new WP_Error(
@@ -1436,13 +1437,17 @@ class BJLG_REST_API {
                 );
             }
 
-            set_transient($transient_key, $filepath, $transient_ttl);
+            set_transient($transient_key, BJLG_Actions::build_download_token_payload($filepath), $transient_ttl);
             $download_token = $token;
         }
 
         if ($download_token === null) {
             $download_token = wp_generate_password(32, false);
-            set_transient('bjlg_download_' . $download_token, $filepath, $transient_ttl);
+            set_transient(
+                'bjlg_download_' . $download_token,
+                BJLG_Actions::build_download_token_payload($filepath),
+                $transient_ttl
+            );
         }
 
         $download_url = add_query_arg([
@@ -1835,8 +1840,13 @@ class BJLG_REST_API {
 
         $download_token = wp_generate_password(32, false);
         $transient_key = 'bjlg_download_' . $download_token;
+        $token_ttl = BJLG_Actions::get_download_token_ttl($filepath);
 
-        set_transient($transient_key, $filepath, BJLG_Backup::get_task_ttl());
+        set_transient(
+            $transient_key,
+            BJLG_Actions::build_download_token_payload($filepath),
+            $token_ttl
+        );
 
         $download_url = add_query_arg([
             'action' => 'bjlg_download',
@@ -1865,7 +1875,7 @@ class BJLG_REST_API {
             'components' => $manifest['contains'] ?? [],
             'download_url' => $download_url,
             'download_token' => $download_token,
-            'download_expires_in' => BJLG_Backup::get_task_ttl(),
+            'download_expires_in' => $token_ttl,
             'download_rest_url' => $rest_download_url,
             'manifest' => $manifest
         ];

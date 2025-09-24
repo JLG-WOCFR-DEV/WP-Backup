@@ -272,6 +272,53 @@ jQuery(document).ready(function($) {
         // ... (Code complet fourni précédemment) ...
     });
 
+    // --- DEMANDE DE TÉLÉCHARGEMENT SÉCURISÉ ---
+    $('body').on('click', '.bjlg-download-button', function(e) {
+        e.preventDefault();
+
+        const $button = $(this);
+        const filename = $button.data('filename');
+
+        if (!filename) {
+            return;
+        }
+
+        const originalText = $button.data('original-text') || $button.text();
+        $button.data('original-text', originalText);
+
+        $button.prop('disabled', true).text('Préparation...');
+
+        $.ajax({
+            url: bjlg_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'bjlg_prepare_download',
+                nonce: bjlg_ajax.nonce,
+                filename: filename
+            }
+        })
+        .done(function(response) {
+            if (response && response.success && response.data && response.data.download_url) {
+                window.location.href = response.data.download_url;
+            } else {
+                const message = response && response.data && response.data.message
+                    ? response.data.message
+                    : 'Impossible de préparer le téléchargement.';
+                alert(message);
+            }
+        })
+        .fail(function(xhr) {
+            let message = 'Une erreur est survenue lors de la préparation du téléchargement.';
+            if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                message += '\n' + xhr.responseJSON.data.message;
+            }
+            alert(message);
+        })
+        .always(function() {
+            $button.prop('disabled', false).text(originalText);
+        });
+    });
+
     // --- GESTIONNAIRE SUPPRESSION DE SAUVEGARDE ---
     $('body').on('click', '.bjlg-delete-button', function(e) {
         e.preventDefault();
