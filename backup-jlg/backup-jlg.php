@@ -103,11 +103,20 @@ final class BJLG_Plugin {
         new BJLG\BJLG_Admin();
         new BJLG\BJLG_Actions();
 
-        $backup_manager = new BJLG\BJLG_Backup();
-        new BJLG\BJLG_Restore($backup_manager);
-        BJLG\BJLG_Scheduler::instance(); BJLG\BJLG_Cleanup::instance(); new BJLG\BJLG_Encryption(); new BJLG\BJLG_Health_Check();
-        new BJLG\BJLG_Diagnostics(); new BJLG\BJLG_Webhooks(); new BJLG\BJLG_Incremental(); new BJLG\BJLG_Performance();
-        new BJLG\BJLG_REST_API(); new BJLG\BJLG_Settings();
+        $encryption_service = new BJLG\BJLG_Encryption();
+        $performance_service = new BJLG\BJLG_Performance();
+
+        $backup_manager = new BJLG\BJLG_Backup($performance_service, $encryption_service);
+        new BJLG\BJLG_Restore($backup_manager, $encryption_service);
+
+        BJLG\BJLG_Scheduler::instance();
+        BJLG\BJLG_Cleanup::instance();
+        new BJLG\BJLG_Health_Check();
+        new BJLG\BJLG_Diagnostics();
+        new BJLG\BJLG_Webhooks();
+        new BJLG\BJLG_Incremental();
+        new BJLG\BJLG_REST_API();
+        new BJLG\BJLG_Settings();
     }
     
     public function enqueue_admin_assets($hook) {

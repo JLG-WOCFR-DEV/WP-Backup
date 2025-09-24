@@ -56,14 +56,22 @@ class BJLG_Backup {
     /** @var array<int, string> */
     private $temporary_files = [];
     
-    public function __construct() {
+    public function __construct($performance_optimizer = null, $encryption_handler = null) {
+        if ($performance_optimizer instanceof BJLG_Performance) {
+            $this->performance_optimizer = $performance_optimizer;
+        }
+
+        if ($encryption_handler instanceof BJLG_Encryption) {
+            $this->encryption_handler = $encryption_handler;
+        }
+
         // Hooks AJAX
         add_action('wp_ajax_bjlg_start_backup_task', [$this, 'handle_start_backup_task']);
         add_action('wp_ajax_bjlg_check_backup_progress', [$this, 'handle_check_backup_progress']);
-        
+
         // Hook pour l'exécution en arrière-plan
         add_action('bjlg_run_backup_task', [$this, 'run_backup_task']);
-        
+
         // Initialiser les handlers
         add_action('init', [$this, 'init_handlers']);
     }
@@ -72,10 +80,10 @@ class BJLG_Backup {
      * Initialise les handlers
      */
     public function init_handlers() {
-        if (class_exists(BJLG_Performance::class)) {
+        if (!$this->performance_optimizer && class_exists(BJLG_Performance::class)) {
             $this->performance_optimizer = new BJLG_Performance();
         }
-        if (class_exists(BJLG_Encryption::class)) {
+        if (!$this->encryption_handler && class_exists(BJLG_Encryption::class)) {
             $this->encryption_handler = new BJLG_Encryption();
         }
     }
@@ -252,6 +260,8 @@ class BJLG_Backup {
                 }
             }
             
+            $this->ensure_backup_directory_is_ready();
+
             // Créer le fichier de sauvegarde
             $backup_filename = $this->generate_backup_filename($backup_type, $components);
             $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
@@ -260,8 +270,20 @@ class BJLG_Backup {
 
             // Créer l'archive ZIP
             $zip = new ZipArchive();
-            if ($zip->open($backup_filepath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== TRUE) {
-                throw new Exception("Impossible de créer l'archive ZIP.");
+            $zip_open_result = $zip->open($backup_filepath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+
+            if ($zip_open_result !== true) {
+                $error_message = $this->describe_zip_error($zip_open_result);
+
+                BJLG_Debug::log(
+                    sprintf(
+                        "ERREUR: ZipArchive::open a échoué pour %s : %s",
+                        $backup_filepath,
+                        $error_message
+                    )
+                );
+
+                throw new Exception("Impossible de créer l'archive ZIP : " . $error_message . '.');
             }
             
             // Ajouter le manifeste
@@ -421,6 +443,51 @@ class BJLG_Backup {
         } finally {
             $this->cleanup_temporary_files();
         }
+    }
+
+    /**
+     * S'assure que le dossier de sauvegarde est prêt à l'emploi.
+     *
+     * @throws Exception Quand le dossier ne peut pas être créé ou n'est pas accessible en écriture.
+     */
+    private function ensure_backup_directory_is_ready() {
+        if (!is_dir(BJLG_BACKUP_DIR)) {
+            if (!wp_mkdir_p(BJLG_BACKUP_DIR)) {
+                throw new Exception("Le dossier de sauvegarde est introuvable et n'a pas pu être créé.");
+            }
+        }
+
+        $is_writable = function_exists('wp_is_writable') ? wp_is_writable(BJLG_BACKUP_DIR) : is_writable(BJLG_BACKUP_DIR);
+
+        if (!$is_writable) {
+            throw new Exception("Le dossier de sauvegarde n'est pas accessible en écriture.");
+        }
+    }
+
+    /**
+     * Retourne une description lisible pour les erreurs ZipArchive::open().
+     *
+     * @param int|string $error_code
+     * @return string
+     */
+    private function describe_zip_error($error_code) {
+        $errors = [
+            ZipArchive::ER_EXISTS => "L'archive existe déjà et ne peut pas être écrasée.",
+            ZipArchive::ER_INCONS => "Archive ZIP incohérente ou corrompue.",
+            ZipArchive::ER_INVAL => "Arguments fournis invalides.",
+            ZipArchive::ER_MEMORY => 'Mémoire insuffisante pour ouvrir l\'archive.',
+            ZipArchive::ER_NOENT => 'Fichier ou dossier manquant pour créer l\'archive.',
+            ZipArchive::ER_NOZIP => "Le fichier n'est pas une archive ZIP valide.",
+            ZipArchive::ER_OPEN => "Impossible d'ouvrir le fichier de sauvegarde.",
+            ZipArchive::ER_READ => "Impossible de lire le fichier de sauvegarde.",
+            ZipArchive::ER_SEEK => 'Erreur lors de la recherche dans le fichier de sauvegarde.',
+        ];
+
+        if (is_int($error_code) && isset($errors[$error_code])) {
+            return $errors[$error_code];
+        }
+
+        return sprintf('Code erreur %s renvoyé par ZipArchive::open()', (string) $error_code);
     }
 
     /**
