@@ -857,10 +857,174 @@ namespace {
             $this->assertArrayHasKey('download_url', $response);
             $this->assertSame($filename, $response['filename']);
             $this->assertArrayHasKey('size', $response);
+            $this->assertArrayHasKey('download_token', $response);
+            $this->assertIsString($response['download_token']);
             $this->assertGreaterThan(0, $response['size']);
         } finally {
             if (file_exists($filepath)) {
                 unlink($filepath);
+            }
+        }
+    }
+
+    public function test_download_backup_reuses_valid_token(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+        $filepath = BJLG_BACKUP_DIR . $filename;
+
+        file_put_contents($filepath, 'backup-data');
+
+        $request_factory = function ($id, $token = null) {
+            return new class($id, $token) {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct($id, $token)
+                {
+                    $this->params = [
+                        'id' => $id,
+                        'token' => $token,
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+        };
+
+        try {
+            $first_response = $api->download_backup($request_factory($filename));
+
+            $this->assertIsArray($first_response);
+            $this->assertArrayHasKey('download_token', $first_response);
+
+            $token = (string) $first_response['download_token'];
+
+            $second_response = $api->download_backup($request_factory($filename, $token));
+
+            $this->assertIsArray($second_response);
+            $this->assertArrayHasKey('download_token', $second_response);
+            $this->assertSame($token, $second_response['download_token']);
+
+            $parsed_url = parse_url($second_response['download_url']);
+            $query_args = [];
+
+            if (!empty($parsed_url['query'])) {
+                parse_str((string) $parsed_url['query'], $query_args);
+            }
+
+            $this->assertSame($token, $query_args['token'] ?? null);
+            $this->assertCount(1, $GLOBALS['bjlg_test_transients']);
+            $this->assertSame(
+                $filepath,
+                $GLOBALS['bjlg_test_transients']['bjlg_download_' . $token] ?? null
+            );
+        } finally {
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+        }
+    }
+
+    public function test_download_backup_rejects_unknown_token(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+        $filepath = BJLG_BACKUP_DIR . $filename;
+
+        file_put_contents($filepath, 'backup-data');
+
+        $request = new class($filename) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id)
+            {
+                $this->params = [
+                    'id' => $id,
+                    'token' => 'invalid-token',
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            $response = $api->download_backup($request);
+
+            $this->assertInstanceOf(\WP_Error::class, $response);
+            $this->assertSame('bjlg_invalid_token', $response->get_error_code());
+            $data = $response->get_error_data();
+            $this->assertIsArray($data);
+            $this->assertSame(404, $data['status'] ?? null);
+        } finally {
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+        }
+    }
+
+    public function test_download_backup_rejects_token_for_other_backup(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+        $filepath = BJLG_BACKUP_DIR . $filename;
+        $other_file = BJLG_BACKUP_DIR . 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+
+        file_put_contents($filepath, 'primary-backup');
+        file_put_contents($other_file, 'other-backup');
+
+        $token = 'existing-token';
+        set_transient('bjlg_download_' . $token, $other_file, DAY_IN_SECONDS);
+
+        $request = new class($filename, $token) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id, $token)
+            {
+                $this->params = [
+                    'id' => $id,
+                    'token' => $token,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            $response = $api->download_backup($request);
+
+            $this->assertInstanceOf(\WP_Error::class, $response);
+            $this->assertSame('bjlg_invalid_token', $response->get_error_code());
+            $data = $response->get_error_data();
+            $this->assertIsArray($data);
+            $this->assertSame(403, $data['status'] ?? null);
+        } finally {
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+
+            if (file_exists($other_file)) {
+                unlink($other_file);
             }
         }
     }

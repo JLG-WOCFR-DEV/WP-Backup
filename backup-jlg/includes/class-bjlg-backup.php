@@ -29,6 +29,13 @@ class BJLG_Backup {
     private const TASK_LOCK_TTL = 1800;
 
     /**
+     * Stocke le verrou en mémoire pour les environnements sans API de cache/options.
+     *
+     * @var array{owner: string, expires_at: int}|null
+     */
+    private static $in_memory_lock = null;
+
+    /**
      * Récupère la durée de vie maximale d'une tâche stockée dans un transient.
      *
      * @return int
@@ -77,12 +84,23 @@ class BJLG_Backup {
      */
     public static function reserve_task_slot($task_id) {
         $current_owner = self::get_task_lock_owner();
+        $lock_ttl = self::get_task_lock_ttl();
 
         if ($current_owner !== null && $current_owner !== $task_id) {
             return false;
         }
 
-        return set_transient(self::TASK_LOCK_KEY, $task_id, self::get_task_lock_ttl());
+        if ($current_owner === $task_id) {
+            self::refresh_task_lock($task_id, $lock_ttl);
+
+            return true;
+        }
+
+        if (self::try_acquire_task_lock($task_id, $lock_ttl)) {
+            return true;
+        }
+
+        return self::get_task_lock_owner() === $task_id;
     }
 
     /**
@@ -92,10 +110,14 @@ class BJLG_Backup {
      * @return void
      */
     public static function release_task_slot($task_id) {
-        $current_owner = get_transient(self::TASK_LOCK_KEY);
+        $current_owner = self::get_task_lock_owner();
 
         if ($current_owner === $task_id) {
-            delete_transient(self::TASK_LOCK_KEY);
+            if (function_exists('delete_transient')) {
+                delete_transient(self::TASK_LOCK_KEY);
+            }
+
+            self::$in_memory_lock = null;
         }
     }
 
@@ -105,14 +127,33 @@ class BJLG_Backup {
      * @return string|null
      */
     private static function get_task_lock_owner() {
-        $current_owner = get_transient(self::TASK_LOCK_KEY);
+        $current_owner = function_exists('get_transient')
+            ? get_transient(self::TASK_LOCK_KEY)
+            : false;
 
         if ($current_owner === false) {
-            return null;
+            if (self::$in_memory_lock === null) {
+                return null;
+            }
+
+            if (self::$in_memory_lock['expires_at'] <= time()) {
+                self::$in_memory_lock = null;
+
+                return null;
+            }
+
+            return self::$in_memory_lock['owner'];
         }
 
-        if (is_string($current_owner) && get_transient($current_owner) === false) {
-            delete_transient(self::TASK_LOCK_KEY);
+        if (is_string($current_owner)
+            && function_exists('get_transient')
+            && get_transient($current_owner) === false
+        ) {
+            if (function_exists('delete_transient')) {
+                delete_transient(self::TASK_LOCK_KEY);
+            }
+
+            self::$in_memory_lock = null;
 
             return null;
         }
@@ -134,6 +175,99 @@ class BJLG_Backup {
         }
 
         return (int) $filtered_ttl;
+    }
+
+    /**
+     * Tente d'acquérir le verrou de manière atomique selon les APIs disponibles.
+     *
+     * @param string $task_id
+     * @param int    $ttl
+     *
+     * @return bool
+     */
+    private static function try_acquire_task_lock($task_id, $ttl) {
+        if (function_exists('wp_using_ext_object_cache')
+            && wp_using_ext_object_cache()
+            && function_exists('wp_cache_add')
+        ) {
+            return wp_cache_add(self::TASK_LOCK_KEY, $task_id, 'transient', $ttl);
+        }
+
+        if (function_exists('add_option')) {
+            $option_name = '_transient_' . self::TASK_LOCK_KEY;
+            $timeout_name = '_transient_timeout_' . self::TASK_LOCK_KEY;
+            $added = add_option($option_name, $task_id, '', 'no');
+
+            if ($added) {
+                $expires_at = time() + $ttl;
+
+                if (!add_option($timeout_name, $expires_at, '', 'no')) {
+                    if (function_exists('update_option')) {
+                        update_option($timeout_name, $expires_at);
+                    }
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        if (function_exists('set_transient')) {
+            return set_transient(self::TASK_LOCK_KEY, $task_id, $ttl);
+        }
+
+        $now = time();
+
+        if (self::$in_memory_lock === null || self::$in_memory_lock['expires_at'] <= $now) {
+            self::$in_memory_lock = [
+                'owner' => $task_id,
+                'expires_at' => $now + $ttl,
+            ];
+
+            return true;
+        }
+
+        return self::$in_memory_lock['owner'] === $task_id;
+    }
+
+    /**
+     * Rafraîchit la durée de vie du verrou pour le propriétaire actuel.
+     *
+     * @param string $task_id
+     * @param int    $ttl
+     *
+     * @return void
+     */
+    private static function refresh_task_lock($task_id, $ttl) {
+        if (function_exists('wp_using_ext_object_cache')
+            && wp_using_ext_object_cache()
+            && function_exists('wp_cache_set')
+        ) {
+            wp_cache_set(self::TASK_LOCK_KEY, $task_id, 'transient', $ttl);
+
+            return;
+        }
+
+        if (function_exists('update_option')) {
+            $option_name = '_transient_' . self::TASK_LOCK_KEY;
+            $timeout_name = '_transient_timeout_' . self::TASK_LOCK_KEY;
+            update_option($option_name, $task_id);
+            update_option($timeout_name, time() + $ttl);
+
+            return;
+        }
+
+        if (function_exists('set_transient')) {
+            set_transient(self::TASK_LOCK_KEY, $task_id, $ttl);
+
+            return;
+        }
+
+        self::$in_memory_lock = [
+            'owner' => $task_id,
+            'expires_at' => time() + $ttl,
+        ];
     }
 
     private $performance_optimizer;

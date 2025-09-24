@@ -87,14 +87,25 @@ class BJLG_Rate_Limiter {
 
                 $ip = trim($ip);
 
-                if (filter_var($ip, FILTER_VALIDATE_IP,
-                    FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
-                    return $ip;
+                $validated_ip = filter_var($ip, FILTER_VALIDATE_IP);
+
+                if ($validated_ip !== false) {
+                    return $validated_ip;
                 }
             }
         }
 
-        return $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        $fallback_ip = $_SERVER['REMOTE_ADDR'] ?? '';
+
+        if (is_string($fallback_ip) && $fallback_ip !== '') {
+            $validated_fallback = filter_var($fallback_ip, FILTER_VALIDATE_IP);
+
+            if ($validated_fallback !== false) {
+                return $validated_fallback;
+            }
+        }
+
+        return 'unknown';
     }
 
     /**
