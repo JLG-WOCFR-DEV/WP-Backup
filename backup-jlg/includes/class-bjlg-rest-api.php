@@ -1404,9 +1404,46 @@ class BJLG_REST_API {
             return $filepath;
         }
 
-        // Générer un lien de téléchargement temporaire
-        $download_token = wp_generate_password(32, false);
-        set_transient('bjlg_download_' . $download_token, $filepath, BJLG_Backup::get_task_ttl());
+        $download_token = null;
+        $transient_ttl = BJLG_Backup::get_task_ttl();
+
+        if (is_string($token)) {
+            $token = trim($token);
+        }
+
+        if (!empty($token)) {
+            $transient_key = 'bjlg_download_' . $token;
+            $existing_path = get_transient($transient_key);
+
+            if (empty($existing_path)) {
+                return new WP_Error(
+                    'bjlg_invalid_token',
+                    __('Le token de téléchargement fourni est invalide ou expiré.', 'backup-jlg'),
+                    ['status' => 404]
+                );
+            }
+
+            $normalized_existing = $this->normalize_backup_path($existing_path);
+            $normalized_requested = $this->normalize_backup_path($filepath);
+
+            if ($normalized_existing === null || $normalized_requested === null
+                || $normalized_existing !== $normalized_requested
+            ) {
+                return new WP_Error(
+                    'bjlg_invalid_token',
+                    __('Le token fourni ne correspond pas à cette sauvegarde.', 'backup-jlg'),
+                    ['status' => 403]
+                );
+            }
+
+            set_transient($transient_key, $filepath, $transient_ttl);
+            $download_token = $token;
+        }
+
+        if ($download_token === null) {
+            $download_token = wp_generate_password(32, false);
+            set_transient('bjlg_download_' . $download_token, $filepath, $transient_ttl);
+        }
 
         $download_url = add_query_arg([
             'action' => 'bjlg_download',
@@ -1415,12 +1452,33 @@ class BJLG_REST_API {
 
         return rest_ensure_response([
             'download_url' => $download_url,
-            'expires_in' => BJLG_Backup::get_task_ttl(),
+            'expires_in' => $transient_ttl,
+            'download_token' => $download_token,
             'filename' => basename($filepath),
             'size' => filesize($filepath)
         ]);
     }
-    
+
+    /**
+     * Normalise un chemin de sauvegarde pour comparaison sécurisée.
+     *
+     * @param string $path
+     * @return string|null
+     */
+    private function normalize_backup_path($path) {
+        if (!is_string($path) || $path === '') {
+            return null;
+        }
+
+        $resolved = realpath($path);
+
+        if ($resolved === false) {
+            return null;
+        }
+
+        return str_replace('\\', '/', $resolved);
+    }
+
     /**
      * Endpoint : Restaurer une sauvegarde
      */

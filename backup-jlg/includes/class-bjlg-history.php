@@ -16,8 +16,10 @@ class BJLG_History {
      */
     public static function create_table() {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'bjlg_history';
-        $charset_collate = $wpdb->get_charset_collate();
+        $table_name = self::get_table_name();
+        $charset_collate = method_exists($wpdb, 'get_charset_collate')
+            ? $wpdb->get_charset_collate()
+            : 'DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci';
         
         $sql = "CREATE TABLE $table_name (
             id mediumint(9) NOT NULL AUTO_INCREMENT,
@@ -39,7 +41,9 @@ class BJLG_History {
         dbDelta($sql);
         
         // Vérifier si la table a été créée
-        $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+        $table_exists = method_exists($wpdb, 'get_var')
+            ? $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name
+            : false;
         
         if ($table_exists) {
             BJLG_Debug::log("Table d'historique créée ou mise à jour avec succès.");
@@ -58,7 +62,7 @@ class BJLG_History {
      */
     public static function log($action, $status, $details = '', $user_id = null) {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'bjlg_history';
+        $table_name = self::get_table_name();
         
         // Obtenir l'ID de l'utilisateur actuel si non spécifié
         if ($user_id === null) {
@@ -91,14 +95,22 @@ class BJLG_History {
         $data['ip_address'] = $ip_address;
         $formats[] = '%s';
 
-        $result = $wpdb->insert(
-            $table_name,
-            $data,
-            $formats
-        );
-        
-        if ($result === false) {
-            BJLG_Debug::log("ERREUR lors de l'enregistrement dans l'historique : " . $wpdb->last_error);
+        if (self::wpdb_supports(['insert'])) {
+            $result = $wpdb->insert(
+                $table_name,
+                $data,
+                $formats
+            );
+
+            if ($result === false) {
+                $error_message = property_exists($wpdb, 'last_error')
+                    ? (string) $wpdb->last_error
+                    : 'unknown';
+
+                BJLG_Debug::log("ERREUR lors de l'enregistrement dans l'historique : " . $error_message);
+            }
+        } else {
+            BJLG_Debug::log('Historique non persistant : insert() indisponible sur $wpdb.');
         }
         
         // Déclencher une action pour permettre des extensions
@@ -114,7 +126,7 @@ class BJLG_History {
      */
     public static function get_history($limit = 50, $filters = []) {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'bjlg_history';
+        $table_name = self::get_table_name();
         
         $where_clauses = ['1=1'];
         $values = [];
@@ -153,10 +165,14 @@ class BJLG_History {
         // Préparer la requête
         $query = "SELECT * FROM $table_name WHERE $where_sql ORDER BY timestamp DESC LIMIT %d";
         
-        if (!empty($values)) {
+        if (!empty($values) && self::wpdb_supports(['prepare'])) {
             $query = $wpdb->prepare($query, ...$values);
         }
-        
+
+        if (!self::wpdb_supports(['get_results'])) {
+            return [];
+        }
+
         $results = $wpdb->get_results($query, ARRAY_A);
         
         // Enrichir les résultats avec les noms d'utilisateur
@@ -177,7 +193,7 @@ class BJLG_History {
      */
     public static function get_stats($period = 'week') {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'bjlg_history';
+        $table_name = self::get_table_name();
         
         $date_limit = date('Y-m-d H:i:s', strtotime('-1 ' . $period));
         
@@ -192,60 +208,74 @@ class BJLG_History {
         ];
         
         // Total des actions
-        $stats['total_actions'] = $wpdb->get_var(
-            $wpdb->prepare(
-                "SELECT COUNT(*) FROM $table_name WHERE timestamp > %s",
-                $date_limit
-            )
-        );
+        if (self::wpdb_supports(['prepare', 'get_var'])) {
+            $stats['total_actions'] = $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT COUNT(*) FROM $table_name WHERE timestamp > %s",
+                    $date_limit
+                )
+            );
+        }
         
         // Par statut
-        $status_counts = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT status, COUNT(*) as count 
-                 FROM $table_name 
-                 WHERE timestamp > %s 
-                 GROUP BY status",
-                $date_limit
-            ),
-            ARRAY_A
-        );
+        $status_counts = [];
+
+        if (self::wpdb_supports(['prepare', 'get_results'])) {
+            $status_counts = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT status, COUNT(*) as count
+                     FROM $table_name
+                     WHERE timestamp > %s
+                     GROUP BY status",
+                    $date_limit
+                ),
+                ARRAY_A
+            );
+        }
         
         foreach ($status_counts as $row) {
             $stats[$row['status']] = intval($row['count']);
         }
         
         // Par type d'action
-        $action_counts = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT action_type, COUNT(*) as count 
-                 FROM $table_name 
-                 WHERE timestamp > %s 
-                 GROUP BY action_type 
-                 ORDER BY count DESC 
-                 LIMIT 10",
-                $date_limit
-            ),
-            ARRAY_A
-        );
+        $action_counts = [];
+
+        if (self::wpdb_supports(['prepare', 'get_results'])) {
+            $action_counts = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT action_type, COUNT(*) as count
+                     FROM $table_name
+                     WHERE timestamp > %s
+                     GROUP BY action_type
+                     ORDER BY count DESC
+                     LIMIT 10",
+                    $date_limit
+                ),
+                ARRAY_A
+            );
+        }
         
         foreach ($action_counts as $row) {
             $stats['by_action'][$row['action_type']] = intval($row['count']);
         }
         
         // Par utilisateur
-        $user_counts = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT user_id, COUNT(*) as count 
-                 FROM $table_name 
-                 WHERE timestamp > %s AND user_id IS NOT NULL 
-                 GROUP BY user_id 
-                 ORDER BY count DESC 
-                 LIMIT 5",
-                $date_limit
-            ),
-            ARRAY_A
-        );
+        $user_counts = [];
+
+        if (self::wpdb_supports(['prepare', 'get_results'])) {
+            $user_counts = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT user_id, COUNT(*) as count
+                     FROM $table_name
+                     WHERE timestamp > %s AND user_id IS NOT NULL
+                     GROUP BY user_id
+                     ORDER BY count DESC
+                     LIMIT 5",
+                    $date_limit
+                ),
+                ARRAY_A
+            );
+        }
         
         foreach ($user_counts as $row) {
             $user = get_user_by('id', $row['user_id']);
@@ -254,18 +284,22 @@ class BJLG_History {
         }
         
         // Heure la plus active
-        $hour_stats = $wpdb->get_row(
-            $wpdb->prepare(
-                "SELECT HOUR(timestamp) as hour, COUNT(*) as count 
-                 FROM $table_name 
-                 WHERE timestamp > %s 
-                 GROUP BY HOUR(timestamp) 
-                 ORDER BY count DESC 
-                 LIMIT 1",
-                $date_limit
-            ),
-            ARRAY_A
-        );
+        $hour_stats = null;
+
+        if (self::wpdb_supports(['prepare', 'get_row'])) {
+            $hour_stats = $wpdb->get_row(
+                $wpdb->prepare(
+                    "SELECT HOUR(timestamp) as hour, COUNT(*) as count
+                     FROM $table_name
+                     WHERE timestamp > %s
+                     GROUP BY HOUR(timestamp)
+                     ORDER BY count DESC
+                     LIMIT 1",
+                    $date_limit
+                ),
+                ARRAY_A
+            );
+        }
         
         if ($hour_stats) {
             $stats['most_active_hour'] = sprintf('%02d:00', $hour_stats['hour']);
@@ -279,21 +313,29 @@ class BJLG_History {
      */
     public static function search($search_term, $limit = 50) {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'bjlg_history';
-        
-        $search_term = '%' . $wpdb->esc_like($search_term) . '%';
-        
+        $table_name = self::get_table_name();
+
+        if (method_exists($wpdb, 'esc_like')) {
+            $search_term = '%' . $wpdb->esc_like($search_term) . '%';
+        } else {
+            $search_term = '%' . str_replace('%', '%%', $search_term) . '%';
+        }
+
+        if (!self::wpdb_supports(['prepare', 'get_results'])) {
+            return [];
+        }
+
         $query = $wpdb->prepare(
-            "SELECT * FROM $table_name 
-             WHERE action_type LIKE %s 
-                OR details LIKE %s 
-             ORDER BY timestamp DESC 
+            "SELECT * FROM $table_name
+             WHERE action_type LIKE %s
+                OR details LIKE %s
+             ORDER BY timestamp DESC
              LIMIT %d",
             $search_term,
             $search_term,
             $limit
         );
-        
+
         return $wpdb->get_results($query, ARRAY_A);
     }
     
@@ -325,10 +367,14 @@ class BJLG_History {
      */
     public static function cleanup($days_to_keep = 30) {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'bjlg_history';
-        
+        $table_name = self::get_table_name();
+
         $cutoff_date = date('Y-m-d H:i:s', strtotime('-' . $days_to_keep . ' days'));
-        
+
+        if (!self::wpdb_supports(['prepare', 'query'])) {
+            return 0;
+        }
+
         $deleted = $wpdb->query(
             $wpdb->prepare(
                 "DELETE FROM $table_name WHERE timestamp < %s",
@@ -339,15 +385,55 @@ class BJLG_History {
         if ($deleted > 0) {
             BJLG_Debug::log("Historique nettoyé : $deleted entrées supprimées (plus de $days_to_keep jours).");
         }
-        
+
         return $deleted;
     }
-    
+
+    /**
+     * Retourne le nom complet de la table d'historique selon le préfixe actif.
+     */
+    private static function get_table_name() {
+        global $wpdb;
+
+        $prefix = 'wp_';
+
+        if (is_object($wpdb) && property_exists($wpdb, 'prefix')) {
+            $raw_prefix = $wpdb->prefix;
+
+            if (is_string($raw_prefix) && $raw_prefix !== '') {
+                $prefix = $raw_prefix;
+            }
+        }
+
+        return $prefix . 'bjlg_history';
+    }
+
+    /**
+     * Vérifie si $wpdb propose toutes les méthodes nécessaires.
+     *
+     * @param array<int, string> $methods
+     */
+    private static function wpdb_supports(array $methods) {
+        global $wpdb;
+
+        if (!is_object($wpdb)) {
+            return false;
+        }
+
+        foreach ($methods as $method) {
+            if (!method_exists($wpdb, $method)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /**
      * Obtient l'adresse IP du client
      */
     private static function get_client_ip() {
-        $ip_keys = ['HTTP_CF_CONNECTING_IP', 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED', 
+        $ip_keys = ['HTTP_CF_CONNECTING_IP', 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED',
                    'HTTP_X_CLUSTER_CLIENT_IP', 'HTTP_FORWARDED_FOR', 'HTTP_FORWARDED', 'REMOTE_ADDR'];
         
         foreach ($ip_keys as $key) {
@@ -361,14 +447,25 @@ class BJLG_History {
                 
                 $ip = trim($ip);
                 
-                if (filter_var($ip, FILTER_VALIDATE_IP, 
-                    FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
-                    return $ip;
+                $validated_ip = filter_var($ip, FILTER_VALIDATE_IP);
+
+                if ($validated_ip !== false) {
+                    return $validated_ip;
                 }
             }
         }
-        
-        return $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
+
+        $fallback_ip = $_SERVER['REMOTE_ADDR'] ?? '';
+
+        if (is_string($fallback_ip) && $fallback_ip !== '') {
+            $validated_fallback = filter_var($fallback_ip, FILTER_VALIDATE_IP);
+
+            if ($validated_fallback !== false) {
+                return $validated_fallback;
+            }
+        }
+
+        return 'Unknown';
     }
     
     /**

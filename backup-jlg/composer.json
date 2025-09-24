@@ -19,9 +19,9 @@
         "squizlabs/php_codesniffer": "^3.6"
     },
     "autoload": {
-        "psr-4": {
-            "BJLG\\": "includes/"
-        }
+        "classmap": [
+            "includes/"
+        ]
     },
     "config": {
         "vendor-dir": "vendor-bjlg",

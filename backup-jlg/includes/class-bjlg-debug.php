@@ -11,24 +11,35 @@ if (!defined('ABSPATH')) {
 class BJLG_Debug {
 
     /**
+     * Journal en mémoire utilisé principalement pour les tests automatisés.
+     *
+     * @var array<int, string>
+     */
+    public static $logs = [];
+
+    /**
      * Enregistre un message dans le log du plugin si le mode débogage est activé.
      * @param string|array|object $message Le message à enregistrer.
      * @param string $level Niveau de log (info, warning, error, debug).
      */
     public static function log($message, $level = 'info') {
+        // Conserver une trace en mémoire pour les environnements de test
+        if (is_array($message) || is_object($message)) {
+            $formatted_message = print_r($message, true);
+        } else {
+            $formatted_message = (string) $message;
+        }
+
+        self::$logs[] = $formatted_message;
+
         // Vérifier si le débogage est activé
         if (!defined('BJLG_DEBUG') || BJLG_DEBUG !== true) {
             return;
         }
-        
+
         $log_file = WP_CONTENT_DIR . '/bjlg-debug.log';
         $timestamp = date('Y-m-d H:i:s');
-        
-        // Formater le message selon le type
-        if (is_array($message) || is_object($message)) {
-            $message = print_r($message, true);
-        }
-        
+
         // Ajouter le contexte (fichier et ligne d'appel)
         $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
         $caller = isset($backtrace[1]) ? $backtrace[1] : $backtrace[0];
@@ -38,14 +49,14 @@ class BJLG_Debug {
         
         // Construire l'entrée de log
         $level_str = strtoupper($level);
-        $entry = "[$timestamp] [$level_str] [$file:$line in $function()] $message\n";
-        
+        $entry = "[$timestamp] [$level_str] [$file:$line in $function()] $formatted_message\n";
+
         // Écrire dans le fichier (avec verrou pour éviter les conflits)
         $result = @file_put_contents($log_file, $entry, FILE_APPEND | LOCK_EX);
-        
+
         // Si l'écriture échoue et qu'on est en mode debug WordPress, utiliser error_log
         if ($result === false && defined('WP_DEBUG') && WP_DEBUG) {
-            error_log("BJLG Debug: $message");
+            error_log("BJLG Debug: $formatted_message");
         }
     }
     
@@ -348,4 +359,8 @@ class BJLG_Debug {
         
         unset($GLOBALS['bjlg_benchmarks'][$label]);
     }
+}
+
+if (!class_exists('BJLG_Debug', false)) {
+    class_alias(__NAMESPACE__ . '\\BJLG_Debug', 'BJLG_Debug');
 }
