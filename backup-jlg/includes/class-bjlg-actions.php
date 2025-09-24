@@ -15,10 +15,70 @@ class BJLG_Actions {
 
     public function __construct() {
         add_action('wp_ajax_bjlg_delete_backup', [$this, 'handle_delete_backup']);
+        add_action('wp_ajax_bjlg_prepare_download', [$this, 'prepare_download']);
         add_action('wp_ajax_bjlg_download', [$this, 'handle_download_request']);
-        add_action('wp_ajax_nopriv_bjlg_download', [$this, 'handle_download_request']);
         add_action('init', [$this, 'maybe_handle_public_download']);
         add_action('template_redirect', [$this, 'maybe_handle_public_download']);
+    }
+
+    /**
+     * Génère un token de téléchargement à la demande pour un fichier spécifique.
+     */
+    public function prepare_download() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        if (empty($_POST['filename'])) {
+            wp_send_json_error(['message' => 'Nom de fichier manquant.'], 400);
+        }
+
+        $raw_filename = wp_unslash($_POST['filename']);
+        $sanitized_filename = sanitize_file_name($raw_filename);
+
+        if ($sanitized_filename === '') {
+            wp_send_json_error(['message' => 'Nom de fichier invalide.'], 400);
+        }
+
+        $real_backup_dir = realpath(BJLG_BACKUP_DIR);
+
+        if ($real_backup_dir === false) {
+            wp_send_json_error(['message' => 'Répertoire de sauvegarde introuvable.'], 500);
+        }
+
+        $filepath = $real_backup_dir . DIRECTORY_SEPARATOR . $sanitized_filename;
+        $real_filepath = realpath($filepath);
+
+        if ($real_filepath === false || !is_readable($real_filepath)) {
+            wp_send_json_error(['message' => 'Fichier de sauvegarde introuvable.'], 404);
+        }
+
+        $normalized_dir = rtrim(str_replace('\\', '/', $real_backup_dir), '/') . '/';
+        $normalized_path = str_replace('\\', '/', $real_filepath);
+
+        if (strpos($normalized_path, $normalized_dir) !== 0) {
+            wp_send_json_error(['message' => 'Accès au fichier refusé.'], 403);
+        }
+
+        $download_token = wp_generate_password(32, false);
+        $transient_key = 'bjlg_download_' . $download_token;
+        $ttl = self::get_download_token_ttl($real_filepath);
+        $payload = self::build_download_token_payload($real_filepath);
+
+        set_transient($transient_key, $payload, $ttl);
+
+        $download_url = add_query_arg([
+            'action' => 'bjlg_download',
+            'token' => $download_token,
+        ], admin_url('admin-ajax.php'));
+
+        wp_send_json_success([
+            'download_url' => $download_url,
+            'token' => $download_token,
+            'expires_in' => $ttl,
+        ]);
     }
 
     /**
@@ -160,10 +220,22 @@ class BJLG_Actions {
         }
 
         $transient_key = 'bjlg_download_' . $token;
-        $filepath = get_transient($transient_key);
+        $payload = get_transient($transient_key);
+
+        if (is_array($payload)) {
+            $filepath = isset($payload['file']) ? $payload['file'] : '';
+            $required_capability = isset($payload['requires_cap']) ? $payload['requires_cap'] : null;
+        } else {
+            $filepath = $payload;
+            $required_capability = null;
+        }
 
         if (empty($filepath)) {
             return new WP_Error('bjlg_invalid_token', 'Lien de téléchargement invalide ou expiré.', ['status' => 403]);
+        }
+
+        if ($required_capability && !current_user_can($required_capability)) {
+            return new WP_Error('bjlg_forbidden', 'Permissions insuffisantes pour télécharger cette sauvegarde.', ['status' => 403]);
         }
 
         $real_backup_dir = realpath(BJLG_BACKUP_DIR);
@@ -190,6 +262,49 @@ class BJLG_Actions {
         }
 
         return [$real_filepath, $transient_key];
+    }
+
+    /**
+     * Construit la charge utile stockée avec un token de téléchargement.
+     *
+     * @param string $filepath
+     * @param string $required_capability
+     * @return array
+     */
+    public static function build_download_token_payload($filepath, $required_capability = BJLG_CAPABILITY) {
+        return [
+            'file' => $filepath,
+            'requires_cap' => $required_capability,
+            'issued_at' => time(),
+        ];
+    }
+
+    /**
+     * Retourne la durée de vie d'un token de téléchargement.
+     *
+     * @param string $filepath
+     * @return int
+     */
+    public static function get_download_token_ttl($filepath) {
+        $minute_in_seconds = defined('MINUTE_IN_SECONDS') ? MINUTE_IN_SECONDS : 60;
+        $default_ttl = 15 * $minute_in_seconds;
+        $filtered_ttl = apply_filters('bjlg_download_token_ttl', $default_ttl, $filepath);
+
+        if (!is_int($filtered_ttl)) {
+            $filtered_ttl = (int) $filtered_ttl;
+        }
+
+        if ($filtered_ttl <= 0) {
+            $filtered_ttl = $default_ttl;
+        }
+
+        $task_ttl = BJLG_Backup::get_task_ttl();
+
+        if (is_int($task_ttl) && $task_ttl > 0) {
+            $filtered_ttl = min($filtered_ttl, $task_ttl);
+        }
+
+        return $filtered_ttl;
     }
 
     /**

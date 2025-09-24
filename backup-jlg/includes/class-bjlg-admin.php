@@ -192,12 +192,6 @@ class BJLG_Admin {
                     <tbody>
                         <?php foreach ($backups as $backup_file):
                             $filename = basename($backup_file);
-                            $download_token = wp_generate_password(32, false);
-                            set_transient('bjlg_download_' . $download_token, $backup_file, BJLG_Backup::get_task_ttl());
-                            $file_url = add_query_arg([
-                                'action' => 'bjlg_download',
-                                'token' => $download_token,
-                            ], admin_url('admin-ajax.php'));
                             $is_encrypted = (substr($filename, -4) === '.enc');
                             ?>
                             <tr>
@@ -216,7 +210,7 @@ class BJLG_Admin {
                                 <td><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), filemtime($backup_file)); ?></td>
                                 <td>
                                     <button class="button button-primary bjlg-restore-button" data-filename="<?php echo esc_attr($filename); ?>">Restaurer</button>
-                                    <a href="<?php echo esc_url($file_url); ?>" class="button">Télécharger</a>
+                                    <button type="button" class="button bjlg-download-button" data-filename="<?php echo esc_attr($filename); ?>">Télécharger</button>
                                     <button class="button button-link-delete bjlg-delete-button" data-filename="<?php echo esc_attr($filename); ?>">Supprimer</button>
                                 </td>
                             </tr>
