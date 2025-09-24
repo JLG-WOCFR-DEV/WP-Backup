@@ -19,6 +19,16 @@ class BJLG_Backup {
     public const TASK_TTL = DAY_IN_SECONDS;
 
     /**
+     * Clé du transient servant de verrou d'exécution.
+     */
+    private const TASK_LOCK_KEY = 'bjlg_backup_task_lock';
+
+    /**
+     * Durée de vie du verrou d'exécution (30 minutes).
+     */
+    private const TASK_LOCK_TTL = 1800;
+
+    /**
      * Récupère la durée de vie maximale d'une tâche stockée dans un transient.
      *
      * @return int
@@ -48,6 +58,82 @@ class BJLG_Backup {
      */
     public static function save_task_state($task_id, array $task_data) {
         return set_transient($task_id, $task_data, self::get_task_ttl());
+    }
+
+    /**
+     * Indique si un verrou d'exécution est actuellement actif.
+     *
+     * @return bool
+     */
+    public static function is_task_locked() {
+        return self::get_task_lock_owner() !== null;
+    }
+
+    /**
+     * Réserve le verrou d'exécution pour une tâche donnée.
+     *
+     * @param string $task_id
+     * @return bool
+     */
+    public static function reserve_task_slot($task_id) {
+        $current_owner = self::get_task_lock_owner();
+
+        if ($current_owner !== null && $current_owner !== $task_id) {
+            return false;
+        }
+
+        return set_transient(self::TASK_LOCK_KEY, $task_id, self::get_task_lock_ttl());
+    }
+
+    /**
+     * Libère le verrou d'exécution lorsqu'une tâche est terminée.
+     *
+     * @param string $task_id
+     * @return void
+     */
+    public static function release_task_slot($task_id) {
+        $current_owner = get_transient(self::TASK_LOCK_KEY);
+
+        if ($current_owner === $task_id) {
+            delete_transient(self::TASK_LOCK_KEY);
+        }
+    }
+
+    /**
+     * Retourne l'identifiant de la tâche qui possède actuellement le verrou.
+     *
+     * @return string|null
+     */
+    private static function get_task_lock_owner() {
+        $current_owner = get_transient(self::TASK_LOCK_KEY);
+
+        if ($current_owner === false) {
+            return null;
+        }
+
+        if (is_string($current_owner) && get_transient($current_owner) === false) {
+            delete_transient(self::TASK_LOCK_KEY);
+
+            return null;
+        }
+
+        return is_string($current_owner) ? $current_owner : null;
+    }
+
+    /**
+     * Retourne la durée de vie du verrou d'exécution, filtrable.
+     *
+     * @return int
+     */
+    private static function get_task_lock_ttl() {
+        $default_ttl = self::TASK_LOCK_TTL;
+        $filtered_ttl = apply_filters('bjlg_task_lock_ttl', $default_ttl);
+
+        if (!is_numeric($filtered_ttl) || (int) $filtered_ttl <= 0) {
+            return $default_ttl;
+        }
+
+        return (int) $filtered_ttl;
     }
 
     private $performance_optimizer;
@@ -108,7 +194,7 @@ class BJLG_Backup {
 
         // Créer un ID unique pour cette tâche
         $task_id = 'bjlg_backup_' . md5(uniqid('manual', true));
-        
+
         // Initialiser les données de la tâche
         $task_data = [
             'progress' => 5,
@@ -120,13 +206,21 @@ class BJLG_Backup {
             'source' => 'manual',
             'start_time' => time()
         ];
-        
+
+        if (!self::reserve_task_slot($task_id)) {
+            BJLG_Debug::log("Impossible de démarrer la tâche $task_id : une sauvegarde est déjà en cours.");
+            wp_send_json_error([
+                'message' => 'Une autre sauvegarde est déjà en cours d\'exécution.'
+            ], 409);
+        }
+
         // Planifier l'exécution immédiate en arrière-plan avant de sauvegarder l'état
         $event_scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
 
         if ($event_scheduled === false) {
             BJLG_Debug::log("Échec de la planification de la tâche de sauvegarde : $task_id");
-            wp_send_json_error(['message' => "Impossible de planifier la tâche de sauvegarde en arrière-plan."]);
+            self::release_task_slot($task_id);
+            wp_send_json_error(['message' => "Impossible de planifier la tâche de sauvegarde en arrière-plan."], 500);
         }
 
         // Sauvegarder temporairement
@@ -201,15 +295,33 @@ class BJLG_Backup {
      * Exécute la tâche de sauvegarde en arrière-plan
      */
     public function run_backup_task($task_id) {
-        $this->cleanup_temporary_files();
+        if (!self::reserve_task_slot($task_id)) {
+            $lock_owner = self::get_task_lock_owner();
 
-        $task_data = get_transient($task_id);
-        if (!$task_data) {
-            BJLG_Debug::log("ERREUR: Tâche $task_id introuvable.");
+            if ($lock_owner !== null && $lock_owner !== $task_id) {
+                BJLG_Debug::log("Tâche $task_id retardée : une autre sauvegarde ($lock_owner) est en cours.");
+            } else {
+                BJLG_Debug::log("Impossible d'acquérir le verrou d'exécution pour la tâche $task_id. Nouvelle tentative programmée.");
+            }
+
+            $rescheduled = wp_schedule_single_event(time() + 30, 'bjlg_run_backup_task', ['task_id' => $task_id]);
+
+            if ($rescheduled === false) {
+                BJLG_Debug::log("Échec de la replanification de la tâche $task_id.");
+            }
+
             return;
         }
 
         try {
+            $this->cleanup_temporary_files();
+
+            $task_data = get_transient($task_id);
+            if (!$task_data) {
+                BJLG_Debug::log("ERREUR: Tâche $task_id introuvable.");
+                return;
+            }
+
             // Configuration initiale
             set_time_limit(0);
             @ini_set('memory_limit', '512M');
@@ -242,7 +354,7 @@ class BJLG_Backup {
 
             // Déterminer le type de sauvegarde
             $backup_type = $task_data['incremental'] ? 'incremental' : 'full';
-            
+
             // Si incrémentale, vérifier qu'une sauvegarde complète existe
             $incremental_handler = null;
             if ($task_data['incremental']) {
@@ -259,7 +371,7 @@ class BJLG_Backup {
                     $incremental_handler = null;
                 }
             }
-            
+
             $this->ensure_backup_directory_is_ready();
 
             // Créer le fichier de sauvegarde
@@ -285,7 +397,7 @@ class BJLG_Backup {
 
                 throw new Exception("Impossible de créer l'archive ZIP : " . $error_message . '.');
             }
-            
+
             // Ajouter le manifeste
             $manifest = $this->create_manifest($components, $backup_type);
             $zip->addFromString('backup-manifest.json', json_encode($manifest, JSON_PRETTY_PRINT));
@@ -313,18 +425,18 @@ class BJLG_Backup {
                         $this->backup_directory($zip, $upload_dir['basedir'], 'wp-content/uploads/', $task_data['incremental'], $incremental_handler);
                         break;
                 }
-                
+
                 $progress += $progress_per_component;
                 $this->update_task_progress($task_id, round($progress, 1), 'running', "Composant $component terminé");
             }
-            
+
             // Fermer l'archive
             $close_result = @$zip->close();
 
             if ($close_result !== true) {
                 throw new Exception("Impossible de finaliser l'archive ZIP.");
             }
-            
+
             // Chiffrement si demandé
             $requested_encryption = (bool) $task_data['encrypt'];
             if ($requested_encryption) {
@@ -374,11 +486,11 @@ class BJLG_Backup {
             }
 
             $effective_encryption = (bool) $task_data['encrypt'];
-            
+
             // Calculer les statistiques
             $file_size = filesize($backup_filepath);
             $duration = time() - $task_data['start_time'];
-            
+
             // Enregistrer le succès
             BJLG_History::log('backup_created', 'success', sprintf(
                 'Fichier : %s | Taille : %s | Durée : %ds | Chiffrement : %s',
@@ -387,7 +499,7 @@ class BJLG_Backup {
                 $duration,
                 $effective_encryption ? 'oui' : 'non'
             ));
-            
+
             $completion_timestamp = time();
             $manifest_details = [
                 'file' => $backup_filename,
@@ -421,9 +533,9 @@ class BJLG_Backup {
             }
 
             $this->update_task_progress($task_id, 100, 'complete', $success_message);
-            
+
             BJLG_Debug::log("Sauvegarde terminée : $backup_filename (" . size_format($file_size) . ")");
-            
+
         } catch (Exception $e) {
             BJLG_Debug::log("ERREUR dans la sauvegarde : " . $e->getMessage());
             BJLG_History::log('backup_created', 'failure', 'Erreur : ' . $e->getMessage());
@@ -442,6 +554,7 @@ class BJLG_Backup {
             }
         } finally {
             $this->cleanup_temporary_files();
+            self::release_task_slot($task_id);
         }
     }
 

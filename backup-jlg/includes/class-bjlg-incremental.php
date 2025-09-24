@@ -93,7 +93,9 @@ class BJLG_Incremental {
             'version' => '2.0'
         ];
         $this->last_manifest_signature = null;
-        $this->save_manifest();
+        if (!$this->save_manifest()) {
+            BJLG_Debug::log("ERREUR: La réinitialisation du manifeste incrémental n'a pas pu être enregistrée.");
+        }
     }
     
     /**
@@ -101,10 +103,25 @@ class BJLG_Incremental {
      */
     private function save_manifest() {
         $json = json_encode($this->last_backup_data, JSON_PRETTY_PRINT);
-        file_put_contents($this->manifest_file, $json);
-        
+
+        if ($json === false) {
+            BJLG_Debug::log("ERREUR: Impossible d'encoder le manifeste incrémental.");
+
+            return false;
+        }
+
+        $bytes_written = @file_put_contents($this->manifest_file, $json, LOCK_EX);
+
+        if ($bytes_written === false) {
+            BJLG_Debug::log("ERREUR: Échec de l'écriture du manifeste incrémental dans {$this->manifest_file}.");
+
+            return false;
+        }
+
         // Protéger le fichier
         @chmod($this->manifest_file, 0600);
+
+        return true;
     }
     
     /**
@@ -371,9 +388,9 @@ class BJLG_Incremental {
 
         $this->last_backup_data['last_scan'] = time();
 
-        $this->save_manifest();
-
-        BJLG_Debug::log("Manifeste incrémental mis à jour");
+        if ($this->save_manifest()) {
+            BJLG_Debug::log("Manifeste incrémental mis à jour");
+        }
     }
 
     /**
