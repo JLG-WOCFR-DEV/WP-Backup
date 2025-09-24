@@ -1087,14 +1087,43 @@ class BJLG_REST_API {
             'source' => 'api',
             'start_time' => time()
         ];
-        
-        set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
-        
+
+        if (!BJLG_Backup::reserve_task_slot($task_id)) {
+            return new WP_Error(
+                'backup_in_progress',
+                __('Une sauvegarde est déjà en cours. Réessayez ultérieurement.', 'backup-jlg'),
+                ['status' => 409]
+            );
+        }
+
+        $task_initialized = BJLG_Backup::save_task_state($task_id, $task_data);
+
+        if (!$task_initialized) {
+            BJLG_Backup::release_task_slot($task_id);
+
+            return new WP_Error(
+                'task_initialization_failed',
+                __('Impossible d\'initialiser la sauvegarde. Veuillez réessayer.', 'backup-jlg'),
+                ['status' => 500]
+            );
+        }
+
         // Planifier l'exécution
-        wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
-        
+        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+
+        if ($scheduled === false) {
+            delete_transient($task_id);
+            BJLG_Backup::release_task_slot($task_id);
+
+            return new WP_Error(
+                'schedule_failed',
+                __('Impossible de planifier la tâche de sauvegarde en arrière-plan.', 'backup-jlg'),
+                ['status' => 500]
+            );
+        }
+
         BJLG_History::log('api_backup_created', 'info', 'Backup initiated via API');
-        
+
         return rest_ensure_response([
             'success' => true,
             'task_id' => $task_id,
