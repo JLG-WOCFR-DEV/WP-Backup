@@ -49,8 +49,8 @@ class BJLG_Actions {
                 throw new Exception("Nom de fichier invalide.");
             }
 
-            // Construire le chemin initial vers le fichier
-            $filepath = BJLG_BACKUP_DIR . $filename;
+            // Construire le chemin initial vers le fichier en utilisant le chemin canonique du répertoire
+            $filepath = $real_backup_dir . DIRECTORY_SEPARATOR . $filename;
 
             // Obtenir le chemin canonique du fichier pour la sécurité
             $real_filepath = realpath($filepath);

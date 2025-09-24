@@ -1063,11 +1063,7 @@ class BJLG_Restore {
 
         $query = '';
         $queries_executed = 0;
-        $errors = [];
-
         $transaction_started = false;
-        $should_commit = false;
-        $transaction_exception = null;
 
         try {
             // Désactiver temporairement les contraintes
@@ -1078,63 +1074,45 @@ class BJLG_Restore {
                 $transaction_started = true;
             }
 
-            try {
-                while (($line = fgets($handle)) !== false) {
-                    // Ignorer les commentaires et les lignes vides
-                    if (substr($line, 0, 2) == '--' || trim($line) == '') {
-                        continue;
-                    }
-
-                    $query .= $line;
-
-                    // Exécuter la requête quand on atteint un point-virgule à la fin d'une ligne
-                    if (substr(trim($line), -1, 1) == ';') {
-                        $result = $wpdb->query($query);
-
-                        if ($result === false) {
-                            $error_msg = "Erreur SQL : " . $wpdb->last_error;
-                            BJLG_Debug::log($error_msg);
-                            $errors[] = $error_msg;
-
-                            // Continuer malgré les erreurs pour les tables optionnelles
-                            if (strpos($wpdb->last_error, 'already exists') === false) {
-                                // Ce n'est pas une erreur de table existante
-                                if (count($errors) > 10) {
-                                    // Trop d'erreurs, abandonner
-                                    throw new Exception("Trop d'erreurs lors de l'import SQL.");
-                                }
-                            }
-                        } else {
-                            $queries_executed++;
-                        }
-
-                        $query = ''; // Réinitialiser pour la prochaine requête
-                    }
+            while (($line = fgets($handle)) !== false) {
+                // Ignorer les commentaires et les lignes vides
+                if (substr($line, 0, 2) == '--' || trim($line) == '') {
+                    continue;
                 }
 
-                $should_commit = true;
+                $query .= $line;
 
-                BJLG_Debug::log("Import SQL terminé : {$queries_executed} requêtes exécutées.");
+                // Exécuter la requête quand on atteint un point-virgule à la fin d'une ligne
+                if (substr(trim($line), -1, 1) == ';') {
+                    $result = $wpdb->query($query);
 
-                if (!empty($errors)) {
-                    BJLG_Debug::log("Erreurs rencontrées : " . implode(", ", array_slice($errors, 0, 5)));
-                }
-            } catch (Throwable $throwable) {
-                $transaction_exception = $throwable;
-                throw $throwable;
-            } finally {
-                if ($transaction_started) {
-                    if ($transaction_exception === null && $should_commit) {
-                        $wpdb->query('COMMIT');
-                    } else {
-                        $wpdb->query('ROLLBACK');
+                    if ($result === false) {
+                        $error_message = 'Erreur SQL : ' . $wpdb->last_error;
+                        BJLG_Debug::log($error_message);
+
+                        throw new Exception($error_message);
                     }
-                }
 
-                $wpdb->query('SET autocommit = 1');
-                $wpdb->query('SET foreign_key_checks = 1');
+                    $queries_executed++;
+                    $query = ''; // Réinitialiser pour la prochaine requête
+                }
             }
+
+            BJLG_Debug::log("Import SQL terminé : {$queries_executed} requêtes exécutées.");
+
+            if ($transaction_started) {
+                $wpdb->query('COMMIT');
+            }
+        } catch (Throwable $throwable) {
+            if ($transaction_started) {
+                $wpdb->query('ROLLBACK');
+            }
+
+            throw $throwable;
         } finally {
+            $wpdb->query('SET autocommit = 1');
+            $wpdb->query('SET foreign_key_checks = 1');
+
             if (is_resource($handle)) {
                 fclose($handle);
             }

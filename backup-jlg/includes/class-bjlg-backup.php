@@ -113,15 +113,20 @@ class BJLG_Backup {
             'start_time' => time()
         ];
         
+        // Planifier l'exécution immédiate en arrière-plan avant de sauvegarder l'état
+        $event_scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+
+        if ($event_scheduled === false) {
+            BJLG_Debug::log("Échec de la planification de la tâche de sauvegarde : $task_id");
+            wp_send_json_error(['message' => "Impossible de planifier la tâche de sauvegarde en arrière-plan."]);
+        }
+
         // Sauvegarder temporairement
         self::save_task_state($task_id, $task_data);
-        
+
         BJLG_Debug::log("Nouvelle tâche de sauvegarde créée : $task_id");
         BJLG_History::log('backup_started', 'info', 'Composants : ' . implode(', ', $components));
-        
-        // Planifier l'exécution immédiate en arrière-plan
-        wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
-        
+
         wp_send_json_success([
             'task_id' => $task_id,
             'message' => 'Sauvegarde lancée en arrière-plan.'
