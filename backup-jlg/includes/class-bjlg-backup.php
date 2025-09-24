@@ -226,13 +226,19 @@ class BJLG_Backup {
             $backup_type = $task_data['incremental'] ? 'incremental' : 'full';
             
             // Si incrémentale, vérifier qu'une sauvegarde complète existe
+            $incremental_handler = null;
             if ($task_data['incremental']) {
-                $incremental_handler = new BJLG_Incremental();
+                $incremental_handler = BJLG_Incremental::get_latest_instance();
+                if (!$incremental_handler) {
+                    $incremental_handler = new BJLG_Incremental();
+                }
+
                 if (!$incremental_handler->can_do_incremental()) {
                     BJLG_Debug::log("Pas de sauvegarde complète trouvée, bascule en mode complet.");
                     $backup_type = 'full';
                     $task_data['incremental'] = false;
                     self::save_task_state($task_id, $task_data);
+                    $incremental_handler = null;
                 }
             }
             
@@ -265,14 +271,14 @@ class BJLG_Backup {
                         $this->backup_database($zip, $task_data['incremental']);
                         break;
                     case 'plugins':
-                        $this->backup_directory($zip, WP_PLUGIN_DIR, 'wp-content/plugins/', $task_data['incremental']);
+                        $this->backup_directory($zip, WP_PLUGIN_DIR, 'wp-content/plugins/', $task_data['incremental'], $incremental_handler);
                         break;
                     case 'themes':
-                        $this->backup_directory($zip, get_theme_root(), 'wp-content/themes/', $task_data['incremental']);
+                        $this->backup_directory($zip, get_theme_root(), 'wp-content/themes/', $task_data['incremental'], $incremental_handler);
                         break;
                     case 'uploads':
                         $upload_dir = wp_get_upload_dir();
-                        $this->backup_directory($zip, $upload_dir['basedir'], 'wp-content/uploads/', $task_data['incremental']);
+                        $this->backup_directory($zip, $upload_dir['basedir'], 'wp-content/uploads/', $task_data['incremental'], $incremental_handler);
                         break;
                 }
                 
@@ -626,7 +632,7 @@ class BJLG_Backup {
     /**
      * Sauvegarde un répertoire
      */
-    private function backup_directory(&$zip, $source_dir, $zip_path, $incremental = false) {
+    private function backup_directory(&$zip, $source_dir, $zip_path, $incremental = false, $incremental_handler = null) {
         if (!is_dir($source_dir)) {
             BJLG_Debug::log("Répertoire introuvable : $source_dir");
             return;
@@ -639,7 +645,14 @@ class BJLG_Backup {
         // Pour l'incrémental, obtenir la liste des fichiers modifiés
         $modified_files = [];
         if ($incremental) {
-            $incremental_handler = new BJLG_Incremental();
+            if (!$incremental_handler instanceof BJLG_Incremental) {
+                $incremental_handler = BJLG_Incremental::get_latest_instance();
+            }
+
+            if (!$incremental_handler) {
+                $incremental_handler = new BJLG_Incremental();
+            }
+
             $modified_files = $incremental_handler->get_modified_files($source_dir);
             
             if (empty($modified_files)) {
