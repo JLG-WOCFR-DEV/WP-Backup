@@ -105,6 +105,7 @@ $GLOBALS['bjlg_test_scheduled_events'] = [
     'recurring' => [],
     'single' => [],
 ];
+$GLOBALS['bjlg_test_set_transient_mock'] = null;
 $GLOBALS['bjlg_test_options'] = [];
 $GLOBALS['bjlg_registered_routes'] = [];
 $GLOBALS['bjlg_history_entries'] = [];
@@ -649,7 +650,24 @@ if (!function_exists('wp_generate_password')) {
 
 if (!function_exists('set_transient')) {
     function set_transient($transient, $value, $expiration) {
+        $mock = $GLOBALS['bjlg_test_set_transient_mock'] ?? null;
+
+        if (is_callable($mock)) {
+            $mock_result = $mock($transient, $value, $expiration);
+
+            if ($mock_result === false) {
+                return false;
+            }
+
+            if ($mock_result === true) {
+                $GLOBALS['bjlg_test_transients'][$transient] = $value;
+
+                return true;
+            }
+        }
+
         $GLOBALS['bjlg_test_transients'][$transient] = $value;
+
         return true;
     }
 }
@@ -676,6 +694,23 @@ if (!function_exists('wp_schedule_single_event')) {
         ];
 
         return true;
+    }
+}
+
+if (!function_exists('wp_unschedule_event')) {
+    function wp_unschedule_event($timestamp, $hook, $args = []) {
+        foreach ($GLOBALS['bjlg_test_scheduled_events']['single'] as $index => $event) {
+            if ((int) $event['timestamp'] === (int) $timestamp
+                && $event['hook'] === $hook
+                && $event['args'] == $args
+            ) {
+                unset($GLOBALS['bjlg_test_scheduled_events']['single'][$index]);
+
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 

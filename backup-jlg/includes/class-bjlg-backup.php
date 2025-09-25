@@ -349,17 +349,38 @@ class BJLG_Backup {
             ], 409);
         }
 
-        // Planifier l'exécution immédiate en arrière-plan avant de sauvegarder l'état
-        $event_scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+        $event_timestamp = time();
+        $event_args = ['task_id' => $task_id];
+
+        // Sauvegarder l'état avant de planifier l'exécution en arrière-plan
+        $state_saved = self::save_task_state($task_id, $task_data);
+
+        if ($state_saved === false) {
+            BJLG_Debug::log("Échec de l'enregistrement de l'état pour la tâche de sauvegarde : $task_id");
+
+            if (function_exists('wp_unschedule_event')) {
+                wp_unschedule_event($event_timestamp, 'bjlg_run_backup_task', $event_args);
+            }
+
+            self::release_task_slot($task_id);
+
+            wp_send_json_error(['message' => "Impossible d'initialiser la tâche de sauvegarde."], 500);
+        }
+
+        // Planifier l'exécution immédiate en arrière-plan
+        $event_scheduled = wp_schedule_single_event($event_timestamp, 'bjlg_run_backup_task', $event_args);
 
         if ($event_scheduled === false) {
             BJLG_Debug::log("Échec de la planification de la tâche de sauvegarde : $task_id");
+
+            if (function_exists('delete_transient')) {
+                delete_transient($task_id);
+            }
+
             self::release_task_slot($task_id);
+
             wp_send_json_error(['message' => "Impossible de planifier la tâche de sauvegarde en arrière-plan."], 500);
         }
-
-        // Sauvegarder temporairement
-        self::save_task_state($task_id, $task_data);
 
         BJLG_Debug::log("Nouvelle tâche de sauvegarde créée : $task_id");
         BJLG_History::log('backup_started', 'info', 'Composants : ' . implode(', ', $components));
