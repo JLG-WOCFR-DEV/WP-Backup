@@ -926,6 +926,8 @@ namespace {
             $this->assertSame($filepath, $stored_payload['file'] ?? null);
             $this->assertSame(BJLG_CAPABILITY, $stored_payload['requires_cap'] ?? null);
             $this->assertArrayHasKey('issued_at', $stored_payload);
+            $this->assertArrayHasKey('issued_by', $stored_payload);
+            $this->assertSame(0, $stored_payload['issued_by']);
         } finally {
             if (file_exists($filepath)) {
                 unlink($filepath);

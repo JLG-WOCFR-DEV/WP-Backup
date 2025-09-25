@@ -225,13 +225,19 @@ class BJLG_Actions {
         if (is_array($payload)) {
             $filepath = isset($payload['file']) ? $payload['file'] : '';
             $required_capability = isset($payload['requires_cap']) ? $payload['requires_cap'] : null;
+            $issued_by = isset($payload['issued_by']) ? (int) $payload['issued_by'] : 0;
         } else {
             $filepath = $payload;
             $required_capability = null;
+            $issued_by = 0;
         }
 
         if (empty($filepath)) {
             return new WP_Error('bjlg_invalid_token', 'Lien de téléchargement invalide ou expiré.', ['status' => 403]);
+        }
+
+        if ($issued_by > 0 && function_exists('wp_set_current_user')) {
+            wp_set_current_user($issued_by);
         }
 
         if ($required_capability && !current_user_can($required_capability)) {
@@ -272,10 +278,13 @@ class BJLG_Actions {
      * @return array
      */
     public static function build_download_token_payload($filepath, $required_capability = BJLG_CAPABILITY) {
+        $issued_by = function_exists('get_current_user_id') ? get_current_user_id() : 0;
+
         return [
             'file' => $filepath,
             'requires_cap' => $required_capability,
             'issued_at' => time(),
+            'issued_by' => $issued_by,
         ];
     }
 
