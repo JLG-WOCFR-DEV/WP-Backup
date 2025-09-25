@@ -103,6 +103,12 @@ namespace {
             $GLOBALS['bjlg_test_current_user_can'] = true;
             $GLOBALS['bjlg_test_realpath_mock'] = null;
             $GLOBALS['bjlg_test_transients'] = [];
+            $GLOBALS['bjlg_test_scheduled_events'] = [
+                'recurring' => [],
+                'single' => [],
+            ];
+            $GLOBALS['bjlg_test_set_transient_mock'] = null;
+            $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
 
             if (!is_dir(BJLG_BACKUP_DIR)) {
                 mkdir(BJLG_BACKUP_DIR, 0777, true);
@@ -1143,6 +1149,115 @@ namespace {
                 rmdir($plugin_directory);
             }
         }
+    }
+
+    public function test_restore_endpoint_returns_error_when_transient_initialization_fails(): void
+    {
+        $api = new BJLG\BJLG_REST_API();
+
+        $archive_path = $this->createBackupWithComponents(['db']);
+
+        $request = new class($archive_path) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct(string $archive_path)
+            {
+                $this->params = [
+                    'id' => basename($archive_path),
+                    'components' => ['db'],
+                    'create_restore_point' => false,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value = null, $expiration = null) {
+            if (strpos($transient, 'bjlg_restore_') === 0) {
+                return false;
+            }
+
+            return null;
+        };
+
+        $response = $api->restore_backup($request);
+
+        $this->assertInstanceOf(\WP_Error::class, $response);
+        $this->assertSame('rest_restore_initialization_failed', $response->get_error_code());
+
+        $error_data = $response->get_error_data();
+        $this->assertIsArray($error_data);
+        $this->assertSame(500, $error_data['status']);
+
+        $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+        $this->assertArrayHasKey('single', $GLOBALS['bjlg_test_scheduled_events']);
+        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+
+        $this->deleteBackupIfExists($archive_path);
+    }
+
+    public function test_restore_endpoint_cleans_up_when_scheduling_fails(): void
+    {
+        $api = new BJLG\BJLG_REST_API();
+
+        $archive_path = $this->createBackupWithComponents(['db']);
+
+        $request = new class($archive_path) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct(string $archive_path)
+            {
+                $this->params = [
+                    'id' => basename($archive_path),
+                    'components' => ['db'],
+                    'create_restore_point' => false,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $captured_task_id = null;
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value = null, $expiration = null) use (&$captured_task_id) {
+            if (strpos($transient, 'bjlg_restore_') === 0) {
+                $captured_task_id = $transient;
+            }
+
+            return null;
+        };
+
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = static function ($timestamp, $hook, $args = []) {
+            if ($hook === 'bjlg_run_restore_task') {
+                return false;
+            }
+
+            return null;
+        };
+
+        $response = $api->restore_backup($request);
+
+        $this->assertInstanceOf(\WP_Error::class, $response);
+        $this->assertSame('rest_restore_schedule_failed', $response->get_error_code());
+        $this->assertNotNull($captured_task_id);
+
+        $error_data = $response->get_error_data();
+        $this->assertIsArray($error_data);
+        $this->assertSame(500, $error_data['status']);
+
+        $this->assertArrayNotHasKey($captured_task_id, $GLOBALS['bjlg_test_transients']);
+        $this->assertArrayHasKey('single', $GLOBALS['bjlg_test_scheduled_events']);
+        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+
+        $this->deleteBackupIfExists($archive_path);
     }
 
         public function test_update_settings_rejects_empty_payload(): void

@@ -370,11 +370,29 @@ class BJLG_Restore {
             'create_restore_point' => $create_backup_before_restore,
         ];
         
-        set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
-        
+        $transient_set = set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
+
+        if ($transient_set === false) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log("ERREUR : Impossible d'initialiser la tâche de restauration {$task_id}.");
+            }
+
+            wp_send_json_error(['message' => "Impossible d'initialiser la tâche de restauration."], 500);
+        }
+
         // Planifier l'exécution
-        wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
-        
+        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
+
+        if ($scheduled === false) {
+            delete_transient($task_id);
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log("ERREUR : Impossible de planifier la tâche de restauration {$task_id}.");
+            }
+
+            wp_send_json_error(['message' => "Impossible de planifier la tâche de restauration en arrière-plan."], 500);
+        }
+
         wp_send_json_success(['task_id' => $task_id]);
     }
 
