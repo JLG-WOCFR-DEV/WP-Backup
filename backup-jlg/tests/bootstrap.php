@@ -106,6 +106,7 @@ $GLOBALS['bjlg_test_scheduled_events'] = [
     'single' => [],
 ];
 $GLOBALS['bjlg_test_set_transient_mock'] = null;
+$GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
 $GLOBALS['bjlg_test_options'] = [];
 $GLOBALS['bjlg_registered_routes'] = [];
 $GLOBALS['bjlg_history_entries'] = [];
@@ -687,6 +688,26 @@ if (!function_exists('delete_transient')) {
 
 if (!function_exists('wp_schedule_single_event')) {
     function wp_schedule_single_event($timestamp, $hook, $args = []) {
+        $mock = $GLOBALS['bjlg_test_schedule_single_event_mock'] ?? null;
+
+        if (is_callable($mock)) {
+            $mock_result = $mock($timestamp, $hook, $args);
+
+            if ($mock_result !== null) {
+                if ($mock_result === false) {
+                    return false;
+                }
+
+                $GLOBALS['bjlg_test_scheduled_events']['single'][] = [
+                    'timestamp' => $timestamp,
+                    'hook' => $hook,
+                    'args' => $args,
+                ];
+
+                return true;
+            }
+        }
+
         $GLOBALS['bjlg_test_scheduled_events']['single'][] = [
             'timestamp' => $timestamp,
             'hook' => $hook,

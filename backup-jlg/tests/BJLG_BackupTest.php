@@ -15,6 +15,7 @@ final class BJLG_BackupTest extends TestCase
             'single' => [],
         ];
         $GLOBALS['bjlg_test_set_transient_mock'] = null;
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
 
         $_POST = [];
     }
@@ -22,6 +23,7 @@ final class BJLG_BackupTest extends TestCase
     protected function tearDown(): void
     {
         $GLOBALS['bjlg_test_set_transient_mock'] = null;
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
         $_POST = [];
 
         parent::tearDown();

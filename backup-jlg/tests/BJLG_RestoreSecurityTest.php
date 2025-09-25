@@ -22,7 +22,12 @@ final class BJLG_RestoreSecurityTest extends TestCase
 
         $GLOBALS['bjlg_test_current_user_can'] = true;
         $GLOBALS['bjlg_test_transients'] = [];
-        $GLOBALS['bjlg_test_scheduled_events'] = [];
+        $GLOBALS['bjlg_test_scheduled_events'] = [
+            'recurring' => [],
+            'single' => [],
+        ];
+        $GLOBALS['bjlg_test_set_transient_mock'] = null;
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
 
         $_POST = [];
 
@@ -39,6 +44,9 @@ final class BJLG_RestoreSecurityTest extends TestCase
         if (file_exists($this->existingBackupPath)) {
             unlink($this->existingBackupPath);
         }
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = null;
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
 
         parent::tearDown();
     }
@@ -143,6 +151,78 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $this->assertIsArray($task_data);
         $this->assertArrayHasKey('create_restore_point', $task_data);
         $this->assertFalse($task_data['create_restore_point']);
+    }
+
+    public function test_handle_run_restore_returns_error_when_transient_initialization_fails(): void
+    {
+        $_POST['nonce'] = 'nonce';
+        $_POST['filename'] = 'backup.zip';
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value = null, $expiration = null) {
+            if (strpos($transient, 'bjlg_restore_') === 0) {
+                return false;
+            }
+
+            return null;
+        };
+
+        $restore = new BJLG\BJLG_Restore();
+
+        try {
+            $restore->handle_run_restore();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertSame(500, $response->status_code);
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('message', $response->data);
+            $this->assertSame("Impossible d'initialiser la tâche de restauration.", $response->data['message']);
+        }
+
+        $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+        $this->assertArrayHasKey('single', $GLOBALS['bjlg_test_scheduled_events']);
+        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+    }
+
+    public function test_handle_run_restore_cleans_up_when_scheduling_fails(): void
+    {
+        $_POST['nonce'] = 'nonce';
+        $_POST['filename'] = 'backup.zip';
+
+        $captured_task_id = null;
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value = null, $expiration = null) use (&$captured_task_id) {
+            if (strpos($transient, 'bjlg_restore_') === 0) {
+                $captured_task_id = $transient;
+            }
+
+            return null;
+        };
+
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = static function ($timestamp, $hook, $args = []) {
+            if ($hook === 'bjlg_run_restore_task') {
+                return false;
+            }
+
+            return null;
+        };
+
+        $restore = new BJLG\BJLG_Restore();
+
+        try {
+            $restore->handle_run_restore();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertNotNull($captured_task_id, 'The restore task identifier should have been captured.');
+            $this->assertSame(500, $response->status_code);
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('message', $response->data);
+            $this->assertSame("Impossible de planifier la tâche de restauration en arrière-plan.", $response->data['message']);
+        }
+
+        $this->assertNotNull($captured_task_id);
+        $this->assertArrayNotHasKey($captured_task_id, $GLOBALS['bjlg_test_transients']);
+        $this->assertArrayHasKey('single', $GLOBALS['bjlg_test_scheduled_events']);
+        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
     }
 
     public function test_restore_rejects_directory_traversal_entries(): void

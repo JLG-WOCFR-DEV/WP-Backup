@@ -1526,11 +1526,38 @@ class BJLG_REST_API {
             'create_restore_point' => (bool) $create_restore_point
         ];
 
-        set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
-        
+        $task_ttl = BJLG_Backup::get_task_ttl();
+        $transient_set = set_transient($task_id, $task_data, $task_ttl);
+
+        if ($transient_set === false) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log("ERREUR : Impossible d'initialiser la tâche de restauration {$task_id} via l'API.");
+            }
+
+            return new WP_Error(
+                'rest_restore_initialization_failed',
+                __('Impossible d\'initialiser la tâche de restauration.', 'backup-jlg'),
+                ['status' => 500]
+            );
+        }
+
         // Planifier l'exécution
-        wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
-        
+        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
+
+        if ($scheduled === false) {
+            delete_transient($task_id);
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log("ERREUR : Impossible de planifier la tâche de restauration {$task_id} via l'API.");
+            }
+
+            return new WP_Error(
+                'rest_restore_schedule_failed',
+                __('Impossible de planifier la tâche de restauration en arrière-plan.', 'backup-jlg'),
+                ['status' => 500]
+            );
+        }
+
         return rest_ensure_response([
             'success' => true,
             'task_id' => $task_id,
