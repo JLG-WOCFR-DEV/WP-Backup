@@ -130,6 +130,51 @@ final class BJLG_ActionsTest extends TestCase
             $this->assertSame(500, $exception->status_code);
         }
     }
+
+    public function test_validate_download_token_restores_user_context(): void
+    {
+        $actions = new BJLG\BJLG_Actions();
+
+        $token = 'bjlg-test-token';
+        $filepath = BJLG_BACKUP_DIR . 'token-download-' . uniqid('', true) . '.zip';
+
+        file_put_contents($filepath, 'data');
+
+        $user_id = 123;
+        $user = (object) [
+            'ID' => $user_id,
+            'caps' => [BJLG_CAPABILITY => true],
+            'allcaps' => [BJLG_CAPABILITY => true],
+        ];
+
+        $GLOBALS['bjlg_test_users'] = [$user_id => $user];
+        $GLOBALS['bjlg_test_current_user_can'] = false;
+        $GLOBALS['current_user'] = null;
+        $GLOBALS['current_user_id'] = 0;
+
+        set_transient('bjlg_download_' . $token, [
+            'file' => $filepath,
+            'requires_cap' => BJLG_CAPABILITY,
+            'issued_at' => time(),
+            'issued_by' => $user_id,
+        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
+
+        $method = new \ReflectionMethod(BJLG\BJLG_Actions::class, 'validate_download_token');
+        $method->setAccessible(true);
+
+        try {
+            $result = $method->invoke($actions, $token);
+
+            $this->assertIsArray($result);
+            $this->assertSame($filepath, $result[0]);
+            $this->assertSame('bjlg_download_' . $token, $result[1]);
+            $this->assertSame($user_id, get_current_user_id());
+        } finally {
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+        }
+    }
 }
 
 }

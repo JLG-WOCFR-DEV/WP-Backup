@@ -17,6 +17,13 @@ class BJLG_Encryption {
     const CIPHER_METHOD = 'aes-256-cbc';
     const KEY_LENGTH = 32; // 256 bits
     const IV_LENGTH = 16;  // 128 bits
+    const FILE_MAGIC = 'BJLGENC1';
+    const FILE_VERSION = 2;
+    const FILE_FLAG_PASSWORD = 0x01;
+    const HMAC_LENGTH = 32;
+    const PASSWORD_SALT_LENGTH = 16;
+    const STRING_MAGIC = 'BJLGS1';
+    const STRING_VERSION = 1;
     
     private $encryption_key;
     private $is_enabled;
@@ -180,12 +187,27 @@ class BJLG_Encryption {
             }
             $delete_on_failure = true;
 
-            $iv = openssl_random_pseudo_bytes(self::IV_LENGTH);
+            $iv = function_exists('random_bytes')
+                ? random_bytes(self::IV_LENGTH)
+                : openssl_random_pseudo_bytes(self::IV_LENGTH);
+
             if ($iv === false || strlen($iv) !== self::IV_LENGTH) {
                 throw new Exception("Impossible de générer l'IV");
             }
 
-            $key = $password ? $this->derive_key_from_password($password) : $this->encryption_key;
+            $uses_password = is_string($password) && $password !== '';
+            $salt = '';
+
+            if ($uses_password) {
+                $salt = $this->generate_password_salt();
+                if ($salt === false || strlen($salt) !== self::PASSWORD_SALT_LENGTH) {
+                    throw new Exception("Impossible de générer le sel de mot de passe");
+                }
+            }
+
+            $key = $uses_password
+                ? $this->derive_key_from_password($password, $salt)
+                : $this->encryption_key;
 
             $block_size = openssl_cipher_iv_length(self::CIPHER_METHOD);
             if (!$block_size) {
@@ -195,9 +217,23 @@ class BJLG_Encryption {
 
             $hmac_context = hash_init('sha256', HASH_HMAC, $key);
 
-            if (fwrite($output_handle, 'BJLGENC1') !== 8 ||
-                fwrite($output_handle, chr(1)) !== 1 ||
-                fwrite($output_handle, $iv) !== self::IV_LENGTH) {
+            $flags = 0;
+
+            if ($uses_password) {
+                $flags |= self::FILE_FLAG_PASSWORD;
+            }
+
+            $header = self::FILE_MAGIC . chr(self::FILE_VERSION) . chr($flags) . $iv;
+
+            if ($uses_password) {
+                $salt_length = strlen($salt);
+                if ($salt_length > 255) {
+                    throw new Exception("Sel de mot de passe trop long");
+                }
+                $header .= chr($salt_length) . $salt;
+            }
+
+            if (fwrite($output_handle, $header) !== strlen($header)) {
                 throw new Exception("Impossible d'écrire l'en-tête du fichier chiffré");
             }
 
@@ -206,7 +242,7 @@ class BJLG_Encryption {
                 throw new Exception("Impossible de préparer l'écriture du HMAC");
             }
 
-            if (fwrite($output_handle, str_repeat("\0", 32)) !== 32) {
+            if (fwrite($output_handle, str_repeat("\0", self::HMAC_LENGTH)) !== self::HMAC_LENGTH) {
                 throw new Exception("Impossible de réserver l'espace pour le HMAC");
             }
 
@@ -366,31 +402,25 @@ class BJLG_Encryption {
                 throw new Exception("Impossible de lire le fichier chiffré");
             }
 
-            $header = fread($input_handle, 8);
-            if ($header === false || strlen($header) !== 8 || $header !== 'BJLGENC1') {
-                throw new Exception("Format de fichier invalide");
+            $header = $this->read_encrypted_file_header($input_handle);
+
+            $version = $header['version'];
+            $flags = $header['flags'];
+            $iv = $header['iv'];
+            $salt = $header['salt'];
+            $stored_hmac = $header['hmac'];
+
+            $uses_password = $version >= 2
+                ? (($flags & self::FILE_FLAG_PASSWORD) === self::FILE_FLAG_PASSWORD)
+                : (is_string($password) && $password !== '');
+
+            if ($uses_password && (!is_string($password) || $password === '')) {
+                throw new Exception("Mot de passe requis pour ce fichier chiffré");
             }
 
-            $version_data = fread($input_handle, 1);
-            if ($version_data === false || strlen($version_data) !== 1) {
-                throw new Exception("Version de chiffrement non supportée");
-            }
-            $version = ord($version_data);
-            if ($version !== 1) {
-                throw new Exception("Version de chiffrement non supportée");
-            }
-
-            $iv = fread($input_handle, self::IV_LENGTH);
-            if ($iv === false || strlen($iv) !== self::IV_LENGTH) {
-                throw new Exception("IV manquant ou corrompu");
-            }
-
-            $stored_hmac = fread($input_handle, 32);
-            if ($stored_hmac === false || strlen($stored_hmac) !== 32) {
-                throw new Exception("HMAC manquant ou corrompu");
-            }
-
-            $key = $password ? $this->derive_key_from_password($password) : $this->encryption_key;
+            $key = $uses_password
+                ? $this->derive_key_from_password($password, $version >= 2 ? $salt : null)
+                : $this->encryption_key;
 
             $block_size = openssl_cipher_iv_length(self::CIPHER_METHOD);
             if (!$block_size) {
@@ -535,17 +565,113 @@ class BJLG_Encryption {
             throw $e; // Propager l'erreur car la restauration ne peut pas continuer
         }
     }
-    
+
+    /**
+     * Lit et valide l'en-tête d'un fichier chiffré.
+     *
+     * @param resource $handle
+     * @return array{version:int,flags:int,iv:string,salt:string,hmac:string}
+     * @throws Exception
+     */
+    private function read_encrypted_file_header($handle) {
+        $magic = fread($handle, strlen(self::FILE_MAGIC));
+        if ($magic === false || strlen($magic) !== strlen(self::FILE_MAGIC) || $magic !== self::FILE_MAGIC) {
+            throw new Exception("Format de fichier invalide");
+        }
+
+        $version_data = fread($handle, 1);
+        if ($version_data === false || strlen($version_data) !== 1) {
+            throw new Exception("Version de chiffrement non supportée");
+        }
+
+        $version = ord($version_data);
+        if ($version < 1 || $version > self::FILE_VERSION) {
+            throw new Exception("Version de chiffrement non supportée");
+        }
+
+        $flags = 0;
+
+        if ($version >= 2) {
+            $flags_data = fread($handle, 1);
+            if ($flags_data === false || strlen($flags_data) !== 1) {
+                throw new Exception("En-tête de chiffrement corrompu");
+            }
+
+            $flags = ord($flags_data);
+        }
+
+        $iv = fread($handle, self::IV_LENGTH);
+        if ($iv === false || strlen($iv) !== self::IV_LENGTH) {
+            throw new Exception("IV manquant ou corrompu");
+        }
+
+        $salt = '';
+
+        if ($version >= 2 && ($flags & self::FILE_FLAG_PASSWORD)) {
+            $salt_length_data = fread($handle, 1);
+            if ($salt_length_data === false || strlen($salt_length_data) !== 1) {
+                throw new Exception("Sel de mot de passe manquant ou corrompu");
+            }
+
+            $salt_length = ord($salt_length_data);
+
+            if ($salt_length <= 0) {
+                throw new Exception("Sel de mot de passe invalide");
+            }
+
+            $salt = fread($handle, $salt_length);
+            if ($salt === false || strlen($salt) !== $salt_length) {
+                throw new Exception("Sel de mot de passe corrompu");
+            }
+        }
+
+        $stored_hmac = fread($handle, self::HMAC_LENGTH);
+        if ($stored_hmac === false || strlen($stored_hmac) !== self::HMAC_LENGTH) {
+            throw new Exception("HMAC manquant ou corrompu");
+        }
+
+        return [
+            'version' => $version,
+            'flags' => $flags,
+            'iv' => $iv,
+            'salt' => $salt,
+            'hmac' => $stored_hmac,
+        ];
+    }
+
+    /**
+     * Génère un sel sécurisé pour la dérivation de mot de passe.
+     *
+     * @return string|false
+     */
+    private function generate_password_salt() {
+        $salt = function_exists('random_bytes')
+            ? random_bytes(self::PASSWORD_SALT_LENGTH)
+            : openssl_random_pseudo_bytes(self::PASSWORD_SALT_LENGTH);
+
+        if ($salt === false || strlen($salt) !== self::PASSWORD_SALT_LENGTH) {
+            return false;
+        }
+
+        return $salt;
+    }
+
     /**
      * Dérive une clé à partir d'un mot de passe
      */
-    private function derive_key_from_password($password) {
-        $salt = get_option('bjlg_encryption_salt');
-        if (!$salt) {
-            $salt = openssl_random_pseudo_bytes(16);
-            update_option('bjlg_encryption_salt', $salt);
+    private function derive_key_from_password($password, $salt = null) {
+        if ($salt === null) {
+            $salt = get_option('bjlg_encryption_salt');
+            if (!$salt) {
+                $salt = openssl_random_pseudo_bytes(self::PASSWORD_SALT_LENGTH);
+                update_option('bjlg_encryption_salt', $salt);
+            }
         }
-        
+
+        if (!is_string($salt) || $salt === '') {
+            throw new Exception("Sel de dérivation de clé invalide");
+        }
+
         // Utiliser PBKDF2 pour dériver la clé
         return hash_pbkdf2('sha256', $password, $salt, 10000, self::KEY_LENGTH, true);
     }
@@ -557,8 +683,15 @@ class BJLG_Encryption {
         if (!$this->is_enabled) {
             return $plaintext;
         }
-        
-        $iv = openssl_random_pseudo_bytes(self::IV_LENGTH);
+
+        $iv = function_exists('random_bytes')
+            ? random_bytes(self::IV_LENGTH)
+            : openssl_random_pseudo_bytes(self::IV_LENGTH);
+
+        if ($iv === false || strlen($iv) !== self::IV_LENGTH) {
+            return false;
+        }
+
         $ciphertext = openssl_encrypt(
             $plaintext,
             self::CIPHER_METHOD,
@@ -566,9 +699,16 @@ class BJLG_Encryption {
             OPENSSL_RAW_DATA,
             $iv
         );
-        
-        // Retourner en base64 pour stockage facile
-        return base64_encode($iv . $ciphertext);
+
+        if ($ciphertext === false) {
+            return false;
+        }
+
+        $hmac = hash_hmac('sha256', $iv . $ciphertext, $this->encryption_key, true);
+
+        $payload = self::STRING_MAGIC . chr(self::STRING_VERSION) . $iv . $hmac . $ciphertext;
+
+        return base64_encode($payload);
     }
     
     /**
@@ -579,10 +719,50 @@ class BJLG_Encryption {
             return $encrypted;
         }
         
-        $data = base64_decode($encrypted);
-        $iv = substr($data, 0, self::IV_LENGTH);
-        $ciphertext = substr($data, self::IV_LENGTH);
-        
+        $data = base64_decode($encrypted, true);
+
+        if ($data === false) {
+            return false;
+        }
+
+        $magic_length = strlen(self::STRING_MAGIC);
+
+        if (strncmp($data, self::STRING_MAGIC, $magic_length) === 0) {
+            $offset = $magic_length;
+
+            if (strlen($data) < $offset + 1 + self::IV_LENGTH + self::HMAC_LENGTH) {
+                return false;
+            }
+
+            $version = ord($data[$offset]);
+            $offset++;
+
+            if ($version !== self::STRING_VERSION) {
+                return false;
+            }
+
+            $iv = substr($data, $offset, self::IV_LENGTH);
+            $offset += self::IV_LENGTH;
+
+            $stored_hmac = substr($data, $offset, self::HMAC_LENGTH);
+            $offset += self::HMAC_LENGTH;
+
+            $ciphertext = substr($data, $offset);
+
+            $calculated_hmac = hash_hmac('sha256', $iv . $ciphertext, $this->encryption_key, true);
+
+            if (!hash_equals($stored_hmac, $calculated_hmac)) {
+                return false;
+            }
+        } else {
+            if (strlen($data) <= self::IV_LENGTH) {
+                return false;
+            }
+
+            $iv = substr($data, 0, self::IV_LENGTH);
+            $ciphertext = substr($data, self::IV_LENGTH);
+        }
+
         return openssl_decrypt(
             $ciphertext,
             self::CIPHER_METHOD,
@@ -735,32 +915,20 @@ class BJLG_Encryption {
         }
 
         try {
-            $header = fread($handle, 8);
-            if ($header === false || strlen($header) !== 8 || $header !== 'BJLGENC1') {
-                throw new Exception('Format de fichier chiffré invalide');
+            $header = $this->read_encrypted_file_header($handle);
+
+            $version = $header['version'];
+            $flags = $header['flags'];
+
+            if ($version >= 2 && ($flags & self::FILE_FLAG_PASSWORD) === 0) {
+                throw new Exception('Ce fichier n\'est pas protégé par mot de passe');
             }
 
-            $version_data = fread($handle, 1);
-            if ($version_data === false || strlen($version_data) !== 1) {
-                throw new Exception('Version de chiffrement non supportée');
-            }
+            $iv = $header['iv'];
+            $stored_hmac = $header['hmac'];
+            $salt = $header['salt'];
 
-            $version = ord($version_data);
-            if ($version !== 1) {
-                throw new Exception('Version de chiffrement non supportée');
-            }
-
-            $iv = fread($handle, self::IV_LENGTH);
-            if ($iv === false || strlen($iv) !== self::IV_LENGTH) {
-                throw new Exception('IV manquant ou corrompu');
-            }
-
-            $stored_hmac = fread($handle, 32);
-            if ($stored_hmac === false || strlen($stored_hmac) !== 32) {
-                throw new Exception('HMAC manquant ou corrompu');
-            }
-
-            $key = $this->derive_key_from_password($password);
+            $key = $this->derive_key_from_password($password, $version >= 2 ? $salt : null);
 
             $block_size = openssl_cipher_iv_length(self::CIPHER_METHOD);
             if (!$block_size) {
@@ -880,9 +1048,9 @@ class BJLG_Encryption {
         // Vérifier le header magique
         $handle = fopen($filepath, 'rb');
         if ($handle) {
-            $header = fread($handle, 8);
+            $header = fread($handle, strlen(self::FILE_MAGIC));
             fclose($handle);
-            return $header === 'BJLGENC1';
+            return $header === self::FILE_MAGIC;
         }
         
         return false;
