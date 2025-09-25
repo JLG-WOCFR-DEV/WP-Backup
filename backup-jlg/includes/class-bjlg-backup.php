@@ -317,7 +317,8 @@ class BJLG_Backup {
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
 
-        $components = isset($_POST['components']) ? array_map('sanitize_text_field', $_POST['components']) : [];
+        $raw = isset($_POST['components']) ? (array) $_POST['components'] : [];
+        $components = array_map('sanitize_text_field', $raw);
 
         $encrypt = $this->get_boolean_request_value('encrypt', 'encrypt_backup');
         $incremental = $this->get_boolean_request_value('incremental', 'incremental_backup');
