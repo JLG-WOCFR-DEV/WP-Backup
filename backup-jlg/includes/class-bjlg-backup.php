@@ -73,6 +73,7 @@ class BJLG_Backup {
 
         if ($saved) {
             self::mark_lock_initialized($task_id);
+            self::refresh_task_lock($task_id, self::get_task_lock_ttl());
         }
 
         return $saved;

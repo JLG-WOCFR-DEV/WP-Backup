@@ -110,6 +110,10 @@ namespace {
             $GLOBALS['bjlg_test_set_transient_mock'] = null;
             $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
 
+            $lock_property = new \ReflectionProperty(BJLG\BJLG_Backup::class, 'in_memory_lock');
+            $lock_property->setAccessible(true);
+            $lock_property->setValue(null, null);
+
             if (!is_dir(BJLG_BACKUP_DIR)) {
                 mkdir(BJLG_BACKUP_DIR, 0777, true);
             }
