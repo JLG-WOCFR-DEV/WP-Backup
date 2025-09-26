@@ -16,6 +16,11 @@ final class BJLG_RestoreSecurityTest extends TestCase
      */
     private $existingBackupPath;
 
+    /**
+     * @var array<int, string>
+     */
+    private $additionalBackupPaths = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -30,6 +35,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
 
         $_POST = [];
+        $this->additionalBackupPaths = [];
 
         if (!is_dir(BJLG_BACKUP_DIR)) {
             mkdir(BJLG_BACKUP_DIR, 0777, true);
@@ -44,6 +50,13 @@ final class BJLG_RestoreSecurityTest extends TestCase
         if (file_exists($this->existingBackupPath)) {
             unlink($this->existingBackupPath);
         }
+
+        foreach ($this->additionalBackupPaths as $path) {
+            if (file_exists($path)) {
+                unlink($path);
+            }
+        }
+        $this->additionalBackupPaths = [];
 
         $GLOBALS['bjlg_test_set_transient_mock'] = null;
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
@@ -129,6 +142,56 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $this->assertIsArray($task_data);
         $this->assertArrayHasKey('create_restore_point', $task_data);
         $this->assertFalse($task_data['create_restore_point']);
+    }
+
+    public function test_handle_run_restore_allows_encrypted_backup_with_password(): void
+    {
+        $encryptedPath = BJLG_BACKUP_DIR . 'encrypted-backup.zip.enc';
+        file_put_contents($encryptedPath, 'encrypted-dummy');
+        $this->additionalBackupPaths[] = $encryptedPath;
+
+        $_POST['nonce'] = 'nonce';
+        $_POST['filename'] = basename($encryptedPath);
+        $_POST['password'] = 'super-secret';
+
+        $restore = new BJLG\BJLG_Restore();
+
+        try {
+            $restore->handle_run_restore();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertArrayHasKey('task_id', $response->data);
+            $task_id = $response->data['task_id'];
+        }
+
+        $task_data = get_transient($task_id);
+        $this->assertIsArray($task_data);
+        $this->assertSame(basename($encryptedPath), $task_data['filename']);
+        $this->assertArrayHasKey('password_encrypted', $task_data);
+        $this->assertNotEmpty($task_data['password_encrypted']);
+    }
+
+    public function test_handle_run_restore_requires_password_for_encrypted_backup(): void
+    {
+        $encryptedPath = BJLG_BACKUP_DIR . 'encrypted-no-password.zip.enc';
+        file_put_contents($encryptedPath, 'encrypted-dummy');
+        $this->additionalBackupPaths[] = $encryptedPath;
+
+        $_POST['nonce'] = 'nonce';
+        $_POST['filename'] = basename($encryptedPath);
+
+        $restore = new BJLG\BJLG_Restore();
+
+        try {
+            $restore->handle_run_restore();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('message', $response->data);
+            $this->assertSame('Un mot de passe est requis pour restaurer une sauvegarde chiffrée.', $response->data['message']);
+        }
+
+        $this->assertSame([], $GLOBALS['bjlg_test_transients']);
     }
 
     public function test_handle_run_restore_interprets_false_string_as_false(): void

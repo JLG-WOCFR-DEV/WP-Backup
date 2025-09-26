@@ -126,6 +126,180 @@ jQuery(document).ready(function($) {
         const $statusText = $('#bjlg-restore-status-text');
         const $progressBar = $('#bjlg-restore-progress-bar');
         const fileInput = document.getElementById('bjlg-restore-file-input');
+        const passwordInput = document.getElementById('bjlg-restore-password');
+        const $errorNotice = $('#bjlg-restore-errors');
+        const errorFieldClass = 'bjlg-input-error';
+
+        function getValidationErrors(payload) {
+            if (!payload || typeof payload !== 'object') {
+                return null;
+            }
+
+            if (payload.errors && typeof payload.errors === 'object') {
+                return payload.errors;
+            }
+
+            if (payload.validation_errors && typeof payload.validation_errors === 'object') {
+                return payload.validation_errors;
+            }
+
+            if (payload.field_errors && typeof payload.field_errors === 'object') {
+                return payload.field_errors;
+            }
+
+            return null;
+        }
+
+        function parseErrors(rawErrors) {
+            const result = {
+                general: [],
+                fields: {}
+            };
+
+            if (!rawErrors) {
+                return result;
+            }
+
+            const collectMessages = function(target, value) {
+                if (Array.isArray(value)) {
+                    value.forEach(function(item) {
+                        collectMessages(target, item);
+                    });
+                    return;
+                }
+
+                if (!value) {
+                    return;
+                }
+
+                if (typeof value === 'string') {
+                    const trimmed = value.trim();
+                    if (trimmed !== '') {
+                        target.push(trimmed);
+                    }
+                    return;
+                }
+
+                if (typeof value === 'object' && typeof value.message === 'string') {
+                    const trimmed = value.message.trim();
+                    if (trimmed !== '') {
+                        target.push(trimmed);
+                    }
+                }
+            };
+
+            if (typeof rawErrors === 'string' || Array.isArray(rawErrors)) {
+                collectMessages(result.general, rawErrors);
+                return result;
+            }
+
+            if (typeof rawErrors === 'object') {
+                $.each(rawErrors, function(key, value) {
+                    if (key === undefined || key === null) {
+                        collectMessages(result.general, value);
+                        return;
+                    }
+
+                    const normalizedKey = String(key);
+                    const generalKeys = ['', '_', '_general', '_global', '*', 'general', 'messages'];
+
+                    if (generalKeys.indexOf(normalizedKey) !== -1 || !Number.isNaN(Number(normalizedKey))) {
+                        collectMessages(result.general, value);
+                        return;
+                    }
+
+                    const messages = [];
+                    collectMessages(messages, value);
+
+                    if (messages.length) {
+                        result.fields[normalizedKey] = messages;
+                    }
+                });
+            }
+
+            return result;
+        }
+
+        function clearRestoreErrors() {
+            if ($errorNotice.length) {
+                $errorNotice.hide().empty();
+            }
+
+            $form.find('.bjlg-field-error').remove();
+            $form.find('.' + errorFieldClass)
+                .removeClass(errorFieldClass)
+                .removeAttr('aria-invalid');
+        }
+
+        function displayRestoreErrors(message, rawErrors) {
+            const parsed = parseErrors(rawErrors);
+            const summaryItems = [];
+            const seenMessages = new Set();
+
+            const appendSummary = function(text) {
+                if (!text || typeof text !== 'string') {
+                    return;
+                }
+
+                const trimmed = text.trim();
+                if (trimmed === '' || seenMessages.has(trimmed)) {
+                    return;
+                }
+
+                seenMessages.add(trimmed);
+                summaryItems.push(trimmed);
+            };
+
+            if ($errorNotice.length) {
+                $errorNotice.empty();
+
+                if (message && message.trim() !== '') {
+                    $('<p/>').text(message).appendTo($errorNotice);
+                }
+
+                parsed.general.forEach(appendSummary);
+
+                $.each(parsed.fields, function(field, messages) {
+                    messages.forEach(appendSummary);
+                });
+
+                if (summaryItems.length) {
+                    const $list = $('<ul/>');
+                    summaryItems.forEach(function(item) {
+                        $('<li/>').text(item).appendTo($list);
+                    });
+                    $errorNotice.append($list);
+                }
+
+                if ($errorNotice.children().length) {
+                    $errorNotice.show();
+                }
+            }
+
+            $.each(parsed.fields, function(fieldName, messages) {
+                const $field = $form.find('[name="' + fieldName + '"]');
+                if (!$field.length) {
+                    return;
+                }
+
+                $field.addClass(errorFieldClass).attr('aria-invalid', 'true');
+
+                if (!messages || !messages.length) {
+                    return;
+                }
+
+                const messageText = messages[0];
+                if (!messageText || typeof messageText !== 'string') {
+                    return;
+                }
+
+                $('<p class="bjlg-field-error description" style="color:#b32d2e; margin-top:4px;"></p>')
+                    .text(messageText)
+                    .insertAfter($field.last());
+            });
+        }
+
+        clearRestoreErrors();
 
         if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
             alert('Veuillez sélectionner un fichier de sauvegarde à téléverser.');
@@ -158,9 +332,11 @@ jQuery(document).ready(function($) {
                 $statusText.text('Fichier téléversé. Préparation de la restauration...');
                 runRestore(response.data.filename, createRestorePoint);
             } else {
-                const message = response && response.data && response.data.message
-                    ? response.data.message
+                const payload = response && response.data ? response.data : {};
+                const message = payload && payload.message
+                    ? payload.message
                     : 'Réponse invalide du serveur.';
+                displayRestoreErrors(message, getValidationErrors(payload));
                 $statusText.html('<span style="color:red;">❌ ' + message + '</span>');
                 $button.prop('disabled', false);
             }
@@ -170,6 +346,8 @@ jQuery(document).ready(function($) {
             if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
                 errorMessage += ' ' + xhr.responseJSON.data.message;
             }
+            const errors = xhr && xhr.responseJSON ? getValidationErrors(xhr.responseJSON.data) : null;
+            displayRestoreErrors(errorMessage, errors);
             $statusText.html('<span style="color:red;">❌ ' + errorMessage + '</span>');
             $button.prop('disabled', false);
         });
@@ -179,7 +357,8 @@ jQuery(document).ready(function($) {
                 action: 'bjlg_run_restore',
                 nonce: bjlg_ajax.nonce,
                 filename: filename,
-                create_backup_before_restore: createRestorePointChecked ? 1 : 0
+                create_backup_before_restore: createRestorePointChecked ? 1 : 0,
+                password: passwordInput ? passwordInput.value : ''
             };
 
             $statusText.text('Initialisation de la restauration...');
@@ -193,9 +372,11 @@ jQuery(document).ready(function($) {
                 if (response.success && response.data && response.data.task_id) {
                     pollRestoreProgress(response.data.task_id);
                 } else {
-                    const message = response && response.data && response.data.message
-                        ? response.data.message
+                    const payload = response && response.data ? response.data : {};
+                    const message = payload && payload.message
+                        ? payload.message
                         : 'Impossible de démarrer la restauration.';
+                    displayRestoreErrors(message, getValidationErrors(payload));
                     $statusText.html('<span style="color:red;">❌ ' + message + '</span>');
                     $button.prop('disabled', false);
                 }
@@ -205,6 +386,8 @@ jQuery(document).ready(function($) {
                 if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
                     errorMessage += ' ' + xhr.responseJSON.data.message;
                 }
+                const errors = xhr && xhr.responseJSON ? getValidationErrors(xhr.responseJSON.data) : null;
+                displayRestoreErrors(errorMessage, errors);
                 $statusText.html('<span style="color:red;">❌ ' + errorMessage + '</span>');
                 $button.prop('disabled', false);
             });
@@ -240,6 +423,7 @@ jQuery(document).ready(function($) {
                         if (data.status === 'error') {
                             clearInterval(interval);
                             const message = data.status_text || 'La restauration a échoué.';
+                            displayRestoreErrors(message, getValidationErrors(data));
                             $statusText.html('<span style="color:red;">❌ ' + message + '</span>');
                             $button.prop('disabled', false);
                         } else if (data.status === 'complete' || (Number.isFinite(progressValue) && progressValue >= 100)) {
