@@ -189,6 +189,44 @@ final class BJLG_RestoreSecurityTest extends TestCase
             $this->assertIsArray($response->data);
             $this->assertArrayHasKey('message', $response->data);
             $this->assertSame('Un mot de passe est requis pour restaurer une sauvegarde chiffrée.', $response->data['message']);
+            $this->assertArrayHasKey('validation_errors', $response->data);
+            $this->assertIsArray($response->data['validation_errors']);
+            $this->assertArrayHasKey('password', $response->data['validation_errors']);
+            $this->assertContains(
+                'Un mot de passe est requis pour restaurer une sauvegarde chiffrée.',
+                $response->data['validation_errors']['password']
+            );
+        }
+
+        $this->assertSame([], $GLOBALS['bjlg_test_transients']);
+    }
+
+    public function test_handle_run_restore_requires_minimum_password_length(): void
+    {
+        $_POST['nonce'] = 'nonce';
+        $_POST['filename'] = 'backup.zip';
+        $_POST['password'] = '123';
+
+        $restore = new BJLG\BJLG_Restore();
+
+        try {
+            $restore->handle_run_restore();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertTrue(
+                $response->status_code === null || $response->status_code === 200,
+                'Expected wp_send_json_error to use the default HTTP status code.'
+            );
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('message', $response->data);
+            $this->assertSame('Le mot de passe doit contenir au moins 4 caractères.', $response->data['message']);
+            $this->assertArrayHasKey('validation_errors', $response->data);
+            $this->assertIsArray($response->data['validation_errors']);
+            $this->assertArrayHasKey('password', $response->data['validation_errors']);
+            $this->assertContains(
+                'Le mot de passe doit contenir au moins 4 caractères.',
+                $response->data['validation_errors']['password']
+            );
         }
 
         $this->assertSame([], $GLOBALS['bjlg_test_transients']);
