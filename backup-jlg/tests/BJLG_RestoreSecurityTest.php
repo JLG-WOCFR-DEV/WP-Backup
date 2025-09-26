@@ -16,6 +16,11 @@ final class BJLG_RestoreSecurityTest extends TestCase
      */
     private $existingBackupPath;
 
+    /**
+     * @var array<int, string>
+     */
+    private $temporaryFiles = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -41,9 +46,15 @@ final class BJLG_RestoreSecurityTest extends TestCase
 
     protected function tearDown(): void
     {
-        if (file_exists($this->existingBackupPath)) {
-            unlink($this->existingBackupPath);
+        $files_to_remove = array_merge([$this->existingBackupPath], $this->temporaryFiles);
+
+        foreach ($files_to_remove as $path) {
+            if (is_string($path) && $path !== '' && file_exists($path)) {
+                @unlink($path);
+            }
         }
+
+        $this->temporaryFiles = [];
 
         $GLOBALS['bjlg_test_set_transient_mock'] = null;
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
@@ -129,6 +140,119 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $this->assertIsArray($task_data);
         $this->assertArrayHasKey('create_restore_point', $task_data);
         $this->assertFalse($task_data['create_restore_point']);
+    }
+
+    public function test_handle_run_restore_requires_password_for_encrypted_backups(): void
+    {
+        $encrypted_backup = BJLG_BACKUP_DIR . 'secure-backup.zip.enc';
+        file_put_contents($encrypted_backup, 'encrypted-content');
+        $this->temporaryFiles[] = $encrypted_backup;
+
+        $_POST['nonce'] = 'nonce';
+        $_POST['filename'] = basename($encrypted_backup);
+
+        $restore = new BJLG\BJLG_Restore();
+
+        try {
+            $restore->handle_run_restore();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('message', $response->data);
+            $this->assertSame('Un mot de passe est requis pour restaurer une sauvegarde chiffrée.', $response->data['message']);
+        }
+    }
+
+    public function test_encrypted_restore_decrypts_with_original_password_and_updates_progress(): void
+    {
+        $zip_path = BJLG_BACKUP_DIR . 'fixture-restore.zip';
+        $zip = new ZipArchive();
+        $this->assertTrue($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE));
+        $zip->addFromString('backup-manifest.json', json_encode([
+            'contains' => [],
+            'type' => 'test',
+            'version' => '1.0.0',
+            'created_at' => '2024-01-01 00:00:00',
+        ]));
+        $zip->close();
+
+        $encrypted_path = $zip_path . '.enc';
+        file_put_contents($encrypted_path, 'encrypted-placeholder');
+
+        $this->temporaryFiles[] = $zip_path;
+        $this->temporaryFiles[] = $encrypted_path;
+
+        $password = "  SuPeR\nSeCrEt\t  ";
+
+        $encryption_stub = new class($zip_path) extends BJLG\BJLG_Encryption {
+            /** @var array<int, array{filepath: string, password: ?string}> */
+            public $calls = [];
+
+            /** @var string */
+            private $returnPath;
+
+            public function __construct($returnPath)
+            {
+                $this->returnPath = $returnPath;
+            }
+
+            public function decrypt_backup_file($filepath, $password = null)
+            {
+                $this->calls[] = [
+                    'filepath' => $filepath,
+                    'password' => $password,
+                ];
+
+                return $this->returnPath;
+            }
+        };
+
+        $status_updates = [];
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value, $expiration) use (&$status_updates) {
+            if (strpos($transient, 'bjlg_restore_') === 0) {
+                $status_updates[] = $value;
+            }
+
+            return null;
+        };
+
+        $_POST = [
+            'nonce' => 'nonce',
+            'filename' => basename($encrypted_path),
+            'password' => $password,
+        ];
+
+        $restore = new BJLG\BJLG_Restore(null, $encryption_stub);
+
+        try {
+            $restore->handle_run_restore();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertArrayHasKey('task_id', $response->data);
+            $task_id = $response->data['task_id'];
+        }
+
+        $task_data = get_transient($task_id);
+        $this->assertIsArray($task_data);
+        $this->assertArrayHasKey('password_encrypted', $task_data);
+        $this->assertNotEmpty($task_data['password_encrypted']);
+
+        $restore->run_restore_task($task_id);
+
+        $this->assertNotEmpty($encryption_stub->calls);
+        $this->assertSame($encrypted_path, $encryption_stub->calls[0]['filepath']);
+        $this->assertSame($password, $encryption_stub->calls[0]['password']);
+
+        $this->assertNotEmpty($status_updates);
+
+        $progress_texts = array_column($status_updates, 'status_text');
+        $this->assertContains("Déchiffrement de l'archive...", $progress_texts);
+        $this->assertSame('Restauration terminée avec succès !', end($progress_texts));
+
+        $final_state = get_transient($task_id);
+        $this->assertIsArray($final_state);
+        $this->assertSame('complete', $final_state['status']);
+        $this->assertSame(100, $final_state['progress']);
     }
 
     public function test_handle_run_restore_interprets_false_string_as_false(): void

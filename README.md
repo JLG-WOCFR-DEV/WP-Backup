@@ -73,6 +73,30 @@ wp backup-jlg restore --file=/chemin/vers/sauvegarde.zip
 - `composer cs` : lance PHP_CodeSniffer avec la norme WordPress.
 - `composer cs-fix` : corrige automatiquement les violations de style détectées.
 
+## 🧪 Tests automatisés côté PHP et UI
+Le plugin dispose désormais de deux familles de tests complémentaires :
+
+1. **Tests serveur (PHPUnit)** – couvrent la logique métier et les contrôles de sécurité côté PHP.
+   - Dépendances : PHP ≥ 7.4, Composer installé.
+   - Commande : `composer test`
+
+2. **Tests interface (Playwright)** – rejouent les scénarios d’administration (sauvegarde/restauration) et vérifient l’affichage des barres de progression, logs de debug et messages d’erreur.
+   - Dépendances : Node.js ≥ 18.
+   - Installation initiale :
+     ```bash
+     npm install
+     npx playwright install --with-deps
+     ```
+   - Exécution : `npm run test:e2e`
+
+Pour valider l’ensemble avant une contribution, exécuter :
+
+```bash
+composer test && npm run test:e2e
+```
+
+Les tests Playwright s’appuient sur un banc d’essai HTML léger qui charge le JavaScript d’administration (`assets/js/admin.js`) et intercepte les requêtes AJAX afin de simuler les réponses WordPress (progression normale, réussite et erreurs). Cela permet de vérifier localement que l’interface réagit correctement sans devoir lancer un site WordPress complet.
+
 ## ⚠️ Limitations connues
 - Le multi-threading et les benchmarks automatiques nécessitent des fonctions systèmes (`shell_exec`, `proc_open`) souvent désactivées sur les hébergements mutualisés ; le plugin bascule alors en traitement séquentiel.
 - L’intégration Google Drive et certaines notifications externes requièrent l’installation des dépendances Composer et la configuration d’identifiants tiers.
