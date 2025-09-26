@@ -18,6 +18,10 @@ final class BJLG_BackupTest extends TestCase
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
 
         $_POST = [];
+
+        $lock_property = new ReflectionProperty(BJLG\BJLG_Backup::class, 'in_memory_lock');
+        $lock_property->setAccessible(true);
+        $lock_property->setValue(null, null);
     }
 
     protected function tearDown(): void
@@ -25,6 +29,10 @@ final class BJLG_BackupTest extends TestCase
         $GLOBALS['bjlg_test_set_transient_mock'] = null;
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
         $_POST = [];
+
+        $lock_property = new ReflectionProperty(BJLG\BJLG_Backup::class, 'in_memory_lock');
+        $lock_property->setAccessible(true);
+        $lock_property->setValue(null, null);
 
         parent::tearDown();
     }
@@ -85,5 +93,54 @@ final class BJLG_BackupTest extends TestCase
         );
 
         BJLG\BJLG_Backup::release_task_slot($task_one);
+    }
+
+    public function test_progress_updates_refresh_lock_and_keep_owner(): void
+    {
+        $task_id = 'bjlg_backup_' . md5('lock-refresh');
+        $backup = new BJLG\BJLG_Backup();
+
+        $this->assertTrue(BJLG\BJLG_Backup::reserve_task_slot($task_id));
+
+        $initial_state = [
+            'progress' => 0,
+            'status' => 'running',
+            'status_text' => 'Initialisation',
+        ];
+
+        $this->assertTrue(BJLG\BJLG_Backup::save_task_state($task_id, $initial_state));
+
+        $lock_payload = $GLOBALS['bjlg_test_transients']['bjlg_backup_task_lock'] ?? null;
+        $this->assertIsArray($lock_payload);
+        $this->assertSame($task_id, $lock_payload['owner']);
+        $initial_expiration = $lock_payload['expires_at'];
+
+        $progress_method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'update_task_progress');
+        $progress_method->setAccessible(true);
+
+        sleep(1);
+        $progress_method->invoke($backup, $task_id, 25, 'running', 'Quarter way through');
+
+        $lock_after_first_update = $GLOBALS['bjlg_test_transients']['bjlg_backup_task_lock'] ?? null;
+        $this->assertIsArray($lock_after_first_update);
+        $this->assertSame($task_id, $lock_after_first_update['owner']);
+        $this->assertGreaterThan($initial_expiration, $lock_after_first_update['expires_at']);
+        $this->assertSame(25, $GLOBALS['bjlg_test_transients'][$task_id]['progress']);
+
+        $first_extension = $lock_after_first_update['expires_at'];
+
+        sleep(1);
+        $progress_method->invoke($backup, $task_id, 50.5, 'running', 'Halfway done');
+
+        $lock_after_second_update = $GLOBALS['bjlg_test_transients']['bjlg_backup_task_lock'] ?? null;
+        $this->assertIsArray($lock_after_second_update);
+        $this->assertSame($task_id, $lock_after_second_update['owner']);
+        $this->assertGreaterThan($first_extension, $lock_after_second_update['expires_at']);
+        $this->assertSame(50.5, $GLOBALS['bjlg_test_transients'][$task_id]['progress']);
+
+        BJLG\BJLG_Backup::release_task_slot($task_id);
+
+        $this->assertArrayNotHasKey('bjlg_backup_task_lock', $GLOBALS['bjlg_test_transients']);
+        unset($GLOBALS['bjlg_test_transients'][$task_id]);
     }
 }
