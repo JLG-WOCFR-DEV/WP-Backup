@@ -1544,17 +1544,31 @@ class BJLG_REST_API {
         // Planifier l'exécution
         $scheduled = wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
 
-        if ($scheduled === false) {
+        if ($scheduled === false || is_wp_error($scheduled)) {
             delete_transient($task_id);
 
+            $error_details = is_wp_error($scheduled) ? $scheduled->get_error_message() : null;
+
             if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log("ERREUR : Impossible de planifier la tâche de restauration {$task_id} via l'API.");
+                $log_message = "ERREUR : Impossible de planifier la tâche de restauration {$task_id} via l'API.";
+
+                if (!empty($error_details)) {
+                    $log_message .= ' Détails : ' . $error_details;
+                }
+
+                BJLG_Debug::log($log_message);
+            }
+
+            $error_data = ['status' => 500];
+
+            if (!empty($error_details)) {
+                $error_data['details'] = $error_details;
             }
 
             return new WP_Error(
                 'rest_restore_schedule_failed',
                 __('Impossible de planifier la tâche de restauration en arrière-plan.', 'backup-jlg'),
-                ['status' => 500]
+                $error_data
             );
         }
 

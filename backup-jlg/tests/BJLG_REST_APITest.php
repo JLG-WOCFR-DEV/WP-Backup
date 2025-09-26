@@ -1260,6 +1260,68 @@ namespace {
         $this->deleteBackupIfExists($archive_path);
     }
 
+    public function test_restore_endpoint_cleans_up_when_scheduling_returns_wp_error(): void
+    {
+        $api = new BJLG\BJLG_REST_API();
+
+        $archive_path = $this->createBackupWithComponents(['db']);
+
+        $request = new class($archive_path) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct(string $archive_path)
+            {
+                $this->params = [
+                    'id' => basename($archive_path),
+                    'components' => ['db'],
+                    'create_restore_point' => false,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $captured_task_id = null;
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value = null, $expiration = null) use (&$captured_task_id) {
+            if (strpos($transient, 'bjlg_restore_') === 0) {
+                $captured_task_id = $transient;
+            }
+
+            return null;
+        };
+
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = static function ($timestamp, $hook, $args = []) {
+            if ($hook === 'bjlg_run_restore_task') {
+                return new WP_Error('cron_failure', 'Unexpected cron failure (REST)');
+            }
+
+            return null;
+        };
+
+        $response = $api->restore_backup($request);
+
+        $this->assertInstanceOf(\WP_Error::class, $response);
+        $this->assertSame('rest_restore_schedule_failed', $response->get_error_code());
+        $this->assertNotNull($captured_task_id);
+
+        $error_data = $response->get_error_data();
+        $this->assertIsArray($error_data);
+        $this->assertSame(500, $error_data['status']);
+        $this->assertArrayHasKey('details', $error_data);
+        $this->assertSame('Unexpected cron failure (REST)', $error_data['details']);
+
+        $this->assertArrayNotHasKey($captured_task_id, $GLOBALS['bjlg_test_transients']);
+        $this->assertArrayHasKey('single', $GLOBALS['bjlg_test_scheduled_events']);
+        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+
+        $this->deleteBackupIfExists($archive_path);
+    }
+
         public function test_update_settings_rejects_empty_payload(): void
         {
             $api = new BJLG\BJLG_REST_API();
