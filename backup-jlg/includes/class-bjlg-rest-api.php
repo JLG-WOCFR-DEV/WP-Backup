@@ -14,6 +14,7 @@ if (!defined('ABSPATH')) {
 }
 
 require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
+require_once __DIR__ . '/class-bjlg-restore.php';
 
 class BJLG_REST_API {
     
@@ -1581,10 +1582,12 @@ class BJLG_REST_API {
     }
 
     private function normalize_restore_components($components) {
-        $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+        if ($components === null) {
+            return [];
+        }
+
         $components = (array) $components;
-        $sanitized = [];
-        $has_all = false;
+        $validated_components = [];
 
         foreach ($components as $component) {
             if (!is_string($component)) {
@@ -1599,23 +1602,10 @@ class BJLG_REST_API {
                 );
             }
 
-            $component = sanitize_key($component);
-
-            if ($component === 'all') {
-                $has_all = true;
-                continue;
-            }
-
-            if (in_array($component, $allowed_components, true) && !in_array($component, $sanitized, true)) {
-                $sanitized[] = $component;
-            }
+            $validated_components[] = $component;
         }
 
-        if ($has_all) {
-            return $allowed_components;
-        }
-
-        return $sanitized;
+        return BJLG_Restore::normalize_requested_components($validated_components, false);
     }
 
     /**

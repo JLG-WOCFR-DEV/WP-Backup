@@ -329,6 +329,13 @@ class BJLG_Restore {
             }
         }
 
+        $raw_components = $_POST['components'] ?? null;
+        if ($raw_components !== null) {
+            $raw_components = wp_unslash($raw_components);
+        }
+
+        $requested_components = self::normalize_requested_components($raw_components);
+
         $password = null;
         if (array_key_exists('password', $_POST)) {
             $maybe_password = wp_unslash($_POST['password']);
@@ -380,6 +387,7 @@ class BJLG_Restore {
             'filepath' => $filepath,
             'password_encrypted' => $encrypted_password,
             'create_restore_point' => $create_backup_before_restore,
+            'components' => $requested_components,
         ];
         
         $transient_set = set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
@@ -461,7 +469,7 @@ class BJLG_Restore {
         $original_archive_path = $filepath;
         $decrypted_archive_path = null;
         $create_restore_point = !empty($task_data['create_restore_point']);
-        $requested_components = $this->normalize_requested_components($task_data['components'] ?? null);
+        $requested_components = self::normalize_requested_components($task_data['components'] ?? null);
         $current_status = is_array($task_data) ? $task_data : [];
 
         if (!empty($encrypted_password)) {
@@ -853,18 +861,19 @@ class BJLG_Restore {
      * Normalise la liste des composants demandés pour la restauration.
      *
      * @param mixed $components
+     * @param bool  $default_to_all Si vrai, retourne tous les composants lorsque l'entrée est vide.
      * @return array<int, string>
      */
-    private function normalize_requested_components($components) {
+    public static function normalize_requested_components($components, $default_to_all = true) {
         $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
 
         if ($components === null) {
-            return $allowed_components;
+            return $default_to_all ? $allowed_components : [];
         }
 
         $components = (array) $components;
         $normalized = [];
-        $has_all = empty($components);
+        $has_all = $default_to_all && empty($components);
 
         foreach ($components as $component) {
             if (!is_string($component)) {
@@ -883,8 +892,12 @@ class BJLG_Restore {
             }
         }
 
-        if ($has_all || empty($normalized)) {
+        if ($has_all) {
             return $allowed_components;
+        }
+
+        if (empty($normalized)) {
+            return $default_to_all ? $allowed_components : $normalized;
         }
 
         return $normalized;
