@@ -125,7 +125,37 @@ jQuery(document).ready(function($) {
         const $statusWrapper = $('#bjlg-restore-status');
         const $statusText = $('#bjlg-restore-status-text');
         const $progressBar = $('#bjlg-restore-progress-bar');
+        const $debugWrapper = $('#bjlg-restore-debug-wrapper');
+        const $debugOutput = $('#bjlg-restore-ajax-debug');
         const fileInput = document.getElementById('bjlg-restore-file-input');
+
+        let restoreDebugReport = '';
+        const appendRestoreDebug = function(message, payload) {
+            if (!$debugOutput.length) {
+                return;
+            }
+
+            if (restoreDebugReport.length) {
+                restoreDebugReport += "\n\n";
+            }
+
+            restoreDebugReport += message;
+
+            if (typeof payload !== 'undefined') {
+                restoreDebugReport += "\n";
+                if (typeof payload === 'string') {
+                    restoreDebugReport += payload;
+                } else {
+                    try {
+                        restoreDebugReport += JSON.stringify(payload, null, 2);
+                    } catch (error) {
+                        restoreDebugReport += String(payload);
+                    }
+                }
+            }
+
+            $debugOutput.text(restoreDebugReport);
+        };
 
         if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
             alert('Veuillez sélectionner un fichier de sauvegarde à téléverser.');
@@ -140,11 +170,30 @@ jQuery(document).ready(function($) {
         $statusWrapper.show();
         $statusText.text('Téléversement du fichier en cours...');
         $progressBar.css('width', '0%').text('0%');
+        if ($debugWrapper.length) {
+            $debugWrapper.show();
+        }
+        if ($debugOutput.length) {
+            restoreDebugReport = '';
+            $debugOutput.text('');
+        }
 
         const formData = new FormData();
         formData.append('action', 'bjlg_upload_restore_file');
         formData.append('nonce', bjlg_ajax.nonce);
         formData.append('restore_file', fileInput.files[0]);
+
+        if ($debugOutput.length) {
+            appendRestoreDebug(
+                '--- 1. TÉLÉVERSEMENT DU FICHIER ---\nRequête envoyée (métadonnées)',
+                {
+                    filename: fileInput.files[0].name,
+                    size: fileInput.files[0].size,
+                    type: fileInput.files[0].type || 'inconnu',
+                    create_backup_before_restore: createRestorePoint
+                }
+            );
+        }
 
         $.ajax({
             url: bjlg_ajax.ajax_url,
@@ -154,6 +203,7 @@ jQuery(document).ready(function($) {
             processData: false
         })
         .done(function(response) {
+            appendRestoreDebug('Réponse du serveur (téléversement)', response);
             if (response.success && response.data && response.data.filename) {
                 $statusText.text('Fichier téléversé. Préparation de la restauration...');
                 runRestore(response.data.filename, createRestorePoint);
@@ -166,6 +216,16 @@ jQuery(document).ready(function($) {
             }
         })
         .fail(function(xhr) {
+            appendRestoreDebug(
+                'Erreur de communication (téléversement)',
+                {
+                    status: xhr ? xhr.status : 'inconnu',
+                    responseText: xhr ? xhr.responseText : 'Aucune réponse',
+                    message: xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
+                        ? xhr.responseJSON.data.message
+                        : undefined
+                }
+            );
             let errorMessage = 'Erreur de communication lors du téléversement.';
             if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
                 errorMessage += ' ' + xhr.responseJSON.data.message;
@@ -183,6 +243,7 @@ jQuery(document).ready(function($) {
             };
 
             $statusText.text('Initialisation de la restauration...');
+            appendRestoreDebug('--- 2. DÉMARRAGE DE LA RESTAURATION ---\nRequête envoyée', requestData);
 
             $.ajax({
                 url: bjlg_ajax.ajax_url,
@@ -190,6 +251,7 @@ jQuery(document).ready(function($) {
                 data: requestData
             })
             .done(function(response) {
+                appendRestoreDebug('Réponse du serveur (démarrage restauration)', response);
                 if (response.success && response.data && response.data.task_id) {
                     pollRestoreProgress(response.data.task_id);
                 } else {
@@ -201,6 +263,16 @@ jQuery(document).ready(function($) {
                 }
             })
             .fail(function(xhr) {
+                appendRestoreDebug(
+                    'Erreur de communication (démarrage restauration)',
+                    {
+                        status: xhr ? xhr.status : 'inconnu',
+                        responseText: xhr ? xhr.responseText : 'Aucune réponse',
+                        message: xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
+                            ? xhr.responseJSON.data.message
+                            : undefined
+                    }
+                );
                 let errorMessage = 'Erreur de communication lors du démarrage de la restauration.';
                 if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
                     errorMessage += ' ' + xhr.responseJSON.data.message;
@@ -211,6 +283,11 @@ jQuery(document).ready(function($) {
         }
 
         function pollRestoreProgress(taskId) {
+            appendRestoreDebug('--- 3. SUIVI DE LA RESTAURATION ---\nRequête envoyée', {
+                action: 'bjlg_check_restore_progress',
+                nonce: '***',
+                task_id: taskId
+            });
             const interval = setInterval(function() {
                 $.ajax({
                     url: bjlg_ajax.ajax_url,
@@ -222,6 +299,7 @@ jQuery(document).ready(function($) {
                     }
                 })
                 .done(function(response) {
+                    appendRestoreDebug('Mise à jour progression', response);
                     if (response.success && response.data) {
                         const data = response.data;
 
@@ -257,7 +335,14 @@ jQuery(document).ready(function($) {
                         $button.prop('disabled', false);
                     }
                 })
-                .fail(function() {
+                .fail(function(xhr) {
+                    appendRestoreDebug(
+                        'Erreur de communication (suivi restauration)',
+                        {
+                            status: xhr ? xhr.status : 'inconnu',
+                            responseText: xhr ? xhr.responseText : 'Aucune réponse'
+                        }
+                    );
                     clearInterval(interval);
                     $statusText.html('<span style="color:red;">❌ Erreur de communication lors du suivi de la restauration.</span>');
                     $button.prop('disabled', false);
