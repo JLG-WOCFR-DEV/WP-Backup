@@ -29,9 +29,14 @@ class BJLG_Backup {
     private const TASK_LOCK_TTL = 1800;
 
     /**
+     * Délai de grâce accordé pour initialiser l'état d'une tâche après l'acquisition du verrou.
+     */
+    private const TASK_LOCK_INITIALIZATION_GRACE = 30;
+
+    /**
      * Stocke le verrou en mémoire pour les environnements sans API de cache/options.
      *
-     * @var array{owner: string, expires_at: int}|null
+     * @var array{owner: string, acquired_at: int, initialized: bool, expires_at: int}|null
      */
     private static $in_memory_lock = null;
 
@@ -64,7 +69,13 @@ class BJLG_Backup {
      * @return bool
      */
     public static function save_task_state($task_id, array $task_data) {
-        return set_transient($task_id, $task_data, self::get_task_ttl());
+        $saved = set_transient($task_id, $task_data, self::get_task_ttl());
+
+        if ($saved) {
+            self::mark_lock_initialized($task_id);
+        }
+
+        return $saved;
     }
 
     /**
@@ -113,11 +124,7 @@ class BJLG_Backup {
         $current_owner = self::get_task_lock_owner();
 
         if ($current_owner === $task_id) {
-            if (function_exists('delete_transient')) {
-                delete_transient(self::TASK_LOCK_KEY);
-            }
-
-            self::$in_memory_lock = null;
+            self::delete_lock_payload();
         }
     }
 
@@ -127,38 +134,35 @@ class BJLG_Backup {
      * @return string|null
      */
     private static function get_task_lock_owner() {
-        $current_owner = function_exists('get_transient')
-            ? get_transient(self::TASK_LOCK_KEY)
-            : false;
+        $payload = self::get_lock_payload();
 
-        if ($current_owner === false) {
-            if (self::$in_memory_lock === null) {
-                return null;
-            }
-
-            if (self::$in_memory_lock['expires_at'] <= time()) {
-                self::$in_memory_lock = null;
-
-                return null;
-            }
-
-            return self::$in_memory_lock['owner'];
+        if ($payload === null) {
+            return null;
         }
 
-        if (is_string($current_owner)
-            && function_exists('get_transient')
-            && get_transient($current_owner) === false
-        ) {
-            if (function_exists('delete_transient')) {
-                delete_transient(self::TASK_LOCK_KEY);
-            }
+        $now = time();
 
-            self::$in_memory_lock = null;
+        if (!is_string($payload['owner']) || $payload['owner'] === '') {
+            self::delete_lock_payload();
 
             return null;
         }
 
-        return is_string($current_owner) ? $current_owner : null;
+        if ((int) $payload['expires_at'] <= $now) {
+            self::delete_lock_payload();
+
+            return null;
+        }
+
+        if (!$payload['initialized'] && ($now - (int) $payload['acquired_at']) > self::TASK_LOCK_INITIALIZATION_GRACE) {
+            self::delete_lock_payload();
+
+            return null;
+        }
+
+        self::$in_memory_lock = $payload;
+
+        return $payload['owner'];
     }
 
     /**
@@ -178,6 +182,217 @@ class BJLG_Backup {
     }
 
     /**
+     * Récupère le payload du verrou, quelle que soit la couche de stockage utilisée.
+     *
+     * @return array{owner: string, acquired_at: int, initialized: bool, expires_at: int}|null
+     */
+    private static function get_lock_payload() {
+        if (function_exists('wp_using_ext_object_cache')
+            && wp_using_ext_object_cache()
+            && function_exists('wp_cache_get')
+        ) {
+            $raw_payload = wp_cache_get(self::TASK_LOCK_KEY, 'transient');
+
+            if ($raw_payload !== false) {
+                $payload = self::normalize_lock_payload($raw_payload);
+
+                if ($payload !== null) {
+                    self::$in_memory_lock = $payload;
+
+                    return $payload;
+                }
+            }
+        }
+
+        if (function_exists('get_transient')) {
+            $raw_payload = get_transient(self::TASK_LOCK_KEY);
+
+            if ($raw_payload !== false) {
+                $payload = self::normalize_lock_payload($raw_payload);
+
+                if ($payload !== null) {
+                    self::$in_memory_lock = $payload;
+
+                    return $payload;
+                }
+            }
+        }
+
+        if (function_exists('get_option')) {
+            $option_name = '_transient_' . self::TASK_LOCK_KEY;
+            $raw_payload = get_option($option_name, null);
+
+            if ($raw_payload !== null) {
+                $payload = self::normalize_lock_payload($raw_payload);
+
+                if ($payload !== null) {
+                    self::$in_memory_lock = $payload;
+
+                    return $payload;
+                }
+            }
+        }
+
+        if (self::$in_memory_lock !== null) {
+            $payload = self::normalize_lock_payload(self::$in_memory_lock);
+
+            if ($payload !== null) {
+                if ((int) $payload['expires_at'] <= time()) {
+                    self::$in_memory_lock = null;
+
+                    return null;
+                }
+
+                return $payload;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Convertit un payload quelconque en représentation structurée.
+     *
+     * @param mixed $raw_payload
+     * @return array{owner: string, acquired_at: int, initialized: bool, expires_at: int}|null
+     */
+    private static function normalize_lock_payload($raw_payload) {
+        if (is_array($raw_payload)) {
+            if (!isset($raw_payload['owner']) || !isset($raw_payload['expires_at'])) {
+                return null;
+            }
+
+            $now = time();
+
+            $owner = (string) $raw_payload['owner'];
+            $acquired_at = isset($raw_payload['acquired_at'])
+                ? (int) $raw_payload['acquired_at']
+                : $now;
+            $initialized = isset($raw_payload['initialized'])
+                ? (bool) $raw_payload['initialized']
+                : true;
+            $expires_at = (int) $raw_payload['expires_at'];
+
+            if ($expires_at <= 0) {
+                $expires_at = $now + self::get_task_lock_ttl();
+            }
+
+            return [
+                'owner' => $owner,
+                'acquired_at' => $acquired_at,
+                'initialized' => $initialized,
+                'expires_at' => $expires_at,
+            ];
+        }
+
+        if (is_string($raw_payload) && $raw_payload !== '') {
+            $now = time();
+
+            return [
+                'owner' => $raw_payload,
+                'acquired_at' => $now,
+                'initialized' => true,
+                'expires_at' => $now + self::get_task_lock_ttl(),
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Enregistre la représentation structurée du verrou dans toutes les couches disponibles.
+     *
+     * @param array{owner: string, acquired_at: int, initialized: bool, expires_at: int} $payload
+     * @return void
+     */
+    private static function persist_lock_payload(array $payload) {
+        $ttl = self::calculate_remaining_ttl($payload);
+
+        if (function_exists('wp_using_ext_object_cache')
+            && wp_using_ext_object_cache()
+            && function_exists('wp_cache_set')
+        ) {
+            wp_cache_set(self::TASK_LOCK_KEY, $payload, 'transient', $ttl);
+        }
+
+        if (function_exists('set_transient')) {
+            set_transient(self::TASK_LOCK_KEY, $payload, $ttl);
+        } elseif (function_exists('update_option')) {
+            $option_name = '_transient_' . self::TASK_LOCK_KEY;
+            $timeout_name = '_transient_timeout_' . self::TASK_LOCK_KEY;
+
+            update_option($option_name, $payload);
+            update_option($timeout_name, $payload['expires_at']);
+        }
+
+        self::$in_memory_lock = $payload;
+    }
+
+    /**
+     * Supprime le verrou quelle que soit la couche de stockage.
+     *
+     * @return void
+     */
+    private static function delete_lock_payload() {
+        if (function_exists('wp_using_ext_object_cache')
+            && wp_using_ext_object_cache()
+            && function_exists('wp_cache_delete')
+        ) {
+            wp_cache_delete(self::TASK_LOCK_KEY, 'transient');
+        }
+
+        if (function_exists('delete_transient')) {
+            delete_transient(self::TASK_LOCK_KEY);
+        } elseif (function_exists('delete_option')) {
+            $option_name = '_transient_' . self::TASK_LOCK_KEY;
+            $timeout_name = '_transient_timeout_' . self::TASK_LOCK_KEY;
+
+            delete_option($option_name);
+            delete_option($timeout_name);
+        }
+
+        self::$in_memory_lock = null;
+    }
+
+    /**
+     * Calcule le TTL restant pour le payload du verrou.
+     *
+     * @param array{owner: string, acquired_at: int, initialized: bool, expires_at: int} $payload
+     * @return int
+     */
+    private static function calculate_remaining_ttl(array $payload) {
+        $remaining = (int) $payload['expires_at'] - time();
+
+        if ($remaining < 1) {
+            return 1;
+        }
+
+        return $remaining;
+    }
+
+    /**
+     * Marque le verrou comme initialisé pour la tâche donnée.
+     *
+     * @param string $task_id
+     * @return void
+     */
+    private static function mark_lock_initialized($task_id) {
+        $payload = self::get_lock_payload();
+
+        if ($payload === null || $payload['owner'] !== $task_id) {
+            return;
+        }
+
+        if ($payload['initialized']) {
+            return;
+        }
+
+        $payload['initialized'] = true;
+
+        self::persist_lock_payload($payload);
+    }
+
+    /**
      * Tente d'acquérir le verrou de manière atomique selon les APIs disponibles.
      *
      * @param string $task_id
@@ -186,20 +401,33 @@ class BJLG_Backup {
      * @return bool
      */
     private static function try_acquire_task_lock($task_id, $ttl) {
+        $now = time();
+        $ttl = (int) $ttl;
+        $payload = [
+            'owner' => (string) $task_id,
+            'acquired_at' => $now,
+            'initialized' => false,
+            'expires_at' => $now + $ttl,
+        ];
+
         if (function_exists('wp_using_ext_object_cache')
             && wp_using_ext_object_cache()
             && function_exists('wp_cache_add')
         ) {
-            return wp_cache_add(self::TASK_LOCK_KEY, $task_id, 'transient', $ttl);
+            if (wp_cache_add(self::TASK_LOCK_KEY, $payload, 'transient', $ttl)) {
+                self::$in_memory_lock = $payload;
+
+                return true;
+            }
         }
 
         if (function_exists('add_option')) {
             $option_name = '_transient_' . self::TASK_LOCK_KEY;
             $timeout_name = '_transient_timeout_' . self::TASK_LOCK_KEY;
-            $added = add_option($option_name, $task_id, '', 'no');
+            $added = add_option($option_name, $payload, '', 'no');
 
             if ($added) {
-                $expires_at = time() + $ttl;
+                $expires_at = $payload['expires_at'];
 
                 if (!add_option($timeout_name, $expires_at, '', 'no')) {
                     if (function_exists('update_option')) {
@@ -207,28 +435,29 @@ class BJLG_Backup {
                     }
                 }
 
+                self::$in_memory_lock = $payload;
+
                 return true;
             }
-
-            return false;
         }
 
-        if (function_exists('set_transient')) {
-            return set_transient(self::TASK_LOCK_KEY, $task_id, $ttl);
-        }
-
-        $now = time();
-
-        if (self::$in_memory_lock === null || self::$in_memory_lock['expires_at'] <= $now) {
-            self::$in_memory_lock = [
-                'owner' => $task_id,
-                'expires_at' => $now + $ttl,
-            ];
+        if (function_exists('set_transient') && set_transient(self::TASK_LOCK_KEY, $payload, $ttl)) {
+            self::$in_memory_lock = $payload;
 
             return true;
         }
 
-        return self::$in_memory_lock['owner'] === $task_id;
+        $existing_payload = self::$in_memory_lock !== null
+            ? self::normalize_lock_payload(self::$in_memory_lock)
+            : null;
+
+        if ($existing_payload === null || (int) $existing_payload['expires_at'] <= $now) {
+            self::$in_memory_lock = $payload;
+
+            return true;
+        }
+
+        return $existing_payload['owner'] === $task_id;
     }
 
     /**
@@ -240,34 +469,23 @@ class BJLG_Backup {
      * @return void
      */
     private static function refresh_task_lock($task_id, $ttl) {
-        if (function_exists('wp_using_ext_object_cache')
-            && wp_using_ext_object_cache()
-            && function_exists('wp_cache_set')
-        ) {
-            wp_cache_set(self::TASK_LOCK_KEY, $task_id, 'transient', $ttl);
+        $existing_payload = self::get_lock_payload();
+        $now = time();
+        $ttl = (int) $ttl;
 
-            return;
+        if ($existing_payload === null || $existing_payload['owner'] !== $task_id) {
+            $payload = [
+                'owner' => (string) $task_id,
+                'acquired_at' => $now,
+                'initialized' => false,
+                'expires_at' => $now + $ttl,
+            ];
+        } else {
+            $payload = $existing_payload;
+            $payload['expires_at'] = $now + $ttl;
         }
 
-        if (function_exists('update_option')) {
-            $option_name = '_transient_' . self::TASK_LOCK_KEY;
-            $timeout_name = '_transient_timeout_' . self::TASK_LOCK_KEY;
-            update_option($option_name, $task_id);
-            update_option($timeout_name, time() + $ttl);
-
-            return;
-        }
-
-        if (function_exists('set_transient')) {
-            set_transient(self::TASK_LOCK_KEY, $task_id, $ttl);
-
-            return;
-        }
-
-        self::$in_memory_lock = [
-            'owner' => $task_id,
-            'expires_at' => time() + $ttl,
-        ];
+        self::persist_lock_payload($payload);
     }
 
     private $performance_optimizer;
