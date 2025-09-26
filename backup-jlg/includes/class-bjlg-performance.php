@@ -51,7 +51,16 @@ class BJLG_Performance {
      */
     private function detect_system_capabilities() {
         // Détection du nombre de cœurs CPU
-        if (function_exists('shell_exec') && !in_array('shell_exec', explode(',', ini_get('disable_functions')))) {
+        $disable_functions = ini_get('disable_functions');
+        $disabled_functions = [];
+
+        if (is_string($disable_functions) && $disable_functions !== '') {
+            $disabled_functions = array_filter(array_map('trim', explode(',', $disable_functions)));
+        }
+
+        $can_use_shell_exec = function_exists('shell_exec') && !in_array('shell_exec', $disabled_functions, true);
+
+        if ($can_use_shell_exec) {
             if (PHP_OS_FAMILY === 'Windows') {
                 $cores = shell_exec('wmic cpu get NumberOfCores');
                 // CORRECTION: Vérifier que $cores n'est pas null avant de l'utiliser
