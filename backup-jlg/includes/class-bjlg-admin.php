@@ -251,11 +251,19 @@ class BJLG_Admin {
                             </td>
                         </tr>
                         <tr>
+                            <th scope="row"><label for="bjlg-restore-password">Mot de passe</label></th>
+                            <td>
+                                <input type="password" id="bjlg-restore-password" name="password" class="regular-text" autocomplete="current-password" placeholder="Requis pour les archives .zip.enc">
+                                <p class="description">Requis pour restaurer les sauvegardes chiffrées (<code>.zip.enc</code>). Laissez vide pour les archives non chiffrées.</p>
+                            </td>
+                        </tr>
+                        <tr>
                             <th scope="row">Options</th>
                             <td><label><input type="checkbox" name="create_backup_before_restore" value="1" checked> Créer une sauvegarde de sécurité avant la restauration</label></td>
                         </tr>
                     </tbody>
                 </table>
+                <div id="bjlg-restore-errors" class="notice notice-error" style="display: none;" role="alert"></div>
                 <p class="submit">
                     <button type="submit" class="button button-primary"><span class="dashicons dashicons-upload"></span> Téléverser et Restaurer</button>
                 </p>
