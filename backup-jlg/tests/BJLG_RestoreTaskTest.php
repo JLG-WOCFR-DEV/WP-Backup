@@ -227,6 +227,101 @@ final class BJLG_RestoreTaskTest extends TestCase
         }
     }
 
+    public function test_ajax_restore_task_respects_requested_components(): void
+    {
+        BJLG_Test_Debug_Logger::$logs = [];
+
+        $plugin_slug = 'component-plugin-' . uniqid('', true);
+        $theme_slug = 'component-theme-' . uniqid('', true);
+        $upload_slug = 'component-upload-' . uniqid('', true);
+
+        $zip_filename = 'components-' . uniqid('', true) . '.zip';
+        $zip_path = BJLG_BACKUP_DIR . $zip_filename;
+
+        $zip = new ZipArchive();
+        $open_result = $zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+        $this->assertTrue($open_result === true || $open_result === ZipArchive::ER_OK);
+
+        $manifest = [
+            'type' => 'test',
+            'contains' => ['db', 'plugins', 'themes', 'uploads'],
+        ];
+
+        $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $zip->addFromString('database.sql', "SELECT 1;\n");
+        $zip->addFromString('wp-content/plugins/' . $plugin_slug . '/plugin.txt', 'plugin');
+        $zip->addFromString('wp-content/themes/' . $theme_slug . '/style.css', 'theme');
+        $zip->addFromString('wp-content/uploads/' . $upload_slug . '/file.txt', 'upload');
+        $zip->close();
+
+        $plugin_dir = WP_PLUGIN_DIR . '/' . $plugin_slug;
+        $plugin_file = $plugin_dir . '/plugin.txt';
+        $theme_dir = get_theme_root() . '/' . $theme_slug;
+        $theme_file = $theme_dir . '/style.css';
+        $upload_dir = wp_get_upload_dir()['basedir'] . '/' . $upload_slug;
+        $upload_file = $upload_dir . '/file.txt';
+
+        $this->removePath($plugin_dir);
+        $this->removePath($theme_dir);
+        $this->removePath($upload_dir);
+
+        $_POST = [
+            'nonce' => 'test',
+            'filename' => $zip_filename,
+            'components' => ['plugins', 'uploads'],
+        ];
+
+        $restore = new BJLG\BJLG_Restore();
+
+        $task_id = null;
+
+        try {
+            $restore->handle_run_restore();
+            $this->fail('Expected JSON response not thrown');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('task_id', $response->data);
+            $task_id = $response->data['task_id'];
+        }
+
+        $this->assertIsString($task_id);
+
+        $task_data = get_transient($task_id);
+        $this->assertIsArray($task_data);
+        $this->assertSame(['plugins', 'uploads'], $task_data['components']);
+
+        $GLOBALS['wpdb']->queries = [];
+
+        $restore->run_restore_task($task_id);
+
+        $this->assertFileExists($plugin_file);
+        $this->assertFileExists($upload_file);
+        $this->assertFileDoesNotExist($theme_file);
+
+        $database_queries = array_filter(
+            $GLOBALS['wpdb']->queries,
+            static function ($query) {
+                return stripos((string) $query, 'foreign_key_checks') !== false;
+            }
+        );
+        $this->assertSame([], array_values($database_queries));
+
+        $this->assertNotContains('Import de la base de données...', BJLG_Test_Debug_Logger::$logs);
+        $this->assertContains('Restauration de plugins terminée.', BJLG_Test_Debug_Logger::$logs);
+        $this->assertContains('Restauration de uploads terminée.', BJLG_Test_Debug_Logger::$logs);
+        $this->assertNotContains('Restauration de themes terminée.', BJLG_Test_Debug_Logger::$logs);
+
+        $this->removePath($plugin_dir);
+        $this->removePath($upload_dir);
+        $this->removePath($theme_dir);
+
+        if (file_exists($zip_path)) {
+            unlink($zip_path);
+        }
+
+        $_POST = [];
+    }
+
     public function test_clear_all_caches_preserves_third_party_transients(): void
     {
         $restore = new BJLG\BJLG_Restore();
@@ -247,5 +342,32 @@ final class BJLG_RestoreTaskTest extends TestCase
 
         $this->assertNotEmpty($wpdb->queries);
         $this->assertStringContainsString("\\_transient\\_bjlg\\_%", $wpdb->queries[0]);
+    }
+
+    private function removePath(string $path): void
+    {
+        if (is_file($path) || is_link($path)) {
+            @unlink($path);
+            return;
+        }
+
+        if (!is_dir($path)) {
+            return;
+        }
+
+        $items = scandir($path);
+        if ($items === false) {
+            return;
+        }
+
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+
+            $this->removePath($path . DIRECTORY_SEPARATOR . $item);
+        }
+
+        @rmdir($path);
     }
 }
