@@ -265,6 +265,10 @@ class BJLG_Admin {
                 <div class="bjlg-progress-bar"><div class="bjlg-progress-bar-inner" id="bjlg-restore-progress-bar">0%</div></div>
                 <p id="bjlg-restore-status-text">Préparation...</p>
             </div>
+            <div id="bjlg-restore-debug-wrapper" style="display: none;">
+                <h3><span class="dashicons dashicons-info"></span> Détails techniques</h3>
+                <pre id="bjlg-restore-ajax-debug" class="bjlg-log-textarea"></pre>
+            </div>
         </div>
         <?php
     }
