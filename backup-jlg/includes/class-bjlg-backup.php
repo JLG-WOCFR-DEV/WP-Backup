@@ -154,7 +154,9 @@ class BJLG_Backup {
             return null;
         }
 
-        if (!$payload['initialized'] && ($now - (int) $payload['acquired_at']) > self::TASK_LOCK_INITIALIZATION_GRACE) {
+        $initialization_grace = self::get_task_lock_initialization_grace();
+
+        if (!$payload['initialized'] && ($now - (int) $payload['acquired_at']) > $initialization_grace) {
             self::delete_lock_payload();
 
             return null;
@@ -179,6 +181,22 @@ class BJLG_Backup {
         }
 
         return (int) $filtered_ttl;
+    }
+
+    /**
+     * Retourne le délai de grâce accordé pour initialiser la tâche verrouillée.
+     *
+     * @return int
+     */
+    private static function get_task_lock_initialization_grace() {
+        $default_grace = self::TASK_LOCK_INITIALIZATION_GRACE;
+        $filtered_grace = apply_filters('bjlg_task_lock_initialization_grace', $default_grace);
+
+        if (!is_numeric($filtered_grace) || (int) $filtered_grace < 0) {
+            return $default_grace;
+        }
+
+        return (int) $filtered_grace;
     }
 
     /**
