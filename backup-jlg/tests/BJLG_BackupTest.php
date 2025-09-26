@@ -69,4 +69,21 @@ final class BJLG_BackupTest extends TestCase
             $this->assertArrayNotHasKey('bjlg_backup_task_lock', $GLOBALS['bjlg_test_transients']);
         }
     }
+
+    public function test_second_task_cannot_reserve_lock_before_initialization(): void
+    {
+        $task_one = 'bjlg_backup_' . md5('first');
+        $task_two = 'bjlg_backup_' . md5('second');
+
+        $this->assertTrue(BJLG\BJLG_Backup::reserve_task_slot($task_one));
+        $this->assertTrue(BJLG\BJLG_Backup::is_task_locked());
+        $this->assertFalse(BJLG\BJLG_Backup::reserve_task_slot($task_two));
+
+        $this->assertTrue(
+            BJLG\BJLG_Backup::reserve_task_slot($task_one),
+            'The original task should be able to refresh its reservation.'
+        );
+
+        BJLG\BJLG_Backup::release_task_slot($task_one);
+    }
 }
