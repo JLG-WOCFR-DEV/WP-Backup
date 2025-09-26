@@ -694,8 +694,8 @@ if (!function_exists('wp_schedule_single_event')) {
             $mock_result = $mock($timestamp, $hook, $args);
 
             if ($mock_result !== null) {
-                if ($mock_result === false) {
-                    return false;
+                if ($mock_result === false || $mock_result instanceof WP_Error) {
+                    return $mock_result;
                 }
 
                 $GLOBALS['bjlg_test_scheduled_events']['single'][] = [
