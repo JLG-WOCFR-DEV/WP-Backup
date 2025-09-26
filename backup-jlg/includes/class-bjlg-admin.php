@@ -253,8 +253,19 @@ class BJLG_Admin {
                         <tr>
                             <th scope="row"><label for="bjlg-restore-password">Mot de passe</label></th>
                             <td>
-                                <input type="password" id="bjlg-restore-password" name="password" class="regular-text" autocomplete="current-password" placeholder="Requis pour les archives .zip.enc">
-                                <p class="description">Requis pour restaurer les sauvegardes chiffrées (<code>.zip.enc</code>). Laissez vide pour les archives non chiffrées.</p>
+                                <input type="password"
+                                       id="bjlg-restore-password"
+                                       name="password"
+                                       class="regular-text"
+                                       autocomplete="current-password"
+                                       aria-describedby="bjlg-restore-password-help"
+                                       placeholder="Requis pour les archives .zip.enc">
+                                <p class="description"
+                                   id="bjlg-restore-password-help"
+                                   data-default-text="<?php echo esc_attr('Requis pour restaurer les sauvegardes chiffrées (.zip.enc). Laissez vide pour les archives non chiffrées.'); ?>"
+                                   data-encrypted-text="<?php echo esc_attr('Mot de passe obligatoire : renseignez-le pour déchiffrer l\'archive (.zip.enc).'); ?>">
+                                    Requis pour restaurer les sauvegardes chiffrées (<code>.zip.enc</code>). Laissez vide pour les archives non chiffrées.
+                                </p>
                             </td>
                         </tr>
                         <tr>

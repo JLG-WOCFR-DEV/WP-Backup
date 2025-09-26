@@ -341,12 +341,24 @@ class BJLG_Restore {
             if ($password === '') {
                 $password = null;
             } elseif (strlen($password) < 4) {
-                wp_send_json_error(['message' => 'Le mot de passe doit contenir au moins 4 caractères.']);
+                $message = 'Le mot de passe doit contenir au moins 4 caractères.';
+                wp_send_json_error([
+                    'message' => $message,
+                    'validation_errors' => [
+                        'password' => [$message],
+                    ],
+                ]);
             }
         }
 
         if ($is_encrypted_backup && $password === null) {
-            wp_send_json_error(['message' => 'Un mot de passe est requis pour restaurer une sauvegarde chiffrée.']);
+            $message = 'Un mot de passe est requis pour restaurer une sauvegarde chiffrée.';
+            wp_send_json_error([
+                'message' => $message,
+                'validation_errors' => [
+                    'password' => [$message],
+                ],
+            ]);
         }
 
         try {

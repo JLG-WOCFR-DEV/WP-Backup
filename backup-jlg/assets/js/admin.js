@@ -129,8 +129,65 @@ jQuery(document).ready(function($) {
         const $debugOutput = $('#bjlg-restore-ajax-debug');
         const fileInput = document.getElementById('bjlg-restore-file-input');
         const passwordInput = document.getElementById('bjlg-restore-password');
+        const passwordHelp = document.getElementById('bjlg-restore-password-help');
+        const passwordHelpDefaultText = passwordHelp
+            ? (passwordHelp.getAttribute('data-default-text') || passwordHelp.textContent.trim())
+            : '';
+        const passwordHelpEncryptedText = passwordHelp
+            ? (passwordHelp.getAttribute('data-encrypted-text') || passwordHelpDefaultText)
+            : '';
         const $errorNotice = $('#bjlg-restore-errors');
         const errorFieldClass = 'bjlg-input-error';
+
+        function applyPasswordHelpText(text) {
+            if (!passwordHelp) {
+                return;
+            }
+
+            const resolved = typeof text === 'string' && text.trim() !== ''
+                ? text.trim()
+                : passwordHelpDefaultText;
+
+            passwordHelp.textContent = resolved;
+        }
+
+        function updatePasswordRequirement() {
+            if (!passwordInput) {
+                return;
+            }
+
+            let requiresPassword = false;
+
+            if (fileInput && fileInput.files && fileInput.files.length > 0) {
+                const filename = fileInput.files[0].name || '';
+                requiresPassword = /\.zip\.enc$/i.test(filename.trim());
+            }
+
+            if (requiresPassword) {
+                passwordInput.setAttribute('required', 'required');
+                passwordInput.setAttribute('aria-required', 'true');
+                applyPasswordHelpText(passwordHelpEncryptedText);
+            } else {
+                passwordInput.removeAttribute('required');
+                passwordInput.removeAttribute('aria-required');
+                applyPasswordHelpText(passwordHelpDefaultText);
+            }
+        }
+
+        if (fileInput) {
+            fileInput.addEventListener('change', updatePasswordRequirement);
+        }
+
+        if (passwordInput) {
+            passwordInput.addEventListener('input', function() {
+                $(this)
+                    .removeClass(errorFieldClass)
+                    .removeAttr('aria-invalid');
+                $(this).nextAll('.bjlg-field-error').remove();
+            });
+        }
+
+        updatePasswordRequirement();
 
         function getValidationErrors(payload) {
             if (!payload || typeof payload !== 'object') {
