@@ -115,6 +115,7 @@ class BJLG_Webhooks {
 
         if (!BJLG_Backup::reserve_task_slot($task_id)) {
             BJLG_Debug::log("Impossible de planifier une sauvegarde via webhook : une tâche est déjà en cours.");
+            BJLG_History::log('webhook_backup_conflict', 'failure', 'Une sauvegarde est déjà en cours lors de l\'appel webhook.');
 
             wp_send_json_error([
                 'message' => __('Une sauvegarde est déjà en cours. Réessayez ultérieurement.', 'backup-jlg')
@@ -135,6 +136,7 @@ class BJLG_Webhooks {
 
         if (!BJLG_Backup::save_task_state($task_id, $task_data)) {
             BJLG_Debug::log("Échec de l'initialisation de la tâche de sauvegarde webhook pour {$task_id}.");
+            BJLG_History::log('webhook_backup_failed', 'failure', "Initialisation impossible pour la tâche {$task_id}.");
             BJLG_Backup::release_task_slot($task_id);
 
             wp_send_json_error([
@@ -144,11 +146,18 @@ class BJLG_Webhooks {
         }
 
         // Planifier l'exécution immédiate
-        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+        $event_timestamp = time();
+        $event_args = ['task_id' => $task_id];
+        $scheduled = wp_schedule_single_event($event_timestamp, 'bjlg_run_backup_task', $event_args);
 
         if ($scheduled === false) {
             BJLG_Debug::log("Échec de la planification de la tâche de sauvegarde webhook pour {$task_id}.");
-            delete_transient($task_id);
+            BJLG_History::log('webhook_backup_failed', 'failure', "Planification impossible pour la tâche {$task_id}.");
+
+            if (function_exists('delete_transient')) {
+                delete_transient($task_id);
+            }
+
             BJLG_Backup::release_task_slot($task_id);
 
             wp_send_json_error([
