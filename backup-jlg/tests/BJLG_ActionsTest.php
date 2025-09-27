@@ -109,6 +109,96 @@ final class BJLG_ActionsTest extends TestCase
         }
     }
 
+    public function test_prepare_download_generates_token_payload(): void
+    {
+        $actions = new BJLG\BJLG_Actions();
+
+        $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+        $filepath = BJLG_BACKUP_DIR . $filename;
+
+        file_put_contents($filepath, 'prepared-download');
+
+        $real_filepath = realpath($filepath);
+
+        if ($real_filepath === false) {
+            $this->fail('Failed to resolve the real path for the prepared download file.');
+        }
+
+        $_POST['filename'] = $filename;
+        $_POST['nonce'] = 'test-nonce';
+
+        $expected_ttl = 123;
+        $captured_filter_args = null;
+        $previous_download_filters = $GLOBALS['bjlg_test_hooks']['filters']['bjlg_download_token_ttl'] ?? null;
+        $transient_key = null;
+
+        add_filter(
+            'bjlg_download_token_ttl',
+            function ($ttl, $path) use (&$captured_filter_args, $expected_ttl) {
+                $captured_filter_args = [$ttl, $path];
+
+                return $expected_ttl;
+            },
+            10,
+            2
+        );
+
+        try {
+            try {
+                $actions->prepare_download();
+                $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+            } catch (BJLG_Test_JSON_Response $exception) {
+                $this->assertIsArray($exception->data);
+                $this->assertArrayHasKey('download_url', $exception->data);
+                $this->assertArrayHasKey('token', $exception->data);
+                $this->assertArrayHasKey('expires_in', $exception->data);
+                $this->assertSame($expected_ttl, $exception->data['expires_in']);
+
+                $token = $exception->data['token'];
+                $this->assertNotEmpty($token);
+                $this->assertIsString($token);
+
+                $download_url = $exception->data['download_url'];
+                $this->assertIsString($download_url);
+                $this->assertStringContainsString($token, $download_url);
+
+                $transient_key = 'bjlg_download_' . $token;
+                $this->assertArrayHasKey($transient_key, $GLOBALS['bjlg_test_transients']);
+
+                $payload = $GLOBALS['bjlg_test_transients'][$transient_key];
+                $this->assertIsArray($payload);
+                $this->assertArrayHasKey('file', $payload);
+                $this->assertArrayHasKey('requires_cap', $payload);
+                $this->assertArrayHasKey('issued_at', $payload);
+                $this->assertArrayHasKey('issued_by', $payload);
+
+                $this->assertSame($real_filepath, $payload['file']);
+                $this->assertSame(BJLG_CAPABILITY, $payload['requires_cap']);
+                $this->assertIsInt($payload['issued_at']);
+                $this->assertGreaterThan(0, $payload['issued_at']);
+                $this->assertSame(0, $payload['issued_by']);
+
+                $this->assertIsArray($captured_filter_args);
+                $this->assertSame(15 * (defined('MINUTE_IN_SECONDS') ? MINUTE_IN_SECONDS : 60), $captured_filter_args[0]);
+                $this->assertSame($real_filepath, $captured_filter_args[1]);
+            }
+        } finally {
+            if ($previous_download_filters === null) {
+                unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_download_token_ttl']);
+            } else {
+                $GLOBALS['bjlg_test_hooks']['filters']['bjlg_download_token_ttl'] = $previous_download_filters;
+            }
+
+            if ($transient_key !== null) {
+                unset($GLOBALS['bjlg_test_transients'][$transient_key]);
+            }
+
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+        }
+    }
+
     /**
      * @return array<string, array{0: ?string, 1: int}>
      */
