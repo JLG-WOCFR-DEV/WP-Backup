@@ -55,12 +55,26 @@ Les dépendances sont installées dans `vendor-bjlg/` afin de ne pas entrer en c
 # Lister les sauvegardes avec une clé API
 curl -H "X-API-Key: bjlg_xxxxx" https://example.com/wp-json/backup-jlg/v1/backups
 
+# Lister les sauvegardes et demander immédiatement un lien téléchargeable
+curl -H "X-API-Key: bjlg_xxxxx" "https://example.com/wp-json/backup-jlg/v1/backups?with_token=1"
+
 # Lancer une sauvegarde à la demande
 curl -X POST https://example.com/wp-json/backup-jlg/v1/backups \
   -H "X-API-Key: bjlg_xxxxx" \
   -H "Content-Type: application/json" \
   -d '{"components":["db","uploads"],"encrypt":true}'
 ```
+
+#### Télécharger une sauvegarde
+
+Les réponses des routes `GET /backups` et `GET /backups/{id}` contiennent désormais uniquement l’URL REST `.../backups/{id}/download` lorsque `with_token` est absent ou vaut `0`. Appelez ce point d’entrée pour générer un token de téléchargement à la demande :
+
+```bash
+curl -H "X-API-Key: bjlg_xxxxx" \
+  https://example.com/wp-json/backup-jlg/v1/backups/{backup-id}/download
+```
+
+Vous pouvez toujours demander la génération immédiate d’un lien signé en ajoutant `with_token=1` à vos requêtes `GET /backups` ou `GET /backups/{id}`.
 
 ### WP-CLI (si activé)
 ```bash

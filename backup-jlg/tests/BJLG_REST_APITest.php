@@ -369,6 +369,176 @@ namespace {
             $this->deleteBackupIfExists($uploadsBackup);
         }
 
+        public function test_get_backups_does_not_generate_token_by_default(): void
+        {
+            $GLOBALS['bjlg_test_transients'] = [];
+
+            $api = new BJLG\BJLG_REST_API();
+
+            $backup = $this->createBackupWithComponents(['db']);
+
+            $request = new class {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct()
+                {
+                    $this->params = [
+                        'page' => 1,
+                        'per_page' => 10,
+                        'type' => 'all',
+                        'sort' => 'date_desc',
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+
+            try {
+                $response = $api->get_backups($request);
+
+                $this->assertIsArray($response);
+                $this->assertArrayHasKey('backups', $response);
+                $this->assertNotEmpty($response['backups']);
+
+                $first = $response['backups'][0];
+                $this->assertArrayHasKey('download_rest_url', $first);
+                $this->assertArrayNotHasKey('download_token', $first);
+                $this->assertArrayNotHasKey('download_url', $first);
+                $this->assertSame([], $GLOBALS['bjlg_test_transients']);
+            } finally {
+                $this->deleteBackupIfExists($backup);
+            }
+        }
+
+        public function test_get_backups_can_include_download_token_on_demand(): void
+        {
+            $GLOBALS['bjlg_test_transients'] = [];
+
+            $api = new BJLG\BJLG_REST_API();
+
+            $backup = $this->createBackupWithComponents(['db']);
+
+            $request = new class {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct()
+                {
+                    $this->params = [
+                        'page' => 1,
+                        'per_page' => 10,
+                        'type' => 'all',
+                        'sort' => 'date_desc',
+                        'with_token' => '1',
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+
+            try {
+                $response = $api->get_backups($request);
+
+                $this->assertIsArray($response);
+                $this->assertArrayHasKey('backups', $response);
+                $this->assertNotEmpty($response['backups']);
+
+                $first = $response['backups'][0];
+                $this->assertArrayHasKey('download_token', $first);
+                $this->assertArrayHasKey('download_url', $first);
+                $this->assertArrayHasKey('download_expires_in', $first);
+                $this->assertNotEmpty($GLOBALS['bjlg_test_transients']);
+            } finally {
+                $this->deleteBackupIfExists($backup);
+            }
+        }
+
+        public function test_get_backup_does_not_include_token_by_default(): void
+        {
+            $GLOBALS['bjlg_test_transients'] = [];
+
+            $api = new BJLG\BJLG_REST_API();
+
+            $backup = $this->createBackupWithComponents(['db']);
+            $filename = basename($backup);
+
+            $request = new class($filename) {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct(string $id)
+                {
+                    $this->params = [
+                        'id' => $id,
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+
+            try {
+                $response = $api->get_backup($request);
+
+                $this->assertIsArray($response);
+                $this->assertArrayHasKey('download_rest_url', $response);
+                $this->assertArrayNotHasKey('download_token', $response);
+                $this->assertArrayNotHasKey('download_url', $response);
+                $this->assertSame([], $GLOBALS['bjlg_test_transients']);
+            } finally {
+                $this->deleteBackupIfExists($backup);
+            }
+        }
+
+        public function test_get_backup_includes_token_when_requested(): void
+        {
+            $GLOBALS['bjlg_test_transients'] = [];
+
+            $api = new BJLG\BJLG_REST_API();
+
+            $backup = $this->createBackupWithComponents(['db']);
+            $filename = basename($backup);
+
+            $request = new class($filename) {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct(string $id)
+                {
+                    $this->params = [
+                        'id' => $id,
+                        'with_token' => true,
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+
+            try {
+                $response = $api->get_backup($request);
+
+                $this->assertIsArray($response);
+                $this->assertArrayHasKey('download_token', $response);
+                $this->assertArrayHasKey('download_url', $response);
+                $this->assertArrayHasKey('download_expires_in', $response);
+                $this->assertNotEmpty($GLOBALS['bjlg_test_transients']);
+            } finally {
+                $this->deleteBackupIfExists($backup);
+            }
+        }
+
         public function test_verify_jwt_token_returns_error_for_invalid_signature(): void
         {
             $api = new BJLG\BJLG_REST_API();
@@ -1578,7 +1748,7 @@ namespace {
         $this->assertNotFalse($registered_priority);
     }
 
-    public function test_format_backup_data_generates_download_token(): void
+    public function test_format_backup_data_can_skip_token_generation(): void
     {
         $GLOBALS['bjlg_test_transients'] = [];
 
@@ -1592,6 +1762,31 @@ namespace {
         $method->setAccessible(true);
 
         $data = $method->invoke($api, $tempFile);
+
+        $this->assertArrayHasKey('download_rest_url', $data);
+        $this->assertArrayNotHasKey('download_token', $data);
+        $this->assertArrayNotHasKey('download_url', $data);
+        $this->assertSame([], $GLOBALS['bjlg_test_transients']);
+
+        if (file_exists($tempFile)) {
+            unlink($tempFile);
+        }
+    }
+
+    public function test_format_backup_data_generates_download_token_when_requested(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $tempFile = tempnam(BJLG_BACKUP_DIR, 'bjlg-test-backup-');
+        file_put_contents($tempFile, 'backup-content');
+
+        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
+        $method = $reflection->getMethod('format_backup_data');
+        $method->setAccessible(true);
+
+        $data = $method->invoke($api, $tempFile, null, true);
 
         $this->assertArrayHasKey('download_url', $data);
         $this->assertArrayHasKey('download_token', $data);

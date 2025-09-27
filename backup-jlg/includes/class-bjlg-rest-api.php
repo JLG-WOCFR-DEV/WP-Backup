@@ -112,6 +112,10 @@ class BJLG_REST_API {
                     'sort' => [
                         'default' => 'date_desc',
                         'enum' => ['date_asc', 'date_desc', 'size_asc', 'size_desc']
+                    ],
+                    'with_token' => [
+                        'required' => false,
+                        'type' => 'boolean'
                     ]
                 ]
             ],
@@ -146,6 +150,12 @@ class BJLG_REST_API {
                 'methods' => 'GET',
                 'callback' => [$this, 'get_backup'],
                 'permission_callback' => [$this, 'check_permissions'],
+                'args' => [
+                    'with_token' => [
+                        'required' => false,
+                        'type' => 'boolean'
+                    ]
+                ]
             ],
             [
                 'methods' => 'DELETE',
@@ -940,6 +950,11 @@ class BJLG_REST_API {
         $per_page = $request->get_param('per_page');
         $type = $request->get_param('type');
         $sort = $request->get_param('sort');
+        $with_token = $this->interpret_boolean($request->get_param('with_token'));
+
+        if ($with_token === null) {
+            $with_token = false;
+        }
 
         $page = max(1, (int) $page);
         $per_page = max(1, min(100, (int) $per_page));
@@ -1026,7 +1041,7 @@ class BJLG_REST_API {
                 $manifest = $this->get_backup_manifest($file);
             }
 
-            $backups[] = $this->format_backup_data($file, $manifest);
+            $backups[] = $this->format_backup_data($file, $manifest, (bool) $with_token);
         }
         
         $response = rest_ensure_response([
@@ -1364,7 +1379,13 @@ class BJLG_REST_API {
             return $filepath;
         }
 
-        return rest_ensure_response($this->format_backup_data($filepath));
+        $with_token = $this->interpret_boolean($request->get_param('with_token'));
+
+        if ($with_token === null) {
+            $with_token = false;
+        }
+
+        return rest_ensure_response($this->format_backup_data($filepath, null, (bool) $with_token));
     }
     
     /**
@@ -1852,7 +1873,7 @@ class BJLG_REST_API {
     /**
      * Formate les données d'une sauvegarde
      */
-    private function format_backup_data($filepath, $manifest = null) {
+    private function format_backup_data($filepath, $manifest = null, $include_token = false) {
         $filename = basename($filepath);
         $is_encrypted = (substr($filename, -4) === '.enc');
 
@@ -1869,21 +1890,6 @@ class BJLG_REST_API {
             $manifest = $this->get_backup_manifest($filepath);
         }
 
-        $download_token = wp_generate_password(32, false);
-        $transient_key = 'bjlg_download_' . $download_token;
-        $token_ttl = BJLG_Actions::get_download_token_ttl($filepath);
-
-        set_transient(
-            $transient_key,
-            BJLG_Actions::build_download_token_payload($filepath),
-            $token_ttl
-        );
-
-        $download_url = add_query_arg([
-            'action' => 'bjlg_download',
-            'token' => $download_token,
-        ], admin_url('admin-ajax.php'));
-
         $rest_download_route = sprintf(
             '/%s/backups/%s/download',
             self::API_NAMESPACE,
@@ -1894,7 +1900,7 @@ class BJLG_REST_API {
             ? rest_url(ltrim($rest_download_route, '/'))
             : $rest_download_route;
 
-        return [
+        $data = [
             'id' => $filename,
             'filename' => $filename,
             'type' => $type,
@@ -1904,12 +1910,32 @@ class BJLG_REST_API {
             'modified_at' => date('c', filemtime($filepath)),
             'is_encrypted' => $is_encrypted,
             'components' => $manifest['contains'] ?? [],
-            'download_url' => $download_url,
-            'download_token' => $download_token,
-            'download_expires_in' => $token_ttl,
             'download_rest_url' => $rest_download_url,
             'manifest' => $manifest
         ];
+
+        if ($include_token) {
+            $download_token = wp_generate_password(32, false);
+            $transient_key = 'bjlg_download_' . $download_token;
+            $token_ttl = BJLG_Actions::get_download_token_ttl($filepath);
+
+            set_transient(
+                $transient_key,
+                BJLG_Actions::build_download_token_payload($filepath),
+                $token_ttl
+            );
+
+            $download_url = add_query_arg([
+                'action' => 'bjlg_download',
+                'token' => $download_token,
+            ], admin_url('admin-ajax.php'));
+
+            $data['download_url'] = $download_url;
+            $data['download_token'] = $download_token;
+            $data['download_expires_in'] = $token_ttl;
+        }
+
+        return $data;
     }
 
     /**
