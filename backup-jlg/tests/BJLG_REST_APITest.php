@@ -65,10 +65,6 @@ namespace {
         }
     }
 
-    if (!defined('AUTH_KEY')) {
-        define('AUTH_KEY', 'test-auth-key');
-    }
-
     class BJLG_Test_Restore_For_Rest extends BJLG\BJLG_Restore
     {
         /** @var int */
@@ -87,9 +83,46 @@ namespace {
 
     final class BJLG_REST_APITest extends TestCase
     {
+        /** @var bool */
+        private static $ensure_auth_key = true;
+
+        /** @var array<int, string> */
+        private static $tests_without_auth_key = [
+            'test_a_authenticate_returns_error_when_auth_key_missing',
+        ];
+
+        public function runBare(): void
+        {
+            $original = self::$ensure_auth_key;
+
+            $name = null;
+
+            if (method_exists($this, 'getName')) {
+                $name = $this->getName(false);
+            }
+
+            if ($name === null && method_exists($this, 'name')) {
+                $name = $this->name();
+            }
+
+            if ($name !== null && in_array($name, self::$tests_without_auth_key, true)) {
+                self::$ensure_auth_key = false;
+            }
+
+            try {
+                parent::runBare();
+            } finally {
+                self::$ensure_auth_key = $original;
+            }
+        }
+
         protected function setUp(): void
         {
             parent::setUp();
+
+            if (self::$ensure_auth_key && !defined('AUTH_KEY')) {
+                define('AUTH_KEY', 'test-auth-key');
+            }
 
             $GLOBALS['bjlg_test_options'] = [];
             $GLOBALS['bjlg_test_hooks'] = [
@@ -171,6 +204,53 @@ namespace {
             if (is_file($path)) {
                 unlink($path);
             }
+        }
+
+        public function test_a_authenticate_returns_error_when_auth_key_missing(): void
+        {
+            $this->assertFalse(defined('AUTH_KEY'));
+
+            $api = new BJLG\BJLG_REST_API();
+
+            $user = $this->makeUser(101, 'missing-key-user');
+            $GLOBALS['bjlg_test_users'] = [
+                $user->ID => $user,
+            ];
+
+            $api_key = 'missing-key-auth';
+
+            update_option('bjlg_api_keys', [[
+                'key' => wp_hash_password($api_key),
+                'user_id' => $user->ID,
+                'roles' => $user->roles,
+            ]]);
+
+            $request = new class($api_key, $user->user_login) {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct(string $api_key, string $username)
+                {
+                    $this->params = [
+                        'api_key' => $api_key,
+                        'username' => $username,
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+
+            $response = $api->authenticate($request);
+
+            $this->assertInstanceOf(\WP_Error::class, $response);
+            $this->assertSame('jwt_missing_signing_key', $response->get_error_code());
+
+            $error_data = $response->get_error_data('jwt_missing_signing_key');
+            $this->assertIsArray($error_data);
+            $this->assertSame(500, $error_data['status'] ?? null);
         }
 
         public function test_backups_route_per_page_validation_rejects_zero(): void
