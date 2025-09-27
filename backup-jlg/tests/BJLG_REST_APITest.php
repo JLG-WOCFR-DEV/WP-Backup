@@ -23,6 +23,7 @@ namespace {
     }
 
     require_once __DIR__ . '/../includes/class-bjlg-cleanup.php';
+    require_once __DIR__ . '/../includes/class-bjlg-actions.php';
     require_once __DIR__ . '/../includes/class-bjlg-rest-api.php';
     require_once __DIR__ . '/../includes/class-bjlg-restore.php';
     require_once __DIR__ . '/../includes/class-bjlg-webhooks.php';
@@ -1112,6 +1113,101 @@ namespace {
             if (file_exists($filepath)) {
                 unlink($filepath);
             }
+        }
+    }
+
+    public function test_download_backup_url_can_be_used_without_session(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+        $GLOBALS['bjlg_test_current_user_can'] = true;
+        $_REQUEST = [];
+        $_GET = [];
+        $_POST = [];
+
+        $api = new BJLG\BJLG_REST_API();
+        $actions = new BJLG\BJLG_Actions();
+
+        $user = $this->makeUser(777, 'rest-download-user');
+        $GLOBALS['bjlg_test_users'] = [
+            $user->ID => $user,
+        ];
+        $GLOBALS['current_user'] = $user;
+        $GLOBALS['current_user_id'] = $user->ID;
+
+        $backup = $this->createBackupWithComponents(['db']);
+        $filename = basename($backup);
+
+        $request = new class($filename) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id)
+            {
+                $this->params = [
+                    'id' => $id,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            $response = $api->download_backup($request);
+
+            $this->assertIsArray($response);
+            $this->assertArrayHasKey('download_url', $response);
+            $this->assertArrayHasKey('download_token', $response);
+
+            $download_url = (string) $response['download_url'];
+            $parsed_url = parse_url($download_url);
+            $this->assertIsArray($parsed_url);
+            $this->assertSame('/wp-admin/admin-ajax.php', $parsed_url['path'] ?? null);
+
+            $query_args = [];
+            if (!empty($parsed_url['query'])) {
+                parse_str((string) $parsed_url['query'], $query_args);
+            }
+
+            $token = (string) $response['download_token'];
+
+            $this->assertSame('bjlg_download', $query_args['action'] ?? null);
+            $this->assertSame($token, $query_args['token'] ?? null);
+            $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
+            $this->assertSame(10, has_action('wp_ajax_nopriv_bjlg_download', [$actions, 'handle_download_request']));
+
+            // Simulate an unauthenticated request consuming the download URL.
+            $GLOBALS['current_user'] = null;
+            $GLOBALS['current_user_id'] = 0;
+            $GLOBALS['bjlg_test_current_user_can'] = false;
+
+            $captured_paths = [];
+            add_filter('bjlg_pre_stream_backup', function ($value, $filepath) use (&$captured_paths) {
+                $captured_paths[] = $filepath;
+
+                return true;
+            }, 10, 2);
+
+            $_REQUEST['token'] = $token;
+            $_GET['token'] = $token;
+
+            do_action('wp_ajax_nopriv_bjlg_download');
+
+            $this->assertNotEmpty($captured_paths);
+            $this->assertSame(realpath($backup), realpath((string) $captured_paths[0]));
+            $this->assertSame($user->ID, get_current_user_id());
+            $this->assertArrayNotHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
+        } finally {
+            unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_pre_stream_backup']);
+            $_REQUEST = [];
+            $_GET = [];
+            $_POST = [];
+            $GLOBALS['bjlg_test_current_user_can'] = true;
+            $GLOBALS['current_user'] = null;
+            $GLOBALS['current_user_id'] = 0;
+            $this->deleteBackupIfExists($backup);
         }
     }
 

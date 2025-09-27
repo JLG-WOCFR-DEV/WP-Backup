@@ -1417,6 +1417,18 @@ class BJLG_REST_API {
     /**
      * Endpoint : Télécharger une sauvegarde
      */
+    /**
+     * Retourne une URL de téléchargement pour une sauvegarde.
+     *
+     * @param \WP_REST_Request $request
+     * @return array{
+     *     download_url: string,
+     *     expires_in: int,
+     *     download_token: string,
+     *     filename: string,
+     *     size: int
+     * }|WP_Error URL publique générée via l'action AJAX bjlg_download.
+     */
     public function download_backup($request) {
         $token = $request->get_param('token');
 
@@ -1472,10 +1484,7 @@ class BJLG_REST_API {
             );
         }
 
-        $download_url = add_query_arg([
-            'action' => 'bjlg_download',
-            'token' => $download_token,
-        ], admin_url('admin-ajax.php'));
+        $download_url = BJLG_Actions::build_download_url($download_token);
 
         return rest_ensure_response([
             'download_url' => $download_url,
@@ -1925,10 +1934,7 @@ class BJLG_REST_API {
                 $token_ttl
             );
 
-            $download_url = add_query_arg([
-                'action' => 'bjlg_download',
-                'token' => $download_token,
-            ], admin_url('admin-ajax.php'));
+            $download_url = BJLG_Actions::build_download_url($download_token);
 
             $data['download_url'] = $download_url;
             $data['download_token'] = $download_token;

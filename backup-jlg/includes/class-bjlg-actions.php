@@ -17,6 +17,7 @@ class BJLG_Actions {
         add_action('wp_ajax_bjlg_delete_backup', [$this, 'handle_delete_backup']);
         add_action('wp_ajax_bjlg_prepare_download', [$this, 'prepare_download']);
         add_action('wp_ajax_bjlg_download', [$this, 'handle_download_request']);
+        add_action('wp_ajax_nopriv_bjlg_download', [$this, 'handle_download_request']);
         add_action('init', [$this, 'maybe_handle_public_download']);
         add_action('template_redirect', [$this, 'maybe_handle_public_download']);
     }
@@ -69,10 +70,7 @@ class BJLG_Actions {
 
         set_transient($transient_key, $payload, $ttl);
 
-        $download_url = add_query_arg([
-            'action' => 'bjlg_download',
-            'token' => $download_token,
-        ], admin_url('admin-ajax.php'));
+        $download_url = self::build_download_url($download_token);
 
         wp_send_json_success([
             'download_url' => $download_url,
@@ -289,6 +287,23 @@ class BJLG_Actions {
     }
 
     /**
+     * Construit l'URL publique permettant de télécharger un fichier via son token.
+     *
+     * @param string $token
+     * @return string
+     */
+    public static function build_download_url($token) {
+        $base_url = function_exists('admin_url') ? admin_url('admin-ajax.php') : 'wp-admin/admin-ajax.php';
+
+        $download_url = add_query_arg([
+            'action' => 'bjlg_download',
+            'token' => $token,
+        ], $base_url);
+
+        return apply_filters('bjlg_download_url', $download_url, $token);
+    }
+
+    /**
      * Retourne la durée de vie d'un token de téléchargement.
      *
      * @param string $filepath
@@ -342,6 +357,12 @@ class BJLG_Actions {
      * @param string $filepath
      */
     private function stream_backup_file($filepath) {
+        $short_circuit = apply_filters('bjlg_pre_stream_backup', null, $filepath);
+
+        if ($short_circuit !== null) {
+            return;
+        }
+
         if (!file_exists($filepath) || !is_readable($filepath)) {
             status_header(404);
             wp_die('Fichier de sauvegarde introuvable.', '', ['response' => 404]);
