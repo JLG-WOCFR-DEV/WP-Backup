@@ -1141,6 +1141,87 @@ namespace {
         }
     }
 
+    public function test_download_backup_supports_encrypted_archives(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $zip_path = $this->createBackupWithComponents(['db']);
+        $encrypted_path = $zip_path . '.enc';
+        $copied = copy($zip_path, $encrypted_path);
+        $this->assertTrue($copied);
+
+        $filename = basename($encrypted_path);
+        $request_factory = function ($id, $token = null) {
+            return new class($id, $token) {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct($id, $token)
+                {
+                    $this->params = [
+                        'id' => $id,
+                        'token' => $token,
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+        };
+
+        try {
+            $initial_response = $api->download_backup($request_factory($filename));
+
+            $this->assertIsArray($initial_response);
+            $this->assertSame($filename, $initial_response['filename']);
+            $this->assertStringEndsWith('.zip.enc', (string) $initial_response['filename']);
+            $this->assertArrayHasKey('download_url', $initial_response);
+            $this->assertArrayHasKey('download_token', $initial_response);
+            $this->assertArrayHasKey('size', $initial_response);
+
+            $this->assertSame(filesize($encrypted_path), $initial_response['size']);
+
+            $token = (string) $initial_response['download_token'];
+            $this->assertNotSame('', $token);
+
+            $parsed_url = parse_url((string) $initial_response['download_url']);
+            $this->assertIsArray($parsed_url);
+
+            $query_args = [];
+
+            if (!empty($parsed_url['query'])) {
+                parse_str((string) $parsed_url['query'], $query_args);
+            }
+
+            $this->assertSame($token, $query_args['token'] ?? null);
+            $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
+            $stored_payload = $GLOBALS['bjlg_test_transients']['bjlg_download_' . $token] ?? null;
+            $this->assertIsArray($stored_payload);
+            $this->assertSame($encrypted_path, $stored_payload['file'] ?? null);
+
+            $refreshed_response = $api->download_backup($request_factory($filename, $token));
+
+            $this->assertIsArray($refreshed_response);
+            $this->assertSame($token, $refreshed_response['download_token']);
+            $this->assertSame(filesize($encrypted_path), $refreshed_response['size']);
+            $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
+        } finally {
+            if (file_exists($encrypted_path)) {
+                unlink($encrypted_path);
+            }
+
+            if (file_exists($zip_path)) {
+                unlink($zip_path);
+            }
+
+            $GLOBALS['bjlg_test_transients'] = [];
+        }
+    }
+
     /**
      * @return array<string, array{0: int}>
      */
