@@ -3,8 +3,47 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
+if (!defined('BJLG_VERSION')) {
+    define('BJLG_VERSION', 'test-version');
+}
+
+if (!function_exists('current_time')) {
+    function current_time($type = 'mysql') {
+        if ($type === 'mysql') {
+            return gmdate('Y-m-d H:i:s');
+        }
+
+        return time();
+    }
+}
+
 if (!class_exists('BJLG\\BJLG_Debug')) {
     require_once __DIR__ . '/../includes/class-bjlg-debug.php';
+}
+
+if (!class_exists('BJLG_Test_Debug_Logger')) {
+    class BJLG_Test_Debug_Logger
+    {
+        /** @var array<int, string> */
+        public static $logs = [];
+
+        public static function __callStatic($name, $arguments)
+        {
+            $target = '\\BJLG\\BJLG_Debug';
+
+            if (class_exists($target) && method_exists($target, $name)) {
+                return forward_static_call_array([$target, $name], $arguments);
+            }
+
+            throw new \BadMethodCallException(sprintf('Method %s::%s does not exist.', $target, $name));
+        }
+    }
+
+    if (class_exists('BJLG\\BJLG_Debug')) {
+        BJLG_Test_Debug_Logger::$logs =& \BJLG\BJLG_Debug::$logs;
+    } else {
+        class_alias('BJLG_Test_Debug_Logger', 'BJLG\\BJLG_Debug');
+    }
 }
 require_once __DIR__ . '/../includes/class-bjlg-restore.php';
 require_once __DIR__ . '/../includes/class-bjlg-encryption.php';
@@ -230,6 +269,44 @@ final class BJLG_RestoreSecurityTest extends TestCase
         }
 
         $this->assertSame([], $GLOBALS['bjlg_test_transients']);
+    }
+
+    public function test_perform_pre_restore_backup_generates_unique_filenames(): void
+    {
+        $fake_backup_manager = new class extends BJLG\BJLG_Backup {
+            public function __construct()
+            {
+                // Bypass parent initialization for isolated testing.
+            }
+
+            public function dump_database($filepath)
+            {
+                file_put_contents($filepath, 'SQL-DUMP');
+            }
+
+            public function add_folder_to_zip(&$zip, $folder, $zip_path, $exclude = [], $incremental = false, $modified_files = [])
+            {
+                if ($zip instanceof \ZipArchive) {
+                    $zip->addFromString(rtrim($zip_path, '/') . '/placeholder.txt', 'placeholder');
+                }
+            }
+        };
+
+        $restore = new BJLG\BJLG_Restore($fake_backup_manager);
+
+        $reflection = new ReflectionClass(BJLG\BJLG_Restore::class);
+        $method = $reflection->getMethod('perform_pre_restore_backup');
+        $method->setAccessible(true);
+
+        $first_backup = $method->invoke($restore);
+        $this->additionalBackupPaths[] = $first_backup['filepath'];
+
+        $second_backup = $method->invoke($restore);
+        $this->additionalBackupPaths[] = $second_backup['filepath'];
+
+        $this->assertFileExists($first_backup['filepath']);
+        $this->assertFileExists($second_backup['filepath']);
+        $this->assertNotSame($first_backup['filename'], $second_backup['filename']);
     }
 
     public function test_handle_run_restore_interprets_false_string_as_false(): void
