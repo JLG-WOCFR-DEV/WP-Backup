@@ -1141,6 +1141,93 @@ namespace {
         }
     }
 
+    /**
+     * @return array<string, array{0: int}>
+     */
+    public function provide_download_sizes(): array
+    {
+        return [
+            'tiny_archive' => [512],
+            'multi_block_archive' => [10 * 1024 + 3],
+            'multi_megabyte_archive' => [3 * 1024 * 1024 + 123],
+        ];
+    }
+
+    /**
+     * @dataProvider provide_download_sizes
+     */
+    public function test_download_backup_reports_exact_size_for_varied_archives(int $size): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $filepath = BJLG_BACKUP_DIR . uniqid('', true) . '.zip';
+        $filename = basename($filepath);
+
+        $chunk_length = max(1, min($size, 1024));
+        $chunk = random_bytes($chunk_length);
+        $full_repeats = intdiv($size, $chunk_length);
+        $remainder = $size % $chunk_length;
+
+        $content = $full_repeats > 0 ? str_repeat($chunk, $full_repeats) : '';
+
+        if ($remainder > 0) {
+            $content .= substr($chunk, 0, $remainder);
+        }
+
+        $bytes_written = file_put_contents($filepath, $content);
+        $this->assertSame($size, $bytes_written);
+
+        $expected_ttl = \BJLG\BJLG_Actions::get_download_token_ttl($filepath);
+
+        $request = new class($filename) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id)
+            {
+                $this->params = [
+                    'id' => $id,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            $response = $api->download_backup($request);
+
+            $this->assertIsArray($response);
+            $this->assertArrayHasKey('download_url', $response);
+            $this->assertIsString($response['download_url']);
+            $this->assertNotEmpty($response['download_url']);
+            $this->assertSame($filename, $response['filename']);
+            $this->assertArrayHasKey('download_token', $response);
+            $this->assertIsString($response['download_token']);
+            $this->assertNotEmpty($response['download_token']);
+            $this->assertArrayHasKey('expires_in', $response);
+            $this->assertIsInt($response['expires_in']);
+            $this->assertSame($expected_ttl, $response['expires_in']);
+            $this->assertArrayHasKey('size', $response);
+            $this->assertIsInt($response['size']);
+            $this->assertSame(filesize($filepath), $response['size']);
+            $this->assertSame(
+                \BJLG\BJLG_Actions::build_download_url($response['download_token']),
+                $response['download_url']
+            );
+        } finally {
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+
+            $GLOBALS['bjlg_test_transients'] = [];
+        }
+    }
+
     public function test_download_backup_returns_error_when_transient_persistence_fails(): void
     {
         $GLOBALS['bjlg_test_transients'] = [];
