@@ -82,8 +82,21 @@ class BJLG_Restore {
 
         $backup_manager = $this->backup_manager;
 
-        $backup_filename = 'pre-restore-backup-' . date('Y-m-d-H-i-s') . '.zip';
+        $timestamp = date('Y-m-d-H-i-s');
+        $base_filename = 'pre-restore-backup-' . $timestamp;
+        $backup_filename = $base_filename . '.zip';
+
+        if (function_exists('wp_unique_filename')) {
+            $backup_filename = wp_unique_filename(BJLG_BACKUP_DIR, $backup_filename);
+        }
+
         $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
+
+        while (file_exists($backup_filepath)) {
+            $unique_suffix = str_replace('.', '-', uniqid('', true));
+            $backup_filename = sprintf('%s-%s.zip', $base_filename, $unique_suffix);
+            $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
+        }
         $sql_filepath = BJLG_BACKUP_DIR . 'database_temp_prerestore.sql';
 
         $zip = new ZipArchive();
