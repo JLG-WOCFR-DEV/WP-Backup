@@ -394,4 +394,134 @@ final class BJLG_BackupDatabaseTest extends TestCase
             $GLOBALS['wpdb'] = $previous_wpdb;
         }
     }
+
+    public function test_backup_database_streams_large_table_in_multiple_batches(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $zip = new class extends ZipArchive {
+            /** @var array<int, array{0: string, 1: string}> */
+            public $addedFiles = [];
+
+            /** @var array<string, string|false> */
+            public $fileContents = [];
+
+            public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
+            {
+                $this->addedFiles[] = [$filepath, $entryname];
+                $this->fileContents[$entryname] = @file_get_contents($filepath);
+
+                return true;
+            }
+        };
+
+        $previous_wpdb = $GLOBALS['wpdb'] ?? null;
+
+        $GLOBALS['wpdb'] = new class {
+            /** @var string */
+            public $prefix = 'wp_';
+
+            /** @var array<int, string> */
+            public $selectQueries = [];
+
+            /**
+             * @param string $query
+             * @param string $output
+             * @return array<int, mixed>
+             */
+            public function get_results($query, $output = 'OBJECT')
+            {
+                if (stripos($query, 'SHOW TABLES') === 0) {
+                    return [['wp_large_stream']];
+                }
+
+                if (preg_match('/^SELECT \* FROM `wp_large_stream` LIMIT (\d+), (\d+)/i', $query, $matches) === 1) {
+                    $this->selectQueries[] = $query;
+
+                    $offset = (int) $matches[1];
+
+                    if ($offset === 0) {
+                        return [
+                            ['id' => 1, 'value' => 'stream-batch-0-row-1'],
+                            ['id' => 2, 'value' => 'stream-batch-0-row-2'],
+                        ];
+                    }
+
+                    if ($offset === 1000) {
+                        return [
+                            ['id' => 1001, 'value' => 'stream-batch-1-row-1'],
+                            ['id' => 1002, 'value' => 'stream-batch-1-row-2'],
+                        ];
+                    }
+
+                    return [];
+                }
+
+                return [];
+            }
+
+            public function get_row($query, $output = 'OBJECT', $y = 0)
+            {
+                if (stripos($query, 'SHOW CREATE TABLE') === 0) {
+                    return ['wp_large_stream', 'CREATE TABLE `wp_large_stream` (`id` int(11), `value` varchar(255))'];
+                }
+
+                return null;
+            }
+
+            public function get_var($query)
+            {
+                if (stripos($query, 'SELECT COUNT(*) FROM `wp_large_stream`') === 0) {
+                    return 1500;
+                }
+
+                return 0;
+            }
+        };
+
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'backup_database');
+        $method->setAccessible(true);
+        $method->invokeArgs($backup, [&$zip, false]);
+
+        $temporaryFilesProperty = new ReflectionProperty(BJLG\BJLG_Backup::class, 'temporary_files');
+        $temporaryFilesProperty->setAccessible(true);
+        $temporaryFiles = $temporaryFilesProperty->getValue($backup);
+
+        $this->assertIsArray($temporaryFiles);
+        $this->assertNotEmpty($temporaryFiles);
+
+        $tempPath = $temporaryFiles[0];
+        $this->assertIsString($tempPath);
+        $this->assertFileExists($tempPath);
+
+        $this->assertNotEmpty($zip->addedFiles);
+        $this->assertArrayHasKey('database.sql', $zip->fileContents);
+
+        $dumpContent = $zip->fileContents['database.sql'];
+        $this->assertIsString($dumpContent);
+
+        $wpdb_mock = $GLOBALS['wpdb'];
+
+        $this->assertSame([
+            'SELECT * FROM `wp_large_stream` LIMIT 0, 1000',
+            'SELECT * FROM `wp_large_stream` LIMIT 1000, 1000',
+        ], $wpdb_mock->selectQueries);
+
+        $this->assertStringContainsString('stream-batch-0-row-1', $dumpContent);
+        $this->assertStringContainsString('stream-batch-0-row-2', $dumpContent);
+        $this->assertStringContainsString('stream-batch-1-row-1', $dumpContent);
+        $this->assertStringContainsString('stream-batch-1-row-2', $dumpContent);
+
+        $cleanupMethod = new ReflectionMethod(BJLG\BJLG_Backup::class, 'cleanup_temporary_files');
+        $cleanupMethod->setAccessible(true);
+        $cleanupMethod->invoke($backup);
+
+        $this->assertFileDoesNotExist($tempPath);
+
+        if ($previous_wpdb === null) {
+            unset($GLOBALS['wpdb']);
+        } else {
+            $GLOBALS['wpdb'] = $previous_wpdb;
+        }
+    }
 }
