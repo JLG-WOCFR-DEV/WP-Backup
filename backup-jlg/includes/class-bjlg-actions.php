@@ -68,7 +68,19 @@ class BJLG_Actions {
         $ttl = self::get_download_token_ttl($real_filepath);
         $payload = self::build_download_token_payload($real_filepath);
 
-        set_transient($transient_key, $payload, $ttl);
+        $persisted = set_transient($transient_key, $payload, $ttl);
+
+        if ($persisted === false) {
+            BJLG_Debug::error(sprintf(
+                'Échec de la persistance du token de téléchargement "%s" pour "%s".',
+                $download_token,
+                $real_filepath
+            ));
+
+            wp_send_json_error([
+                'message' => __('Impossible de créer un token de téléchargement.', 'backup-jlg'),
+            ], 500);
+        }
 
         $download_url = self::build_download_url($download_token);
 

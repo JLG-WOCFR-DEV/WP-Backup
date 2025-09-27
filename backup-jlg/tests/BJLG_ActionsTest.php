@@ -12,6 +12,30 @@ namespace BJLG {
             return \realpath($path);
         }
     }
+
+    if (!class_exists(__NAMESPACE__ . '\\BJLG_Debug')) {
+        class BJLG_Debug
+        {
+            /** @var array<int, string> */
+            public static $logs = [];
+
+            /**
+             * @param mixed $message
+             */
+            public static function log($message): void
+            {
+                self::$logs[] = (string) $message;
+            }
+
+            /**
+             * @param mixed $message
+             */
+            public static function error($message): void
+            {
+                self::log($message);
+            }
+        }
+    }
 }
 
 namespace {
@@ -28,6 +52,7 @@ final class BJLG_ActionsTest extends TestCase
         $GLOBALS['bjlg_test_transients'] = [];
         $GLOBALS['bjlg_test_last_status_header'] = null;
         $GLOBALS['bjlg_test_realpath_mock'] = null;
+        \BJLG\BJLG_Debug::$logs = [];
         $_POST = [];
         $_REQUEST = [];
         $_GET = [];
@@ -45,6 +70,42 @@ final class BJLG_ActionsTest extends TestCase
         } catch (BJLG_Test_JSON_Response $exception) {
             $this->assertSame(['message' => 'Permission refusée.'], $exception->data);
             $this->assertSame(403, $exception->status_code);
+        }
+    }
+
+    public function test_prepare_download_returns_error_when_transient_persistence_fails(): void
+    {
+        $actions = new BJLG\BJLG_Actions();
+
+        $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+        $filepath = BJLG_BACKUP_DIR . $filename;
+
+        file_put_contents($filepath, 'backup-data');
+
+        $_POST['filename'] = $filename;
+        $_POST['nonce'] = 'test-nonce';
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value = null, $expiration = null) {
+            if (strpos($transient, 'bjlg_download_') === 0) {
+                return false;
+            }
+
+            return null;
+        };
+
+        try {
+            $actions->prepare_download();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $exception) {
+            $this->assertSame(['message' => 'Impossible de créer un token de téléchargement.'], $exception->data);
+            $this->assertSame(500, $exception->status_code);
+            $this->assertNotEmpty(BJLG\BJLG_Debug::$logs);
+        } finally {
+            $GLOBALS['bjlg_test_set_transient_mock'] = null;
+
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
         }
     }
 
