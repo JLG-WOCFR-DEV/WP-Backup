@@ -210,6 +210,82 @@ final class BJLG_BackupFilesystemTest extends TestCase
         }
     }
 
+    public function test_add_folder_to_zip_streams_large_files_without_compression(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $zip = new class extends ZipArchive {
+            /** @var array<int, array{0: string, 1: string}> */
+            public $addedFiles = [];
+
+            /** @var array<int, array{0: string, 1: int, 2: int}> */
+            public $compressionCalls = [];
+
+            public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
+            {
+                $this->addedFiles[] = [$filepath, $entryname];
+                return true;
+            }
+
+            public function setCompressionName($name, $method, $compflags = 0): bool
+            {
+                $this->compressionCalls[] = [$name, $method, $compflags];
+                return true;
+            }
+        };
+
+        $root = sys_get_temp_dir() . '/bjlg-large-' . uniqid('', true);
+        $large_dir = $root . '/large';
+
+        try {
+            if (!is_dir($large_dir) && !mkdir($large_dir, 0777, true) && !is_dir($large_dir)) {
+                $this->fail('Unable to create the directory for the large file test.');
+            }
+
+            $large_file = $large_dir . '/file.bin';
+
+            $handle = fopen($large_file, 'w');
+            if ($handle === false) {
+                $this->fail('Unable to create the large file for the test.');
+            }
+
+            try {
+                $seek_result = fseek($handle, 50 * 1024 * 1024);
+                if ($seek_result !== 0) {
+                    $this->fail('Unable to create the large file of the expected size.');
+                }
+
+                $write_result = fwrite($handle, '0');
+                if ($write_result === false) {
+                    $this->fail('Unable to finalize the large file for the test.');
+                }
+            } finally {
+                fclose($handle);
+            }
+
+            $backup->add_folder_to_zip($zip, $large_dir, 'large/');
+
+            $this->assertCount(1, $zip->addedFiles, 'The large file should be added to the archive.');
+            $this->assertSame($large_file, $zip->addedFiles[0][0]);
+            $this->assertSame('large/file.bin', $zip->addedFiles[0][1]);
+
+            $this->assertNotEmpty($zip->compressionCalls, 'Compression settings should be adjusted for large files.');
+            $this->assertSame(['large/file.bin', ZipArchive::CM_STORE, 0], $zip->compressionCalls[0]);
+        } finally {
+            if (isset($large_file) && file_exists($large_file)) {
+                @unlink($large_file);
+            }
+
+            if (is_dir($large_dir)) {
+                @rmdir($large_dir);
+            }
+
+            if (is_dir($root)) {
+                @rmdir($root);
+            }
+        }
+    }
+
     public function test_generate_backup_filename_produces_unique_names_within_same_second(): void
     {
         $backup = new BJLG\BJLG_Backup();
