@@ -80,6 +80,18 @@ class BJLG_Backup {
     }
 
     /**
+     * Supprime l'état stocké d'une tâche.
+     *
+     * @param string $task_id
+     * @return void
+     */
+    public static function delete_task_state($task_id) {
+        if (function_exists('delete_transient')) {
+            delete_transient($task_id);
+        }
+    }
+
+    /**
      * Indique si un verrou d'exécution est actuellement actif.
      *
      * @return bool
