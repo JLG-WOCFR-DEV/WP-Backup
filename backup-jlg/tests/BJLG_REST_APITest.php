@@ -1223,22 +1223,26 @@ namespace {
     }
 
     /**
-     * @return array<string, array{0: int}>
+     * @return array<string, array{0: int, 1: int, 2: int, 3: int}>
      */
     public function provide_download_sizes(): array
     {
         return [
-            'tiny_archive' => [512],
-            'multi_block_archive' => [10 * 1024 + 3],
-            'multi_megabyte_archive' => [3 * 1024 * 1024 + 123],
+            'zero_byte_archive' => [0, 600, 3600, 600],
+            'one_kib_archive' => [1024, 3600, 1200, 1200],
+            'five_mib_archive' => [5 * 1024 * 1024, 7200, 7200, 7200],
         ];
     }
 
     /**
      * @dataProvider provide_download_sizes
      */
-    public function test_download_backup_reports_exact_size_for_varied_archives(int $size): void
-    {
+    public function test_download_backup_reports_exact_size_for_varied_archives(
+        int $size,
+        int $download_ttl,
+        int $task_ttl,
+        int $expected_ttl
+    ): void {
         $GLOBALS['bjlg_test_transients'] = [];
 
         $api = new BJLG\BJLG_REST_API();
@@ -1246,21 +1250,26 @@ namespace {
         $filepath = BJLG_BACKUP_DIR . uniqid('', true) . '.zip';
         $filename = basename($filepath);
 
-        $chunk_length = max(1, min($size, 1024));
-        $chunk = random_bytes($chunk_length);
-        $full_repeats = intdiv($size, $chunk_length);
-        $remainder = $size % $chunk_length;
+        $handle = fopen($filepath, 'wb');
+        $this->assertNotFalse($handle, 'Failed to create backup file handle.');
 
-        $content = $full_repeats > 0 ? str_repeat($chunk, $full_repeats) : '';
+        $truncated = ftruncate($handle, $size);
+        $this->assertTrue($truncated, 'Unable to size backup file.');
+        fclose($handle);
 
-        if ($remainder > 0) {
-            $content .= substr($chunk, 0, $remainder);
-        }
+        clearstatcache(false, $filepath);
+        $this->assertSame($size, filesize($filepath));
 
-        $bytes_written = file_put_contents($filepath, $content);
-        $this->assertSame($size, $bytes_written);
+        $previous_download_filters = $GLOBALS['bjlg_test_hooks']['filters']['bjlg_download_token_ttl'] ?? null;
+        $previous_task_filters = $GLOBALS['bjlg_test_hooks']['filters']['bjlg_task_ttl'] ?? null;
 
-        $expected_ttl = \BJLG\BJLG_Actions::get_download_token_ttl($filepath);
+        add_filter('bjlg_download_token_ttl', static function ($value) use ($download_ttl) {
+            return $download_ttl;
+        }, 10, 2);
+
+        add_filter('bjlg_task_ttl', static function ($value) use ($task_ttl) {
+            return $task_ttl;
+        }, 10, 1);
 
         $request = new class($filename) {
             /** @var array<string, mixed> */
@@ -1295,14 +1304,42 @@ namespace {
             $this->assertSame($expected_ttl, $response['expires_in']);
             $this->assertArrayHasKey('size', $response);
             $this->assertIsInt($response['size']);
-            $this->assertSame(filesize($filepath), $response['size']);
+            $this->assertSame($size, $response['size']);
             $this->assertSame(
                 \BJLG\BJLG_Actions::build_download_url($response['download_token']),
                 $response['download_url']
             );
+
+            $this->assertCount(1, $GLOBALS['bjlg_test_transients']);
+
+            $transient_key = 'bjlg_download_' . $response['download_token'];
+            $this->assertArrayHasKey($transient_key, $GLOBALS['bjlg_test_transients']);
+
+            $stored_payload = $GLOBALS['bjlg_test_transients'][$transient_key];
+            $this->assertIsArray($stored_payload);
+            $this->assertArrayHasKey('file', $stored_payload);
+            $this->assertSame($filepath, $stored_payload['file']);
+            $this->assertArrayHasKey('requires_cap', $stored_payload);
+            $this->assertSame(BJLG_CAPABILITY, $stored_payload['requires_cap']);
+            $this->assertArrayHasKey('issued_at', $stored_payload);
+            $this->assertIsInt($stored_payload['issued_at']);
+            $this->assertArrayHasKey('issued_by', $stored_payload);
+            $this->assertSame(get_current_user_id(), $stored_payload['issued_by']);
         } finally {
             if (file_exists($filepath)) {
                 unlink($filepath);
+            }
+
+            if ($previous_download_filters !== null) {
+                $GLOBALS['bjlg_test_hooks']['filters']['bjlg_download_token_ttl'] = $previous_download_filters;
+            } else {
+                unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_download_token_ttl']);
+            }
+
+            if ($previous_task_filters !== null) {
+                $GLOBALS['bjlg_test_hooks']['filters']['bjlg_task_ttl'] = $previous_task_filters;
+            } else {
+                unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_task_ttl']);
             }
 
             $GLOBALS['bjlg_test_transients'] = [];
