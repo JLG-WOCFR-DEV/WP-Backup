@@ -1026,7 +1026,13 @@ class BJLG_REST_API {
                 $manifest = $this->get_backup_manifest($file);
             }
 
-            $backups[] = $this->format_backup_data($file, $manifest);
+            $formatted = $this->format_backup_data($file, $manifest);
+
+            if (is_wp_error($formatted)) {
+                return $formatted;
+            }
+
+            $backups[] = $formatted;
         }
         
         $response = rest_ensure_response([
@@ -1364,7 +1370,13 @@ class BJLG_REST_API {
             return $filepath;
         }
 
-        return rest_ensure_response($this->format_backup_data($filepath));
+        $formatted = $this->format_backup_data($filepath);
+
+        if (is_wp_error($formatted)) {
+            return $formatted;
+        }
+
+        return rest_ensure_response($formatted);
     }
     
     /**
@@ -1438,17 +1450,57 @@ class BJLG_REST_API {
                 );
             }
 
-            set_transient($transient_key, BJLG_Actions::build_download_token_payload($filepath), $transient_ttl);
+            $payload = BJLG_Actions::build_download_token_payload($filepath);
+
+            if (!is_array($payload) || empty($payload)) {
+                BJLG_Debug::log('ERREUR : Impossible de régénérer la charge utile de téléchargement pour ' . $filepath . '.');
+
+                return new WP_Error(
+                    'bjlg_download_payload_unavailable',
+                    __('Impossible de préparer la charge utile de téléchargement demandée.', 'backup-jlg'),
+                    ['status' => 503]
+                );
+            }
+
+            if (set_transient($transient_key, $payload, $transient_ttl) === false) {
+                BJLG_Debug::log('ERREUR : Échec de la mise à jour du token de téléchargement pour ' . $filepath . '.');
+
+                return new WP_Error(
+                    'bjlg_download_token_error',
+                    __('Impossible de stocker le token de téléchargement pour cette sauvegarde.', 'backup-jlg'),
+                    ['status' => 500]
+                );
+            }
             $download_token = $token;
         }
 
         if ($download_token === null) {
             $download_token = wp_generate_password(32, false);
-            set_transient(
+            $payload = BJLG_Actions::build_download_token_payload($filepath);
+
+            if (!is_array($payload) || empty($payload)) {
+                BJLG_Debug::log('ERREUR : Charge utile de téléchargement indisponible pour ' . $filepath . '.');
+
+                return new WP_Error(
+                    'bjlg_download_payload_unavailable',
+                    __('Impossible de préparer la charge utile de téléchargement demandée.', 'backup-jlg'),
+                    ['status' => 503]
+                );
+            }
+
+            if (set_transient(
                 'bjlg_download_' . $download_token,
-                BJLG_Actions::build_download_token_payload($filepath),
+                $payload,
                 $transient_ttl
-            );
+            ) === false) {
+                BJLG_Debug::log('ERREUR : Impossible de créer le token de téléchargement pour ' . $filepath . '.');
+
+                return new WP_Error(
+                    'bjlg_download_token_error',
+                    __('Impossible de stocker le token de téléchargement pour cette sauvegarde.', 'backup-jlg'),
+                    ['status' => 500]
+                );
+            }
         }
 
         $download_url = add_query_arg([
@@ -1873,11 +1925,31 @@ class BJLG_REST_API {
         $transient_key = 'bjlg_download_' . $download_token;
         $token_ttl = BJLG_Actions::get_download_token_ttl($filepath);
 
-        set_transient(
+        $payload = BJLG_Actions::build_download_token_payload($filepath);
+
+        if (!is_array($payload) || empty($payload)) {
+            BJLG_Debug::log('ERREUR : Charge utile de téléchargement indisponible pour ' . $filepath . '.');
+
+            return new WP_Error(
+                'bjlg_download_payload_unavailable',
+                __('Impossible de préparer la charge utile de téléchargement demandée.', 'backup-jlg'),
+                ['status' => 503]
+            );
+        }
+
+        if (set_transient(
             $transient_key,
-            BJLG_Actions::build_download_token_payload($filepath),
+            $payload,
             $token_ttl
-        );
+        ) === false) {
+            BJLG_Debug::log('ERREUR : Impossible de créer le token de téléchargement pour ' . $filepath . '.');
+
+            return new WP_Error(
+                'bjlg_download_token_error',
+                __('Impossible de stocker le token de téléchargement pour cette sauvegarde.', 'backup-jlg'),
+                ['status' => 500]
+            );
+        }
 
         $download_url = add_query_arg([
             'action' => 'bjlg_download',

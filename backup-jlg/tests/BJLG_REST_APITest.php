@@ -109,6 +109,7 @@ namespace {
             ];
             $GLOBALS['bjlg_test_set_transient_mock'] = null;
             $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
+            \BJLG_Debug::$logs = [];
 
             $lock_property = new \ReflectionProperty(BJLG\BJLG_Backup::class, 'in_memory_lock');
             $lock_property->setAccessible(true);
@@ -1038,6 +1039,63 @@ namespace {
 
             if (file_exists($other_file)) {
                 unlink($other_file);
+            }
+        }
+    }
+
+    public function test_get_backup_returns_error_when_download_token_cannot_be_stored(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+        $filepath = BJLG_BACKUP_DIR . $filename;
+
+        file_put_contents($filepath, 'backup-data');
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value = null, $expiration = null) {
+            if (strpos($transient, 'bjlg_download_') === 0) {
+                return false;
+            }
+
+            return null;
+        };
+
+        $request = new class($filename) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id)
+            {
+                $this->params = [
+                    'id' => $id,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            $response = $api->get_backup($request);
+
+            $this->assertInstanceOf(\WP_Error::class, $response);
+            $this->assertSame('bjlg_download_token_error', $response->get_error_code());
+            $data = $response->get_error_data();
+            if (!is_array($data)) {
+                $data = $response->get_error_data('bjlg_download_token_error');
+            }
+            $this->assertIsArray($data);
+            $this->assertSame(500, $data['status'] ?? null);
+            $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+            $this->assertNotEmpty(\BJLG_Debug::$logs);
+        } finally {
+            $GLOBALS['bjlg_test_set_transient_mock'] = null;
+            if (file_exists($filepath)) {
+                unlink($filepath);
             }
         }
     }
