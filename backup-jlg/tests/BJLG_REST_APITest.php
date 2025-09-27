@@ -65,10 +65,6 @@ namespace {
         }
     }
 
-    if (!defined('AUTH_KEY')) {
-        define('AUTH_KEY', 'test-auth-key');
-    }
-
     class BJLG_Test_Restore_For_Rest extends BJLG\BJLG_Restore
     {
         /** @var int */
@@ -85,11 +81,17 @@ namespace {
         }
     }
 
-    final class BJLG_REST_APITest extends TestCase
+    class BJLG_REST_APITest extends TestCase
     {
+        protected static bool $should_define_auth_key = true;
+
         protected function setUp(): void
         {
             parent::setUp();
+
+            if (static::$should_define_auth_key && !defined('AUTH_KEY')) {
+                define('AUTH_KEY', 'test-auth-key');
+            }
 
             $GLOBALS['bjlg_test_options'] = [];
             $GLOBALS['bjlg_test_hooks'] = [
@@ -2033,5 +2035,74 @@ namespace {
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
     }
 }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    final class BJLG_REST_API_MissingAuthKeyTest extends BJLG_REST_APITest
+    {
+        protected static bool $should_define_auth_key = false;
+
+        public function test_authenticate_returns_error_when_auth_key_missing(): void
+        {
+            $this->assertFalse(defined('AUTH_KEY'));
+
+            $api = new BJLG\BJLG_REST_API();
+
+            $user = (object) [
+                'ID' => 6101,
+                'user_login' => 'auth-missing',
+                'user_email' => 'auth-missing@example.com',
+                'allcaps' => [BJLG_CAPABILITY => true],
+                'roles' => ['administrator'],
+            ];
+
+            $GLOBALS['bjlg_test_users'] = [
+                $user->ID => $user,
+            ];
+
+            $api_key = 'missing-auth-key';
+
+            update_option('bjlg_api_keys', [
+                [
+                    'key' => wp_hash_password($api_key),
+                    'user_id' => $user->ID,
+                    'roles' => $user->roles,
+                ],
+            ]);
+
+            $request = new class($api_key) {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct(string $api_key)
+                {
+                    $this->params = [
+                        'api_key' => $api_key,
+                        'username' => null,
+                        'password' => null,
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+
+            $result = $api->authenticate($request);
+
+            $this->assertInstanceOf(\WP_Error::class, $result);
+            $this->assertSame('missing_jwt_signing_key', $result->get_error_code());
+
+            $message = $result->get_error_message('missing_jwt_signing_key');
+            $this->assertNotEmpty($message);
+
+            $error_data = $result->get_error_data('missing_jwt_signing_key');
+            $this->assertIsArray($error_data);
+            $this->assertSame(500, $error_data['status'] ?? null);
+        }
+    }
 
 }

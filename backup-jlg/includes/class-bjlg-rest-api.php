@@ -878,10 +878,16 @@ class BJLG_REST_API {
                 );
             }
 
+            $token = $this->generate_jwt_token($user->ID, $user->user_login);
+
+            if (is_wp_error($token)) {
+                return $token;
+            }
+
             return rest_ensure_response([
                 'success' => true,
                 'message' => 'Authentication successful',
-                'token' => $this->generate_jwt_token($user->ID, $user->user_login),
+                'token' => $token,
                 'user' => [
                     'id' => $user->ID,
                     'username' => $user->user_login,
@@ -909,10 +915,16 @@ class BJLG_REST_API {
             );
         }
         
+        $token = $this->generate_jwt_token($user->ID, $user->user_login);
+
+        if (is_wp_error($token)) {
+            return $token;
+        }
+
         return rest_ensure_response([
             'success' => true,
             'message' => 'Authentication successful',
-            'token' => $this->generate_jwt_token($user->ID, $user->user_login),
+            'token' => $token,
             'user' => [
                 'id' => $user->ID,
                 'username' => $user->user_login,
@@ -925,6 +937,36 @@ class BJLG_REST_API {
      * Génère un token JWT
      */
     private function generate_jwt_token($user_id, $username) {
+        if (!defined('AUTH_KEY')) {
+            $message = __('The AUTH_KEY constant is not defined. Unable to generate JWT tokens.', 'backup-jlg');
+
+            if (function_exists('error_log')) {
+                error_log('[Backup JLG] ' . $message);
+            }
+
+            return new WP_Error(
+                'missing_jwt_signing_key',
+                $message,
+                ['status' => 500]
+            );
+        }
+
+        $auth_key = constant('AUTH_KEY');
+
+        if (!is_string($auth_key) || trim($auth_key) === '') {
+            $message = __('The AUTH_KEY constant is empty. Unable to generate JWT tokens.', 'backup-jlg');
+
+            if (function_exists('error_log')) {
+                error_log('[Backup JLG] ' . $message);
+            }
+
+            return new WP_Error(
+                'missing_jwt_signing_key',
+                $message,
+                ['status' => 500]
+            );
+        }
+
         $header = json_encode(['typ' => 'JWT', 'alg' => 'HS256']);
         $payload = json_encode([
             'user_id' => (int) $user_id,
@@ -936,7 +978,7 @@ class BJLG_REST_API {
         $base64Header = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($header));
         $base64Payload = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($payload));
         
-        $signature = hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY, true);
+        $signature = hash_hmac('sha256', $base64Header . '.' . $base64Payload, $auth_key, true);
         $base64Signature = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($signature));
         
         return $base64Header . '.' . $base64Payload . '.' . $base64Signature;
