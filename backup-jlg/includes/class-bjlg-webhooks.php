@@ -104,14 +104,24 @@ class BJLG_Webhooks {
         $incremental = isset($_GET['incremental']) && $_GET['incremental'] === 'true';
         
         BJLG_Debug::log("Webhook déclenché avec succès. Planification d'une sauvegarde en arrière-plan.");
-        
+
         // Enregistrer l'appel du webhook
         $ip = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
         $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown';
         BJLG_History::log('webhook_triggered', 'success', "IP: $ip | User-Agent: $user_agent");
-        
+
         // Créer la tâche de sauvegarde
         $task_id = 'bjlg_backup_' . md5(uniqid('webhook', true));
+
+        if (!BJLG_Backup::reserve_task_slot($task_id)) {
+            BJLG_Debug::log("Impossible de planifier une sauvegarde via webhook : une tâche est déjà en cours.");
+
+            wp_send_json_error([
+                'message' => __('Une sauvegarde est déjà en cours. Réessayez ultérieurement.', 'backup-jlg')
+            ], 409);
+            exit;
+        }
+
         $task_data = [
             'progress' => 5,
             'status' => 'pending',
@@ -123,11 +133,30 @@ class BJLG_Webhooks {
             'start_time' => time()
         ];
 
-        set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
-        
+        if (!BJLG_Backup::save_task_state($task_id, $task_data)) {
+            BJLG_Debug::log("Échec de l'initialisation de la tâche de sauvegarde webhook pour {$task_id}.");
+            BJLG_Backup::release_task_slot($task_id);
+
+            wp_send_json_error([
+                'message' => __('Impossible d\'initialiser la sauvegarde. Veuillez réessayer.', 'backup-jlg')
+            ], 500);
+            exit;
+        }
+
         // Planifier l'exécution immédiate
-        wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
-        
+        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+
+        if ($scheduled === false) {
+            BJLG_Debug::log("Échec de la planification de la tâche de sauvegarde webhook pour {$task_id}.");
+            delete_transient($task_id);
+            BJLG_Backup::release_task_slot($task_id);
+
+            wp_send_json_error([
+                'message' => __('Impossible de planifier la tâche de sauvegarde en arrière-plan.', 'backup-jlg')
+            ], 500);
+            exit;
+        }
+
         // Renvoyer une réponse de succès
         wp_send_json_success([
             'message' => 'Backup job scheduled successfully.',
