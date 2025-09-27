@@ -878,10 +878,16 @@ class BJLG_REST_API {
                 );
             }
 
+            $token = $this->generate_jwt_token($user->ID, $user->user_login);
+
+            if (is_wp_error($token)) {
+                return $token;
+            }
+
             return rest_ensure_response([
                 'success' => true,
                 'message' => 'Authentication successful',
-                'token' => $this->generate_jwt_token($user->ID, $user->user_login),
+                'token' => $token,
                 'user' => [
                     'id' => $user->ID,
                     'username' => $user->user_login,
@@ -909,10 +915,16 @@ class BJLG_REST_API {
             );
         }
         
+        $token = $this->generate_jwt_token($user->ID, $user->user_login);
+
+        if (is_wp_error($token)) {
+            return $token;
+        }
+
         return rest_ensure_response([
             'success' => true,
             'message' => 'Authentication successful',
-            'token' => $this->generate_jwt_token($user->ID, $user->user_login),
+            'token' => $token,
             'user' => [
                 'id' => $user->ID,
                 'username' => $user->user_login,
@@ -925,6 +937,18 @@ class BJLG_REST_API {
      * Génère un token JWT
      */
     private function generate_jwt_token($user_id, $username) {
+        if (!defined('AUTH_KEY') || trim((string) AUTH_KEY) === '') {
+            if (function_exists('error_log')) {
+                error_log('[Backup JLG] AUTH_KEY is missing or empty; unable to generate JWT token.');
+            }
+
+            return new WP_Error(
+                'jwt_missing_signing_key',
+                __('La clé AUTH_KEY est manquante; impossible de générer un token JWT.', 'backup-jlg'),
+                ['status' => 500]
+            );
+        }
+
         $header = json_encode(['typ' => 'JWT', 'alg' => 'HS256']);
         $payload = json_encode([
             'user_id' => (int) $user_id,
