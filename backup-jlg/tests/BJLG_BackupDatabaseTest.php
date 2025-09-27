@@ -161,6 +161,102 @@ final class BJLG_BackupDatabaseTest extends TestCase
         }
     }
 
+    public function test_backup_database_raises_when_zip_add_fails(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $zip = new class extends ZipArchive {
+            /** @var array<int, array{0: string, 1: string}> */
+            public $addedFiles = [];
+
+            public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
+            {
+                $this->addedFiles[] = [$filepath, $entryname];
+
+                return false;
+            }
+        };
+
+        $previous_wpdb = $GLOBALS['wpdb'] ?? null;
+
+        $GLOBALS['wpdb'] = new class {
+            /** @var string */
+            public $prefix = 'wp_';
+
+            public function get_results($query, $output = 'OBJECT')
+            {
+                if (stripos($query, 'SHOW TABLES') === 0) {
+                    return [['wp_test']];
+                }
+
+                if (stripos($query, 'SELECT * FROM `wp_test`') === 0) {
+                    return [[
+                        'id' => 1,
+                        'name' => 'Failure',
+                    ]];
+                }
+
+                return [];
+            }
+
+            public function get_row($query, $output = 'OBJECT', $y = 0)
+            {
+                if (stripos($query, 'SHOW CREATE TABLE') === 0) {
+                    return ['wp_test', 'CREATE TABLE `wp_test` (`id` int(11))'];
+                }
+
+                return null;
+            }
+
+            public function get_var($query)
+            {
+                if (stripos($query, 'SELECT COUNT(*) FROM `wp_test`') === 0) {
+                    return 1;
+                }
+
+                return 0;
+            }
+        };
+
+        try {
+            $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'backup_database');
+            $method->setAccessible(true);
+
+            try {
+                $method->invokeArgs($backup, [&$zip, false]);
+                $this->fail("Expected exception was not thrown when addFile failed");
+            } catch (Exception $exception) {
+                $this->assertStringContainsString("Impossible d'ajouter l'export SQL à l'archive.", $exception->getMessage());
+            }
+
+            $temporaryFilesProperty = new ReflectionProperty(BJLG\BJLG_Backup::class, 'temporary_files');
+            $temporaryFilesProperty->setAccessible(true);
+
+            $temporaryFiles = $temporaryFilesProperty->getValue($backup);
+
+            $this->assertIsArray($temporaryFiles);
+            $this->assertNotEmpty($temporaryFiles);
+
+            $tempPath = $temporaryFiles[0];
+
+            $this->assertIsString($tempPath);
+            $this->assertFileExists($tempPath);
+
+            $cleanupMethod = new ReflectionMethod(BJLG\BJLG_Backup::class, 'cleanup_temporary_files');
+            $cleanupMethod->setAccessible(true);
+            $cleanupMethod->invoke($backup);
+
+            $this->assertFileDoesNotExist($tempPath);
+            $this->assertSame([], $temporaryFilesProperty->getValue($backup));
+        } finally {
+            if ($previous_wpdb === null) {
+                unset($GLOBALS['wpdb']);
+            } else {
+                $GLOBALS['wpdb'] = $previous_wpdb;
+            }
+        }
+    }
+
     public function test_backup_database_exports_large_tables_in_batches(): void
     {
         $backup = new BJLG\BJLG_Backup();
