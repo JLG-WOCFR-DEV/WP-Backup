@@ -112,6 +112,16 @@ class BJLG_Webhooks {
         
         // Créer la tâche de sauvegarde
         $task_id = 'bjlg_backup_' . md5(uniqid('webhook', true));
+
+        if (!BJLG_Backup::reserve_task_slot($task_id)) {
+            BJLG_Debug::log("Échec de la réservation du créneau de sauvegarde : une sauvegarde est déjà en cours.");
+
+            wp_send_json_error([
+                'message' => __('A backup is already running. Please try again later.', 'backup-jlg')
+            ], 409);
+            exit;
+        }
+
         $task_data = [
             'progress' => 5,
             'status' => 'pending',
@@ -123,11 +133,30 @@ class BJLG_Webhooks {
             'start_time' => time()
         ];
 
-        set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
-        
+        if (!BJLG_Backup::save_task_state($task_id, $task_data)) {
+            BJLG_Backup::release_task_slot($task_id);
+            BJLG_Debug::log("Impossible d'initialiser la tâche de sauvegarde du webhook.");
+
+            wp_send_json_error([
+                'message' => __('Unable to initialize the backup task. Please try again.', 'backup-jlg')
+            ], 500);
+            exit;
+        }
+
         // Planifier l'exécution immédiate
-        wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
-        
+        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+
+        if ($scheduled === false) {
+            delete_transient($task_id);
+            BJLG_Backup::release_task_slot($task_id);
+            BJLG_Debug::log("Échec de la planification de la tâche de sauvegarde du webhook.");
+
+            wp_send_json_error([
+                'message' => __('Failed to schedule the backup task. Please try again.', 'backup-jlg')
+            ], 500);
+            exit;
+        }
+
         // Renvoyer une réponse de succès
         wp_send_json_success([
             'message' => 'Backup job scheduled successfully.',
