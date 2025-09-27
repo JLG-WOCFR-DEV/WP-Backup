@@ -1128,7 +1128,7 @@ class BJLG_REST_API {
         $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
 
         if ($scheduled === false) {
-            delete_transient($task_id);
+            BJLG_Backup::delete_task_state($task_id);
             BJLG_Backup::release_task_slot($task_id);
 
             return new WP_Error(

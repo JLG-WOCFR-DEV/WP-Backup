@@ -154,10 +154,7 @@ class BJLG_Webhooks {
             BJLG_Debug::log("Échec de la planification de la tâche de sauvegarde webhook pour {$task_id}.");
             BJLG_History::log('webhook_backup_failed', 'failure', "Planification impossible pour la tâche {$task_id}.");
 
-            if (function_exists('delete_transient')) {
-                delete_transient($task_id);
-            }
-
+            BJLG_Backup::delete_task_state($task_id);
             BJLG_Backup::release_task_slot($task_id);
 
             wp_send_json_error([
