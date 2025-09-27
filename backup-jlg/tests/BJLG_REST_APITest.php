@@ -256,6 +256,10 @@ namespace {
 
             $this->assertInstanceOf(\WP_Error::class, $response);
             $this->assertSame('jwt_missing_signing_key', $response->get_error_code());
+            $this->assertSame(
+                __('La clé AUTH_KEY est manquante; impossible de générer un token JWT.', 'backup-jlg'),
+                $response->get_error_message('jwt_missing_signing_key')
+            );
 
             $error_data = $response->get_error_data('jwt_missing_signing_key');
             $this->assertIsArray($error_data);

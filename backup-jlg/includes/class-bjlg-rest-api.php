@@ -937,7 +937,9 @@ class BJLG_REST_API {
      * Génère un token JWT
      */
     private function generate_jwt_token($user_id, $username) {
-        if (!defined('AUTH_KEY') || trim((string) AUTH_KEY) === '') {
+        $auth_key = defined('AUTH_KEY') ? trim((string) AUTH_KEY) : '';
+
+        if ($auth_key === '') {
             if (function_exists('error_log')) {
                 error_log('[Backup JLG] AUTH_KEY is missing or empty; unable to generate JWT token.');
             }
@@ -960,7 +962,7 @@ class BJLG_REST_API {
         $base64Header = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($header));
         $base64Payload = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($payload));
         
-        $signature = hash_hmac('sha256', $base64Header . '.' . $base64Payload, AUTH_KEY, true);
+        $signature = hash_hmac('sha256', $base64Header . '.' . $base64Payload, $auth_key, true);
         $base64Signature = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($signature));
         
         return $base64Header . '.' . $base64Payload . '.' . $base64Signature;
