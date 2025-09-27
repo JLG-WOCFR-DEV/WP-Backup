@@ -3,7 +3,7 @@
     "description": "Une solution complète de sauvegarde, restauration et gestion pour WordPress.",
     "type": "wordpress-plugin",
     "license": "GPL-2.0-or-later",
-    "version": "2.0.0",
+    "version": "2.0.3",
     "authors": [
         {
             "name": "JLG",

@@ -302,6 +302,10 @@ header('X-XSS-Protection: 1; mode=block');
 
 ## 📝 Changelog
 
+### Version 2.0.3 (2024-04-23)
+- 🔧 Harmonisation de la version Composer avec la version déclarée dans le plugin principal.
+- 📦 Préparation de la diffusion Packagist pour garantir la distribution de la version correcte.
+
 ### Version 2.0.0 (2024-01-15)
 - ✨ Ajout du chiffrement AES-256
 - ✨ API REST complète
