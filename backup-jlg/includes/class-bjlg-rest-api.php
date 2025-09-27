@@ -1495,17 +1495,45 @@ class BJLG_REST_API {
                 );
             }
 
-            set_transient($transient_key, BJLG_Actions::build_download_token_payload($filepath), $transient_ttl);
+            $payload = BJLG_Actions::build_download_token_payload($filepath);
+            $persisted = set_transient($transient_key, $payload, $transient_ttl);
+
+            if ($persisted === false) {
+                BJLG_Debug::error(sprintf(
+                    'Échec de la persistance du token de téléchargement "%s" pour "%s".',
+                    $token,
+                    $filepath
+                ));
+
+                return new WP_Error(
+                    'bjlg_download_token_failure',
+                    __('Impossible de créer un token de téléchargement.', 'backup-jlg'),
+                    ['status' => 500]
+                );
+            }
+
             $download_token = $token;
         }
 
         if ($download_token === null) {
             $download_token = wp_generate_password(32, false);
-            set_transient(
-                'bjlg_download_' . $download_token,
-                BJLG_Actions::build_download_token_payload($filepath),
-                $transient_ttl
-            );
+            $payload = BJLG_Actions::build_download_token_payload($filepath);
+            $transient_key = 'bjlg_download_' . $download_token;
+            $persisted = set_transient($transient_key, $payload, $transient_ttl);
+
+            if ($persisted === false) {
+                BJLG_Debug::error(sprintf(
+                    'Échec de la persistance du token de téléchargement "%s" pour "%s".',
+                    $download_token,
+                    $filepath
+                ));
+
+                return new WP_Error(
+                    'bjlg_download_token_failure',
+                    __('Impossible de créer un token de téléchargement.', 'backup-jlg'),
+                    ['status' => 500]
+                );
+            }
         }
 
         $download_url = BJLG_Actions::build_download_url($download_token);

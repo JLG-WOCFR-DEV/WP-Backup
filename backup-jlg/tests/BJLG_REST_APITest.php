@@ -17,6 +17,14 @@ namespace {
             {
                 self::$logs[] = (string) $message;
             }
+
+            /**
+             * @param mixed $message
+             */
+            public static function error($message): void
+            {
+                self::log($message);
+            }
         }
 
         class_alias('BJLG_Debug', 'BJLG\\BJLG_Debug');
@@ -124,6 +132,7 @@ namespace {
                 define('AUTH_KEY', 'test-auth-key');
             }
 
+            \BJLG\BJLG_Debug::$logs = [];
             $GLOBALS['bjlg_test_options'] = [];
             $GLOBALS['bjlg_test_hooks'] = [
                 'actions' => [],
@@ -1122,6 +1131,125 @@ namespace {
             $this->assertIsString($response['download_token']);
             $this->assertGreaterThan(0, $response['size']);
         } finally {
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+        }
+    }
+
+    public function test_download_backup_returns_error_when_transient_persistence_fails(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+        $filepath = BJLG_BACKUP_DIR . $filename;
+
+        file_put_contents($filepath, 'backup-data');
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value = null, $expiration = null) {
+            if (strpos($transient, 'bjlg_download_') === 0) {
+                return false;
+            }
+
+            return null;
+        };
+
+        $request = new class($filename) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id)
+            {
+                $this->params = [
+                    'id' => $id,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            $response = $api->download_backup($request);
+
+            $this->assertInstanceOf(\WP_Error::class, $response);
+            $this->assertSame('bjlg_download_token_failure', $response->get_error_code());
+
+            $error_data = $response->get_error_data();
+            $this->assertIsArray($error_data);
+            $this->assertSame(500, $error_data['status']);
+
+            $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+            $this->assertNotEmpty(\BJLG\BJLG_Debug::$logs);
+        } finally {
+            $GLOBALS['bjlg_test_set_transient_mock'] = null;
+
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+        }
+    }
+
+    public function test_download_backup_returns_error_when_refreshing_existing_token_fails(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+        $filepath = BJLG_BACKUP_DIR . $filename;
+
+        file_put_contents($filepath, 'backup-data');
+
+        $token = 'bjlg-test-token-' . uniqid('', true);
+        $payload = BJLG\BJLG_Actions::build_download_token_payload($filepath);
+        $GLOBALS['bjlg_test_transients']['bjlg_download_' . $token] = $payload;
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value = null, $expiration = null) {
+            if (strpos($transient, 'bjlg_download_') === 0) {
+                return false;
+            }
+
+            return null;
+        };
+
+        $request = new class($filename, $token) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id, $token)
+            {
+                $this->params = [
+                    'id' => $id,
+                    'token' => $token,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            $response = $api->download_backup($request);
+
+            $this->assertInstanceOf(\WP_Error::class, $response);
+            $this->assertSame('bjlg_download_token_failure', $response->get_error_code());
+
+            $error_data = $response->get_error_data();
+            $this->assertIsArray($error_data);
+            $this->assertSame(500, $error_data['status']);
+
+            $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
+            $this->assertNotEmpty(\BJLG\BJLG_Debug::$logs);
+        } finally {
+            $GLOBALS['bjlg_test_set_transient_mock'] = null;
+
             if (file_exists($filepath)) {
                 unlink($filepath);
             }
