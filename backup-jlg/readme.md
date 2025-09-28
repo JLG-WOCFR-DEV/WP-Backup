@@ -10,6 +10,7 @@ Une solution professionnelle complète de sauvegarde et restauration pour WordPr
 - **API Keys sécurisées** pour l'accès distant
 - **Tokens JWT** pour l'authentification
 - **Protection par mot de passe** optionnelle
+- **Limiteur de taux REST** basé sur l'adresse IP
 
 ### 🚀 Performance
 - **Multi-threading** pour des sauvegardes 60-70% plus rapides
@@ -85,6 +86,26 @@ define('WP_MAX_MEMORY_LIMIT', '512M');
 1. Allez dans **Backup JLG → API & Intégrations**
 2. Générez une clé API
 3. Copiez la clé (elle ne sera plus visible après)
+
+### 4. Limiteur de taux REST
+
+Par défaut, le plugin ne se fie qu'à `REMOTE_ADDR` pour identifier les clients et
+éviter les usurpations via des en-têtes HTTP. Si votre site est derrière un
+reverse proxy géré (Cloudflare, load balancer, etc.) qui réécrit les en-têtes,
+indiquez explicitement ceux à utiliser :
+
+```php
+// Dans un mu-plugin ou functions.php :
+add_filter('bjlg_rate_limiter_trusted_proxy_headers', function () {
+    return ['HTTP_X_FORWARDED_FOR'];
+});
+```
+
+Il est également possible de définir l'option `bjlg_trusted_proxy_headers`
+(`HTTP_X_FORWARDED_FOR,HTTP_CF_CONNECTING_IP`, par exemple). **Attention :** ne
+faites confiance à ces en-têtes que si le proxy supprime systématiquement toute
+valeur fournie par le client. Dans le cas contraire, l'adresse IP pourrait être
+falsifiée et contourner le limiteur de taux.
 
 ## 🎯 Utilisation
 
