@@ -69,29 +69,61 @@ class BJLG_Rate_Limiter {
     }
 
     /**
-     * Obtient l'adresse IP du client
+     * Obtient l'adresse IP du client.
+     *
+     * Par défaut, seul `REMOTE_ADDR` est utilisé afin d'éviter les usurpations via
+     * des en-têtes HTTP. Un filtre (`bjlg_rate_limiter_trusted_proxy_headers`) ou
+     * l'option `bjlg_trusted_proxy_headers` permettent d'indiquer explicitement les
+     * en-têtes supplémentaires à prendre en compte lorsqu'un reverse proxy de
+     * confiance réécrit les IP. Ces en-têtes ne doivent être activés que si le
+     * proxy retire systématiquement toute valeur fournie par le client, faute de
+     * quoi l'adresse peut être falsifiée.
      */
     private function get_client_ip() {
-        $ip_keys = ['HTTP_CF_CONNECTING_IP', 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR',
-                   'HTTP_X_FORWARDED', 'HTTP_X_CLUSTER_CLIENT_IP', 'HTTP_FORWARDED_FOR',
-                   'HTTP_FORWARDED', 'REMOTE_ADDR'];
+        $option_headers = get_option('bjlg_trusted_proxy_headers', []);
 
-        foreach ($ip_keys as $key) {
-            if (array_key_exists($key, $_SERVER) === true) {
-                $ip = $_SERVER[$key];
+        if (is_string($option_headers)) {
+            $option_headers = array_filter(array_map('trim', explode(',', $option_headers)));
+        }
 
-                // Pour X-Forwarded-For, prendre la première IP
-                if (strpos($ip, ',') !== false) {
-                    $ip = explode(',', $ip)[0];
-                }
+        if (!is_array($option_headers)) {
+            $option_headers = [];
+        }
 
-                $ip = trim($ip);
+        $trusted_headers = apply_filters('bjlg_rate_limiter_trusted_proxy_headers', $option_headers);
 
-                $validated_ip = filter_var($ip, FILTER_VALIDATE_IP);
+        if (!is_array($trusted_headers)) {
+            $trusted_headers = [];
+        }
 
-                if ($validated_ip !== false) {
-                    return $validated_ip;
-                }
+        foreach ($trusted_headers as $key) {
+            if (!is_string($key) || $key === '') {
+                continue;
+            }
+
+            $server_key = strtoupper(str_replace('-', '_', $key));
+
+            if (strpos($server_key, 'HTTP_') !== 0 && $server_key !== 'REMOTE_ADDR') {
+                $server_key = 'HTTP_' . $server_key;
+            }
+
+            if (!array_key_exists($server_key, $_SERVER)) {
+                continue;
+            }
+
+            $ip = $_SERVER[$server_key];
+
+            // Pour les listes (ex: X-Forwarded-For), prendre la première IP
+            if (strpos($ip, ',') !== false) {
+                $ip = explode(',', $ip)[0];
+            }
+
+            $ip = trim($ip);
+
+            $validated_ip = filter_var($ip, FILTER_VALIDATE_IP);
+
+            if ($validated_ip !== false) {
+                return $validated_ip;
             }
         }
 
