@@ -15,6 +15,7 @@ if (!defined('ABSPATH')) {
 
 require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
 require_once __DIR__ . '/class-bjlg-restore.php';
+require_once __DIR__ . '/class-bjlg-settings.php';
 
 class BJLG_REST_API {
     
@@ -24,6 +25,9 @@ class BJLG_REST_API {
     const API_KEYS_LAST_PERSIST_TRANSIENT = 'bjlg_api_keys_last_persist';
     
     private $rate_limiter;
+
+    /** @var BJLG_Settings|null */
+    private $settings_manager;
     
     public function __construct() {
         add_action('rest_api_init', [$this, 'register_routes']);
@@ -33,6 +37,10 @@ class BJLG_REST_API {
         // Initialiser le rate limiter
         if (class_exists(BJLG_Rate_Limiter::class)) {
             $this->rate_limiter = new BJLG_Rate_Limiter();
+        }
+
+        if (class_exists(BJLG_Settings::class)) {
+            $this->settings_manager = BJLG_Settings::get_instance();
         }
     }
     
@@ -1382,9 +1390,15 @@ class BJLG_REST_API {
             switch ($key) {
                 case 'cleanup':
                     $validated_value = $this->validate_cleanup_settings($value);
+                    if (!is_wp_error($validated_value)) {
+                        $validated_value = $this->sanitize_setting_section($key, $validated_value);
+                    }
                     break;
                 case 'schedule':
                     $validated_value = $this->validate_schedule_settings($value);
+                    if (!is_wp_error($validated_value)) {
+                        $validated_value = $this->sanitize_setting_section($key, $validated_value);
+                    }
                     break;
                 case 'encryption':
                 case 'notifications':
@@ -1427,7 +1441,51 @@ class BJLG_REST_API {
             );
         }
 
-        return $value;
+        $sanitized = $this->sanitize_setting_section($key, $value);
+
+        if (is_wp_error($sanitized)) {
+            return $sanitized;
+        }
+
+        return $sanitized;
+    }
+
+    private function sanitize_setting_section($section, array $value) {
+        $settings_manager = $this->get_settings_manager();
+
+        if ($settings_manager === null) {
+            return new WP_Error(
+                'settings_sanitizer_unavailable',
+                __('The settings sanitizer is not available.', 'backup-jlg'),
+                ['status' => 500]
+            );
+        }
+
+        $sanitized = $settings_manager->sanitize_settings_section($section, $value);
+
+        if ($sanitized === null) {
+            return new WP_Error(
+                'invalid_setting_key',
+                sprintf(__('The "%s" setting cannot be updated via the REST API.', 'backup-jlg'), $section),
+                ['status' => 400]
+            );
+        }
+
+        return $sanitized;
+    }
+
+    private function get_settings_manager() {
+        if ($this->settings_manager instanceof BJLG_Settings) {
+            return $this->settings_manager;
+        }
+
+        if (!class_exists(BJLG_Settings::class)) {
+            return null;
+        }
+
+        $this->settings_manager = BJLG_Settings::get_instance();
+
+        return $this->settings_manager;
     }
 
     private function validate_cleanup_settings($value) {

@@ -61,6 +61,7 @@ namespace {
     require_once __DIR__ . '/../includes/class-bjlg-webhooks.php';
     require_once __DIR__ . '/../includes/class-bjlg-backup.php';
     require_once __DIR__ . '/../includes/class-bjlg-rate-limiter.php';
+    require_once __DIR__ . '/../includes/class-bjlg-settings.php';
 
     class BJLG_Test_Auth_Request
     {
@@ -180,6 +181,12 @@ namespace {
 
             $GLOBALS['bjlg_test_filesize_calls'] = [];
             $GLOBALS['bjlg_test_filemtime_calls'] = [];
+
+            if (class_exists(BJLG\BJLG_Settings::class)) {
+                $settings_instance = new \ReflectionProperty(BJLG\BJLG_Settings::class, 'instance');
+                $settings_instance->setAccessible(true);
+                $settings_instance->setValue(null, null);
+            }
 
             $lock_property = new \ReflectionProperty(BJLG\BJLG_Backup::class, 'in_memory_lock');
             $lock_property->setAccessible(true);
@@ -2096,13 +2103,56 @@ namespace {
             $this->assertSame($original_cleanup, get_option('bjlg_cleanup_settings'));
         }
 
-        public function test_update_settings_saves_notifications_and_webhooks(): void
+        public function test_update_settings_sanitizes_payload_before_saving(): void
         {
             $api = new BJLG\BJLG_REST_API();
 
             $payload = [
-                'notifications' => ['email' => ['enabled' => true]],
-                'webhooks' => ['endpoints' => ['https://example.com/hook']],
+                'cleanup' => ['by_number' => '15', 'by_age' => '-20'],
+                'schedule' => [
+                    'recurrence' => 'WEEKLY',
+                    'day' => 'Friday',
+                    'time' => ' 05:30 ',
+                    'components' => ['db', 'plugins', 'plugins', 'weird<script>'],
+                    'encrypt' => '1',
+                    'incremental' => 'false',
+                ],
+                'encryption' => [
+                    'enabled' => 'true',
+                    'auto_encrypt' => 'yes',
+                    'password_protect' => 'no',
+                    'compression_level' => '15',
+                ],
+                'notifications' => [
+                    'enabled' => 'yes',
+                    'email_recipients' => '   admin@example.com , invalid-email ',
+                    'events' => [
+                        'backup_complete' => 'TRUE',
+                        'backup_failed' => '0',
+                        'cleanup_complete' => 'Y',
+                        'storage_warning' => 'no',
+                    ],
+                    'channels' => [
+                        'email' => ['enabled' => '1'],
+                        'slack' => ['enabled' => 'yes', 'webhook_url' => 'https://example.com/slack<script>'],
+                        'discord' => ['enabled' => '', 'webhook_url' => 'ftp://discord.example.com/hook'],
+                    ],
+                ],
+                'performance' => [
+                    'multi_threading' => 'on',
+                    'max_workers' => '0',
+                    'chunk_size' => '-10',
+                    'compression_level' => '9',
+                ],
+                'webhooks' => [
+                    'enabled' => '1',
+                    'urls' => [
+                        'backup_complete' => ' https://example.com/hook?foo=bar ',
+                        'backup_failed' => 'not-a-url',
+                        'cleanup_complete' => 'https://example.com/cleanup',
+                    ],
+                    'secret' => '  secret  ',
+                ],
             ];
 
             $request = new class($payload) {
@@ -2126,8 +2176,65 @@ namespace {
             $response = $api->update_settings($request);
 
             $this->assertIsArray($response);
-            $this->assertSame($payload['notifications'], get_option('bjlg_notification_settings'));
-            $this->assertSame($payload['webhooks'], get_option('bjlg_webhook_settings'));
+            $this->assertSame([
+                'by_number' => 15,
+                'by_age' => 0,
+            ], get_option('bjlg_cleanup_settings'));
+
+            $this->assertSame([
+                'recurrence' => 'weekly',
+                'day' => 'friday',
+                'time' => '05:30',
+                'components' => ['db', 'plugins'],
+                'encrypt' => true,
+                'incremental' => false,
+            ], get_option('bjlg_schedule_settings'));
+
+            $this->assertSame([
+                'enabled' => true,
+                'auto_encrypt' => true,
+                'password_protect' => false,
+                'compression_level' => 15,
+            ], get_option('bjlg_encryption_settings'));
+
+            $this->assertSame([
+                'enabled' => true,
+                'email_recipients' => 'admin@example.com , invalid-email',
+                'events' => [
+                    'backup_complete' => true,
+                    'backup_failed' => false,
+                    'cleanup_complete' => false,
+                    'storage_warning' => false,
+                ],
+                'channels' => [
+                    'email' => ['enabled' => true],
+                    'slack' => [
+                        'enabled' => true,
+                        'webhook_url' => 'https://example.com/slack%3Cscript%3E',
+                    ],
+                    'discord' => [
+                        'enabled' => false,
+                        'webhook_url' => 'ftp://discord.example.com/hook',
+                    ],
+                ],
+            ], get_option('bjlg_notification_settings'));
+
+            $this->assertSame([
+                'multi_threading' => true,
+                'max_workers' => 1,
+                'chunk_size' => 1,
+                'compression_level' => 9,
+            ], get_option('bjlg_performance_settings'));
+
+            $this->assertSame([
+                'enabled' => true,
+                'urls' => [
+                    'backup_complete' => 'https://example.com/hook?foo=bar',
+                    'backup_failed' => '',
+                    'cleanup_complete' => 'https://example.com/cleanup',
+                ],
+                'secret' => 'secret',
+            ], get_option('bjlg_webhook_settings'));
         }
 
         public function test_create_schedule_rejects_incomplete_payload(): void

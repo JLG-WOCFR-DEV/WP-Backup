@@ -546,6 +546,34 @@ if (!function_exists('sanitize_text_field')) {
     }
 }
 
+if (!function_exists('esc_url_raw')) {
+    function esc_url_raw($url) {
+        $url = trim((string) $url);
+
+        if ($url === '') {
+            return '';
+        }
+
+        $parts = parse_url($url);
+
+        if ($parts === false || empty($parts['scheme']) || empty($parts['host'])) {
+            return '';
+        }
+
+        $sanitized = filter_var($url, FILTER_SANITIZE_URL);
+
+        if ($sanitized === false) {
+            return '';
+        }
+
+        return str_replace(
+            ['<', '>', '"', "'", ' '],
+            ['%3C', '%3E', '%22', '%27', '%20'],
+            $sanitized
+        );
+    }
+}
+
 if (!function_exists('wp_cache_flush')) {
     function wp_cache_flush() {
         return true;
