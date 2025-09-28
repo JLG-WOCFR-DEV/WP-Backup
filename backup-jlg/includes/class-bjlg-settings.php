@@ -12,6 +12,9 @@ if (!defined('ABSPATH')) {
  */
 class BJLG_Settings {
 
+    /** @var self|null */
+    private static $instance = null;
+
     private $default_settings = [
         'cleanup' => [
             'by_number' => 3,
@@ -52,15 +55,32 @@ class BJLG_Settings {
     ];
 
     public function __construct() {
+        if (self::$instance instanceof self) {
+            return;
+        }
+
+        self::$instance = $this;
+
         // Un seul point d'entrée pour tous les réglages
         add_action('wp_ajax_bjlg_save_settings', [$this, 'handle_save_settings']);
         add_action('wp_ajax_bjlg_get_settings', [$this, 'handle_get_settings']);
         add_action('wp_ajax_bjlg_reset_settings', [$this, 'handle_reset_settings']);
         add_action('wp_ajax_bjlg_export_settings', [$this, 'handle_export_settings']);
         add_action('wp_ajax_bjlg_import_settings', [$this, 'handle_import_settings']);
-        
+
         // Initialiser les paramètres par défaut si nécessaire
         add_action('init', [$this, 'init_default_settings']);
+    }
+
+    /**
+     * Retourne l'instance actuelle ou l'initialise si nécessaire.
+     */
+    public static function get_instance() {
+        if (!self::$instance instanceof self) {
+            self::$instance = new self();
+        }
+
+        return self::$instance;
     }
     
     /**
@@ -627,6 +647,32 @@ class BJLG_Settings {
             default:
                 return null;
         }
+    }
+
+    /**
+     * Nettoie un bloc de réglages en appliquant les règles d'importation.
+     *
+     * @param string $section
+     * @param array  $value
+     * @return array|null
+     */
+    public function sanitize_settings_section($section, array $value) {
+        $option_map = [
+            'cleanup' => 'bjlg_cleanup_settings',
+            'whitelabel' => 'bjlg_whitelabel_settings',
+            'encryption' => 'bjlg_encryption_settings',
+            'notifications' => 'bjlg_notification_settings',
+            'performance' => 'bjlg_performance_settings',
+            'webhooks' => 'bjlg_webhook_settings',
+            'schedule' => 'bjlg_schedule_settings',
+            'gdrive' => 'bjlg_gdrive_settings',
+        ];
+
+        if (!isset($option_map[$section])) {
+            return null;
+        }
+
+        return $this->sanitize_imported_option($option_map[$section], $value);
     }
 
     /**
