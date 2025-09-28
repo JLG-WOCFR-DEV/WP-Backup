@@ -1,6 +1,30 @@
 <?php
 declare(strict_types=1);
 
+namespace BJLG {
+    if (!function_exists(__NAMESPACE__ . '\\filesize')) {
+        function filesize($filename)
+        {
+            if (isset($GLOBALS['bjlg_test_filesize_callback']) && is_callable($GLOBALS['bjlg_test_filesize_callback'])) {
+                return call_user_func($GLOBALS['bjlg_test_filesize_callback'], $filename);
+            }
+
+            return \filesize($filename);
+        }
+    }
+
+    if (!function_exists(__NAMESPACE__ . '\\filemtime')) {
+        function filemtime($filename)
+        {
+            if (isset($GLOBALS['bjlg_test_filemtime_callback']) && is_callable($GLOBALS['bjlg_test_filemtime_callback'])) {
+                return call_user_func($GLOBALS['bjlg_test_filemtime_callback'], $filename);
+            }
+
+            return \filemtime($filename);
+        }
+    }
+}
+
 namespace {
     use PHPUnit\Framework\TestCase;
 
@@ -152,6 +176,10 @@ namespace {
             ];
             $GLOBALS['bjlg_test_set_transient_mock'] = null;
             $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
+            unset($GLOBALS['bjlg_test_filesize_callback'], $GLOBALS['bjlg_test_filemtime_callback']);
+
+            $GLOBALS['bjlg_test_filesize_calls'] = [];
+            $GLOBALS['bjlg_test_filemtime_calls'] = [];
 
             $lock_property = new \ReflectionProperty(BJLG\BJLG_Backup::class, 'in_memory_lock');
             $lock_property->setAccessible(true);
@@ -2318,6 +2346,94 @@ namespace {
         $this->assertIsArray($payload);
         $this->assertSame($tempFile, $payload['file'] ?? null);
         $this->assertSame(BJLG_CAPABILITY, $payload['requires_cap'] ?? null);
+
+        if (file_exists($tempFile)) {
+            unlink($tempFile);
+        }
+    }
+
+    public function test_format_backup_data_reuses_filesize_and_filemtime_values(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $tempFile = tempnam(BJLG_BACKUP_DIR, 'bjlg-test-backup-');
+        file_put_contents($tempFile, 'backup-content');
+
+        $GLOBALS['bjlg_test_filesize_callback'] = function (string $path) use ($tempFile) {
+            $GLOBALS['bjlg_test_filesize_calls'][] = $path;
+
+            return 4096;
+        };
+
+        $GLOBALS['bjlg_test_filemtime_callback'] = function (string $path) use ($tempFile) {
+            $GLOBALS['bjlg_test_filemtime_calls'][] = $path;
+
+            return 1_700_000_000;
+        };
+
+        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
+        $method = $reflection->getMethod('format_backup_data');
+        $method->setAccessible(true);
+
+        /** @var array<string, mixed> $data */
+        $data = $method->invoke($api, $tempFile);
+
+        $this->assertSame([$tempFile], $GLOBALS['bjlg_test_filesize_calls']);
+        $this->assertSame([$tempFile], $GLOBALS['bjlg_test_filemtime_calls']);
+
+        $this->assertSame(4096, $data['size']);
+        $this->assertSame(size_format(4096), $data['size_formatted']);
+
+        $expectedDate = date('c', 1_700_000_000);
+        $this->assertSame($expectedDate, $data['created_at']);
+        $this->assertSame($expectedDate, $data['modified_at']);
+
+        unset($GLOBALS['bjlg_test_filesize_callback'], $GLOBALS['bjlg_test_filemtime_callback']);
+
+        if (file_exists($tempFile)) {
+            unlink($tempFile);
+        }
+    }
+
+    public function test_format_backup_data_handles_missing_file_metadata(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $tempFile = tempnam(BJLG_BACKUP_DIR, 'bjlg-test-backup-');
+        file_put_contents($tempFile, 'backup-content');
+
+        $GLOBALS['bjlg_test_filesize_callback'] = function (string $path) use ($tempFile) {
+            $GLOBALS['bjlg_test_filesize_calls'][] = $path;
+
+            return false;
+        };
+
+        $GLOBALS['bjlg_test_filemtime_callback'] = function (string $path) use ($tempFile) {
+            $GLOBALS['bjlg_test_filemtime_calls'][] = $path;
+
+            return false;
+        };
+
+        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
+        $method = $reflection->getMethod('format_backup_data');
+        $method->setAccessible(true);
+
+        /** @var array<string, mixed> $data */
+        $data = $method->invoke($api, $tempFile);
+
+        $this->assertSame([$tempFile], $GLOBALS['bjlg_test_filesize_calls']);
+        $this->assertSame([$tempFile], $GLOBALS['bjlg_test_filemtime_calls']);
+
+        $this->assertNull($data['size']);
+        $this->assertNull($data['size_formatted']);
+        $this->assertNull($data['created_at']);
+        $this->assertNull($data['modified_at']);
+
+        unset($GLOBALS['bjlg_test_filesize_callback'], $GLOBALS['bjlg_test_filemtime_callback']);
 
         if (file_exists($tempFile)) {
             unlink($tempFile);

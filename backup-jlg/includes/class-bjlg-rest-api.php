@@ -1963,14 +1963,32 @@ class BJLG_REST_API {
             ? rest_url(ltrim($rest_download_route, '/'))
             : $rest_download_route;
 
+        $filesize = @filesize($filepath);
+        if ($filesize === false) {
+            $filesize = null;
+            $size_formatted = null;
+        } else {
+            $size_formatted = size_format($filesize);
+        }
+
+        $filemtime = @filemtime($filepath);
+        if ($filemtime === false) {
+            $created_at = null;
+            $modified_at = null;
+        } else {
+            $timestamp = date('c', $filemtime);
+            $created_at = $timestamp;
+            $modified_at = $timestamp;
+        }
+
         $data = [
             'id' => $filename,
             'filename' => $filename,
             'type' => $type,
-            'size' => filesize($filepath),
-            'size_formatted' => size_format(filesize($filepath)),
-            'created_at' => date('c', filemtime($filepath)),
-            'modified_at' => date('c', filemtime($filepath)),
+            'size' => $filesize,
+            'size_formatted' => $size_formatted,
+            'created_at' => $created_at,
+            'modified_at' => $modified_at,
             'is_encrypted' => $is_encrypted,
             'components' => $manifest['contains'] ?? [],
             'download_rest_url' => $rest_download_url,
