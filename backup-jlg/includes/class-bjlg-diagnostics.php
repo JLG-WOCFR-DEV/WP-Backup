@@ -90,33 +90,26 @@ class BJLG_Diagnostics {
             $zip->addFromString('statistiques-sauvegardes.json', json_encode($backup_stats, JSON_PRETTY_PRINT));
 
             $zip->close();
-            
-            $uploads = wp_get_upload_dir();
-            $backup_dir = trailingslashit(BJLG_BACKUP_DIR);
-            $download_url = '';
 
-            if (!empty($uploads['baseurl']) && !empty($uploads['basedir'])) {
-                $baseurl = trailingslashit($uploads['baseurl']);
-                $basedir = trailingslashit(wp_normalize_path($uploads['basedir']));
-                $normalized_backup_dir = trailingslashit(wp_normalize_path($backup_dir));
+            $real_zip_path = realpath($zip_filepath);
 
-                if (strpos($normalized_backup_dir, $basedir) === 0) {
-                    $relative_path = trim(substr($normalized_backup_dir, strlen($basedir)), '/');
-                    if ($relative_path !== '') {
-                        $baseurl = trailingslashit($baseurl . $relative_path);
-                    }
-                    $download_url = $baseurl . $zip_filename;
-                }
+            if ($real_zip_path === false) {
+                throw new Exception("Impossible de localiser le pack de support généré.");
             }
 
-            if (empty($download_url)) {
-                $download_url = str_replace(
-                    wp_normalize_path(ABSPATH),
-                    trailingslashit(get_site_url()),
-                    wp_normalize_path($zip_filepath)
-                );
+            $download_token = wp_generate_password(32, false);
+            $transient_key = 'bjlg_download_' . $download_token;
+            $payload = BJLG_Actions::build_download_token_payload($real_zip_path, BJLG_CAPABILITY);
+            $payload['delete_after_download'] = true;
+            $ttl = BJLG_Actions::get_download_token_ttl($real_zip_path);
+
+            if (!set_transient($transient_key, $payload, $ttl)) {
+                @unlink($real_zip_path);
+                throw new Exception("Impossible de préparer le téléchargement du pack de support.");
             }
-            $file_size = filesize($zip_filepath);
+
+            $download_url = BJLG_Actions::build_download_url($download_token);
+            $file_size = filesize($real_zip_path);
             
             BJLG_Debug::log("Pack de support créé avec succès : " . $zip_filename);
             BJLG_History::log('support_package', 'success', 'Pack de support créé : ' . $zip_filename);
