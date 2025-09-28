@@ -20,6 +20,8 @@ class BJLG_REST_API {
     
     const API_NAMESPACE = 'backup-jlg/v1';
     const API_VERSION = '1.0.0';
+    const API_KEY_STATS_TRANSIENT_PREFIX = 'bjlg_api_key_stats_';
+    const API_KEYS_LAST_PERSIST_TRANSIENT = 'bjlg_api_keys_last_persist';
     
     private $rate_limiter;
     
@@ -403,20 +405,28 @@ class BJLG_REST_API {
                 continue;
             }
 
+            $stats_storage_key = $this->get_api_key_stats_storage_key($stored_value);
+            $force_persist = false;
+
             if (isset($key_data['expires']) && $key_data['expires'] < time()) {
-                $this->remove_api_key_entry($stored_keys, $index);
+                $this->remove_api_key_entry($stored_keys, $index, true);
                 unset($key_data);
                 return false;
             }
 
             if ($needs_rehash) {
-                $key_data['key'] = $this->hash_api_key($api_key);
+                $new_hash = $this->hash_api_key($api_key);
+                $new_stats_key = $this->get_api_key_stats_storage_key($new_hash);
+                $this->migrate_api_key_stats($stats_storage_key, $new_stats_key);
+                $key_data['key'] = $new_hash;
+                $stats_storage_key = $new_stats_key;
+                $force_persist = true;
             }
 
             $resolved_user_id = $this->resolve_api_key_user_id($key_data);
 
             if ($resolved_user_id <= 0) {
-                $this->remove_api_key_entry($stored_keys, $index);
+                $this->remove_api_key_entry($stored_keys, $index, true);
                 unset($key_data);
 
                 return new WP_Error(
@@ -429,7 +439,7 @@ class BJLG_REST_API {
             $user = get_user_by('id', $resolved_user_id);
 
             if (!$user) {
-                $this->remove_api_key_entry($stored_keys, $index);
+                $this->remove_api_key_entry($stored_keys, $index, true);
                 unset($key_data);
 
                 return new WP_Error(
@@ -440,7 +450,7 @@ class BJLG_REST_API {
             }
 
             if (!user_can($user, BJLG_CAPABILITY)) {
-                $this->remove_api_key_entry($stored_keys, $index);
+                $this->remove_api_key_entry($stored_keys, $index, true);
                 unset($key_data);
 
                 return new WP_Error(
@@ -450,15 +460,44 @@ class BJLG_REST_API {
                 );
             }
 
-            $key_data['user_id'] = (int) $user->ID;
-            $key_data['roles'] = $this->extract_roles_for_key($key_data, $user);
-            $key_data['last_used'] = time();
-            $key_data['usage_count'] = ($key_data['usage_count'] ?? 0) + 1;
+            $existing_usage_data = false;
+
+            if (isset($key_data['usage_count']) || isset($key_data['last_used'])) {
+                $existing_usage_data = [
+                    'usage_count' => isset($key_data['usage_count']) ? (int) $key_data['usage_count'] : 0,
+                    'last_used' => isset($key_data['last_used']) ? (int) $key_data['last_used'] : 0,
+                ];
+                $force_persist = true;
+            }
+
+            unset($key_data['usage_count'], $key_data['last_used']);
+
+            $stats = $this->get_api_key_stats($stats_storage_key, $existing_usage_data);
+            $stats['usage_count'] = isset($stats['usage_count']) ? (int) $stats['usage_count'] + 1 : 1;
+            $stats['last_used'] = time();
+            $this->set_api_key_stats($stats_storage_key, $stats);
+
+            $current_user_id = (int) $user->ID;
+
+            if (!isset($key_data['user_id']) || (int) $key_data['user_id'] !== $current_user_id) {
+                $force_persist = true;
+            }
+
+            $key_data['user_id'] = $current_user_id;
+
+            $new_roles = $this->extract_roles_for_key($key_data, $user);
+            $existing_roles = isset($key_data['roles']) && is_array($key_data['roles']) ? array_values($key_data['roles']) : [];
+
+            if ($new_roles !== $existing_roles) {
+                $force_persist = true;
+            }
+
+            $key_data['roles'] = $new_roles;
             $stored_keys[$index] = $key_data;
-            update_option('bjlg_api_keys', $stored_keys);
+            $this->maybe_persist_api_keys($stored_keys, $force_persist);
 
             if (function_exists('wp_set_current_user')) {
-                wp_set_current_user((int) $user->ID);
+                wp_set_current_user($current_user_id);
             }
 
             unset($key_data);
@@ -475,9 +514,25 @@ class BJLG_REST_API {
      * @param array $stored_keys
      * @param int   $index
      */
-    private function remove_api_key_entry(array $stored_keys, $index) {
+    private function remove_api_key_entry(array &$stored_keys, $index, $force_persist = false) {
+        if (!isset($stored_keys[$index])) {
+            return;
+        }
+
+        $entry = $stored_keys[$index];
+        $stats_key = '';
+
+        if (is_array($entry) && isset($entry['key'])) {
+            $stats_key = $this->get_api_key_stats_storage_key($entry['key']);
+        }
+
+        if ($stats_key !== '') {
+            $this->delete_api_key_stats($stats_key);
+        }
+
         unset($stored_keys[$index]);
-        update_option('bjlg_api_keys', array_values($stored_keys));
+        $stored_keys = array_values($stored_keys);
+        $this->maybe_persist_api_keys($stored_keys, $force_persist);
     }
 
     public function filter_api_keys_before_save($new_value, $old_value = null, $option = '') {
@@ -490,6 +545,17 @@ class BJLG_REST_API {
         if ($sanitized !== $value) {
             update_option($option, $sanitized);
         }
+    }
+
+    private function maybe_persist_api_keys(array $keys, $force = false) {
+        $prepared_keys = $this->strip_ephemeral_fields_from_keys($keys);
+
+        if (!$force && !$this->should_persist_api_keys()) {
+            return;
+        }
+
+        update_option('bjlg_api_keys', $prepared_keys);
+        set_transient(self::API_KEYS_LAST_PERSIST_TRANSIENT, time(), 0);
     }
 
     private function sanitize_api_keys($keys) {
@@ -506,6 +572,8 @@ class BJLG_REST_API {
             if (isset($key_data['key']) && !$this->is_api_key_hashed($key_data['key'])) {
                 $keys[$index]['key'] = $this->hash_api_key($key_data['key']);
             }
+
+            unset($keys[$index]['usage_count'], $keys[$index]['last_used']);
 
             foreach (['plain_key', 'raw_key', 'display_key', 'api_key_plain', 'api_key_plaintext'] as $sensitive_field) {
                 if (isset($keys[$index][$sensitive_field])) {
@@ -526,6 +594,111 @@ class BJLG_REST_API {
         }
 
         return array_values($keys);
+    }
+
+    private function strip_ephemeral_fields_from_keys(array $keys) {
+        foreach ($keys as $index => $data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            unset($keys[$index]['usage_count'], $keys[$index]['last_used']);
+        }
+
+        return array_values($keys);
+    }
+
+    private function should_persist_api_keys() {
+        $last_persist = get_transient(self::API_KEYS_LAST_PERSIST_TRANSIENT);
+        $interval = $this->get_api_keys_persist_interval();
+
+        if ($interval <= 0) {
+            return true;
+        }
+
+        if ($last_persist === false) {
+            return true;
+        }
+
+        return (time() - (int) $last_persist) >= $interval;
+    }
+
+    private function get_api_keys_persist_interval() {
+        $default_interval = defined('MINUTE_IN_SECONDS') ? 5 * MINUTE_IN_SECONDS : 300;
+
+        return (int) apply_filters('bjlg_api_keys_persist_interval', $default_interval);
+    }
+
+    /**
+     * Récupère les statistiques d'utilisation d'une clé API.
+     *
+     * Lorsque des données d'usage historiques sont détectées dans l'option (legacy
+     * usage_count/last_used), elles sont migrées vers le transient dédié afin de
+     * conserver la rétrocompatibilité sans multiplier les écritures de l'option.
+     *
+     * @param string $storage_key
+     * @param array|false $fallback
+     * @return array{usage_count?:int,last_used?:int}
+     */
+    private function get_api_key_stats($storage_key, $fallback = false) {
+        if (!is_string($storage_key) || $storage_key === '') {
+            return is_array($fallback) ? $fallback : [];
+        }
+
+        $stats = get_transient($storage_key);
+
+        if ($stats !== false && is_array($stats)) {
+            return $stats;
+        }
+
+        if (is_array($fallback) && (array_key_exists('usage_count', $fallback) || array_key_exists('last_used', $fallback))) {
+            $this->set_api_key_stats($storage_key, $fallback);
+            return $fallback;
+        }
+
+        return is_array($fallback) ? $fallback : [];
+    }
+
+    private function set_api_key_stats($storage_key, array $stats) {
+        if (!is_string($storage_key) || $storage_key === '') {
+            return;
+        }
+
+        set_transient($storage_key, [
+            'usage_count' => isset($stats['usage_count']) ? (int) $stats['usage_count'] : 0,
+            'last_used' => isset($stats['last_used']) ? (int) $stats['last_used'] : 0,
+        ], 0);
+    }
+
+    private function delete_api_key_stats($storage_key) {
+        if (!is_string($storage_key) || $storage_key === '') {
+            return;
+        }
+
+        delete_transient($storage_key);
+    }
+
+    private function migrate_api_key_stats($old_storage_key, $new_storage_key) {
+        if ($old_storage_key === $new_storage_key || $new_storage_key === '') {
+            return;
+        }
+
+        $old_stats = $this->get_api_key_stats($old_storage_key, []);
+
+        if (empty($old_stats)) {
+            return;
+        }
+
+        $this->set_api_key_stats($new_storage_key, $old_stats);
+        $this->delete_api_key_stats($old_storage_key);
+    }
+
+    private function get_api_key_stats_storage_key($stored_value) {
+        if (!is_string($stored_value) || $stored_value === '') {
+            return '';
+        }
+
+        return self::API_KEY_STATS_TRANSIENT_PREFIX . md5($stored_value);
     }
 
     private function resolve_api_key_user_id($key_data) {

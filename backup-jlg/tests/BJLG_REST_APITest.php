@@ -818,13 +818,20 @@ namespace {
         $result = $method->invoke($api, $api_key);
 
         $updated_keys = get_option('bjlg_api_keys');
+        $storage_key_method = $reflection->getMethod('get_api_key_stats_storage_key');
+        $storage_key_method->setAccessible(true);
+        $stats_storage_key = $storage_key_method->invoke($api, $hashed_key);
+        $stored_stats = get_transient($stats_storage_key);
 
         $this->assertIsObject($result);
         $this->assertSame($user->ID, $result->ID);
         $this->assertNotEmpty($updated_keys);
-        $this->assertSame($initial_usage_count + 1, $updated_keys[0]['usage_count']);
-        $this->assertArrayHasKey('last_used', $updated_keys[0]);
-        $this->assertGreaterThanOrEqual($before_verification, $updated_keys[0]['last_used']);
+        $this->assertArrayNotHasKey('usage_count', $updated_keys[0]);
+        $this->assertArrayNotHasKey('last_used', $updated_keys[0]);
+        $this->assertIsArray($stored_stats);
+        $this->assertSame($initial_usage_count + 1, $stored_stats['usage_count']);
+        $this->assertArrayHasKey('last_used', $stored_stats);
+        $this->assertGreaterThanOrEqual($before_verification, $stored_stats['last_used']);
         $this->assertSame($user->ID, $updated_keys[0]['user_id']);
         $this->assertContains('administrator', $updated_keys[0]['roles']);
     }
@@ -858,11 +865,19 @@ namespace {
         $this->assertSame($user->ID, $result->ID);
 
         $updated_keys = get_option('bjlg_api_keys');
+        $storage_key_method = $reflection->getMethod('get_api_key_stats_storage_key');
+        $storage_key_method->setAccessible(true);
+        $stats_storage_key = $storage_key_method->invoke($api, $updated_keys[0]['key']);
+        $stored_stats = get_transient($stats_storage_key);
 
         $this->assertNotSame($api_key, $updated_keys[0]['key']);
         $this->assertTrue(wp_check_password($api_key, $updated_keys[0]['key']));
         $this->assertSame($user->ID, $updated_keys[0]['user_id']);
         $this->assertContains('administrator', $updated_keys[0]['roles']);
+        $this->assertArrayNotHasKey('usage_count', $updated_keys[0]);
+        $this->assertArrayNotHasKey('last_used', $updated_keys[0]);
+        $this->assertIsArray($stored_stats);
+        $this->assertSame(1, $stored_stats['usage_count']);
         $this->assertSame($user->ID, get_current_user_id());
     }
 
