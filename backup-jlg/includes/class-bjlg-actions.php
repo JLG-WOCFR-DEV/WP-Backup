@@ -187,11 +187,17 @@ class BJLG_Actions {
             wp_send_json_error(['message' => $validation->get_error_message()], $status);
         }
 
-        list($filepath, $transient_key) = $validation;
+        list($filepath, $transient_key, $delete_after_download) = array_pad($validation, 3, false);
 
         delete_transient($transient_key);
 
         $this->stream_backup_file($filepath);
+
+        if ($delete_after_download && file_exists($filepath)) {
+            if (!@unlink($filepath)) {
+                BJLG_Debug::error(sprintf('Impossible de supprimer le fichier "%s" après téléchargement.', $filepath));
+            }
+        }
     }
 
     /**
@@ -211,18 +217,24 @@ class BJLG_Actions {
             wp_die(esc_html($validation->get_error_message()), '', ['response' => $status]);
         }
 
-        list($filepath, $transient_key) = $validation;
+        list($filepath, $transient_key, $delete_after_download) = array_pad($validation, 3, false);
 
         delete_transient($transient_key);
 
         $this->stream_backup_file($filepath);
+
+        if ($delete_after_download && file_exists($filepath)) {
+            if (!@unlink($filepath)) {
+                BJLG_Debug::error(sprintf('Impossible de supprimer le fichier "%s" après téléchargement.', $filepath));
+            }
+        }
     }
 
     /**
      * Valide un token de téléchargement et renvoie le chemin sécurisé.
      *
      * @param string $token
-     * @return array{0: string, 1: string}|WP_Error
+     * @return array{0: string, 1: string, 2?: bool}|WP_Error
      */
     private function validate_download_token($token) {
         if (empty($token)) {
@@ -236,10 +248,12 @@ class BJLG_Actions {
             $filepath = isset($payload['file']) ? $payload['file'] : '';
             $required_capability = isset($payload['requires_cap']) ? $payload['requires_cap'] : null;
             $issued_by = isset($payload['issued_by']) ? (int) $payload['issued_by'] : 0;
+            $delete_after_download = !empty($payload['delete_after_download']);
         } else {
             $filepath = $payload;
             $required_capability = null;
             $issued_by = 0;
+            $delete_after_download = false;
         }
 
         if (empty($filepath)) {
@@ -277,7 +291,7 @@ class BJLG_Actions {
             return new WP_Error('bjlg_unreadable_file', 'Le fichier de sauvegarde est inaccessible.', ['status' => 500]);
         }
 
-        return [$real_filepath, $transient_key];
+        return [$real_filepath, $transient_key, $delete_after_download];
     }
 
     /**
