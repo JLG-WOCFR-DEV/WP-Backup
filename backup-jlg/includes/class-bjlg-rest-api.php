@@ -1929,15 +1929,32 @@ class BJLG_REST_API {
     public function get_status($request) {
         $backup_files = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
 
+        $backup_directory = BJLG_BACKUP_DIR;
+        $disk_free_space = null;
+        $disk_space_error = false;
+
+        if (is_dir($backup_directory) && is_readable($backup_directory)) {
+            $available_space = @disk_free_space($backup_directory);
+
+            if ($available_space !== false) {
+                $disk_free_space = $available_space;
+            } else {
+                $disk_space_error = true;
+            }
+        } else {
+            $disk_space_error = true;
+        }
+
         $status = [
             'plugin_version' => BJLG_VERSION,
             'wordpress_version' => get_bloginfo('version'),
             'php_version' => PHP_VERSION,
-            'backup_directory' => BJLG_BACKUP_DIR,
-            'backup_directory_writable' => is_writable(BJLG_BACKUP_DIR),
+            'backup_directory' => $backup_directory,
+            'backup_directory_writable' => is_writable($backup_directory),
             'total_backups' => count($backup_files),
             'total_size' => $this->get_total_backup_size(),
-            'disk_free_space' => disk_free_space(BJLG_BACKUP_DIR),
+            'disk_free_space' => $disk_free_space,
+            'disk_space_error' => $disk_space_error,
             'memory_limit' => ini_get('memory_limit'),
             'max_execution_time' => ini_get('max_execution_time'),
             'active_tasks' => $this->get_active_tasks_count()

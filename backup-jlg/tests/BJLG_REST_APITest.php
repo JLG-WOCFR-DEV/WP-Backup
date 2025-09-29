@@ -2311,6 +2311,93 @@ namespace {
         $this->assertFalse($task_data['encrypt']);
     }
 
+    public function test_get_status_handles_missing_backup_directory(): void
+    {
+        $api = new BJLG\BJLG_REST_API();
+
+        $original_directory = rtrim(BJLG_BACKUP_DIR, '/\\');
+        $temporary_directory = $original_directory . '-missing-' . uniqid('', true);
+
+        if (!is_dir($original_directory)) {
+            $this->markTestSkipped('Backup directory is not available for the test.');
+        }
+
+        if (!@rename($original_directory, $temporary_directory)) {
+            $this->markTestSkipped('Unable to move the backup directory for the test.');
+        }
+
+        $disk_free_space_calls = 0;
+        $GLOBALS['bjlg_test_disk_free_space_mock'] = static function (string $directory) use (&$disk_free_space_calls) {
+            $disk_free_space_calls++;
+
+            return 123;
+        };
+
+        $original_wpdb = $GLOBALS['wpdb'] ?? null;
+        $GLOBALS['wpdb'] = new class($original_wpdb) {
+            /** @var object|null */
+            private $original;
+
+            /** @var string */
+            public $options;
+
+            public function __construct($original)
+            {
+                $this->original = $original;
+                $this->options = $original->options ?? 'wp_options';
+            }
+
+            public function query($query)
+            {
+                if ($this->original !== null && method_exists($this->original, 'query')) {
+                    return $this->original->query($query);
+                }
+
+                return true;
+            }
+
+            public function get_row($query)
+            {
+                if ($this->original !== null && method_exists($this->original, 'get_row')) {
+                    return $this->original->get_row($query);
+                }
+
+                return (object) [
+                    'size' => 0,
+                    'tables' => 0,
+                ];
+            }
+
+            public function get_var($query)
+            {
+                return 0;
+            }
+        };
+
+        try {
+            $response = $api->get_status(null);
+        } finally {
+            unset($GLOBALS['bjlg_test_disk_free_space_mock']);
+
+            if ($original_wpdb !== null) {
+                $GLOBALS['wpdb'] = $original_wpdb;
+            } else {
+                unset($GLOBALS['wpdb']);
+            }
+
+            if (!@rename($temporary_directory, $original_directory) && !is_dir($original_directory)) {
+                mkdir($original_directory, 0777, true);
+            }
+        }
+
+        $this->assertIsArray($response);
+        $this->assertArrayHasKey('disk_free_space', $response);
+        $this->assertNull($response['disk_free_space']);
+        $this->assertArrayHasKey('disk_space_error', $response);
+        $this->assertTrue($response['disk_space_error']);
+        $this->assertSame(0, $disk_free_space_calls);
+    }
+
     public function test_get_stats_handles_disk_space_failure(): void
     {
         $GLOBALS['bjlg_test_disk_total_space_mock'] = static function (string $directory) {
