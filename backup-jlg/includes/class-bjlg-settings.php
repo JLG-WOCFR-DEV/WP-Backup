@@ -46,6 +46,12 @@ class BJLG_Settings {
             'chunk_size' => 50,
             'compression_level' => 6
         ],
+        'gdrive' => [
+            'client_id' => '',
+            'client_secret' => '',
+            'folder_id' => '',
+            'enabled' => false,
+        ],
         'advanced' => [
             'debug_mode' => false,
             'ajax_debug' => false,
@@ -250,7 +256,7 @@ class BJLG_Settings {
             'encryption' => get_option('bjlg_encryption_settings', $this->default_settings['encryption']),
             'notifications' => get_option('bjlg_notification_settings', $this->default_settings['notifications']),
             'performance' => get_option('bjlg_performance_settings', $this->default_settings['performance']),
-            'gdrive' => get_option('bjlg_gdrive_settings', []),
+            'gdrive' => get_option('bjlg_gdrive_settings', $this->default_settings['gdrive']),
             'webhooks' => get_option('bjlg_webhook_settings', []),
             'schedule' => get_option('bjlg_schedule_settings', []),
             'ajax_debug' => get_option('bjlg_ajax_debug_enabled', false)

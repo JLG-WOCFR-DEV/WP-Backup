@@ -193,7 +193,7 @@ class BJLG_Webhooks {
             BJLG_History::log('webhook_secure_mode', 'success', sprintf('Webhook déclenché via mode sécurisé (%s).', $key_source ?: 'unknown'));
         }
 
-        if ($legacy_mode) {
+        if ($legacy_mode && !headers_sent()) {
             header('Warning: 299 BJLG "Legacy webhook scheme is deprecated and will be removed in a future release."');
         }
 
