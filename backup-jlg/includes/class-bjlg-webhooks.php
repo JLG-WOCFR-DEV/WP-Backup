@@ -11,6 +11,8 @@ if (!defined('ABSPATH')) {
 class BJLG_Webhooks {
 
     const WEBHOOK_QUERY_VAR = 'bjlg_trigger_backup';
+    const WEBHOOK_HEADER = 'X-BJLG-Webhook-Key';
+    const WEBHOOK_SECURE_MARKER = '1';
 
     public function __construct() {
         // Écoute sur chaque chargement de page pour détecter l'appel du webhook
@@ -47,11 +49,20 @@ class BJLG_Webhooks {
     public static function regenerate_key() {
         $new_key = wp_generate_password(40, false, false);
         update_option('bjlg_webhook_key', $new_key);
-        
+
         BJLG_Debug::log("Nouvelle clé de webhook générée.");
         BJLG_History::log('webhook_key_regenerated', 'info', 'Clé de webhook régénérée');
-        
+
         return $new_key;
+    }
+
+    /**
+     * Récupère l'URL de déclenchement du webhook sans exposer la clé.
+     *
+     * @return string
+     */
+    public static function get_webhook_endpoint() {
+        return add_query_arg(self::WEBHOOK_QUERY_VAR, self::WEBHOOK_SECURE_MARKER, home_url('/'));
     }
     
     /**
@@ -64,11 +75,21 @@ class BJLG_Webhooks {
         check_ajax_referer('bjlg_nonce', 'nonce');
         
         $new_key = self::regenerate_key();
-        $webhook_url = home_url('/?bjlg_trigger_backup=' . $new_key);
-        
+        $webhook_url = self::get_webhook_endpoint();
+        $example_request = sprintf(
+            "curl -X POST %s \
+  -H 'Content-Type: application/json' \
+  -H '%s: %s'",
+            esc_url_raw($webhook_url),
+            self::WEBHOOK_HEADER,
+            $new_key
+        );
+
         wp_send_json_success([
             'message' => 'Clé régénérée avec succès',
-            'webhook_url' => $webhook_url
+            'webhook_url' => $webhook_url,
+            'webhook_key' => $new_key,
+            'example_request' => $example_request
         ]);
     }
 
@@ -80,24 +101,105 @@ class BJLG_Webhooks {
             return;
         }
 
-        $provided_key = sanitize_text_field($_GET[self::WEBHOOK_QUERY_VAR]);
         $stored_key = self::get_webhook_key();
-        
+        $request_method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+        $provided_key = '';
+        $key_source = '';
+        $legacy_mode = false;
+
+        $header_key = $this->get_request_header(self::WEBHOOK_HEADER);
+        if (!empty($header_key)) {
+            $provided_key = sanitize_text_field($header_key);
+            $key_source = 'header';
+        }
+
+        if ($provided_key === '') {
+            $auth_header = $this->get_request_header('Authorization');
+            if (!empty($auth_header)) {
+                $auth_header = trim($auth_header);
+                $matches = [];
+                if (preg_match('/^(?:Bearer|BJLG)\s+(.+)$/i', $auth_header, $matches)) {
+                    $auth_header = $matches[1];
+                }
+                if (!empty($auth_header)) {
+                    $provided_key = sanitize_text_field($auth_header);
+                    $key_source = 'authorization';
+                }
+            }
+        }
+
+        if ($provided_key === '' && $request_method === 'POST') {
+            $post_key = isset($_POST['webhook_key']) ? wp_unslash($_POST['webhook_key']) : '';
+            if (!empty($post_key) && is_string($post_key)) {
+                $provided_key = sanitize_text_field($post_key);
+                $key_source = 'post';
+            } else {
+                $raw_input = file_get_contents('php://input');
+                if (!empty($raw_input)) {
+                    $decoded = json_decode($raw_input, true);
+                    if (json_last_error() === JSON_ERROR_NONE && isset($decoded['webhook_key']) && is_string($decoded['webhook_key'])) {
+                        $provided_key = sanitize_text_field($decoded['webhook_key']);
+                        $key_source = 'json';
+                    }
+                }
+            }
+        }
+
+        if ($provided_key === '') {
+            $raw_query_value = isset($_GET[self::WEBHOOK_QUERY_VAR]) ? wp_unslash($_GET[self::WEBHOOK_QUERY_VAR]) : '';
+            $raw_query_value = is_string($raw_query_value) ? trim($raw_query_value) : '';
+            if ($raw_query_value !== '' && $raw_query_value !== self::WEBHOOK_SECURE_MARKER) {
+                $provided_key = sanitize_text_field($raw_query_value);
+                $key_source = 'query-string';
+                $legacy_mode = true;
+            }
+        } elseif ($key_source === 'query-string') {
+            $legacy_mode = true;
+        }
+
+        if ($provided_key === '') {
+            $ip = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
+            BJLG_Debug::log("Échec du déclenchement du webhook : aucune clé fournie.");
+            BJLG_History::log('webhook_secure_missing_key', 'warning', "Tentative sans clé via mode sécurisé depuis IP: $ip");
+
+            wp_send_json_error([
+                'message' => __('Missing webhook key. Provide it via the X-BJLG-Webhook-Key header or POST body.', 'backup-jlg')
+            ], 403);
+            exit;
+        }
+
+        if ($legacy_mode) {
+            BJLG_Debug::log("Webhook déclenché via schéma legacy (clé dans l'URL). Ce mode est déprécié.");
+            BJLG_History::log('webhook_legacy_mode', 'warning', "Appel webhook avec clé dans l'URL (déprécié).");
+        }
+
         // Comparaison sécurisée pour éviter les attaques par analyse temporelle (timing attacks)
         if (!hash_equals($stored_key, $provided_key)) {
             BJLG_Debug::log("Échec du déclenchement du webhook : clé invalide fournie.");
-            
+
             // Log de sécurité
             $ip = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
-            BJLG_History::log('webhook_failed', 'failure', "Tentative avec clé invalide depuis IP: $ip");
-            
+            if ($legacy_mode) {
+                BJLG_History::log('webhook_failed', 'failure', "Tentative legacy avec clé invalide depuis IP: $ip");
+            } else {
+                BJLG_History::log('webhook_secure_failed', 'failure', "Clé invalide via mode sécurisé ({$key_source}) depuis IP: $ip");
+            }
+
             wp_send_json_error(['message' => 'Invalid or missing key.'], 403);
             exit;
         }
-        
+
+        if (!$legacy_mode) {
+            BJLG_History::log('webhook_secure_mode', 'success', sprintf('Webhook déclenché via mode sécurisé (%s).', $key_source ?: 'unknown'));
+        }
+
+        if ($legacy_mode) {
+            header('Warning: 299 BJLG "Legacy webhook scheme is deprecated and will be removed in a future release."');
+        }
+
         // Paramètres optionnels du webhook
-        $components = isset($_GET['components']) ? 
-            explode(',', sanitize_text_field($_GET['components'])) : 
+        $components = isset($_GET['components']) ?
+            explode(',', sanitize_text_field($_GET['components'])) :
             ['db', 'plugins', 'themes', 'uploads'];
         
         $encrypt = isset($_GET['encrypt']) && $_GET['encrypt'] === 'true';
@@ -108,7 +210,8 @@ class BJLG_Webhooks {
         // Enregistrer l'appel du webhook
         $ip = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
         $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown';
-        BJLG_History::log('webhook_triggered', 'success', "IP: $ip | User-Agent: $user_agent");
+        $mode_details = $legacy_mode ? 'legacy (clé dans URL)' : sprintf('secure (%s)', $key_source ?: 'unknown');
+        BJLG_History::log('webhook_triggered', 'success', "Mode: $mode_details | IP: $ip | User-Agent: $user_agent");
 
         // Créer la tâche de sauvegarde
         $task_id = 'bjlg_backup_' . md5(uniqid('webhook', true));
@@ -164,14 +267,45 @@ class BJLG_Webhooks {
         }
 
         // Renvoyer une réponse de succès
-        wp_send_json_success([
+        $response_data = [
             'message' => 'Backup job scheduled successfully.',
             'task_id' => $task_id,
             'components' => $components,
             'encrypt' => $encrypt,
-            'incremental' => $incremental
-        ]);
+            'incremental' => $incremental,
+            'mode' => $legacy_mode ? 'legacy' : 'secure'
+        ];
+
+        if ($legacy_mode) {
+            $response_data['deprecated'] = true;
+        }
+
+        wp_send_json_success($response_data);
         exit;
+    }
+
+    /**
+     * Retourne la valeur d'un en-tête HTTP de manière sécurisée.
+     *
+     * @param string $name
+     * @return string
+     */
+    private function get_request_header($name) {
+        $server_key = 'HTTP_' . strtoupper(str_replace('-', '_', $name));
+        if (isset($_SERVER[$server_key])) {
+            return is_string($_SERVER[$server_key]) ? trim(wp_unslash($_SERVER[$server_key])) : '';
+        }
+
+        if (function_exists('getallheaders')) {
+            $headers = getallheaders();
+            foreach ($headers as $header_name => $value) {
+                if (strcasecmp($header_name, $name) === 0) {
+                    return is_string($value) ? trim($value) : '';
+                }
+            }
+        }
+
+        return '';
     }
     
     /**

@@ -649,7 +649,7 @@ jQuery(document).ready(function($) {
     $('body').on('click', '.bjlg-delete-button', function(e) {
         e.preventDefault();
         if (!confirm("Êtes-vous sûr de vouloir supprimer définitivement ce fichier de sauvegarde ?")) return;
-        
+
         const $button = $(this);
         const filename = $button.data('filename');
         const $row = $button.closest('tr');
@@ -671,6 +671,62 @@ jQuery(document).ready(function($) {
             alert('Erreur critique de communication lors de la suppression.');
             $button.prop('disabled', false);
         });
+    });
+
+    // --- COPIE RAPIDE POUR LES CHAMPS WEBHOOK ---
+    $('body').on('click', '.bjlg-copy-field', function(e) {
+        e.preventDefault();
+
+        const $button = $(this);
+        const targetSelector = $button.data('copyTarget');
+        if (!targetSelector) {
+            return;
+        }
+
+        const $target = $(targetSelector);
+        if (!$target.length || !$target[0]) {
+            return;
+        }
+
+        const value = typeof $target.val === 'function' ? $target.val() : '';
+        if (typeof value !== 'string' || value.length === 0) {
+            return;
+        }
+
+        const originalText = $button.data('original-text') || $button.text();
+        $button.data('original-text', originalText);
+
+        const showFeedback = function(success) {
+            $button.text(success ? 'Copié !' : 'Copie impossible');
+            setTimeout(() => {
+                $button.text(originalText);
+            }, 2000);
+        };
+
+        const fallbackCopy = function() {
+            try {
+                $target.trigger('focus');
+                if (typeof $target[0].select === 'function') {
+                    $target[0].select();
+                }
+                document.execCommand('copy');
+                showFeedback(true);
+            } catch (error) {
+                showFeedback(false);
+            } finally {
+                if (typeof $target[0].blur === 'function') {
+                    $target[0].blur();
+                }
+            }
+        };
+
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function' && typeof window !== 'undefined' && window.isSecureContext) {
+            navigator.clipboard.writeText(value)
+                .then(() => showFeedback(true))
+                .catch(() => fallbackCopy());
+        } else {
+            fallbackCopy();
+        }
     });
 
     // --- GESTIONNAIRE RÉGÉNÉRATION WEBHOOK ---

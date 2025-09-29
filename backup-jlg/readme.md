@@ -181,11 +181,18 @@ wp bjlg cleanup --keep=5
 
 ### Webhook
 
-Déclenchez une sauvegarde via URL :
+Déclenchez une sauvegarde via une requête POST sécurisée :
 
+* **Endpoint** : `https://site.com/?bjlg_trigger_backup=1`
+* **Header** : `X-BJLG-Webhook-Key: VOTRE_CLE_WEBHOOK` (ou utilisez `Authorization: Bearer VOTRE_CLE_WEBHOOK`)
+
+```bash
+curl -X POST https://site.com/?bjlg_trigger_backup=1 \
+  -H "Content-Type: application/json" \
+  -H "X-BJLG-Webhook-Key: VOTRE_CLE_WEBHOOK"
 ```
-https://site.com/?bjlg_trigger_backup=VOTRE_CLE_WEBHOOK
-```
+
+> ℹ️ L'ancien format `https://site.com/?bjlg_trigger_backup=VOTRE_CLE_WEBHOOK` reste supporté durant la période de transition, mais sera retiré après migration.
 
 ## 📊 Endpoints API
 
