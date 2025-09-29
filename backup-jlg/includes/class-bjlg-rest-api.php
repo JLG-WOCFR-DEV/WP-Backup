@@ -2258,17 +2258,25 @@ class BJLG_REST_API {
             $transient_key = 'bjlg_download_' . $download_token;
             $token_ttl = BJLG_Actions::get_download_token_ttl($filepath);
 
-            set_transient(
+            $persisted = set_transient(
                 $transient_key,
                 BJLG_Actions::build_download_token_payload($filepath),
                 $token_ttl
             );
 
-            $download_url = BJLG_Actions::build_download_url($download_token);
+            if ($persisted === false) {
+                BJLG_Debug::error(sprintf(
+                    'Échec de la persistance du token de téléchargement "%s" pour "%s".',
+                    $download_token,
+                    $filepath
+                ));
+            } else {
+                $download_url = BJLG_Actions::build_download_url($download_token);
 
-            $data['download_url'] = $download_url;
-            $data['download_token'] = $download_token;
-            $data['download_expires_in'] = $token_ttl;
+                $data['download_url'] = $download_url;
+                $data['download_token'] = $download_token;
+                $data['download_expires_in'] = $token_ttl;
+            }
         }
 
         return $data;
