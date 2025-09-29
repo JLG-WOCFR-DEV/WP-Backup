@@ -716,6 +716,23 @@ if (!function_exists('delete_transient')) {
 
 if (!function_exists('wp_schedule_single_event')) {
     function wp_schedule_single_event($timestamp, $hook, $args = []) {
+        $event = [
+            'timestamp' => (int) $timestamp,
+            'schedule' => false,
+            'hook' => $hook,
+            'args' => (array) $args,
+        ];
+
+        $pre = apply_filters('pre_schedule_event', null, $event);
+
+        if ($pre instanceof WP_Error) {
+            return $pre;
+        }
+
+        if ($pre === false) {
+            return false;
+        }
+
         $mock = $GLOBALS['bjlg_test_schedule_single_event_mock'] ?? null;
 
         if (is_callable($mock)) {
@@ -765,6 +782,23 @@ if (!function_exists('wp_unschedule_event')) {
 
 if (!function_exists('wp_schedule_event')) {
     function wp_schedule_event($timestamp, $recurrence, $hook, $args = []) {
+        $event = [
+            'timestamp' => (int) $timestamp,
+            'schedule' => $recurrence,
+            'hook' => $hook,
+            'args' => (array) $args,
+        ];
+
+        $pre = apply_filters('pre_schedule_event', null, $event);
+
+        if ($pre instanceof WP_Error) {
+            return $pre;
+        }
+
+        if ($pre === false) {
+            return false;
+        }
+
         $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook] = [
             'timestamp' => $timestamp,
             'recurrence' => $recurrence,

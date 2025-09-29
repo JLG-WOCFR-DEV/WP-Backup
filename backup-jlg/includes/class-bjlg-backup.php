@@ -619,6 +619,19 @@ class BJLG_Backup {
         // Planifier l'exécution immédiate en arrière-plan
         $event_scheduled = wp_schedule_single_event($event_timestamp, 'bjlg_run_backup_task', $event_args);
 
+        if (is_wp_error($event_scheduled)) {
+            $error_message = $event_scheduled->get_error_message();
+            BJLG_Debug::log("Échec de la planification de la tâche de sauvegarde : $task_id. Détails : $error_message");
+
+            self::delete_task_state($task_id);
+            self::release_task_slot($task_id);
+
+            wp_send_json_error([
+                'message' => "Impossible de planifier la tâche de sauvegarde en arrière-plan.",
+                'details' => $error_message,
+            ], 500);
+        }
+
         if ($event_scheduled === false) {
             BJLG_Debug::log("Échec de la planification de la tâche de sauvegarde : $task_id");
 
@@ -711,7 +724,13 @@ class BJLG_Backup {
 
             $rescheduled = wp_schedule_single_event(time() + 30, 'bjlg_run_backup_task', ['task_id' => $task_id]);
 
-            if ($rescheduled === false) {
+            if (is_wp_error($rescheduled)) {
+                BJLG_Debug::log(sprintf(
+                    "Échec de la replanification de la tâche %s. Détails : %s",
+                    $task_id,
+                    $rescheduled->get_error_message()
+                ));
+            } elseif ($rescheduled === false) {
                 BJLG_Debug::log("Échec de la replanification de la tâche $task_id.");
             }
 

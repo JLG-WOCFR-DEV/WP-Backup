@@ -2311,6 +2311,53 @@ namespace {
         $this->assertFalse($task_data['encrypt']);
     }
 
+    public function test_create_backup_returns_error_when_schedule_fails_with_wp_error(): void
+    {
+        $api = new BJLG\BJLG_REST_API();
+
+        $request = new class {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct()
+            {
+                $this->params = [
+                    'components' => ['db'],
+                    'type' => 'full',
+                    'encrypt' => false,
+                    'description' => 'Test failure',
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        add_filter('pre_schedule_event', static function ($pre, array $event) {
+            if ($event['hook'] === 'bjlg_run_backup_task') {
+                return new WP_Error('cron_failure', 'Cron failure for REST tests');
+            }
+
+            return $pre;
+        }, 10, 2);
+
+        $result = $api->create_backup($request);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('schedule_failed', $result->get_error_code());
+        $error_data = $result->get_error_data();
+        $this->assertIsArray($error_data);
+        $this->assertSame('Cron failure for REST tests', $error_data['details'] ?? null);
+        $this->assertSame(500, $error_data['status'] ?? null);
+
+        unset($GLOBALS['bjlg_test_hooks']['filters']['pre_schedule_event']);
+
+        $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+    }
+
     public function test_get_stats_handles_disk_space_failure(): void
     {
         $GLOBALS['bjlg_test_disk_total_space_mock'] = static function (string $directory) {
@@ -2607,6 +2654,47 @@ namespace {
         unset($_GET['components']);
         unset($_SERVER['REMOTE_ADDR']);
         unset($_SERVER['HTTP_USER_AGENT']);
+    }
+
+    public function test_webhook_returns_error_when_schedule_returns_wp_error(): void
+    {
+        $webhook_key = 'webhook-error-key';
+        update_option('bjlg_webhook_key', $webhook_key);
+
+        $_SERVER['REMOTE_ADDR'] = '192.0.2.1';
+        $_SERVER['HTTP_USER_AGENT'] = 'PHPUnit Test';
+        $_GET[BJLG\BJLG_Webhooks::WEBHOOK_QUERY_VAR] = $webhook_key;
+        $_GET['components'] = 'db';
+
+        add_filter('pre_schedule_event', static function ($pre, array $event) {
+            if ($event['hook'] === 'bjlg_run_backup_task') {
+                return new WP_Error('cron_failure', 'Cron failure for webhook tests');
+            }
+
+            return $pre;
+        }, 10, 2);
+
+        $webhooks = new BJLG\BJLG_Webhooks();
+
+        try {
+            $webhooks->listen_for_webhook();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertSame(500, $response->status_code);
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('message', $response->data);
+            $this->assertArrayHasKey('details', $response->data);
+            $this->assertSame('Cron failure for webhook tests', $response->data['details']);
+        }
+
+        unset($GLOBALS['bjlg_test_hooks']['filters']['pre_schedule_event']);
+
+        $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+        $this->assertFalse(BJLG\BJLG_Backup::is_task_locked());
+
+        unset($_GET[BJLG\BJLG_Webhooks::WEBHOOK_QUERY_VAR], $_GET['components']);
+        unset($_SERVER['REMOTE_ADDR'], $_SERVER['HTTP_USER_AGENT']);
     }
 
     public function test_authenticate_remains_accessible_when_rate_limit_allows(): void

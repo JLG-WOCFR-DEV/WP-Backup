@@ -141,8 +141,20 @@ class BJLG_Scheduler {
         BJLG_Debug::log("Réglages de planification enregistrés : " . print_r($schedule_settings, true));
         
         // Mettre à jour la planification
-        $this->update_schedule($schedule_settings);
-        
+        $update_result = $this->update_schedule($schedule_settings);
+
+        if (is_wp_error($update_result)) {
+            $error_message = $update_result->get_error_message();
+            $response = ['message' => $error_message];
+            $error_data = $update_result->get_error_data();
+
+            if (is_array($error_data) && isset($error_data['details'])) {
+                $response['details'] = $error_data['details'];
+            }
+
+            wp_send_json_error($response, 500);
+        }
+
         // Obtenir la prochaine exécution
         $next_run = wp_next_scheduled(self::SCHEDULE_HOOK);
         $next_run_formatted = $next_run ? get_date_from_gmt($this->format_gmt_datetime($next_run), 'd/m/Y H:i:s') : 'Non planifié';
@@ -159,19 +171,43 @@ class BJLG_Scheduler {
     private function update_schedule($settings) {
         // D'abord, supprimer l'ancienne planification
         wp_clear_scheduled_hook(self::SCHEDULE_HOOK);
-        
+
         if ($settings['recurrence'] === 'disabled') {
             BJLG_History::log('schedule_updated', 'info', 'Planification des sauvegardes désactivée.');
-            return;
+            return true;
         }
-        
+
         // Calculer le timestamp de la première exécution
         $first_timestamp = $this->calculate_first_run($settings);
-        
+
         if ($first_timestamp) {
             // Planifier l'événement
-            wp_schedule_event($first_timestamp, $settings['recurrence'], self::SCHEDULE_HOOK);
-            
+            $scheduled = wp_schedule_event($first_timestamp, $settings['recurrence'], self::SCHEDULE_HOOK);
+
+            if (is_wp_error($scheduled)) {
+                $error_message = $scheduled->get_error_message();
+                BJLG_Debug::log("ERREUR : Impossible d'enregistrer la planification des sauvegardes. Détails : {$error_message}");
+
+                return new \WP_Error(
+                    'schedule_registration_failed',
+                    __('Impossible d\'enregistrer la planification des sauvegardes.', 'backup-jlg'),
+                    [
+                        'details' => $error_message,
+                        'status' => 500,
+                    ]
+                );
+            }
+
+            if ($scheduled === false) {
+                BJLG_Debug::log("ERREUR : Impossible d'enregistrer la planification des sauvegardes.");
+
+                return new \WP_Error(
+                    'schedule_registration_failed',
+                    __('Impossible d\'enregistrer la planification des sauvegardes.', 'backup-jlg'),
+                    ['status' => 500]
+                );
+            }
+
             BJLG_Debug::log(sprintf(
                 "Nouvelle sauvegarde planifiée (%s). Prochaine exécution : %s",
                 $settings['recurrence'],
@@ -181,9 +217,17 @@ class BJLG_Scheduler {
             BJLG_History::log('schedule_updated', 'success',
                 'Prochaine sauvegarde planifiée pour le ' . get_date_from_gmt($this->format_gmt_datetime($first_timestamp), 'd/m/Y H:i:s')
             );
-        } else {
-            BJLG_Debug::log("ERREUR : Impossible de calculer le timestamp pour la planification.");
+
+            return true;
         }
+
+        BJLG_Debug::log("ERREUR : Impossible de calculer le timestamp pour la planification.");
+
+        return new \WP_Error(
+            'schedule_timestamp_error',
+            __('Impossible de calculer la prochaine exécution de la sauvegarde.', 'backup-jlg'),
+            ['status' => 500]
+        );
     }
     
     /**
@@ -348,9 +392,31 @@ class BJLG_Scheduler {
         
         BJLG_Debug::log("Exécution manuelle de la sauvegarde planifiée - Task ID: $task_id");
         BJLG_History::log('scheduled_backup', 'info', 'Exécution manuelle de la sauvegarde planifiée');
-        
-        wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
-        
+
+        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+
+        if (is_wp_error($scheduled)) {
+            $error_details = $scheduled->get_error_message();
+            delete_transient($task_id);
+
+            BJLG_Debug::log("ERREUR : Impossible de planifier la sauvegarde planifiée manuelle {$task_id}. Détails : {$error_details}");
+
+            wp_send_json_error([
+                'message' => "Impossible de planifier la sauvegarde planifiée.",
+                'details' => $error_details,
+            ], 500);
+        }
+
+        if ($scheduled === false) {
+            delete_transient($task_id);
+
+            BJLG_Debug::log("ERREUR : Impossible de planifier la sauvegarde planifiée manuelle {$task_id}.");
+
+            wp_send_json_error([
+                'message' => "Impossible de planifier la sauvegarde planifiée.",
+            ], 500);
+        }
+
         wp_send_json_success([
             'message' => 'Sauvegarde planifiée lancée manuellement.',
             'task_id' => $task_id
@@ -391,7 +457,15 @@ class BJLG_Scheduler {
 
         $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
 
-        if (!$scheduled) {
+        if (is_wp_error($scheduled)) {
+            $error_details = $scheduled->get_error_message();
+            delete_transient($task_id);
+            BJLG_Debug::log("ERREUR : Impossible de planifier l'événement de sauvegarde pour la tâche $task_id. Détails : {$error_details}");
+            BJLG_History::log('scheduled_backup', 'failure', "Échec de la planification de la sauvegarde planifiée : {$error_details}.");
+            return;
+        }
+
+        if ($scheduled === false) {
             delete_transient($task_id);
             BJLG_Debug::log("ERREUR : Impossible de planifier l'événement de sauvegarde pour la tâche $task_id.");
             BJLG_History::log('scheduled_backup', 'failure', "Échec de la planification de la sauvegarde planifiée.");

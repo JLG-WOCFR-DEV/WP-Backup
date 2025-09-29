@@ -9,6 +9,10 @@ final class BJLG_BackupTest extends TestCase
     {
         parent::setUp();
 
+        $GLOBALS['bjlg_test_hooks'] = [
+            'actions' => [],
+            'filters' => [],
+        ];
         $GLOBALS['bjlg_test_transients'] = [];
         $GLOBALS['bjlg_test_scheduled_events'] = [
             'recurring' => [],
@@ -28,6 +32,10 @@ final class BJLG_BackupTest extends TestCase
     {
         $GLOBALS['bjlg_test_set_transient_mock'] = null;
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
+        $GLOBALS['bjlg_test_hooks'] = [
+            'actions' => [],
+            'filters' => [],
+        ];
         $_POST = [];
 
         $lock_property = new ReflectionProperty(BJLG\BJLG_Backup::class, 'in_memory_lock');
@@ -142,5 +150,38 @@ final class BJLG_BackupTest extends TestCase
 
         $this->assertArrayNotHasKey('bjlg_backup_task_lock', $GLOBALS['bjlg_test_transients']);
         unset($GLOBALS['bjlg_test_transients'][$task_id]);
+    }
+
+    public function test_handle_start_backup_task_handles_wp_error_from_schedule(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $_POST['components'] = ['database'];
+        $_POST['nonce'] = 'test-nonce';
+
+        add_filter('pre_schedule_event', static function ($pre, array $event) {
+            if ($event['hook'] === 'bjlg_run_backup_task') {
+                return new WP_Error('test_schedule_failure', 'Schedule failure for tests');
+            }
+
+            return $pre;
+        }, 10, 2);
+
+        try {
+            $backup->handle_start_backup_task();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertSame(500, $response->status_code);
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('message', $response->data);
+            $this->assertArrayHasKey('details', $response->data);
+            $this->assertSame('Schedule failure for tests', $response->data['details']);
+        }
+
+        unset($GLOBALS['bjlg_test_hooks']['filters']['pre_schedule_event']);
+
+        $this->assertFalse(BJLG\BJLG_Backup::is_task_locked());
+        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+        $this->assertEmpty($GLOBALS['bjlg_test_transients']);
     }
 }

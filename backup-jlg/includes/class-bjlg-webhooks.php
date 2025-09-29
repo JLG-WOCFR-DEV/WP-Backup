@@ -150,6 +150,21 @@ class BJLG_Webhooks {
         $event_args = ['task_id' => $task_id];
         $scheduled = wp_schedule_single_event($event_timestamp, 'bjlg_run_backup_task', $event_args);
 
+        if (is_wp_error($scheduled)) {
+            $error_message = $scheduled->get_error_message();
+            BJLG_Debug::log("Échec de la planification de la tâche de sauvegarde webhook pour {$task_id}. Détails : {$error_message}");
+            BJLG_History::log('webhook_backup_failed', 'failure', "Planification impossible pour la tâche {$task_id}. Détails : {$error_message}.");
+
+            BJLG_Backup::delete_task_state($task_id);
+            BJLG_Backup::release_task_slot($task_id);
+
+            wp_send_json_error([
+                'message' => __('Impossible de planifier la tâche de sauvegarde en arrière-plan.', 'backup-jlg'),
+                'details' => $error_message,
+            ], 500);
+            exit;
+        }
+
         if ($scheduled === false) {
             BJLG_Debug::log("Échec de la planification de la tâche de sauvegarde webhook pour {$task_id}.");
             BJLG_History::log('webhook_backup_failed', 'failure', "Planification impossible pour la tâche {$task_id}.");

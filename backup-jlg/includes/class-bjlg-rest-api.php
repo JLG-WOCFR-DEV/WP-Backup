@@ -1334,7 +1334,27 @@ class BJLG_REST_API {
         // Planifier l'exécution
         $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
 
+        if (is_wp_error($scheduled)) {
+            $error_message = $scheduled->get_error_message();
+
+            BJLG_Debug::log("ERREUR : Impossible de planifier la sauvegarde API {$task_id}. Détails : $error_message");
+
+            BJLG_Backup::delete_task_state($task_id);
+            BJLG_Backup::release_task_slot($task_id);
+
+            return new WP_Error(
+                'schedule_failed',
+                __('Impossible de planifier la tâche de sauvegarde en arrière-plan.', 'backup-jlg'),
+                [
+                    'status' => 500,
+                    'details' => $error_message,
+                ]
+            );
+        }
+
         if ($scheduled === false) {
+            BJLG_Debug::log("ERREUR : Impossible de planifier la sauvegarde API {$task_id}.");
+
             BJLG_Backup::delete_task_state($task_id);
             BJLG_Backup::release_task_slot($task_id);
 
@@ -1860,31 +1880,36 @@ class BJLG_REST_API {
         // Planifier l'exécution
         $scheduled = wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
 
-        if ($scheduled === false || is_wp_error($scheduled)) {
+        if (is_wp_error($scheduled)) {
+            $error_details = $scheduled->get_error_message();
+
             delete_transient($task_id);
 
-            $error_details = is_wp_error($scheduled) ? $scheduled->get_error_message() : null;
-
             if (class_exists(BJLG_Debug::class)) {
-                $log_message = "ERREUR : Impossible de planifier la tâche de restauration {$task_id} via l'API.";
-
-                if (!empty($error_details)) {
-                    $log_message .= ' Détails : ' . $error_details;
-                }
-
-                BJLG_Debug::log($log_message);
-            }
-
-            $error_data = ['status' => 500];
-
-            if (!empty($error_details)) {
-                $error_data['details'] = $error_details;
+                BJLG_Debug::log("ERREUR : Impossible de planifier la tâche de restauration {$task_id} via l'API. Détails : {$error_details}");
             }
 
             return new WP_Error(
                 'rest_restore_schedule_failed',
                 __('Impossible de planifier la tâche de restauration en arrière-plan.', 'backup-jlg'),
-                $error_data
+                [
+                    'status' => 500,
+                    'details' => $error_details,
+                ]
+            );
+        }
+
+        if ($scheduled === false) {
+            delete_transient($task_id);
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log("ERREUR : Impossible de planifier la tâche de restauration {$task_id} via l'API.");
+            }
+
+            return new WP_Error(
+                'rest_restore_schedule_failed',
+                __('Impossible de planifier la tâche de restauration en arrière-plan.', 'backup-jlg'),
+                ['status' => 500]
             );
         }
 
