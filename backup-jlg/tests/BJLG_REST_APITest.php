@@ -2059,6 +2059,37 @@ namespace {
         $this->deleteBackupIfExists($archive_path);
     }
 
+    public function test_get_task_status_rejects_invalid_identifier(): void
+    {
+        $api = new BJLG\BJLG_REST_API();
+
+        $request = new class {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct()
+            {
+                $this->params = [
+                    'id' => 'bjlg_invalid_123',
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $response = $api->get_task_status($request);
+
+        $this->assertInstanceOf(\WP_Error::class, $response);
+        $this->assertSame('invalid_task_id', $response->get_error_code());
+
+        $error_data = $response->get_error_data();
+        $this->assertIsArray($error_data);
+        $this->assertSame(400, $error_data['status']);
+    }
+
         public function test_update_settings_rejects_empty_payload(): void
         {
             $api = new BJLG\BJLG_REST_API();
