@@ -2167,9 +2167,19 @@ class BJLG_REST_API {
      * Endpoint : Obtenir le statut d'une tâche
      */
     public function get_task_status($request) {
-        $task_id = $request->get_param('id');
+        $raw_task_id = $request->get_param('id');
+        $task_id = sanitize_key($raw_task_id);
+
+        if (empty($task_id) || !preg_match('/^bjlg_(?:backup|restore)_[a-z0-9_]+$/', $task_id)) {
+            return new WP_Error(
+                'invalid_task_id',
+                __('Invalid task identifier.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
         $task_data = get_transient($task_id);
-        
+
         if (!$task_data) {
             return new WP_Error(
                 'task_not_found',
