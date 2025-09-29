@@ -431,13 +431,26 @@ class BJLG_Admin {
             </form>
             
             <h3><span class="dashicons dashicons-admin-links"></span> Webhook</h3>
-            <p>Utilisez cette URL pour déclencher une sauvegarde à distance :</p>
-            <div class="bjlg-webhook-url">
-                <input type="text" readonly value="<?php echo esc_url(home_url('/?bjlg_trigger_backup=' . $webhook_key)); ?>" class="regular-text code" style="width: 70%;">
-                <button class="button bjlg-copy-webhook">Copier</button>
-                <button class="button" id="bjlg-regenerate-webhook">Régénérer</button>
+            <p>Utilisez ce point de terminaison pour déclencher une sauvegarde à distance en toute sécurité :</p>
+            <div class="bjlg-webhook-url" style="margin-bottom: 10px;">
+                <label for="bjlg-webhook-endpoint" style="display:block; font-weight:600;">Point de terminaison</label>
+                <div>
+                    <input type="text" id="bjlg-webhook-endpoint" readonly value="<?php echo esc_url(BJLG_Webhooks::get_webhook_endpoint()); ?>" class="regular-text code" style="width: 70%;">
+                    <button class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-endpoint">Copier l'URL</button>
+                </div>
             </div>
-            
+            <div class="bjlg-webhook-url" style="margin-bottom: 10px;">
+                <label for="bjlg-webhook-key" style="display:block; font-weight:600;">Clé secrète</label>
+                <div>
+                    <input type="text" id="bjlg-webhook-key" readonly value="<?php echo esc_attr($webhook_key); ?>" class="regular-text code" style="width: 70%;">
+                    <button class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-key">Copier la clé</button>
+                    <button class="button" id="bjlg-regenerate-webhook">Régénérer</button>
+                </div>
+            </div>
+            <p class="description">Envoyez une requête <strong>POST</strong> à l'URL ci-dessus en ajoutant l'en-tête <code><?php echo esc_html(BJLG_Webhooks::WEBHOOK_HEADER); ?></code> (ou <code>Authorization: Bearer &lt;clé&gt;</code>) contenant votre clé.</p>
+            <pre class="code"><code><?php echo esc_html(sprintf("curl -X POST %s \\n  -H 'Content-Type: application/json' \\n  -H '%s: %s'", BJLG_Webhooks::get_webhook_endpoint(), BJLG_Webhooks::WEBHOOK_HEADER, $webhook_key)); ?></code></pre>
+            <p class="description"><strong>Compatibilité :</strong> L'ancien format <code><?php echo esc_html(add_query_arg(BJLG_Webhooks::WEBHOOK_QUERY_VAR, 'VOTRE_CLE', home_url('/'))); ?></code> reste supporté provisoirement mais sera retiré après la période de transition.</p>
+
             <form class="bjlg-settings-form">
                 <h3><span class="dashicons dashicons-trash"></span> Rétention des Sauvegardes</h3>
                 <table class="form-table">
