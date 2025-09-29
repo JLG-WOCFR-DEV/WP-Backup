@@ -589,6 +589,62 @@ namespace {
             }
         }
 
+        public function test_get_backups_with_token_logs_error_when_transient_fails(): void
+        {
+            $GLOBALS['bjlg_test_transients'] = [];
+
+            $api = new BJLG\BJLG_REST_API();
+
+            $backup = $this->createBackupWithComponents(['db']);
+
+            $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value = null, $expiration = null) {
+                if (strpos($transient, 'bjlg_download_') === 0) {
+                    return false;
+                }
+
+                return null;
+            };
+
+            $request = new class {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct()
+                {
+                    $this->params = [
+                        'page' => 1,
+                        'per_page' => 10,
+                        'type' => 'all',
+                        'sort' => 'date_desc',
+                        'with_token' => true,
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+
+            try {
+                $response = $api->get_backups($request);
+
+                $this->assertIsArray($response);
+                $this->assertArrayHasKey('backups', $response);
+                $this->assertNotEmpty($response['backups']);
+
+                $first = $response['backups'][0];
+                $this->assertArrayNotHasKey('download_token', $first);
+                $this->assertArrayNotHasKey('download_url', $first);
+                $this->assertArrayNotHasKey('download_expires_in', $first);
+                $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+                $this->assertNotEmpty(\BJLG\BJLG_Debug::$logs);
+            } finally {
+                $GLOBALS['bjlg_test_set_transient_mock'] = null;
+                $this->deleteBackupIfExists($backup);
+            }
+        }
+
         public function test_get_backup_does_not_include_token_by_default(): void
         {
             $GLOBALS['bjlg_test_transients'] = [];
