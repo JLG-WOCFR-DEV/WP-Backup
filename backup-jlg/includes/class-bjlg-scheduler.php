@@ -344,13 +344,36 @@ class BJLG_Scheduler {
             'start_time' => time()
         ];
 
-        set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
-        
+        $transient_set = set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
+
+        if (!$transient_set) {
+            $error_message = "Impossible d'initialiser la sauvegarde planifiée.";
+            BJLG_Debug::log("ERREUR : Impossible d'initialiser la tâche de sauvegarde planifiée $task_id.");
+            BJLG_History::log('scheduled_backup', 'failure', $error_message);
+            wp_send_json_error(['message' => $error_message]);
+        }
+
         BJLG_Debug::log("Exécution manuelle de la sauvegarde planifiée - Task ID: $task_id");
         BJLG_History::log('scheduled_backup', 'info', 'Exécution manuelle de la sauvegarde planifiée');
-        
-        wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
-        
+
+        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+
+        if (is_wp_error($scheduled) || !$scheduled) {
+            delete_transient($task_id);
+            $error_message = "Impossible de planifier l'exécution de la sauvegarde planifiée.";
+
+            if (is_wp_error($scheduled)) {
+                $error_detail = $scheduled->get_error_message();
+                if (!empty($error_detail)) {
+                    $error_message .= ' Raison : ' . $error_detail;
+                }
+            }
+
+            BJLG_Debug::log("ERREUR : $error_message Task ID: $task_id.");
+            BJLG_History::log('scheduled_backup', 'failure', $error_message);
+            wp_send_json_error(['message' => $error_message]);
+        }
+
         wp_send_json_success([
             'message' => 'Sauvegarde planifiée lancée manuellement.',
             'task_id' => $task_id

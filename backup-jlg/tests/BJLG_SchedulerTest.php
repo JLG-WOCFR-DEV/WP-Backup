@@ -35,8 +35,17 @@ final class BJLG_SchedulerTest extends TestCase
             'single' => [],
         ];
         $GLOBALS['bjlg_test_options'] = [];
+        $GLOBALS['bjlg_test_set_transient_mock'] = null;
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
+        BJLG_Debug::$logs = [];
         $_POST = [];
         $_REQUEST = [];
+    }
+
+    protected function tearDown(): void
+    {
+        $GLOBALS['bjlg_test_set_transient_mock'] = null;
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
     }
 
     public function test_handle_run_scheduled_now_sets_start_time(): void
@@ -66,5 +75,68 @@ final class BJLG_SchedulerTest extends TestCase
         $this->assertArrayHasKey('start_time', $task_data);
         $this->assertIsInt($task_data['start_time']);
         $this->assertGreaterThan(0, $task_data['start_time']);
+    }
+
+    public function test_handle_run_scheduled_now_returns_error_when_transient_fails(): void
+    {
+        $_POST['nonce'] = 'test-nonce';
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function () {
+            return false;
+        };
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+
+        try {
+            $scheduler->handle_run_scheduled_now();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertSame(['message' => "Impossible d'initialiser la sauvegarde planifiée."], $response->data);
+        }
+
+        $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+        $this->assertNotEmpty(BJLG_Debug::$logs);
+        $this->assertTrue(
+            (bool) array_filter(
+                BJLG_Debug::$logs,
+                static fn(string $log): bool => strpos($log, 'ERREUR') !== false
+            ),
+            'Expected at least one log entry to contain "ERREUR".'
+        );
+    }
+
+    public function test_handle_run_scheduled_now_returns_error_when_scheduling_fails(): void
+    {
+        $_POST['nonce'] = 'test-nonce';
+
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = static function () {
+            return new WP_Error('schedule_failed', 'Défaillance de planification.');
+        };
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+
+        try {
+            $scheduler->handle_run_scheduled_now();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertSame(
+                [
+                    'message' => "Impossible de planifier l'exécution de la sauvegarde planifiée. Raison : Défaillance de planification.",
+                ],
+                $response->data
+            );
+        }
+
+        $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+        $this->assertNotEmpty(BJLG_Debug::$logs);
+        $this->assertTrue(
+            (bool) array_filter(
+                BJLG_Debug::$logs,
+                static fn(string $log): bool => strpos($log, 'ERREUR') !== false
+            ),
+            'Expected at least one log entry to contain "ERREUR".'
+        );
     }
 }
