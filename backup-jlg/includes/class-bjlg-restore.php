@@ -126,10 +126,10 @@ class BJLG_Restore {
             $backup_manager->dump_database($sql_filepath);
             $added_to_zip = $zip->addFile($sql_filepath, 'database.sql');
 
-            if ($added_to_zip === false) {
+            if ($added_to_zip !== true) {
                 $cleanup_sql_file();
                 throw new Exception(
-                    "Impossible d'ajouter l'export de la base de données à l'archive de pré-restauration."
+                    "Impossible d'ajouter l'export de la base de données (database.sql) à l'archive de pré-restauration."
                 );
             }
 
