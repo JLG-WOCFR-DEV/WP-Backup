@@ -604,7 +604,11 @@ class BJLG_Restore {
             }
 
             if (empty($components_to_restore)) {
-                $error_message = "Aucun composant valide n'a été trouvé dans l'archive de sauvegarde.";
+                if (empty($manifest_components)) {
+                    $error_message = "Aucun composant utile n'a été trouvé dans le manifeste de sauvegarde.";
+                } else {
+                    $error_message = "Les composants demandés ne sont pas disponibles dans l'archive de sauvegarde.";
+                }
 
                 if (class_exists('BJLG_Debug')) {
                     BJLG_Debug::log('ERREUR: ' . $error_message, 'error');
