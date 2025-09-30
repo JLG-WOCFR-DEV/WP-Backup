@@ -244,7 +244,34 @@ class BJLG_Webhooks {
 
         $encrypt = isset($_GET['encrypt']) && $_GET['encrypt'] === 'true';
         $incremental = isset($_GET['incremental']) && $_GET['incremental'] === 'true';
-        
+
+        $available_destinations = BJLG_Backup::get_connectable_destination_ids('webhook');
+        $destinations = $available_destinations;
+
+        if (isset($_GET['destinations'])) {
+            $raw_destinations = wp_unslash($_GET['destinations']);
+
+            if (is_string($raw_destinations)) {
+                $raw_trimmed = trim($raw_destinations);
+                if ($raw_trimmed === '' || strtolower($raw_trimmed) === 'none') {
+                    $destinations = [];
+                } else {
+                    $raw_destinations = array_map('trim', explode(',', $raw_destinations));
+                }
+            }
+
+            if ($destinations !== []) {
+                $requested_destinations = array_filter(array_map('sanitize_key', (array) $raw_destinations));
+                $filtered_destinations = array_values(array_unique(array_intersect($requested_destinations, $available_destinations)));
+
+                if (!empty($filtered_destinations)) {
+                    $destinations = $filtered_destinations;
+                } elseif (!empty($requested_destinations) && empty($available_destinations)) {
+                    $destinations = [];
+                }
+            }
+        }
+
         BJLG_Debug::log("Webhook déclenché avec succès. Planification d'une sauvegarde en arrière-plan.");
 
         // Enregistrer l'appel du webhook
@@ -274,7 +301,8 @@ class BJLG_Webhooks {
             'encrypt' => $encrypt,
             'incremental' => $incremental,
             'source' => 'webhook',
-            'start_time' => time()
+            'start_time' => time(),
+            'destinations' => $destinations,
         ];
 
         if (!BJLG_Backup::save_task_state($task_id, $task_data)) {

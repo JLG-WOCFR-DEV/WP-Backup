@@ -92,6 +92,87 @@ class BJLG_Backup {
     }
 
     /**
+     * Retourne la liste des classes de destinations disponibles indexées par identifiant.
+     *
+     * @return array<string, string>
+     */
+    public static function get_registered_destination_map() {
+        $destinations = [];
+
+        if (class_exists(BJLG_Google_Drive::class)) {
+            $destinations['google_drive'] = BJLG_Google_Drive::class;
+        }
+
+        if (class_exists(BJLG_S3::class)) {
+            $destinations['s3'] = BJLG_S3::class;
+        }
+
+        if (class_exists(BJLG_SFTP::class)) {
+            $destinations['sftp'] = BJLG_SFTP::class;
+        }
+
+        /**
+         * Filtre la liste des classes de destinations disponibles.
+         *
+         * @param array<string, string> $destinations Carte (identifiant => classe).
+         */
+        return apply_filters('bjlg_destination_classes', $destinations);
+    }
+
+    /**
+     * Crée une instance de destination à partir de son identifiant.
+     *
+     * @param string $destination_id
+     * @return BJLG_Destination_Interface|null
+     */
+    public static function create_destination_instance($destination_id) {
+        $map = self::get_registered_destination_map();
+
+        if (!isset($map[$destination_id])) {
+            return null;
+        }
+
+        $class_name = $map[$destination_id];
+
+        if (!class_exists($class_name)) {
+            return null;
+        }
+
+        $instance = new $class_name();
+
+        return $instance instanceof BJLG_Destination_Interface ? $instance : null;
+    }
+
+    /**
+     * Retourne la liste des destinations connectées pour un contexte donné.
+     *
+     * @param string $context
+     * @return array<int, string>
+     */
+    public static function get_connectable_destination_ids($context = 'default') {
+        $map = self::get_registered_destination_map();
+        $available = [];
+
+        foreach ($map as $destination_id => $class_name) {
+            $instance = self::create_destination_instance($destination_id);
+
+            if ($instance instanceof BJLG_Destination_Interface && $instance->is_connected()) {
+                $available[] = sanitize_key($destination_id);
+            }
+        }
+
+        $available = array_values(array_unique($available));
+
+        /**
+         * Filtre la liste des destinations disponibles pour un contexte.
+         *
+         * @param array<int, string> $available Identifiants de destinations prêtes.
+         * @param string             $context   Contexte d'utilisation (manual, webhook, schedule, ...).
+         */
+        return apply_filters('bjlg_available_destination_ids', $available, $context);
+    }
+
+    /**
      * Indique si un verrou d'exécution est actuellement actif.
      *
      * @return bool
@@ -524,14 +605,24 @@ class BJLG_Backup {
 
     /** @var array<int, string> */
     private $temporary_files = [];
-    
-    public function __construct($performance_optimizer = null, $encryption_handler = null) {
+
+    /** @var callable|null */
+    private $destination_factory = null;
+
+    /** @var array<string, ?BJLG_Destination_Interface> */
+    private $destination_instances = [];
+
+    public function __construct($performance_optimizer = null, $encryption_handler = null, ?callable $destination_factory = null) {
         if ($performance_optimizer instanceof BJLG_Performance) {
             $this->performance_optimizer = $performance_optimizer;
         }
 
         if ($encryption_handler instanceof BJLG_Encryption) {
             $this->encryption_handler = $encryption_handler;
+        }
+
+        if ($destination_factory !== null) {
+            $this->destination_factory = $destination_factory;
         }
 
         // Hooks AJAX
@@ -558,6 +649,17 @@ class BJLG_Backup {
     }
 
     /**
+     * Permet d'injecter un fabriquant de destinations (principalement pour les tests).
+     *
+     * @param callable|null $factory
+     * @return void
+     */
+    public function set_destination_factory(?callable $factory) {
+        $this->destination_factory = $factory;
+        $this->destination_instances = [];
+    }
+
+    /**
      * Gère la requête AJAX pour démarrer une tâche de sauvegarde
      */
     public function handle_start_backup_task() {
@@ -571,7 +673,9 @@ class BJLG_Backup {
 
         $encrypt = $this->get_boolean_request_value('encrypt', 'encrypt_backup');
         $incremental = $this->get_boolean_request_value('incremental', 'incremental_backup');
-        
+        $raw_destinations = isset($_POST['destinations']) ? (array) $_POST['destinations'] : [];
+        $destinations = $this->normalize_destination_selection($raw_destinations, 'manual');
+
         if (empty($components)) {
             wp_send_json_error(['message' => 'Aucun composant sélectionné.']);
         }
@@ -588,7 +692,8 @@ class BJLG_Backup {
             'encrypt' => $encrypt,
             'incremental' => $incremental,
             'source' => 'manual',
-            'start_time' => time()
+            'start_time' => time(),
+            'destinations' => $destinations,
         ];
 
         if (!self::reserve_task_slot($task_id)) {
@@ -678,6 +783,164 @@ class BJLG_Backup {
     }
 
     /**
+     * Normalise la sélection des destinations en fonction du contexte.
+     *
+     * @param array<int, string>|string $raw_destinations
+     * @param string                    $context
+     * @param array<string, mixed>      $task_data
+     * @return array<int, string>
+     */
+    private function normalize_destination_selection($raw_destinations, $context, array $task_data = []) {
+        $context = sanitize_key($context);
+        $available = self::get_connectable_destination_ids($context);
+        $available = array_values(array_unique(array_map('sanitize_key', $available)));
+
+        $requested = [];
+
+        if (is_array($raw_destinations)) {
+            $requested = array_map('sanitize_key', $raw_destinations);
+        } elseif (is_string($raw_destinations) && $raw_destinations !== '') {
+            $requested = [sanitize_key($raw_destinations)];
+        }
+
+        $requested = array_values(array_unique(array_intersect($requested, $available)));
+
+        if (empty($requested)) {
+            $requested = $available;
+        }
+
+        /**
+         * Filtre la liste finale des destinations sélectionnées pour une tâche.
+         *
+         * @param array<int, string>     $requested Destinations retenues.
+         * @param array<string, mixed>   $task_data Données de la tâche.
+         * @param string                 $context   Contexte d'exécution.
+         */
+        return apply_filters('bjlg_task_destinations', $requested, $task_data, $context);
+    }
+
+    /**
+     * Retourne (ou crée) l'instance pour une destination donnée.
+     *
+     * @param string $destination_id
+     * @return BJLG_Destination_Interface|null
+     */
+    private function resolve_destination_instance($destination_id) {
+        $destination_id = sanitize_key($destination_id);
+
+        if (array_key_exists($destination_id, $this->destination_instances)) {
+            return $this->destination_instances[$destination_id];
+        }
+
+        $instance = null;
+
+        if (is_callable($this->destination_factory)) {
+            $instance = call_user_func($this->destination_factory, $destination_id);
+        }
+
+        if (!$instance instanceof BJLG_Destination_Interface) {
+            $instance = self::create_destination_instance($destination_id);
+        }
+
+        /**
+         * Filtre l'instance de destination utilisée pour l'envoi.
+         *
+         * @param BJLG_Destination_Interface|null $instance
+         * @param string                          $destination_id
+         */
+        $instance = apply_filters('bjlg_destination_instance', $instance, $destination_id);
+
+        if (!$instance instanceof BJLG_Destination_Interface) {
+            $instance = null;
+        }
+
+        $this->destination_instances[$destination_id] = $instance;
+
+        return $instance;
+    }
+
+    /**
+     * Envoie le fichier de sauvegarde vers les destinations sélectionnées.
+     *
+     * @param string               $backup_filepath
+     * @param string               $backup_filename
+     * @param string               $task_id
+     * @param array<string, mixed> $task_data
+     * @return void
+     */
+    private function dispatch_backup_to_destinations($backup_filepath, $backup_filename, $task_id, array $task_data) {
+        if (!is_readable($backup_filepath)) {
+            return;
+        }
+
+        $context = isset($task_data['source']) ? sanitize_key($task_data['source']) : 'manual';
+        $destinations = $this->normalize_destination_selection($task_data['destinations'] ?? [], $context, $task_data);
+
+        if (empty($destinations)) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log(sprintf('Aucune destination distante sélectionnée pour la sauvegarde %s.', $backup_filename));
+            }
+
+            return;
+        }
+
+        foreach ($destinations as $destination_id) {
+            $destination = $this->resolve_destination_instance($destination_id);
+
+            if (!$destination instanceof BJLG_Destination_Interface) {
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log(sprintf('Destination "%s" introuvable : envoi ignoré.', $destination_id));
+                }
+
+                continue;
+            }
+
+            if (!$destination->is_connected()) {
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log(sprintf('Destination "%s" non connectée : envoi ignoré.', $destination->get_name()));
+                }
+
+                BJLG_History::log(
+                    'destination_upload_failed',
+                    'warning',
+                    sprintf('Destination %s indisponible lors de l\'envoi.', $destination->get_name())
+                );
+
+                continue;
+            }
+
+            $upload_path = apply_filters('bjlg_destination_upload_path', $backup_filepath, $destination_id, $task_id, $task_data);
+
+            if (!is_string($upload_path) || $upload_path === '') {
+                $upload_path = $backup_filepath;
+            }
+
+            try {
+                do_action('bjlg_before_destination_upload', $destination_id, $upload_path, $task_id, $task_data);
+                $destination->upload_file($upload_path, $task_id);
+                BJLG_History::log(
+                    'destination_upload_success',
+                    'success',
+                    sprintf('Sauvegarde envoyée vers %s.', $destination->get_name())
+                );
+                do_action('bjlg_destination_upload_success', $destination_id, $upload_path, $task_id, $task_data);
+            } catch (Exception $exception) {
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log(sprintf('Échec de l\'envoi vers %s : %s', $destination->get_name(), $exception->getMessage()));
+                }
+
+                BJLG_History::log(
+                    'destination_upload_failed',
+                    'warning',
+                    sprintf('Échec de l\'envoi vers %s : %s', $destination->get_name(), $exception->getMessage())
+                );
+
+                do_action('bjlg_destination_upload_failed', $destination_id, $backup_filename, $task_id, $exception, $task_data);
+            }
+        }
+    }
+
+    /**
      * Vérifie la progression d'une tâche
      */
     public function handle_check_backup_progress() {
@@ -756,6 +1019,8 @@ class BJLG_Backup {
             $components = array_map('sanitize_key', $components);
             $components = array_values(array_unique(array_intersect($components, $allowed_components)));
 
+            $context = isset($task_data['source']) ? sanitize_key($task_data['source']) : 'manual';
+            $task_data['destinations'] = $this->normalize_destination_selection($task_data['destinations'] ?? [], $context, $task_data);
             $task_data['components'] = $components;
             self::save_task_state($task_id, $task_data);
 
@@ -927,6 +1192,7 @@ class BJLG_Backup {
                 'incremental' => $task_data['incremental'],
                 'duration' => $duration,
                 'timestamp' => $completion_timestamp,
+                'destinations' => $task_data['destinations'],
             ];
 
             // Notification de succès
@@ -942,6 +1208,8 @@ class BJLG_Backup {
                     $incremental_handler->update_manifest($backup_filename, $manifest_details);
                 }
             }
+
+            $this->dispatch_backup_to_destinations($backup_filepath, $backup_filename, $task_id, $task_data);
 
             // Mise à jour finale
             $success_message = 'Sauvegarde terminée avec succès !';

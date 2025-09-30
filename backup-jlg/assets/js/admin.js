@@ -20,6 +20,11 @@ jQuery(document).ready(function($) {
 
         const encrypt = $form.find('input[name="encrypt_backup"]').is(':checked');
         const incremental = $form.find('input[name="incremental_backup"]').is(':checked');
+        const destinations = [];
+
+        $form.find('input[name="destinations[]"]:checked').each(function() {
+            destinations.push($(this).val());
+        });
 
         if (components.length === 0) {
             alert('Veuillez sélectionner au moins un composant à sauvegarder.');
@@ -37,7 +42,8 @@ jQuery(document).ready(function($) {
             nonce: bjlg_ajax.nonce,
             components: components,
             encrypt: encrypt,
-            incremental: incremental
+            incremental: incremental,
+            destinations: destinations
         };
         let debugReport = "--- 1. REQUÊTE DE LANCEMENT ---\nDonnées envoyées:\n" + JSON.stringify(data, null, 2);
         if ($debugOutput.length) $debugOutput.text(debugReport);

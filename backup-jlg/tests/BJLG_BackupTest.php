@@ -143,4 +143,76 @@ final class BJLG_BackupTest extends TestCase
         $this->assertArrayNotHasKey('bjlg_backup_task_lock', $GLOBALS['bjlg_test_transients']);
         unset($GLOBALS['bjlg_test_transients'][$task_id]);
     }
+
+    public function test_dispatch_backup_to_destinations_uses_registered_instances(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $fake_destination = new class implements BJLG\BJLG_Destination_Interface {
+            /** @var array<int, array<int, string>> */
+            public $uploads = [];
+
+            public function get_id()
+            {
+                return 'fake';
+            }
+
+            public function get_name()
+            {
+                return 'Fake Destination';
+            }
+
+            public function is_connected()
+            {
+                return true;
+            }
+
+            public function disconnect()
+            {
+            }
+
+            public function render_settings()
+            {
+            }
+
+            public function upload_file($filepath, $task_id)
+            {
+                $this->uploads[] = [$filepath, $task_id];
+            }
+        };
+
+        $backup->set_destination_factory(static function ($destination_id) use ($fake_destination) {
+            return $destination_id === 'fake' ? $fake_destination : null;
+        });
+
+        add_filter('bjlg_available_destination_ids', static function ($available, $context) {
+            if ($context === 'manual') {
+                return ['fake'];
+            }
+
+            return $available;
+        }, 10, 2);
+
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'dispatch_backup_to_destinations');
+        $method->setAccessible(true);
+
+        $temp_file = tempnam(sys_get_temp_dir(), 'bjlg-dispatch-');
+        if (!is_string($temp_file)) {
+            $this->fail('Unable to create a temporary file for the dispatch test.');
+        }
+
+        file_put_contents($temp_file, 'archive');
+
+        $task_data = [
+            'source' => 'manual',
+            'destinations' => ['fake'],
+        ];
+
+        $method->invoke($backup, $temp_file, basename($temp_file), 'task-dest', $task_data);
+
+        $this->assertSame([[$temp_file, 'task-dest']], $fake_destination->uploads);
+
+        unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_available_destination_ids']);
+        @unlink($temp_file);
+    }
 }

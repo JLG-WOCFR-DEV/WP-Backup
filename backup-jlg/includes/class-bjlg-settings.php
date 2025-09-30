@@ -52,6 +52,23 @@ class BJLG_Settings {
             'folder_id' => '',
             'enabled' => false,
         ],
+        's3' => [
+            'access_key' => '',
+            'secret_key' => '',
+            'region' => '',
+            'bucket' => '',
+            'prefix' => '',
+            'enabled' => false,
+        ],
+        'sftp' => [
+            'host' => '',
+            'port' => 22,
+            'username' => '',
+            'password' => '',
+            'private_key' => '',
+            'remote_path' => '',
+            'enabled' => false,
+        ],
         'advanced' => [
             'debug_mode' => false,
             'ajax_debug' => false,
@@ -161,6 +178,39 @@ class BJLG_Settings {
                 BJLG_Debug::log("Identifiants Google Drive sauvegardés.");
             }
 
+            // --- Réglages Amazon S3 ---
+            if (isset($_POST['s3_access_key']) || isset($_POST['s3_bucket'])) {
+                $s3_settings = [
+                    'access_key' => isset($_POST['s3_access_key']) ? sanitize_text_field(wp_unslash($_POST['s3_access_key'])) : '',
+                    'secret_key' => isset($_POST['s3_secret_key']) ? sanitize_text_field(wp_unslash($_POST['s3_secret_key'])) : '',
+                    'region'     => isset($_POST['s3_region']) ? sanitize_text_field(wp_unslash($_POST['s3_region'])) : '',
+                    'bucket'     => isset($_POST['s3_bucket']) ? sanitize_text_field(wp_unslash($_POST['s3_bucket'])) : '',
+                    'prefix'     => isset($_POST['s3_prefix']) ? sanitize_text_field(wp_unslash($_POST['s3_prefix'])) : '',
+                    'enabled'    => isset($_POST['s3_enabled']) && wp_unslash($_POST['s3_enabled']) === 'true',
+                ];
+
+                update_option('bjlg_s3_settings', $s3_settings);
+                $saved_settings['s3'] = $s3_settings;
+                BJLG_Debug::log("Réglages Amazon S3 sauvegardés.");
+            }
+
+            // --- Réglages SFTP ---
+            if (isset($_POST['sftp_host']) || isset($_POST['sftp_username'])) {
+                $sftp_settings = [
+                    'host'        => isset($_POST['sftp_host']) ? sanitize_text_field(wp_unslash($_POST['sftp_host'])) : '',
+                    'port'        => isset($_POST['sftp_port']) ? max(1, min(65535, intval(wp_unslash($_POST['sftp_port'])))) : 22,
+                    'username'    => isset($_POST['sftp_username']) ? sanitize_text_field(wp_unslash($_POST['sftp_username'])) : '',
+                    'password'    => isset($_POST['sftp_password']) ? sanitize_text_field(wp_unslash($_POST['sftp_password'])) : '',
+                    'private_key' => isset($_POST['sftp_private_key']) ? $this->sanitize_multiline_field(wp_unslash($_POST['sftp_private_key'])) : '',
+                    'remote_path' => isset($_POST['sftp_remote_path']) ? sanitize_text_field(wp_unslash($_POST['sftp_remote_path'])) : '',
+                    'enabled'     => isset($_POST['sftp_enabled']) && wp_unslash($_POST['sftp_enabled']) === 'true',
+                ];
+
+                update_option('bjlg_sftp_settings', $sftp_settings);
+                $saved_settings['sftp'] = $sftp_settings;
+                BJLG_Debug::log("Réglages SFTP sauvegardés.");
+            }
+
             // --- Réglages de Notifications ---
             if (isset($_POST['notifications_enabled'])) {
                 $notifications_settings = [
@@ -257,6 +307,8 @@ class BJLG_Settings {
             'notifications' => get_option('bjlg_notification_settings', $this->default_settings['notifications']),
             'performance' => get_option('bjlg_performance_settings', $this->default_settings['performance']),
             'gdrive' => get_option('bjlg_gdrive_settings', $this->default_settings['gdrive']),
+            's3' => get_option('bjlg_s3_settings', $this->default_settings['s3']),
+            'sftp' => get_option('bjlg_sftp_settings', $this->default_settings['sftp']),
             'webhooks' => get_option('bjlg_webhook_settings', []),
             'schedule' => get_option('bjlg_schedule_settings', []),
             'ajax_debug' => get_option('bjlg_ajax_debug_enabled', false)
@@ -319,6 +371,8 @@ class BJLG_Settings {
             'bjlg_notification_settings',
             'bjlg_performance_settings',
             'bjlg_gdrive_settings',
+            'bjlg_s3_settings',
+            'bjlg_sftp_settings',
             'bjlg_webhook_settings',
             'bjlg_schedule_settings'
         ];
@@ -572,6 +626,67 @@ class BJLG_Settings {
 
                 return $sanitized;
 
+            case 'bjlg_s3_settings':
+                $defaults = $this->default_settings['s3'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['access_key'])) {
+                        $sanitized['access_key'] = sanitize_text_field($value['access_key']);
+                    }
+                    if (isset($value['secret_key'])) {
+                        $sanitized['secret_key'] = sanitize_text_field($value['secret_key']);
+                    }
+                    if (isset($value['region'])) {
+                        $sanitized['region'] = sanitize_text_field($value['region']);
+                    }
+                    if (isset($value['bucket'])) {
+                        $sanitized['bucket'] = sanitize_text_field($value['bucket']);
+                    }
+                    if (isset($value['prefix'])) {
+                        $sanitized['prefix'] = sanitize_text_field($value['prefix']);
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                return $sanitized;
+
+            case 'bjlg_sftp_settings':
+                $defaults = $this->default_settings['sftp'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['host'])) {
+                        $sanitized['host'] = sanitize_text_field($value['host']);
+                    }
+                    if (isset($value['port'])) {
+                        $port = intval($value['port']);
+                        if ($port < 1 || $port > 65535) {
+                            $port = 22;
+                        }
+                        $sanitized['port'] = $port;
+                    }
+                    if (isset($value['username'])) {
+                        $sanitized['username'] = sanitize_text_field($value['username']);
+                    }
+                    if (isset($value['password'])) {
+                        $sanitized['password'] = sanitize_text_field($value['password']);
+                    }
+                    if (isset($value['private_key'])) {
+                        $sanitized['private_key'] = $this->sanitize_multiline_field($value['private_key']);
+                    }
+                    if (isset($value['remote_path'])) {
+                        $sanitized['remote_path'] = sanitize_text_field($value['remote_path']);
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                return $sanitized;
+
             case 'bjlg_webhook_settings':
                 $defaults = [
                     'enabled' => false,
@@ -672,6 +787,8 @@ class BJLG_Settings {
             'webhooks' => 'bjlg_webhook_settings',
             'schedule' => 'bjlg_schedule_settings',
             'gdrive' => 'bjlg_gdrive_settings',
+            's3' => 'bjlg_s3_settings',
+            'sftp' => 'bjlg_sftp_settings',
         ];
 
         if (!isset($option_map[$section])) {
@@ -679,6 +796,40 @@ class BJLG_Settings {
         }
 
         return $this->sanitize_imported_option($option_map[$section], $value);
+    }
+
+    /**
+     * Nettoie une chaîne multi-lignes (ex: clé privée).
+     *
+     * @param mixed $value
+     * @return string
+     */
+    private function sanitize_multiline_field($value) {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        $value = (string) $value;
+
+        if ($value === '') {
+            return '';
+        }
+
+        if (function_exists('sanitize_textarea_field')) {
+            return sanitize_textarea_field($value);
+        }
+
+        $normalized = str_replace(["\r\n", "\r"], "\n", $value);
+        $lines = explode("\n", $normalized);
+
+        foreach ($lines as &$line) {
+            $line = trim(strip_tags($line));
+        }
+        unset($line);
+
+        $result = implode("\n", $lines);
+
+        return trim($result);
     }
 
     /**

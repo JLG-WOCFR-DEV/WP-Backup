@@ -90,6 +90,7 @@ final class BJLG_Plugin {
             'class-bjlg-performance.php', 'class-bjlg-rate-limiter.php', 'class-bjlg-rest-api.php',
             'class-bjlg-admin.php', 'class-bjlg-actions.php',
             'destinations/interface-bjlg-destination.php', 'destinations/class-bjlg-google-drive.php',
+            'destinations/class-bjlg-s3.php', 'destinations/class-bjlg-sftp.php',
         ];
         foreach ($files_to_load as $file) {
             $path = BJLG_INCLUDES_DIR . $file;

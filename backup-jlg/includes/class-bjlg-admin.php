@@ -22,8 +22,24 @@ class BJLG_Admin {
      * Charge les classes de destination disponibles.
      */
     private function load_destinations() {
-        if (class_exists(BJLG_Google_Drive::class)) {
-            $this->destinations['google_drive'] = new BJLG_Google_Drive();
+        $this->destinations = [];
+
+        if (!class_exists(BJLG_Backup::class)) {
+            return;
+        }
+
+        $destination_classes = BJLG_Backup::get_registered_destination_map();
+
+        foreach ($destination_classes as $destination_id => $class_name) {
+            if (!class_exists($class_name)) {
+                continue;
+            }
+
+            $instance = BJLG_Backup::create_destination_instance($destination_id);
+
+            if ($instance instanceof BJLG_Destination_Interface) {
+                $this->destinations[$destination_id] = $instance;
+            }
         }
     }
 
@@ -131,6 +147,36 @@ class BJLG_Admin {
                                     <label><input type="checkbox" name="backup_components[]" value="themes" checked> Thèmes (<code>/wp-content/themes</code>)</label><br>
                                     <label><input type="checkbox" name="backup_components[]" value="uploads" checked> Médias (<code>/wp-content/uploads</code>)</label>
                                 </fieldset>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Destinations distantes</th>
+                            <td>
+                                <?php
+                                $connected_destinations = array_filter(
+                                    $this->destinations,
+                                    static function ($destination) {
+                                        return $destination instanceof BJLG_Destination_Interface && $destination->is_connected();
+                                    }
+                                );
+
+                                if (!empty($connected_destinations)) {
+                                    echo '<fieldset class="bjlg-destination-selector">';
+                                    echo '<p class="description">Choisissez où envoyer automatiquement cette sauvegarde une fois créée.</p>';
+
+                                    foreach ($connected_destinations as $destination) {
+                                        $destination_id = esc_attr($destination->get_id());
+                                        $destination_name = esc_html($destination->get_name());
+                                        echo '<label class="bjlg-destination-selector__item">';
+                                        echo "<input type='checkbox' name='destinations[]' value='{$destination_id}' checked> {$destination_name}";
+                                        echo '</label><br>';
+                                    }
+
+                                    echo '</fieldset>';
+                                } else {
+                                    echo '<p class="description">Aucune destination distante prête. Configurez vos connecteurs dans l\'onglet Réglages.</p>';
+                                }
+                                ?>
                             </td>
                         </tr>
                         <tr>
@@ -388,7 +434,7 @@ class BJLG_Admin {
                         $destination->render_settings();
                     }
                 } else {
-                    echo '<p class="description">Aucune destination cloud configurée. Pour activer Google Drive, installez les dépendances via Composer.</p>';
+                    echo '<p class="description">Aucune destination distante configurée. Activez et connectez vos intégrations (Google Drive, Amazon S3, SFTP…) dans l\'onglet Réglages.</p>';
                 }
                 ?>
             </form>
