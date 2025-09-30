@@ -183,11 +183,21 @@ class BJLG_Actions {
 
         $validation = $this->validate_download_token($token);
         if (is_wp_error($validation)) {
+            $this->log_download_event(
+                'backup_download_failure',
+                'failure',
+                $token,
+                null,
+                'Erreur: ' . $validation->get_error_message()
+            );
+
             $status = $this->determine_error_status($validation);
             wp_send_json_error(['message' => $validation->get_error_message()], $status);
         }
 
         list($filepath, $transient_key, $delete_after_download) = array_pad($validation, 3, false);
+
+        $this->log_download_event('backup_download_success', 'success', $token, $filepath);
 
         delete_transient($transient_key);
 
@@ -212,12 +222,22 @@ class BJLG_Actions {
 
         $validation = $this->validate_download_token($token);
         if (is_wp_error($validation)) {
+            $this->log_download_event(
+                'backup_download_failure',
+                'failure',
+                $token,
+                null,
+                'Erreur: ' . $validation->get_error_message()
+            );
+
             $status = $this->determine_error_status($validation);
             status_header($status);
             wp_die(esc_html($validation->get_error_message()), '', ['response' => $status]);
         }
 
         list($filepath, $transient_key, $delete_after_download) = array_pad($validation, 3, false);
+
+        $this->log_download_event('backup_download_success', 'success', $token, $filepath);
 
         delete_transient($transient_key);
 
@@ -355,6 +375,86 @@ class BJLG_Actions {
         }
 
         return $filtered_ttl;
+    }
+
+    /**
+     * Journalise une tentative de téléchargement avec les informations pertinentes.
+     *
+     * @param string      $action
+     * @param string      $status
+     * @param string|null $token
+     * @param string|null $filepath
+     * @param string      $extra_message
+     */
+    private function log_download_event($action, $status, $token, $filepath, $extra_message = '') {
+        if (!class_exists(BJLG_History::class)) {
+            return;
+        }
+
+        $ip_address = $this->get_request_ip();
+        $token_value = is_string($token) && $token !== '' ? $token : 'non fourni';
+        $file_value = is_string($filepath) && $filepath !== '' ? basename($filepath) : 'inconnu';
+
+        $details = sprintf(
+            'IP: %s | Token: %s | Fichier: %s',
+            $ip_address,
+            $token_value,
+            $file_value
+        );
+
+        if ($extra_message !== '') {
+            $details .= ' | ' . $extra_message;
+        }
+
+        BJLG_History::log($action, $status, $details);
+    }
+
+    /**
+     * Récupère l'adresse IP de la requête courante.
+     *
+     * @return string
+     */
+    private function get_request_ip() {
+        if (!isset($_SERVER) || !is_array($_SERVER)) {
+            return 'Unknown';
+        }
+
+        $ip_keys = [
+            'HTTP_CF_CONNECTING_IP',
+            'HTTP_CLIENT_IP',
+            'HTTP_X_FORWARDED_FOR',
+            'HTTP_X_FORWARDED',
+            'HTTP_X_CLUSTER_CLIENT_IP',
+            'HTTP_FORWARDED_FOR',
+            'HTTP_FORWARDED',
+            'REMOTE_ADDR',
+        ];
+
+        foreach ($ip_keys as $key) {
+            if (!array_key_exists($key, $_SERVER)) {
+                continue;
+            }
+
+            $raw_ip = $_SERVER[$key];
+
+            if (!is_string($raw_ip) || $raw_ip === '') {
+                continue;
+            }
+
+            if (strpos($raw_ip, ',') !== false) {
+                $raw_ip = explode(',', $raw_ip)[0];
+            }
+
+            $raw_ip = trim($raw_ip);
+
+            $validated = filter_var($raw_ip, FILTER_VALIDATE_IP);
+
+            if ($validated !== false) {
+                return $validated;
+            }
+        }
+
+        return 'Unknown';
     }
 
     /**
