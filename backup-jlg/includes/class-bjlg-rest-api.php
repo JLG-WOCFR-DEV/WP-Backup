@@ -1823,6 +1823,17 @@ class BJLG_REST_API {
 
         $download_url = BJLG_Actions::build_download_url($download_token);
 
+        BJLG_History::log(
+            'backup_download_link_issued',
+            'success',
+            sprintf(
+                'Token: %s | Fichier: %s',
+                $download_token,
+                basename($filepath)
+            ),
+            function_exists('get_current_user_id') ? get_current_user_id() : null
+        );
+
         return rest_ensure_response([
             'download_url' => $download_url,
             'expires_in' => $transient_ttl,
