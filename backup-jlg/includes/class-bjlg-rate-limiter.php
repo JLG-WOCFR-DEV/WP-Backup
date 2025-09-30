@@ -80,64 +80,7 @@ class BJLG_Rate_Limiter {
      * quoi l'adresse peut être falsifiée.
      */
     private function get_client_ip() {
-        $option_headers = get_option('bjlg_trusted_proxy_headers', []);
-
-        if (is_string($option_headers)) {
-            $option_headers = array_filter(array_map('trim', explode(',', $option_headers)));
-        }
-
-        if (!is_array($option_headers)) {
-            $option_headers = [];
-        }
-
-        $trusted_headers = apply_filters('bjlg_rate_limiter_trusted_proxy_headers', $option_headers);
-
-        if (!is_array($trusted_headers)) {
-            $trusted_headers = [];
-        }
-
-        foreach ($trusted_headers as $key) {
-            if (!is_string($key) || $key === '') {
-                continue;
-            }
-
-            $server_key = strtoupper(str_replace('-', '_', $key));
-
-            if (strpos($server_key, 'HTTP_') !== 0 && $server_key !== 'REMOTE_ADDR') {
-                $server_key = 'HTTP_' . $server_key;
-            }
-
-            if (!array_key_exists($server_key, $_SERVER)) {
-                continue;
-            }
-
-            $ip = $_SERVER[$server_key];
-
-            // Pour les listes (ex: X-Forwarded-For), prendre la première IP
-            if (strpos($ip, ',') !== false) {
-                $ip = explode(',', $ip)[0];
-            }
-
-            $ip = trim($ip);
-
-            $validated_ip = filter_var($ip, FILTER_VALIDATE_IP);
-
-            if ($validated_ip !== false) {
-                return $validated_ip;
-            }
-        }
-
-        $fallback_ip = $_SERVER['REMOTE_ADDR'] ?? '';
-
-        if (is_string($fallback_ip) && $fallback_ip !== '') {
-            $validated_fallback = filter_var($fallback_ip, FILTER_VALIDATE_IP);
-
-            if ($validated_fallback !== false) {
-                return $validated_fallback;
-            }
-        }
-
-        return 'unknown';
+        return BJLG_Client_IP_Helper::get_client_ip('bjlg_rate_limiter_trusted_proxy_headers', 'bjlg_trusted_proxy_headers', 'unknown');
     }
 
     /**
