@@ -6,6 +6,7 @@ namespace BJLG;
  * Fichier : includes/class-bjlg-rest-api.php
  */
 
+use Exception;
 use WP_Error;
 use ZipArchive;
 
@@ -200,6 +201,10 @@ class BJLG_REST_API {
                 'create_restore_point' => [
                     'type' => 'boolean',
                     'default' => true
+                ],
+                'password' => [
+                    'type' => 'string',
+                    'required' => false
                 ]
             ]
         ]);
@@ -1202,12 +1207,18 @@ class BJLG_REST_API {
 
                 if (!empty($component_filters)) {
                     $contains = [];
+                    $has_manifest_components = false;
                     if (is_array($manifest) && isset($manifest['contains']) && is_array($manifest['contains'])) {
                         $contains = $manifest['contains'];
+                        $has_manifest_components = true;
                     }
 
                     if (!empty(array_intersect($component_filters, $contains))) {
                         return true;
+                    }
+
+                    if ($has_manifest_components) {
+                        return false;
                     }
 
                     $filename = basename($file);
@@ -1831,6 +1842,62 @@ class BJLG_REST_API {
             return $filepath;
         }
 
+        $filename = basename($filepath);
+        $is_encrypted_backup = substr($filename, -4) === '.enc';
+
+        $password = $request->get_param('password');
+        if ($password !== null && !is_string($password)) {
+            $password = null;
+        }
+
+        if (is_string($password)) {
+            if ($password === '') {
+                $password = null;
+            } elseif (strlen($password) < 4) {
+                $message = 'Le mot de passe doit contenir au moins 4 caractères.';
+
+                return new WP_Error(
+                    'rest_restore_invalid_password',
+                    $message,
+                    [
+                        'status' => 400,
+                        'validation_errors' => [
+                            'password' => [$message],
+                        ],
+                    ]
+                );
+            }
+        }
+
+        if ($is_encrypted_backup && $password === null) {
+            $message = 'Un mot de passe est requis pour restaurer une sauvegarde chiffrée.';
+
+            return new WP_Error(
+                'rest_restore_missing_password',
+                $message,
+                [
+                    'status' => 400,
+                    'validation_errors' => [
+                        'password' => [$message],
+                    ],
+                ]
+            );
+        }
+
+        try {
+            $encrypted_password = BJLG_Restore::encrypt_password_for_transient($password);
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('Échec du chiffrement du mot de passe de restauration (API) : ' . $exception->getMessage(), 'error');
+            }
+
+            return new WP_Error(
+                'rest_restore_password_encryption_failed',
+                __('Impossible de sécuriser le mot de passe fourni.', 'backup-jlg'),
+                ['status' => 500]
+            );
+        }
+
         // Créer une tâche de restauration
         $task_id = 'bjlg_restore_' . md5(uniqid('api', true));
         $task_data = [
@@ -1839,7 +1906,9 @@ class BJLG_REST_API {
             'status_text' => 'Initialisation de la restauration (API)...',
             'filepath' => $filepath,
             'components' => $components,
-            'create_restore_point' => (bool) $create_restore_point
+            'create_restore_point' => (bool) $create_restore_point,
+            'password_encrypted' => $encrypted_password,
+            'filename' => $filename,
         ];
 
         $task_ttl = BJLG_Backup::get_task_ttl();

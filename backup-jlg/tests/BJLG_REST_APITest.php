@@ -58,6 +58,7 @@ namespace {
     require_once __DIR__ . '/../includes/class-bjlg-actions.php';
     require_once __DIR__ . '/../includes/class-bjlg-rest-api.php';
     require_once __DIR__ . '/../includes/class-bjlg-restore.php';
+    require_once __DIR__ . '/../includes/class-bjlg-encryption.php';
     require_once __DIR__ . '/../includes/class-bjlg-webhooks.php';
     require_once __DIR__ . '/../includes/class-bjlg-backup.php';
     require_once __DIR__ . '/../includes/class-bjlg-rate-limiter.php';
@@ -1991,6 +1992,94 @@ namespace {
             $plugin_directory = dirname($plugin_destination);
             if (is_dir($plugin_directory) && count(scandir($plugin_directory)) <= 2) {
                 rmdir($plugin_directory);
+            }
+        }
+    }
+
+    public function test_restore_endpoint_restores_encrypted_archive_with_password(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+        $GLOBALS['bjlg_test_options']['bjlg_encryption_settings'] = ['enabled' => true];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $archive_path = BJLG_BACKUP_DIR . 'bjlg-rest-restore-' . uniqid('', true) . '.zip';
+
+        $zip = new \ZipArchive();
+        $open_result = $zip->open($archive_path, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
+        $this->assertTrue($open_result === true || $open_result === \ZipArchive::ER_OK);
+
+        $manifest = [
+            'type' => 'full',
+            'contains' => ['db'],
+        ];
+
+        $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $zip->addFromString('database.sql', "CREATE TABLE `wp_test` (id INT);\n");
+        $zip->close();
+
+        $password = 'super-secret';
+
+        $encryption = new BJLG\BJLG_Encryption();
+        $encrypted_path = $encryption->encrypt_backup_file($archive_path, $password);
+
+        $this->assertSame($archive_path . '.enc', $encrypted_path);
+        $this->assertFileExists($encrypted_path);
+        $this->assertFileDoesNotExist($archive_path);
+
+        $request = new class($encrypted_path, $password) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct(string $encrypted_path, string $password)
+            {
+                $this->params = [
+                    'id' => basename($encrypted_path),
+                    'components' => ['db'],
+                    'create_restore_point' => false,
+                    'password' => $password,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            $response = $api->restore_backup($request);
+
+            $this->assertIsArray($response);
+            $this->assertArrayHasKey('task_id', $response);
+
+            $task_id = $response['task_id'];
+            $task_data = get_transient($task_id);
+
+            $this->assertIsArray($task_data);
+            $this->assertArrayHasKey('password_encrypted', $task_data);
+            $this->assertNotEmpty($task_data['password_encrypted']);
+
+            $restore = new BJLG_Test_Restore_For_Rest();
+
+            $reflection = new \ReflectionClass(BJLG\BJLG_Restore::class);
+            $decrypt_method = $reflection->getMethod('decrypt_password_from_transient');
+            $decrypt_method->setAccessible(true);
+
+            $decrypted_password = $decrypt_method->invoke($restore, $task_data['password_encrypted']);
+            $this->assertSame($password, $decrypted_password);
+
+            $restore->run_restore_task($task_id);
+
+            $final_status = get_transient($task_id);
+            $this->assertIsArray($final_status);
+            $this->assertSame('complete', $final_status['status']);
+            $this->assertSame(100, $final_status['progress']);
+        } finally {
+            unset($GLOBALS['bjlg_test_options']['bjlg_encryption_settings']);
+
+            if (file_exists($encrypted_path)) {
+                unlink($encrypted_path);
             }
         }
     }
