@@ -1504,6 +1504,68 @@ namespace {
         }
     }
 
+    public function test_download_backup_returns_error_when_filesize_unavailable(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $filepath = BJLG_BACKUP_DIR . uniqid('', true) . '.zip';
+        $filename = basename($filepath);
+
+        $bytes_written = file_put_contents($filepath, 'backup-data');
+        $this->assertNotFalse($bytes_written, 'Failed to write backup file.');
+
+        $GLOBALS['bjlg_test_filesize_callback'] = static function ($candidate) use ($filepath) {
+            $GLOBALS['bjlg_test_filesize_calls'][] = $candidate;
+
+            if ($candidate === $filepath) {
+                return false;
+            }
+
+            return \filesize($candidate);
+        };
+
+        $request = new class($filename) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id)
+            {
+                $this->params = [
+                    'id' => $id,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            $response = $api->download_backup($request);
+
+            $this->assertInstanceOf(\WP_Error::class, $response);
+            $this->assertSame('bjlg_backup_size_unavailable', $response->get_error_code());
+
+            $data = $response->get_error_data();
+            $this->assertIsArray($data);
+            $this->assertSame(500, $data['status']);
+
+            $this->assertNotEmpty(\BJLG\BJLG_Debug::$logs);
+            $this->assertStringContainsString($filepath, \BJLG\BJLG_Debug::$logs[0]);
+        } finally {
+            unset($GLOBALS['bjlg_test_filesize_callback']);
+
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+
+            $GLOBALS['bjlg_test_transients'] = [];
+        }
+    }
+
     public function test_download_backup_returns_error_when_transient_persistence_fails(): void
     {
         $GLOBALS['bjlg_test_transients'] = [];
