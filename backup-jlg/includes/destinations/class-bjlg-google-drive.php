@@ -5,6 +5,7 @@ use Exception;
 use Google\Client as Google_Client;
 use Google\Service\Drive as Google_Service_Drive;
 use Google\Service\Drive\DriveFile as Google_Service_DriveFile;
+use Google_Http_MediaFileUpload;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -43,12 +44,16 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
     /** @var bool */
     private $sdk_available;
 
+    /** @var callable */
+    private $media_upload_factory;
+
     /**
      * @param callable|null $client_factory
      * @param callable|null $drive_factory
      * @param callable|null $state_generator
+     * @param callable|null $media_upload_factory
      */
-    public function __construct(?callable $client_factory = null, ?callable $drive_factory = null, ?callable $state_generator = null) {
+    public function __construct(?callable $client_factory = null, ?callable $drive_factory = null, ?callable $state_generator = null, ?callable $media_upload_factory = null) {
         $this->sdk_available = class_exists(Google_Client::class) && class_exists(Google_Service_Drive::class);
 
         $this->client_factory = $client_factory ?: static function () {
@@ -59,6 +64,9 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         };
         $this->state_generator = $state_generator ?: static function () {
             return bin2hex(random_bytes(16));
+        };
+        $this->media_upload_factory = $media_upload_factory ?: static function (Google_Client $client, $request, string $mime_type, int $chunk_size) {
+            return new Google_Http_MediaFileUpload($client, $request, $mime_type, null, true, $chunk_size);
         };
 
         add_action('admin_init', [$this, 'handle_oauth_callback']);
@@ -156,20 +164,85 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         ]);
 
         $mime_type = 'application/zip';
-        $content = file_get_contents($filepath);
+        $file_size = filesize($filepath);
+        if ($file_size === false) {
+            throw new Exception('Impossible de déterminer la taille du fichier à envoyer.');
+        }
+
+        $handle = fopen($filepath, 'rb');
+        if (!is_resource($handle)) {
+            throw new Exception('Impossible d\'ouvrir le fichier de sauvegarde pour lecture.');
+        }
+
+        $chunk_size = (int) apply_filters('bjlg_google_drive_chunk_size', 5 * 1024 * 1024, $filepath, $task_id);
+        if ($chunk_size <= 0) {
+            $chunk_size = 5 * 1024 * 1024;
+        }
+        $minimum_chunk_size = 256 * 1024; // 256 Ko
+        if ($chunk_size < $minimum_chunk_size) {
+            $chunk_size = $minimum_chunk_size;
+        }
+        $chunk_size = (int) ceil($chunk_size / $minimum_chunk_size) * $minimum_chunk_size;
+
+        $client->setDefer(true);
+
+        $uploaded_file = null;
+        $bytes_uploaded = 0;
 
         try {
-            $uploaded_file = $drive_service->files->create(
+            $request = $drive_service->files->create(
                 $file_metadata,
                 [
-                    'data' => $content,
                     'mimeType' => $mime_type,
-                    'uploadType' => 'multipart',
+                    'uploadType' => 'resumable',
                     'fields' => 'id,name,size',
                 ]
             );
+
+            $media = call_user_func($this->media_upload_factory, $client, $request, $mime_type, $chunk_size);
+            if (method_exists($media, 'setFileSize')) {
+                $media->setFileSize($file_size);
+            }
+
+            while (!feof($handle)) {
+                $chunk = fread($handle, $chunk_size);
+                if ($chunk === false) {
+                    throw new Exception('Erreur lors de la lecture du fichier de sauvegarde.');
+                }
+
+                if ($chunk === '') {
+                    continue;
+                }
+
+                $bytes_uploaded += strlen($chunk);
+                $status = $media->nextChunk($chunk);
+
+                if (class_exists(BJLG_Debug::class) && $file_size > 0) {
+                    $progress = min(100, ($bytes_uploaded / $file_size) * 100);
+                    BJLG_Debug::log(sprintf(
+                        'Progression de l\'envoi Google Drive : %.2f%% (%s/%s octets).',
+                        $progress,
+                        number_format_i18n($bytes_uploaded, 0),
+                        number_format_i18n($file_size, 0)
+                    ));
+                }
+
+                if ($status instanceof Google_Service_DriveFile) {
+                    $uploaded_file = $status;
+                }
+            }
         } catch (\Throwable $exception) {
             throw new Exception('Erreur lors de l\'envoi vers Google Drive : ' . $exception->getMessage(), 0, $exception);
+        } finally {
+            if (is_resource($handle)) {
+                fclose($handle);
+            }
+
+            $client->setDefer(false);
+        }
+
+        if (!$uploaded_file) {
+            throw new Exception('La réponse de Google Drive ne contient pas d\'identifiant de fichier.');
         }
 
         if (!$uploaded_file || !$uploaded_file->getId()) {
