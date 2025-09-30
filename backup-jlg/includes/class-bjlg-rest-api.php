@@ -2257,10 +2257,11 @@ class BJLG_REST_API {
             $download_token = wp_generate_password(32, false);
             $transient_key = 'bjlg_download_' . $download_token;
             $token_ttl = BJLG_Actions::get_download_token_ttl($filepath);
+            $token_payload = BJLG_Actions::build_download_token_payload($filepath);
 
             $persisted = set_transient(
                 $transient_key,
-                BJLG_Actions::build_download_token_payload($filepath),
+                $token_payload,
                 $token_ttl
             );
 

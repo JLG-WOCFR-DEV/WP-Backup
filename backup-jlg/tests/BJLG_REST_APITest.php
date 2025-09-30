@@ -724,6 +724,57 @@ namespace {
             }
         }
 
+        public function test_get_backup_with_token_logs_error_when_transient_fails(): void
+        {
+            $GLOBALS['bjlg_test_transients'] = [];
+
+            $api = new BJLG\BJLG_REST_API();
+
+            $backup = $this->createBackupWithComponents(['db']);
+            $filename = basename($backup);
+
+            $GLOBALS['bjlg_test_set_transient_mock'] = static function (string $transient, $value = null, $expiration = null) {
+                if (strpos($transient, 'bjlg_download_') === 0) {
+                    return false;
+                }
+
+                return null;
+            };
+
+            $request = new class($filename) {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct(string $id)
+                {
+                    $this->params = [
+                        'id' => $id,
+                        'with_token' => true,
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+
+            try {
+                $response = $api->get_backup($request);
+
+                $this->assertIsArray($response);
+                $this->assertArrayHasKey('download_rest_url', $response);
+                $this->assertArrayNotHasKey('download_token', $response);
+                $this->assertArrayNotHasKey('download_url', $response);
+                $this->assertArrayNotHasKey('download_expires_in', $response);
+                $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+                $this->assertNotEmpty(\BJLG\BJLG_Debug::$logs);
+            } finally {
+                $GLOBALS['bjlg_test_set_transient_mock'] = null;
+                $this->deleteBackupIfExists($backup);
+            }
+        }
+
         public function test_verify_jwt_token_returns_error_for_invalid_signature(): void
         {
             $api = new BJLG\BJLG_REST_API();
