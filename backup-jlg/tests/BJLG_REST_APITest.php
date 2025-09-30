@@ -2348,6 +2348,86 @@ namespace {
         $this->assertSame(400, $error_data['status']);
     }
 
+    public function test_handle_save_settings_accepts_checkbox_variants(): void
+    {
+        $settings = new BJLG\BJLG_Settings();
+
+        $previous_post = $_POST ?? [];
+
+        $_POST = [
+            'nonce' => 'test-nonce',
+            'plugin_name' => 'Test Plugin',
+            'hide_from_non_admins' => 'on',
+            'encryption_enabled' => '1',
+            'auto_encrypt' => 'true',
+            'password_protect' => 'yes',
+            'compression_level' => '8',
+            'gdrive_client_id' => 'client-id',
+            'gdrive_client_secret' => 'client-secret',
+            'gdrive_folder_id' => 'folder',
+            'gdrive_enabled' => 1,
+            'notifications_enabled' => 'on',
+            'email_recipients' => 'admin@example.com',
+            'notify_backup_complete' => '1',
+            'notify_backup_failed' => '0',
+            'notify_cleanup_complete' => 'on',
+            'notify_storage_warning' => 'false',
+            'channel_email' => 'on',
+            'channel_slack' => '1',
+            'slack_webhook_url' => 'https://example.com/slack',
+            'channel_discord' => 'no',
+            'discord_webhook_url' => 'https://example.com/discord',
+            'multi_threading' => 'yes',
+            'max_workers' => '4',
+            'chunk_size' => '25',
+            'webhook_enabled' => true,
+            'webhook_backup_complete' => 'https://example.com/hook-complete',
+            'webhook_backup_failed' => 'https://example.com/hook-failed',
+            'webhook_cleanup_complete' => 'https://example.com/hook-cleanup',
+            'webhook_secret' => 'secret-value',
+            'ajax_debug_enabled' => '1',
+        ];
+
+        try {
+            $settings->handle_save_settings();
+            $this->fail('Expected JSON response.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+        } finally {
+            $_POST = $previous_post;
+        }
+
+        $whitelabel = get_option('bjlg_whitelabel_settings');
+        $this->assertIsArray($whitelabel);
+        $this->assertTrue($whitelabel['hide_from_non_admins']);
+
+        $encryption = get_option('bjlg_encryption_settings');
+        $this->assertTrue($encryption['enabled']);
+        $this->assertTrue($encryption['auto_encrypt']);
+        $this->assertTrue($encryption['password_protect']);
+
+        $notifications = get_option('bjlg_notification_settings');
+        $this->assertTrue($notifications['enabled']);
+        $this->assertTrue($notifications['events']['backup_complete']);
+        $this->assertFalse($notifications['events']['backup_failed']);
+        $this->assertTrue($notifications['events']['cleanup_complete']);
+        $this->assertFalse($notifications['events']['storage_warning']);
+        $this->assertTrue($notifications['channels']['email']['enabled']);
+        $this->assertTrue($notifications['channels']['slack']['enabled']);
+        $this->assertFalse($notifications['channels']['discord']['enabled']);
+
+        $performance = get_option('bjlg_performance_settings');
+        $this->assertTrue($performance['multi_threading']);
+
+        $gdrive = get_option('bjlg_gdrive_settings');
+        $this->assertTrue($gdrive['enabled']);
+
+        $webhooks = get_option('bjlg_webhook_settings');
+        $this->assertTrue($webhooks['enabled']);
+
+        $this->assertTrue(get_option('bjlg_ajax_debug_enabled'));
+    }
+
         public function test_update_settings_rejects_empty_payload(): void
         {
             $api = new BJLG\BJLG_REST_API();
