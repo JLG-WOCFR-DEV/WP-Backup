@@ -77,6 +77,58 @@ final class BJLG_BackupFilesystemTest extends TestCase
         $this->assertStringContainsString($nonexistentFolder, BJLG_Debug::$logs[0]);
     }
 
+    public function test_add_folder_to_zip_throws_exception_when_zip_addfile_fails(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $zip = new class extends ZipArchive {
+            /** @var array<int, array{0: string, 1: string}> */
+            public $addAttempts = [];
+
+            public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
+            {
+                $this->addAttempts[] = [$filepath, $entryname];
+
+                return false;
+            }
+        };
+
+        $root = sys_get_temp_dir() . '/bjlg-addfile-fail-' . uniqid('', true);
+        $directory = $root . '/data';
+
+        try {
+            if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
+                $this->fail('Unable to create the directory for the addFile failure test.');
+            }
+
+            $file = $directory . '/file.txt';
+            file_put_contents($file, 'data');
+
+            try {
+                $backup->add_folder_to_zip($zip, $directory, 'data/');
+                $this->fail('An exception should have been thrown when ZipArchive::addFile fails.');
+            } catch (Exception $exception) {
+                $this->assertStringContainsString($file, $exception->getMessage());
+            }
+
+            $this->assertNotEmpty($zip->addAttempts);
+            $this->assertNotEmpty(BJLG_Debug::$logs);
+            $this->assertStringContainsString($file, implode("\n", BJLG_Debug::$logs));
+        } finally {
+            if (isset($file) && file_exists($file)) {
+                @unlink($file);
+            }
+
+            if (is_dir($directory)) {
+                @rmdir($directory);
+            }
+
+            if (is_dir($root)) {
+                @rmdir($root);
+            }
+        }
+    }
+
     public function test_backup_migration_plugin_is_not_excluded_by_default(): void
     {
         $backup = new BJLG\BJLG_Backup();
@@ -160,6 +212,81 @@ final class BJLG_BackupFilesystemTest extends TestCase
             @unlink($file_path);
             @rmdir($windows_dir);
             @rmdir($root);
+        }
+    }
+
+    public function test_add_folder_to_zip_throws_exception_when_setcompressionname_fails(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $zip = new class extends ZipArchive {
+            /** @var array<int, array{0: string, 1: string}> */
+            public $addedFiles = [];
+
+            public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
+            {
+                $this->addedFiles[] = [$filepath, $entryname];
+
+                return true;
+            }
+
+            public function setCompressionName($name, $method, $compflags = 0): bool
+            {
+                return false;
+            }
+        };
+
+        $root = sys_get_temp_dir() . '/bjlg-compression-fail-' . uniqid('', true);
+        $directory = $root . '/large';
+
+        try {
+            if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
+                $this->fail('Unable to create the directory for the compression failure test.');
+            }
+
+            $large_file = $directory . '/large.bin';
+
+            $handle = fopen($large_file, 'w');
+            if ($handle === false) {
+                $this->fail('Unable to create the large file for the compression failure test.');
+            }
+
+            try {
+                $seek_result = fseek($handle, 50 * 1024 * 1024);
+                if ($seek_result !== 0) {
+                    $this->fail('Unable to create the large file of the expected size for the compression failure test.');
+                }
+
+                $write_result = fwrite($handle, '0');
+                if ($write_result === false) {
+                    $this->fail('Unable to finalize the large file for the compression failure test.');
+                }
+            } finally {
+                fclose($handle);
+            }
+
+            try {
+                $backup->add_folder_to_zip($zip, $directory, 'large/');
+                $this->fail('An exception should have been thrown when ZipArchive::setCompressionName fails.');
+            } catch (Exception $exception) {
+                $this->assertStringContainsString('large/large.bin', $exception->getMessage());
+            }
+
+            $this->assertNotEmpty($zip->addedFiles);
+            $this->assertNotEmpty(BJLG_Debug::$logs);
+            $this->assertStringContainsString('large/large.bin', implode("\n", BJLG_Debug::$logs));
+        } finally {
+            if (isset($large_file) && file_exists($large_file)) {
+                @unlink($large_file);
+            }
+
+            if (is_dir($directory)) {
+                @rmdir($directory);
+            }
+
+            if (is_dir($root)) {
+                @rmdir($root);
+            }
         }
     }
 

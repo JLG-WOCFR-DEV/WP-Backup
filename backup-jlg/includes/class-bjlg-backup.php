@@ -1148,7 +1148,15 @@ class BJLG_Backup {
 
         // Ajouter au ZIP via un fichier temporaire puis le supprimer
         if (!$zip->addFile($temp_file, $sql_filename)) {
-            throw new Exception("Impossible d'ajouter l'export SQL à l'archive.");
+            $message = sprintf(
+                "Impossible d'ajouter l'export SQL temporaire %s à l'archive sous %s.",
+                $this->normalize_path($temp_file),
+                $sql_filename
+            );
+
+            BJLG_Debug::log($message);
+
+            throw new Exception($message);
         }
 
         BJLG_Debug::log("Export de la base de données terminé.");
@@ -1410,12 +1418,45 @@ class BJLG_Backup {
                     }
 
                     // Ajouter le fichier
-                    if (filesize($file_path) < 50 * 1024 * 1024) { // Moins de 50MB
-                        $zip->addFile($file_path, $relative_path);
+                    $file_size = @filesize($file_path);
+                    $normalized_path_for_log = $normalized_file_path !== '' ? $normalized_file_path : $file_path;
+
+                    if ($file_size === false || $file_size < 50 * 1024 * 1024) { // Moins de 50MB
+                        if (!$zip->addFile($file_path, $relative_path)) {
+                            $message = sprintf(
+                                "Impossible d'ajouter le fichier %s à l'archive (%s).",
+                                $normalized_path_for_log,
+                                $relative_path
+                            );
+
+                            BJLG_Debug::log($message);
+
+                            throw new Exception($message);
+                        }
                     } else {
                         // Pour les gros fichiers, utiliser le streaming
-                        $zip->addFile($file_path, $relative_path);
-                        $zip->setCompressionName($relative_path, ZipArchive::CM_STORE);
+                        if (!$zip->addFile($file_path, $relative_path)) {
+                            $message = sprintf(
+                                "Impossible d'ajouter le fichier volumineux %s à l'archive (%s).",
+                                $normalized_path_for_log,
+                                $relative_path
+                            );
+
+                            BJLG_Debug::log($message);
+
+                            throw new Exception($message);
+                        }
+
+                        if (!$zip->setCompressionName($relative_path, ZipArchive::CM_STORE)) {
+                            $message = sprintf(
+                                "Impossible de définir la compression pour le fichier %s dans l'archive.",
+                                $relative_path
+                            );
+
+                            BJLG_Debug::log($message);
+
+                            throw new Exception($message);
+                        }
                     }
                 }
             }

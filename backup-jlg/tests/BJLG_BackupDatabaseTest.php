@@ -226,7 +226,8 @@ final class BJLG_BackupDatabaseTest extends TestCase
                 $method->invokeArgs($backup, [&$zip, false]);
                 $this->fail("Expected exception was not thrown when addFile failed");
             } catch (Exception $exception) {
-                $this->assertStringContainsString("Impossible d'ajouter l'export SQL à l'archive.", $exception->getMessage());
+                $this->assertStringContainsString("Impossible d'ajouter l'export SQL temporaire", $exception->getMessage());
+                $this->assertStringContainsString('database.sql', $exception->getMessage());
             }
 
             $temporaryFilesProperty = new ReflectionProperty(BJLG\BJLG_Backup::class, 'temporary_files');
