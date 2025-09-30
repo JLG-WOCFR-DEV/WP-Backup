@@ -196,6 +196,8 @@ curl -X POST https://site.com/?bjlg_trigger_backup=1 \
 
 > ℹ️ L'ancien format `https://site.com/?bjlg_trigger_backup=VOTRE_CLE_WEBHOOK` reste supporté durant la période de transition, mais sera retiré après migration.
 
+> ❗ Si aucun composant valide n'est demandé (`components=foo` par exemple), l'API répond désormais avec un code **400** et le message `No valid components were requested. Allowed components are: db, plugins, themes, uploads.` sans réserver de créneau de sauvegarde.
+
 ## 📊 Endpoints API
 
 | Méthode | Endpoint | Description |

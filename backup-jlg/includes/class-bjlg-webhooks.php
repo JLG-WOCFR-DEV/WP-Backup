@@ -198,10 +198,50 @@ class BJLG_Webhooks {
         }
 
         // Paramètres optionnels du webhook
-        $components = isset($_GET['components']) ?
-            explode(',', sanitize_text_field($_GET['components'])) :
-            ['db', 'plugins', 'themes', 'uploads'];
-        
+        $default_allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+        /**
+         * Filtre les composants autorisés pour les sauvegardes déclenchées via webhook.
+         *
+         * @param array<int, string> $default_allowed_components Liste de composants autorisés par défaut.
+         */
+        $allowed_components = apply_filters('bjlg_webhook_allowed_components', $default_allowed_components);
+        $allowed_components = array_values(array_unique(array_filter(
+            array_map('sanitize_key', (array) $allowed_components)
+        )));
+
+        if (empty($allowed_components)) {
+            $allowed_components = $default_allowed_components;
+        }
+
+        if (isset($_GET['components'])) {
+            $raw_components = wp_unslash($_GET['components']);
+
+            if (is_string($raw_components)) {
+                $raw_components = array_map('trim', explode(',', $raw_components));
+            }
+
+            $requested_components = array_filter(array_map('sanitize_key', (array) $raw_components));
+            $components = array_values(array_unique(array_intersect($requested_components, $allowed_components)));
+
+            if (empty($components)) {
+                BJLG_Debug::log('Webhook rejected: no valid components provided.');
+                BJLG_History::log(
+                    'webhook_invalid_components',
+                    'failure',
+                    'Composants invalides fournis via webhook.'
+                );
+
+                wp_send_json_error([
+                    'message' => sprintf(
+                        __('No valid components were requested. Allowed components are: %s.', 'backup-jlg'),
+                        implode(', ', $allowed_components)
+                    ),
+                ], 400);
+            }
+        } else {
+            $components = $allowed_components;
+        }
+
         $encrypt = isset($_GET['encrypt']) && $_GET['encrypt'] === 'true';
         $incremental = isset($_GET['incremental']) && $_GET['incremental'] === 'true';
         
