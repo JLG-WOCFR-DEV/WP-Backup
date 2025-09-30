@@ -1801,6 +1801,26 @@ class BJLG_REST_API {
             }
         }
 
+        $size = filesize($filepath);
+
+        if ($size === false) {
+            BJLG_Debug::error(sprintf(
+                'Impossible de récupérer la taille du fichier de sauvegarde pour "%s".',
+                $filepath
+            ));
+
+            $status = \file_exists($filepath) ? 500 : 404;
+            $message = $status === 404
+                ? __('La sauvegarde demandée est introuvable.', 'backup-jlg')
+                : __('Impossible de déterminer la taille de la sauvegarde.', 'backup-jlg');
+
+            return new WP_Error(
+                'bjlg_backup_size_unavailable',
+                $message,
+                ['status' => $status]
+            );
+        }
+
         $download_url = BJLG_Actions::build_download_url($download_token);
 
         return rest_ensure_response([
@@ -1808,7 +1828,7 @@ class BJLG_REST_API {
             'expires_in' => $transient_ttl,
             'download_token' => $download_token,
             'filename' => basename($filepath),
-            'size' => filesize($filepath)
+            'size' => $size
         ]);
     }
 
