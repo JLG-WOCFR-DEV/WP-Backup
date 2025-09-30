@@ -389,7 +389,7 @@ class BJLG_Restore {
         }
 
         try {
-            $encrypted_password = $this->encrypt_password_for_transient($password);
+            $encrypted_password = self::encrypt_password_for_transient($password);
         } catch (Exception $exception) {
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log('Échec du chiffrement du mot de passe de restauration : ' . $exception->getMessage(), 'error');
@@ -1078,12 +1078,12 @@ class BJLG_Restore {
      * @param string|null $password
      * @return string|null
      */
-    private function encrypt_password_for_transient($password) {
+    public static function encrypt_password_for_transient($password) {
         if ($password === null) {
             return null;
         }
 
-        $key = $this->get_password_encryption_key();
+        $key = self::get_password_encryption_key();
         $iv_length = openssl_cipher_iv_length('aes-256-cbc');
         if ($iv_length === false) {
             throw new RuntimeException('Méthode de chiffrement indisponible.');
@@ -1116,7 +1116,7 @@ class BJLG_Restore {
             return null;
         }
 
-        $key = $this->get_password_encryption_key();
+        $key = self::get_password_encryption_key();
         $iv_length = openssl_cipher_iv_length('aes-256-cbc');
         if ($iv_length === false) {
             throw new RuntimeException('Méthode de déchiffrement indisponible.');
@@ -1149,7 +1149,7 @@ class BJLG_Restore {
      *
      * @return string
      */
-    private function get_password_encryption_key() {
+    private static function get_password_encryption_key() {
         $salts = [];
 
         if (function_exists('wp_salt')) {

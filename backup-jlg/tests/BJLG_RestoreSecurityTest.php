@@ -587,7 +587,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
 
         $manifest = [
             'type' => 'test',
-            'contains' => [],
+            'contains' => ['db'],
         ];
 
         $zip->addFromString('backup-manifest.json', json_encode($manifest));
