@@ -430,42 +430,13 @@ class BJLG_History {
     }
 
     /**
-     * Obtient l'adresse IP du client
+     * Obtient l'adresse IP du client en respectant la configuration des proxies de confiance.
      */
     private static function get_client_ip() {
-        $ip_keys = ['HTTP_CF_CONNECTING_IP', 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED',
-                   'HTTP_X_CLUSTER_CLIENT_IP', 'HTTP_FORWARDED_FOR', 'HTTP_FORWARDED', 'REMOTE_ADDR'];
-        
-        foreach ($ip_keys as $key) {
-            if (array_key_exists($key, $_SERVER) === true) {
-                $ip = $_SERVER[$key];
-                
-                // Pour X-Forwarded-For, prendre la première IP
-                if (strpos($ip, ',') !== false) {
-                    $ip = explode(',', $ip)[0];
-                }
-                
-                $ip = trim($ip);
-                
-                $validated_ip = filter_var($ip, FILTER_VALIDATE_IP);
-
-                if ($validated_ip !== false) {
-                    return $validated_ip;
-                }
-            }
-        }
-
-        $fallback_ip = $_SERVER['REMOTE_ADDR'] ?? '';
-
-        if (is_string($fallback_ip) && $fallback_ip !== '') {
-            $validated_fallback = filter_var($fallback_ip, FILTER_VALIDATE_IP);
-
-            if ($validated_fallback !== false) {
-                return $validated_fallback;
-            }
-        }
-
-        return 'Unknown';
+        return BJLG_Client_IP_Helper::get_client_ip([
+            'bjlg_history_trusted_proxy_headers',
+            'bjlg_rate_limiter_trusted_proxy_headers',
+        ]);
     }
     
     /**
