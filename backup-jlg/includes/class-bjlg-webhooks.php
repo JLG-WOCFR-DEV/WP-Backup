@@ -102,6 +102,25 @@ class BJLG_Webhooks {
         }
 
         $stored_key = self::get_webhook_key();
+        $rate_limiter = new BJLG_Rate_Limiter();
+        $rate_limiter_request = new class {
+            public function get_header($name)
+            {
+                $server_key = 'HTTP_' . strtoupper(str_replace('-', '_', $name));
+
+                if (isset($_SERVER[$server_key])) {
+                    $value = $_SERVER[$server_key];
+
+                    if (is_array($value)) {
+                        $value = reset($value);
+                    }
+
+                    return is_string($value) ? trim($value) : '';
+                }
+
+                return '';
+            }
+        };
         $request_method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
         $provided_key = '';
         $key_source = '';
@@ -245,6 +264,17 @@ class BJLG_Webhooks {
         $encrypt = isset($_GET['encrypt']) && $_GET['encrypt'] === 'true';
         $incremental = isset($_GET['incremental']) && $_GET['incremental'] === 'true';
         
+        if (!$rate_limiter->check($rate_limiter_request)) {
+            $ip = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
+            BJLG_Debug::log("Webhook rate limit exceeded. IP: $ip");
+            BJLG_History::log('webhook_rate_limited', 'warning', "Déclenchement webhook refusé (limite atteinte) depuis IP: $ip");
+
+            wp_send_json_error([
+                'message' => __('Too many webhook requests. Please slow down.', 'backup-jlg')
+            ], 429);
+            exit;
+        }
+
         BJLG_Debug::log("Webhook déclenché avec succès. Planification d'une sauvegarde en arrière-plan.");
 
         // Enregistrer l'appel du webhook
