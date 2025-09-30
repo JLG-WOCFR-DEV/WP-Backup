@@ -149,6 +149,8 @@ curl -X POST https://site.com/wp-json/backup-jlg/v1/backups \
   }'
 ```
 
+> ℹ️ La propriété `description`, si fournie, est assainie et limitée à 255 caractères avant d'être stockée afin de garantir la sécurité des informations renvoyées par `bjlg_check_backup_progress`.
+
 #### Obtenir le statut
 
 ```bash

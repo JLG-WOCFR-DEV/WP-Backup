@@ -1306,6 +1306,27 @@ class BJLG_REST_API {
 
         $incremental = ($type === 'incremental');
         $description = $request->get_param('description');
+        $sanitized_description = '';
+
+        if (is_scalar($description)) {
+            $raw_description = (string) $description;
+
+            if (function_exists('sanitize_text_field')) {
+                $raw_description = sanitize_text_field($raw_description);
+            }
+
+            $max_description_length = 255;
+
+            if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+                if (mb_strlen($raw_description, 'UTF-8') > $max_description_length) {
+                    $raw_description = mb_substr($raw_description, 0, $max_description_length, 'UTF-8');
+                }
+            } elseif (strlen($raw_description) > $max_description_length) {
+                $raw_description = substr($raw_description, 0, $max_description_length);
+            }
+
+            $sanitized_description = $raw_description;
+        }
 
         // Créer une tâche de sauvegarde
         $task_id = 'bjlg_backup_' . md5(uniqid('api', true));
@@ -1317,7 +1338,7 @@ class BJLG_REST_API {
             'encrypt' => $encrypt,
             'incremental' => $incremental,
             'type' => $type,
-            'description' => $description,
+            'description' => $sanitized_description,
             'source' => 'api',
             'start_time' => time()
         ];

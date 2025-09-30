@@ -2538,6 +2538,79 @@ namespace {
         $this->assertFalse($task_data['encrypt']);
     }
 
+    public function test_create_backup_sanitizes_description_for_progress_check(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+        $GLOBALS['bjlg_test_scheduled_events'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $html_description = '<strong>Backup</strong> via <em>REST</em> <script>alert(1);</script> ' . str_repeat('x', 400);
+
+        $request = new class($html_description) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            /**
+             * @param string $description
+             */
+            public function __construct($description)
+            {
+                $this->params = [
+                    'components' => ['db'],
+                    'type' => 'full',
+                    'encrypt' => 'false',
+                    'description' => $description,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $response = $api->create_backup($request);
+
+        $this->assertIsArray($response);
+        $this->assertArrayHasKey('task_id', $response);
+
+        $task_id = $response['task_id'];
+
+        $this->assertArrayHasKey($task_id, $GLOBALS['bjlg_test_transients']);
+        $task_data = $GLOBALS['bjlg_test_transients'][$task_id];
+
+        $expected_description = sanitize_text_field($html_description);
+        $max_description_length = 255;
+
+        if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+            if (mb_strlen($expected_description, 'UTF-8') > $max_description_length) {
+                $expected_description = mb_substr($expected_description, 0, $max_description_length, 'UTF-8');
+            }
+        } elseif (strlen($expected_description) > $max_description_length) {
+            $expected_description = substr($expected_description, 0, $max_description_length);
+        }
+
+        $this->assertArrayHasKey('description', $task_data);
+        $this->assertSame($expected_description, $task_data['description']);
+
+        $_POST['nonce'] = 'test-nonce';
+        $_POST['task_id'] = $task_id;
+
+        $backup = new BJLG\BJLG_Backup();
+
+        try {
+            $backup->handle_check_backup_progress();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response_exception) {
+            $this->assertIsArray($response_exception->data);
+            $this->assertArrayHasKey('description', $response_exception->data);
+            $this->assertSame($expected_description, $response_exception->data['description']);
+        } finally {
+            unset($_POST['nonce'], $_POST['task_id']);
+        }
+    }
+
     public function test_get_status_handles_missing_backup_directory(): void
     {
         $api = new BJLG\BJLG_REST_API();
