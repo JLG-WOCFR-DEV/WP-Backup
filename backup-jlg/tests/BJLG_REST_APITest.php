@@ -54,6 +54,7 @@ namespace {
         class_alias('BJLG_Debug', 'BJLG\\BJLG_Debug');
     }
 
+    require_once __DIR__ . '/../includes/class-bjlg-client-ip-helper.php';
     require_once __DIR__ . '/../includes/class-bjlg-cleanup.php';
     require_once __DIR__ . '/../includes/class-bjlg-actions.php';
     require_once __DIR__ . '/../includes/class-bjlg-rest-api.php';
@@ -123,6 +124,7 @@ namespace {
         /** @var array<int, string> */
         private static $tests_without_auth_key = [
             'test_a_authenticate_returns_error_when_auth_key_missing',
+            'test_client_ip_helper_ignores_untrusted_forwarded_for',
         ];
 
         public function runBare(): void
@@ -248,6 +250,40 @@ namespace {
         {
             if (is_file($path)) {
                 unlink($path);
+            }
+        }
+
+        public function test_client_ip_helper_ignores_untrusted_forwarded_for(): void
+        {
+            $had_remote = array_key_exists('REMOTE_ADDR', $_SERVER);
+            $previous_remote = $had_remote ? $_SERVER['REMOTE_ADDR'] : null;
+            $had_forwarded = array_key_exists('HTTP_X_FORWARDED_FOR', $_SERVER);
+            $previous_forwarded = $had_forwarded ? $_SERVER['HTTP_X_FORWARDED_FOR'] : null;
+
+            $_SERVER['REMOTE_ADDR'] = '203.0.113.10';
+            $_SERVER['HTTP_X_FORWARDED_FOR'] = '198.51.100.33';
+
+            try {
+                unset($GLOBALS['bjlg_test_options']['bjlg_trusted_proxy_headers']);
+
+                $ip = \BJLG\BJLG_Client_IP_Helper::get_client_ip([
+                    'bjlg_history_trusted_proxy_headers',
+                    'bjlg_rate_limiter_trusted_proxy_headers',
+                ]);
+
+                $this->assertSame('203.0.113.10', $ip);
+            } finally {
+                if ($had_remote) {
+                    $_SERVER['REMOTE_ADDR'] = $previous_remote;
+                } else {
+                    unset($_SERVER['REMOTE_ADDR']);
+                }
+
+                if ($had_forwarded) {
+                    $_SERVER['HTTP_X_FORWARDED_FOR'] = $previous_forwarded;
+                } else {
+                    unset($_SERVER['HTTP_X_FORWARDED_FOR']);
+                }
             }
         }
 

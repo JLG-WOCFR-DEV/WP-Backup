@@ -83,7 +83,7 @@ final class BJLG_Plugin {
     
     private function include_files() {
         $files_to_load = [
-            'class-bjlg-debug.php', 'class-bjlg-history.php', 'class-bjlg-settings.php',
+            'class-bjlg-debug.php', 'class-bjlg-client-ip-helper.php', 'class-bjlg-history.php', 'class-bjlg-settings.php',
             'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php',
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
