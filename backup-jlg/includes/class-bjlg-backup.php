@@ -697,6 +697,15 @@ class BJLG_Backup {
     }
 
     /**
+     * Crée une nouvelle instance de ZipArchive.
+     *
+     * @return ZipArchive
+     */
+    protected function create_zip_archive() {
+        return new ZipArchive();
+    }
+
+    /**
      * Exécute la tâche de sauvegarde en arrière-plan
      */
     public function run_backup_task($task_id) {
@@ -717,6 +726,9 @@ class BJLG_Backup {
 
             return;
         }
+
+        $components = [];
+        $backup_filepath = null;
 
         try {
             $this->cleanup_temporary_files();
@@ -786,7 +798,7 @@ class BJLG_Backup {
             BJLG_Debug::log("Création du fichier : $backup_filename");
 
             // Créer l'archive ZIP
-            $zip = new ZipArchive();
+            $zip = $this->create_zip_archive();
             $zip_open_result = $zip->open($backup_filepath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
 
             if ($zip_open_result !== true) {
@@ -1039,7 +1051,7 @@ class BJLG_Backup {
      */
     private function create_manifest($components, $type) {
         global $wp_version;
-        
+
         return [
             'version' => BJLG_VERSION,
             'wp_version' => $wp_version,
@@ -1056,6 +1068,22 @@ class BJLG_Backup {
             'file_count' => 0,
             'checksum' => ''
         ];
+    }
+
+    /**
+     * Vérifie qu'une opération ZipArchive s'est correctement déroulée.
+     *
+     * @param bool   $result
+     * @param string $message
+     *
+     * @throws Exception
+     */
+    private function assert_zip_operation_success($result, $message) {
+        if ($result !== true) {
+            BJLG_Debug::log($message);
+
+            throw new Exception($message);
+        }
     }
 
     /**
@@ -1147,17 +1175,15 @@ class BJLG_Backup {
         }
 
         // Ajouter au ZIP via un fichier temporaire puis le supprimer
-        if (!$zip->addFile($temp_file, $sql_filename)) {
-            $message = sprintf(
+        $added = $zip->addFile($temp_file, $sql_filename);
+        $this->assert_zip_operation_success(
+            $added,
+            sprintf(
                 "Impossible d'ajouter l'export SQL temporaire %s à l'archive sous %s.",
                 $this->normalize_path($temp_file),
                 $sql_filename
-            );
-
-            BJLG_Debug::log($message);
-
-            throw new Exception($message);
-        }
+            )
+        );
 
         BJLG_Debug::log("Export de la base de données terminé.");
     }
@@ -1422,41 +1448,35 @@ class BJLG_Backup {
                     $normalized_path_for_log = $normalized_file_path !== '' ? $normalized_file_path : $file_path;
 
                     if ($file_size === false || $file_size < 50 * 1024 * 1024) { // Moins de 50MB
-                        if (!$zip->addFile($file_path, $relative_path)) {
-                            $message = sprintf(
+                        $added = $zip->addFile($file_path, $relative_path);
+                        $this->assert_zip_operation_success(
+                            $added,
+                            sprintf(
                                 "Impossible d'ajouter le fichier %s à l'archive (%s).",
                                 $normalized_path_for_log,
                                 $relative_path
-                            );
-
-                            BJLG_Debug::log($message);
-
-                            throw new Exception($message);
-                        }
+                            )
+                        );
                     } else {
                         // Pour les gros fichiers, utiliser le streaming
-                        if (!$zip->addFile($file_path, $relative_path)) {
-                            $message = sprintf(
+                        $added = $zip->addFile($file_path, $relative_path);
+                        $this->assert_zip_operation_success(
+                            $added,
+                            sprintf(
                                 "Impossible d'ajouter le fichier volumineux %s à l'archive (%s).",
                                 $normalized_path_for_log,
                                 $relative_path
-                            );
+                            )
+                        );
 
-                            BJLG_Debug::log($message);
-
-                            throw new Exception($message);
-                        }
-
-                        if (!$zip->setCompressionName($relative_path, ZipArchive::CM_STORE)) {
-                            $message = sprintf(
+                        $compression_set = $zip->setCompressionName($relative_path, ZipArchive::CM_STORE);
+                        $this->assert_zip_operation_success(
+                            $compression_set,
+                            sprintf(
                                 "Impossible de définir la compression pour le fichier %s dans l'archive.",
                                 $relative_path
-                            );
-
-                            BJLG_Debug::log($message);
-
-                            throw new Exception($message);
-                        }
+                            )
+                        );
                     }
                 }
             }

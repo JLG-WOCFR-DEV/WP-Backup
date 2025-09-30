@@ -413,6 +413,141 @@ final class BJLG_BackupFilesystemTest extends TestCase
         }
     }
 
+    public function test_run_backup_task_marks_task_as_error_when_zip_addfile_fails(): void
+    {
+        $task_id = 'bjlg_backup_' . uniqid('zipfail', true);
+
+        $components = ['db'];
+
+        $previous_wpdb = $GLOBALS['wpdb'] ?? null;
+        $GLOBALS['wpdb'] = new class {
+            /** @var string */
+            public $prefix = 'wp_';
+
+            public function get_results($query, $output = OBJECT)
+            {
+                if (stripos($query, 'SHOW TABLES') === 0) {
+                    return [
+                        ['wp_posts'],
+                    ];
+                }
+
+                if (stripos($query, 'SELECT * FROM') === 0) {
+                    return [];
+                }
+
+                return [];
+            }
+
+            public function get_row($query, $output = OBJECT)
+            {
+                if (stripos($query, 'SHOW CREATE TABLE') === 0) {
+                    return ['wp_posts', 'CREATE TABLE `wp_posts` (`ID` bigint(20));'];
+                }
+
+                return null;
+            }
+
+            public function get_var($query)
+            {
+                if (stripos($query, 'SELECT COUNT(*)') === 0) {
+                    return 0;
+                }
+
+                return 0;
+            }
+        };
+
+        try {
+            set_transient($task_id, [
+                'progress' => 5,
+                'status' => 'pending',
+                'status_text' => 'Initialisation',
+                'components' => $components,
+                'encrypt' => false,
+                'incremental' => false,
+                'source' => 'tests',
+                'start_time' => time(),
+            ], HOUR_IN_SECONDS);
+
+            $zip = new class extends ZipArchive {
+                /** @var string|null */
+                public $openedPath = null;
+
+                #[\ReturnTypeWillChange]
+                public function open(string $filename, int $flags = 0)
+                {
+                    $directory = dirname($filename);
+                    if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
+                        throw new \RuntimeException('Unable to create backup directory for the test.');
+                    }
+
+                    file_put_contents($filename, '');
+
+                    $this->openedPath = $filename;
+
+                    return true;
+                }
+
+                #[\ReturnTypeWillChange]
+                public function addFromString(string $name, string $content, int $flags = ZipArchive::FL_OVERWRITE): bool
+                {
+                    return true;
+                }
+
+                public function addFile(string $filepath, string $entryname = "", int $start = 0, int $length = ZipArchive::LENGTH_TO_END, int $flags = ZipArchive::FL_OVERWRITE): bool
+                {
+                    return false;
+                }
+
+                #[\ReturnTypeWillChange]
+                public function close(): bool
+                {
+                    return true;
+                }
+            };
+
+            $backup = new class($zip) extends BJLG\BJLG_Backup {
+                private $zipMock;
+
+                public function __construct(ZipArchive $zipMock)
+                {
+                    $this->zipMock = $zipMock;
+                }
+
+                protected function create_zip_archive(): ZipArchive
+                {
+                    return $this->zipMock;
+                }
+            };
+
+            try {
+                $backup->run_backup_task($task_id);
+            } catch (\Throwable $throwable) {
+                $this->fail('run_backup_task should not bubble up exceptions: ' . $throwable->getMessage());
+            }
+
+            $task_state = get_transient($task_id);
+            $this->assertIsArray($task_state);
+            $this->assertSame('error', $task_state['status']);
+            $this->assertSame(100, $task_state['progress']);
+            $this->assertStringContainsString('Impossible d\'ajouter l\'export SQL temporaire', $task_state['status_text']);
+
+            $this->assertNotEmpty(BJLG_Debug::$logs);
+            $this->assertStringContainsString('Impossible d\'ajouter l\'export SQL temporaire', implode("\n", BJLG_Debug::$logs));
+
+            if ($zip->openedPath !== null) {
+                $this->assertFileDoesNotExist($zip->openedPath, 'The partial backup file should be cleaned up after a failure.');
+            }
+        } finally {
+            if ($previous_wpdb === null) {
+                unset($GLOBALS['wpdb']);
+            } else {
+                $GLOBALS['wpdb'] = $previous_wpdb;
+            }
+        }
+    }
+
     public function test_generate_backup_filename_produces_unique_names_within_same_second(): void
     {
         $backup = new BJLG\BJLG_Backup();
