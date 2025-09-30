@@ -33,8 +33,9 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $client = new FakeGoogleClient();
         $drive_files = new FakeDriveFiles();
         $drive_service = new FakeDriveService($drive_files);
+        $media_factory = new FakeMediaUploadFactory();
 
-        $destination = $this->createDestination($client, $drive_service);
+        $destination = $this->createDestination($client, $drive_service, $media_factory);
 
         update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
@@ -57,9 +58,16 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
 
         $this->assertSame('folder-42', $drive_files->lastMetadata->getParents()[0]);
         $this->assertSame(basename($file), $drive_files->lastMetadata->getName());
-        $this->assertSame('multipart', $drive_files->lastParams['uploadType']);
+        $this->assertSame('resumable', $drive_files->lastParams['uploadType']);
         $this->assertSame('application/zip', $drive_files->lastParams['mimeType']);
-        $this->assertSame(strlen('backup-content'), strlen($drive_files->lastParams['data']));
+        $this->assertSame('id,name,size', $drive_files->lastParams['fields']);
+
+        $this->assertCount(1, $media_factory->uploads);
+        $upload = $media_factory->uploads[0];
+        $this->assertSame(filesize($file), $upload->fileSize);
+        $this->assertSame('application/zip', $upload->mimeType);
+        $this->assertSame(filesize($file), array_sum($upload->chunks));
+        $this->assertSame(filesize($file), $upload->uploadedBytes);
     }
 
     public function test_upload_file_refreshes_token_when_expired(): void
@@ -72,7 +80,7 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         ];
 
         $drive_service = new FakeDriveService(new FakeDriveFiles());
-        $destination = $this->createDestination($client, $drive_service);
+        $destination = $this->createDestination($client, $drive_service, new FakeMediaUploadFactory());
 
         update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
@@ -106,7 +114,7 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $drive_files = new FakeDriveFiles();
         $drive_files->exception = new \Exception('Boom');
 
-        $destination = $this->createDestination($client, new FakeDriveService($drive_files));
+        $destination = $this->createDestination($client, new FakeDriveService($drive_files), new FakeMediaUploadFactory());
 
         update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
@@ -140,7 +148,7 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
             'expires_in' => 3600,
         ];
 
-        $destination = $this->createDestination($client, new FakeDriveService(new FakeDriveFiles()));
+        $destination = $this->createDestination($client, new FakeDriveService(new FakeDriveFiles()), new FakeMediaUploadFactory());
 
         update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
@@ -167,7 +175,7 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
     public function test_handle_oauth_callback_ignores_invalid_state(): void
     {
         $client = new FakeGoogleClient();
-        $destination = $this->createDestination($client, new FakeDriveService(new FakeDriveFiles()));
+        $destination = $this->createDestination($client, new FakeDriveService(new FakeDriveFiles()), new FakeMediaUploadFactory());
 
         update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
@@ -188,7 +196,56 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $this->assertNull($client->authCodeReceived);
     }
 
-    private function createDestination(FakeGoogleClient $client, FakeDriveService $drive_service): BJLG_Google_Drive
+    public function test_upload_file_streams_large_archive_in_chunks(): void
+    {
+        $client = new FakeGoogleClient();
+        $drive_files = new FakeDriveFiles();
+        $media_factory = new FakeMediaUploadFactory();
+        $destination = $this->createDestination($client, new FakeDriveService($drive_files), $media_factory);
+
+        update_option('bjlg_gdrive_settings', [
+            'client_id' => 'client-id',
+            'client_secret' => 'client-secret',
+            'folder_id' => '',
+            'enabled' => true,
+        ]);
+
+        update_option('bjlg_gdrive_token', [
+            'access_token' => 'token',
+            'refresh_token' => 'refresh-token',
+            'created' => time(),
+            'expires_in' => 3600,
+        ]);
+
+        $file = tempnam(sys_get_temp_dir(), 'bjlg');
+        $handle = fopen($file, 'wb');
+        $this->assertIsResource($handle);
+        $large_size = 120 * 1024 * 1024; // 120 Mo
+        ftruncate($handle, $large_size);
+        fclose($handle);
+
+        add_filter('bjlg_google_drive_chunk_size', static function ($size) {
+            return 5 * 1024 * 1024;
+        }, 10, 1);
+
+        try {
+            $destination->upload_file($file, 'task-large');
+        } finally {
+            unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_google_drive_chunk_size']);
+        }
+
+        $this->assertSame('resumable', $drive_files->lastParams['uploadType']);
+        $this->assertNotEmpty($media_factory->uploads);
+        $upload = $media_factory->uploads[0];
+
+        $this->assertSame(5 * 1024 * 1024, $upload->chunkSize);
+        $this->assertSame($large_size, $upload->fileSize);
+        $this->assertGreaterThan(1, count($upload->chunks));
+        $this->assertLessThan($large_size, max($upload->chunks));
+        $this->assertSame($large_size, array_sum($upload->chunks));
+    }
+
+    private function createDestination(FakeGoogleClient $client, FakeDriveService $drive_service, FakeMediaUploadFactory $media_factory): BJLG_Google_Drive
     {
         $test_case = $this;
 
@@ -203,6 +260,11 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
             },
             static function () {
                 return 'state-token';
+            },
+            static function ($provided_client, $request, string $mime_type, int $chunk_size) use ($media_factory, $test_case, $client) {
+                $test_case->assertSame($client, $provided_client);
+
+                return $media_factory($provided_client, $request, $mime_type, $chunk_size);
             }
         );
     }
@@ -236,6 +298,9 @@ final class FakeGoogleClient
 
     /** @var string|null */
     private $refreshToken = null;
+
+    /** @var bool */
+    public $defer = false;
 
     public function __construct()
     {
@@ -331,6 +396,11 @@ final class FakeGoogleClient
     {
         $this->state = (string) $state;
     }
+
+    public function setDefer($defer): void
+    {
+        $this->defer = (bool) $defer;
+    }
 }
 
 final class FakeDriveService
@@ -355,6 +425,9 @@ final class FakeDriveFiles
     /** @var \Exception|null */
     public $exception = null;
 
+    /** @var array<int, FakeGoogleHttpRequest> */
+    public $createdRequests = [];
+
     public function create($metadata, $params)
     {
         if ($this->exception instanceof \Exception) {
@@ -364,11 +437,93 @@ final class FakeDriveFiles
         $this->lastMetadata = $metadata;
         $this->lastParams = $params;
 
-        $file = new DriveFile();
-        $file->setId('file-123');
-        $file->setName($metadata->getName());
-        $file->setSize((string) strlen($params['data'] ?? ''));
+        $request = new FakeGoogleHttpRequest($metadata, $params);
+        $this->createdRequests[] = $request;
 
-        return $file;
+        return $request;
+    }
+}
+
+final class FakeGoogleHttpRequest
+{
+    /** @var DriveFile */
+    public $metadata;
+
+    /** @var array<string, mixed> */
+    public $params;
+
+    public function __construct(DriveFile $metadata, array $params)
+    {
+        $this->metadata = $metadata;
+        $this->params = $params;
+    }
+}
+
+final class FakeMediaUploadFactory
+{
+    /** @var array<int, FakeGoogleMediaFileUpload> */
+    public $uploads = [];
+
+    public function __invoke($client, $request, string $mimeType, int $chunkSize): FakeGoogleMediaFileUpload
+    {
+        $upload = new FakeGoogleMediaFileUpload($client, $request, $mimeType, $chunkSize);
+        $this->uploads[] = $upload;
+
+        return $upload;
+    }
+}
+
+final class FakeGoogleMediaFileUpload
+{
+    /** @var FakeGoogleClient */
+    private $client;
+
+    /** @var FakeGoogleHttpRequest */
+    public $request;
+
+    /** @var string */
+    public $mimeType;
+
+    /** @var int */
+    public $chunkSize;
+
+    /** @var int */
+    public $fileSize = 0;
+
+    /** @var array<int, int> */
+    public $chunks = [];
+
+    /** @var int */
+    public $uploadedBytes = 0;
+
+    public function __construct($client, FakeGoogleHttpRequest $request, string $mimeType, int $chunkSize)
+    {
+        $this->client = $client;
+        $this->request = $request;
+        $this->mimeType = $mimeType;
+        $this->chunkSize = $chunkSize;
+    }
+
+    public function setFileSize($size): void
+    {
+        $this->fileSize = (int) $size;
+    }
+
+    public function nextChunk($chunk)
+    {
+        $length = strlen($chunk);
+        $this->chunks[] = $length;
+        $this->uploadedBytes += $length;
+
+        if ($this->uploadedBytes >= $this->fileSize) {
+            $file = new DriveFile();
+            $file->setId('file-123');
+            $file->setName($this->request->metadata->getName());
+            $file->setSize((string) $this->fileSize);
+
+            return $file;
+        }
+
+        return null;
     }
 }
