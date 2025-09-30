@@ -603,6 +603,49 @@ class BJLG_Restore {
                 );
             }
 
+            if (empty($components_to_restore)) {
+                $error_message = "Aucun composant valide n'a été trouvé dans l'archive de sauvegarde.";
+
+                if (class_exists('BJLG_Debug')) {
+                    BJLG_Debug::log('ERREUR: ' . $error_message, 'error');
+                }
+
+                $current_status = array_merge($current_status, [
+                    'progress' => 100,
+                    'status' => 'error',
+                    'status_text' => $error_message,
+                ]);
+
+                try {
+                    set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
+                    $error_status_recorded = true;
+                } catch (Throwable $transient_exception) {
+                    BJLG_Debug::log(
+                        "ERREUR: Impossible de mettre à jour le statut de la tâche {$task_id} : " . $transient_exception->getMessage(),
+                        'error'
+                    );
+                }
+
+                try {
+                    BJLG_History::log('restore_run', 'failure', $error_message);
+                } catch (Throwable $history_exception) {
+                    BJLG_Debug::log(
+                        "ERREUR: Impossible d'enregistrer l'échec de la restauration : " . $history_exception->getMessage(),
+                        'error'
+                    );
+                }
+
+                $final_error_status = $current_status;
+
+                $zip->close();
+
+                if (is_dir($temp_extract_dir)) {
+                    $this->recursive_delete($temp_extract_dir);
+                }
+
+                return;
+            }
+
             if (in_array('db', $components_to_restore, true)) {
                 $current_status = array_merge($current_status, [
                     'progress' => 30,
