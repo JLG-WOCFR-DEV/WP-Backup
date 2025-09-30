@@ -124,7 +124,14 @@ class BJLG_Restore {
 
             // Export de la base de données
             $backup_manager->dump_database($sql_filepath);
-            $zip->addFile($sql_filepath, 'database.sql');
+            $added_to_zip = $zip->addFile($sql_filepath, 'database.sql');
+
+            if ($added_to_zip === false) {
+                $cleanup_sql_file();
+                throw new Exception(
+                    "Impossible d'ajouter l'export de la base de données à l'archive de pré-restauration."
+                );
+            }
 
             // Ajout des dossiers
             $upload_dir_info = wp_get_upload_dir();
