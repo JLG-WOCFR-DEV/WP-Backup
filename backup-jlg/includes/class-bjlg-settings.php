@@ -128,7 +128,7 @@ class BJLG_Settings {
             if (isset($_POST['plugin_name']) || isset($_POST['hide_from_non_admins'])) {
                 $wl_settings = [
                     'plugin_name'          => isset($_POST['plugin_name']) ? sanitize_text_field(wp_unslash($_POST['plugin_name'])) : '',
-                    'hide_from_non_admins' => isset($_POST['hide_from_non_admins']) && wp_unslash($_POST['hide_from_non_admins']) === 'true',
+                    'hide_from_non_admins' => isset($_POST['hide_from_non_admins']) ? $this->to_bool(wp_unslash($_POST['hide_from_non_admins'])) : false,
                 ];
                 update_option('bjlg_whitelabel_settings', $wl_settings);
                 $saved_settings['whitelabel'] = $wl_settings;
@@ -138,9 +138,9 @@ class BJLG_Settings {
             // --- Réglages de Chiffrement ---
             if (isset($_POST['encryption_enabled'])) {
                 $encryption_settings = [
-                    'enabled' => wp_unslash($_POST['encryption_enabled']) === 'true',
-                    'auto_encrypt' => isset($_POST['auto_encrypt']) && wp_unslash($_POST['auto_encrypt']) === 'true',
-                    'password_protect' => isset($_POST['password_protect']) && wp_unslash($_POST['password_protect']) === 'true',
+                    'enabled' => $this->to_bool(wp_unslash($_POST['encryption_enabled'])),
+                    'auto_encrypt' => isset($_POST['auto_encrypt']) ? $this->to_bool(wp_unslash($_POST['auto_encrypt'])) : false,
+                    'password_protect' => isset($_POST['password_protect']) ? $this->to_bool(wp_unslash($_POST['password_protect'])) : false,
                     'compression_level' => isset($_POST['compression_level']) ? max(0, intval(wp_unslash($_POST['compression_level']))) : 6
                 ];
                 update_option('bjlg_encryption_settings', $encryption_settings);
@@ -154,7 +154,7 @@ class BJLG_Settings {
                     'client_id'     => sanitize_text_field(wp_unslash($_POST['gdrive_client_id'])),
                     'client_secret' => sanitize_text_field(wp_unslash($_POST['gdrive_client_secret'])),
                     'folder_id'     => isset($_POST['gdrive_folder_id']) ? sanitize_text_field(wp_unslash($_POST['gdrive_folder_id'])) : '',
-                    'enabled'       => isset($_POST['gdrive_enabled']) && wp_unslash($_POST['gdrive_enabled']) === 'true'
+                    'enabled'       => isset($_POST['gdrive_enabled']) ? $this->to_bool(wp_unslash($_POST['gdrive_enabled'])) : false
                 ];
                 update_option('bjlg_gdrive_settings', $gdrive_settings);
                 $saved_settings['gdrive'] = $gdrive_settings;
@@ -164,24 +164,24 @@ class BJLG_Settings {
             // --- Réglages de Notifications ---
             if (isset($_POST['notifications_enabled'])) {
                 $notifications_settings = [
-                    'enabled' => wp_unslash($_POST['notifications_enabled']) === 'true',
+                    'enabled' => $this->to_bool(wp_unslash($_POST['notifications_enabled'])),
                     'email_recipients' => isset($_POST['email_recipients']) ? sanitize_text_field(wp_unslash($_POST['email_recipients'])) : '',
                     'events' => [
-                        'backup_complete' => isset($_POST['notify_backup_complete']) && wp_unslash($_POST['notify_backup_complete']) === 'true',
-                        'backup_failed' => isset($_POST['notify_backup_failed']) && wp_unslash($_POST['notify_backup_failed']) === 'true',
-                        'cleanup_complete' => isset($_POST['notify_cleanup_complete']) && wp_unslash($_POST['notify_cleanup_complete']) === 'true',
-                        'storage_warning' => isset($_POST['notify_storage_warning']) && wp_unslash($_POST['notify_storage_warning']) === 'true'
+                        'backup_complete' => isset($_POST['notify_backup_complete']) ? $this->to_bool(wp_unslash($_POST['notify_backup_complete'])) : false,
+                        'backup_failed' => isset($_POST['notify_backup_failed']) ? $this->to_bool(wp_unslash($_POST['notify_backup_failed'])) : false,
+                        'cleanup_complete' => isset($_POST['notify_cleanup_complete']) ? $this->to_bool(wp_unslash($_POST['notify_cleanup_complete'])) : false,
+                        'storage_warning' => isset($_POST['notify_storage_warning']) ? $this->to_bool(wp_unslash($_POST['notify_storage_warning'])) : false
                     ],
                     'channels' => [
                         'email' => [
-                            'enabled' => isset($_POST['channel_email']) && wp_unslash($_POST['channel_email']) === 'true'
+                            'enabled' => isset($_POST['channel_email']) ? $this->to_bool(wp_unslash($_POST['channel_email'])) : false
                         ],
                         'slack' => [
-                            'enabled' => isset($_POST['channel_slack']) && wp_unslash($_POST['channel_slack']) === 'true',
+                            'enabled' => isset($_POST['channel_slack']) ? $this->to_bool(wp_unslash($_POST['channel_slack'])) : false,
                             'webhook_url' => isset($_POST['slack_webhook_url']) ? esc_url_raw(wp_unslash($_POST['slack_webhook_url'])) : ''
                         ],
                         'discord' => [
-                            'enabled' => isset($_POST['channel_discord']) && wp_unslash($_POST['channel_discord']) === 'true',
+                            'enabled' => isset($_POST['channel_discord']) ? $this->to_bool(wp_unslash($_POST['channel_discord'])) : false,
                             'webhook_url' => isset($_POST['discord_webhook_url']) ? esc_url_raw(wp_unslash($_POST['discord_webhook_url'])) : ''
                         ]
                     ]
@@ -194,7 +194,7 @@ class BJLG_Settings {
             // --- Réglages de Performance ---
             if (isset($_POST['multi_threading'])) {
                 $performance_settings = [
-                    'multi_threading' => wp_unslash($_POST['multi_threading']) === 'true',
+                    'multi_threading' => $this->to_bool(wp_unslash($_POST['multi_threading'])),
                     'max_workers' => isset($_POST['max_workers']) ? max(1, intval(wp_unslash($_POST['max_workers']))) : 2,
                     'chunk_size' => isset($_POST['chunk_size']) ? max(1, intval(wp_unslash($_POST['chunk_size']))) : 50
                 ];
@@ -206,7 +206,7 @@ class BJLG_Settings {
             // --- Réglages Webhooks ---
             if (isset($_POST['webhook_enabled'])) {
                 $webhook_settings = [
-                    'enabled' => wp_unslash($_POST['webhook_enabled']) === 'true',
+                    'enabled' => $this->to_bool(wp_unslash($_POST['webhook_enabled'])),
                     'urls' => [
                         'backup_complete' => isset($_POST['webhook_backup_complete']) ? esc_url_raw(wp_unslash($_POST['webhook_backup_complete'])) : '',
                         'backup_failed' => isset($_POST['webhook_backup_failed']) ? esc_url_raw(wp_unslash($_POST['webhook_backup_failed'])) : '',
@@ -221,7 +221,7 @@ class BJLG_Settings {
 
             // --- Réglage du débogueur AJAX ---
             if (isset($_POST['ajax_debug_enabled'])) {
-                $ajax_debug_enabled = wp_unslash($_POST['ajax_debug_enabled']) === 'true';
+                $ajax_debug_enabled = $this->to_bool(wp_unslash($_POST['ajax_debug_enabled']));
                 update_option('bjlg_ajax_debug_enabled', $ajax_debug_enabled);
                 $saved_settings['ajax_debug'] = $ajax_debug_enabled;
                 BJLG_Debug::log("Réglage du débogueur AJAX mis à jour.");
