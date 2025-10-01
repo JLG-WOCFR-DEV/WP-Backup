@@ -187,31 +187,33 @@ class BJLG_Admin {
             <?php if (!empty($backups)):
                 usort($backups, function($a, $b) { return filemtime($b) - filemtime($a); });
                 ?>
-                <table class="wp-list-table widefat striped">
+                <table class="wp-list-table widefat striped bjlg-responsive-table bjlg-backup-table">
                     <thead><tr><th>Nom du fichier</th><th>Type</th><th>Taille</th><th>Date</th><th>Actions</th></tr></thead>
                     <tbody>
                         <?php foreach ($backups as $backup_file):
                             $filename = basename($backup_file);
                             $is_encrypted = (substr($filename, -4) === '.enc');
                             ?>
-                            <tr>
-                                <td>
+                            <tr class="bjlg-card-row">
+                                <td data-label="Nom du fichier">
                                     <strong><?php echo esc_html($filename); ?></strong>
                                     <?php if ($is_encrypted): ?><span class="bjlg-badge encrypted" style="background: #a78bfa; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-left: 5px;">Chiffré</span><?php endif; ?>
                                 </td>
-                                <td>
+                                <td data-label="Type">
                                     <?php
                                     if (strpos($filename, 'full') !== false) { echo '<span class="bjlg-badge full" style="background: #34d399; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Complète</span>'; }
                                     elseif (strpos($filename, 'incremental') !== false) { echo '<span class="bjlg-badge incremental" style="background: #60a5fa; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Incrémentale</span>'; }
                                     else { echo '<span class="bjlg-badge standard" style="background: #9ca3af; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Standard</span>'; }
                                     ?>
                                 </td>
-                                <td><?php echo size_format(filesize($backup_file), 2); ?></td>
-                                <td><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), filemtime($backup_file)); ?></td>
-                                <td>
-                                    <button class="button button-primary bjlg-restore-button" data-filename="<?php echo esc_attr($filename); ?>">Restaurer</button>
-                                    <button type="button" class="button bjlg-download-button" data-filename="<?php echo esc_attr($filename); ?>">Télécharger</button>
-                                    <button class="button button-link-delete bjlg-delete-button" data-filename="<?php echo esc_attr($filename); ?>">Supprimer</button>
+                                <td data-label="Taille"><?php echo size_format(filesize($backup_file), 2); ?></td>
+                                <td data-label="Date"><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), filemtime($backup_file)); ?></td>
+                                <td data-label="Actions" class="bjlg-card-actions-cell">
+                                    <div class="bjlg-card-actions">
+                                        <button class="button button-primary bjlg-restore-button" data-filename="<?php echo esc_attr($filename); ?>">Restaurer</button>
+                                        <button type="button" class="button bjlg-download-button" data-filename="<?php echo esc_attr($filename); ?>">Télécharger</button>
+                                        <button class="button button-link-delete bjlg-delete-button" data-filename="<?php echo esc_attr($filename); ?>">Supprimer</button>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -301,7 +303,7 @@ class BJLG_Admin {
         <div class="bjlg-section">
             <h2>Historique des 50 dernières actions</h2>
             <?php if (!empty($history)): ?>
-                <table class="wp-list-table widefat striped">
+                <table class="wp-list-table widefat striped bjlg-responsive-table bjlg-history-table">
                     <thead><tr><th style="width: 180px;">Date</th><th>Action</th><th style="width: 100px;">Statut</th><th>Détails</th></tr></thead>
                     <tbody>
                         <?php foreach ($history as $entry):
@@ -311,11 +313,11 @@ class BJLG_Admin {
                                 case 'failure': $status_class = 'error'; $status_icon = '❌'; break;
                                 case 'info': $status_class = 'info'; $status_icon = 'ℹ️'; break;
                             } ?>
-                            <tr>
-                                <td><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($entry['timestamp'])); ?></td>
-                                <td><strong><?php echo esc_html(str_replace('_', ' ', ucfirst($entry['action_type']))); ?></strong></td>
-                                <td><span class="bjlg-status <?php echo esc_attr($status_class); ?>"><?php echo $status_icon . ' ' . esc_html(ucfirst($entry['status'])); ?></span></td>
-                                <td><?php echo esc_html($entry['details']); ?></td>
+                            <tr class="bjlg-card-row">
+                                <td data-label="Date"><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($entry['timestamp'])); ?></td>
+                                <td data-label="Action"><strong><?php echo esc_html(str_replace('_', ' ', ucfirst($entry['action_type']))); ?></strong></td>
+                                <td data-label="Statut"><span class="bjlg-status <?php echo esc_attr($status_class); ?>"><?php echo $status_icon . ' ' . esc_html(ucfirst($entry['status'])); ?></span></td>
+                                <td data-label="Détails"><?php echo esc_html($entry['details']); ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
