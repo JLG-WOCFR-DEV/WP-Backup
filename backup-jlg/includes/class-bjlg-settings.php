@@ -178,12 +178,17 @@ class BJLG_Settings {
                     'region' => isset($_POST['s3_region']) ? sanitize_text_field(wp_unslash($_POST['s3_region'])) : '',
                     'bucket' => isset($_POST['s3_bucket']) ? sanitize_text_field(wp_unslash($_POST['s3_bucket'])) : '',
                     'server_side_encryption' => isset($_POST['s3_server_side_encryption']) ? sanitize_text_field(wp_unslash($_POST['s3_server_side_encryption'])) : '',
+                    'kms_key_id' => isset($_POST['s3_kms_key_id']) ? sanitize_text_field(wp_unslash($_POST['s3_kms_key_id'])) : '',
                     'object_prefix' => isset($_POST['s3_object_prefix']) ? sanitize_text_field(wp_unslash($_POST['s3_object_prefix'])) : '',
                     'enabled' => isset($_POST['s3_enabled']) ? $this->to_bool(wp_unslash($_POST['s3_enabled'])) : false,
                 ];
 
                 if (!in_array($s3_settings['server_side_encryption'], ['AES256', 'aws:kms'], true)) {
                     $s3_settings['server_side_encryption'] = '';
+                }
+
+                if ($s3_settings['server_side_encryption'] !== 'aws:kms') {
+                    $s3_settings['kms_key_id'] = '';
                 }
 
                 $s3_settings['object_prefix'] = trim($s3_settings['object_prefix']);

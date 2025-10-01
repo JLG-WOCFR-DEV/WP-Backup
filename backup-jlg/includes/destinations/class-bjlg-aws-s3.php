@@ -93,7 +93,13 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         echo "<option value=''" . selected($sse_value, '', false) . ">Désactivé</option>";
         echo "<option value='AES256'" . selected($sse_value, 'AES256', false) . ">AES-256 (SSE-S3)</option>";
         echo "<option value='aws:kms'" . selected($sse_value, 'aws:kms', false) . ">AWS KMS (clé gérée)</option>";
-        echo "</select><p class='description'>Activez le chiffrement côté serveur pour protéger vos sauvegardes.</p></td></tr>";
+        echo "</select><p class='description'>Activez le chiffrement côté serveur pour protéger vos sauvegardes.</p>";
+
+        echo "<div class='bjlg-field bjlg-field--kms'>";
+        echo "<label for='bjlg-s3-kms-key' class='screen-reader-text'>ID de la clé KMS</label>";
+        echo "<input type='text' id='bjlg-s3-kms-key' name='s3_kms_key_id' value='" . esc_attr($settings['kms_key_id']) . "' class='regular-text' placeholder='arn:aws:kms:...'>";
+        echo "<p class='description'>Requis uniquement pour l'option AWS KMS. Laissez vide pour utiliser la clé gérée par AWS.</p>";
+        echo "</div></td></tr>";
 
         $enabled_attr = $settings['enabled'] ? " checked='checked'" : '';
         echo "<tr><th scope='row'>Activer Amazon S3</th><td><label><input type='checkbox' name='s3_enabled' value='true'{$enabled_attr}> Activer l'envoi automatique vers Amazon S3.</label></td></tr>";
@@ -156,6 +162,10 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
 
         if ($settings['server_side_encryption'] !== '') {
             $headers['x-amz-server-side-encryption'] = $settings['server_side_encryption'];
+
+            if ($settings['server_side_encryption'] === 'aws:kms' && $settings['kms_key_id'] !== '') {
+                $headers['x-amz-server-side-encryption-aws-kms-key-id'] = $settings['kms_key_id'];
+            }
         }
 
         $this->perform_request('PUT', $object_key, $contents, $headers, $settings);
@@ -229,9 +239,14 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
             'region' => isset($_POST['s3_region']) ? sanitize_text_field(wp_unslash($_POST['s3_region'])) : '',
             'bucket' => isset($_POST['s3_bucket']) ? sanitize_text_field(wp_unslash($_POST['s3_bucket'])) : '',
             'server_side_encryption' => isset($_POST['s3_server_side_encryption']) ? sanitize_text_field(wp_unslash($_POST['s3_server_side_encryption'])) : '',
+            'kms_key_id' => isset($_POST['s3_kms_key_id']) ? sanitize_text_field(wp_unslash($_POST['s3_kms_key_id'])) : '',
             'object_prefix' => isset($_POST['s3_object_prefix']) ? sanitize_text_field(wp_unslash($_POST['s3_object_prefix'])) : '',
             'enabled' => true,
         ];
+
+        if ($settings['server_side_encryption'] !== 'aws:kms') {
+            $settings['kms_key_id'] = '';
+        }
 
         try {
             $this->test_connection($settings);
@@ -402,6 +417,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
             'region' => '',
             'bucket' => '',
             'server_side_encryption' => '',
+            'kms_key_id' => '',
             'object_prefix' => '',
             'enabled' => false,
         ];

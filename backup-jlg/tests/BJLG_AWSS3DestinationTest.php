@@ -50,6 +50,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
         $this->assertStringContainsString('Credential=AKIDEXAMPLE/20210101/us-east-1/s3/aws4_request', $headers['Authorization']);
         $this->assertSame('AES256', $headers['x-amz-server-side-encryption']);
         $this->assertSame('task-42', $headers['x-amz-meta-bjlg-task']);
+        $this->assertArrayNotHasKey('x-amz-server-side-encryption-aws-kms-key-id', $headers);
         $this->assertSame('application/zip', $headers['Content-Type']);
         $this->assertSame((string) filesize($file), $headers['Content-Length']);
         $this->assertSame('archive-content', $request['args']['body']);
@@ -192,6 +193,35 @@ final class BJLG_AWSS3DestinationTest extends TestCase
         $this->assertCount(1, $captured);
         $this->assertSame('DELETE', $captured[0]['args']['method']);
         $this->assertSame('https://files-bucket.s3.eu-central-1.amazonaws.com/archives/old.zip', $captured[0]['url']);
+    }
+
+    public function test_upload_file_with_kms_key_sets_header(): void
+    {
+        $destination = $this->createDestination();
+
+        update_option('bjlg_s3_settings', [
+            'access_key' => 'AKIDKMS',
+            'secret_key' => 'kms-secret',
+            'region' => 'eu-west-3',
+            'bucket' => 'kms-bucket',
+            'server_side_encryption' => 'aws:kms',
+            'kms_key_id' => 'arn:aws:kms:eu-west-3:123:key/abc',
+            'enabled' => true,
+        ]);
+
+        $file = tempnam(sys_get_temp_dir(), 'bjlg');
+        self::assertNotFalse($file);
+        file_put_contents($file, 'kms-content');
+
+        $destination->upload_file($file, 'task-99');
+
+        $this->assertCount(1, $this->requests);
+        $headers = $this->requests[0]['args']['headers'];
+
+        $this->assertSame('aws:kms', $headers['x-amz-server-side-encryption']);
+        $this->assertSame('arn:aws:kms:eu-west-3:123:key/abc', $headers['x-amz-server-side-encryption-aws-kms-key-id']);
+
+        unlink($file);
     }
 
     private function createDestination(?callable $handler = null): BJLG_AWS_S3
