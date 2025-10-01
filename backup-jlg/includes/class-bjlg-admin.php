@@ -188,27 +188,35 @@ class BJLG_Admin {
                 usort($backups, function($a, $b) { return filemtime($b) - filemtime($a); });
                 ?>
                 <table class="wp-list-table widefat striped bjlg-responsive-table bjlg-backup-table">
-                    <thead><tr><th>Nom du fichier</th><th>Type</th><th>Taille</th><th>Date</th><th>Actions</th></tr></thead>
+                    <thead>
+                        <tr>
+                            <th scope="col">Nom du fichier</th>
+                            <th scope="col">Type</th>
+                            <th scope="col">Taille</th>
+                            <th scope="col">Date</th>
+                            <th scope="col">Actions</th>
+                        </tr>
+                    </thead>
                     <tbody>
                         <?php foreach ($backups as $backup_file):
                             $filename = basename($backup_file);
                             $is_encrypted = (substr($filename, -4) === '.enc');
                             ?>
                             <tr class="bjlg-card-row">
-                                <td data-label="Nom du fichier">
+                                <td class="bjlg-card-cell" data-label="Nom du fichier">
                                     <strong><?php echo esc_html($filename); ?></strong>
                                     <?php if ($is_encrypted): ?><span class="bjlg-badge encrypted" style="background: #a78bfa; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-left: 5px;">Chiffré</span><?php endif; ?>
                                 </td>
-                                <td data-label="Type">
+                                <td class="bjlg-card-cell" data-label="Type">
                                     <?php
                                     if (strpos($filename, 'full') !== false) { echo '<span class="bjlg-badge full" style="background: #34d399; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Complète</span>'; }
                                     elseif (strpos($filename, 'incremental') !== false) { echo '<span class="bjlg-badge incremental" style="background: #60a5fa; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Incrémentale</span>'; }
                                     else { echo '<span class="bjlg-badge standard" style="background: #9ca3af; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Standard</span>'; }
                                     ?>
                                 </td>
-                                <td data-label="Taille"><?php echo size_format(filesize($backup_file), 2); ?></td>
-                                <td data-label="Date"><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), filemtime($backup_file)); ?></td>
-                                <td data-label="Actions" class="bjlg-card-actions-cell">
+                                <td class="bjlg-card-cell" data-label="Taille"><?php echo size_format(filesize($backup_file), 2); ?></td>
+                                <td class="bjlg-card-cell" data-label="Date"><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), filemtime($backup_file)); ?></td>
+                                <td class="bjlg-card-cell bjlg-card-actions-cell" data-label="Actions">
                                     <div class="bjlg-card-actions">
                                         <button class="button button-primary bjlg-restore-button" data-filename="<?php echo esc_attr($filename); ?>">Restaurer</button>
                                         <button type="button" class="button bjlg-download-button" data-filename="<?php echo esc_attr($filename); ?>">Télécharger</button>
@@ -304,7 +312,14 @@ class BJLG_Admin {
             <h2>Historique des 50 dernières actions</h2>
             <?php if (!empty($history)): ?>
                 <table class="wp-list-table widefat striped bjlg-responsive-table bjlg-history-table">
-                    <thead><tr><th style="width: 180px;">Date</th><th>Action</th><th style="width: 100px;">Statut</th><th>Détails</th></tr></thead>
+                    <thead>
+                        <tr>
+                            <th scope="col" style="width: 180px;">Date</th>
+                            <th scope="col">Action</th>
+                            <th scope="col" style="width: 100px;">Statut</th>
+                            <th scope="col">Détails</th>
+                        </tr>
+                    </thead>
                     <tbody>
                         <?php foreach ($history as $entry):
                             $status_class = ''; $status_icon = '';
@@ -314,10 +329,10 @@ class BJLG_Admin {
                                 case 'info': $status_class = 'info'; $status_icon = 'ℹ️'; break;
                             } ?>
                             <tr class="bjlg-card-row">
-                                <td data-label="Date"><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($entry['timestamp'])); ?></td>
-                                <td data-label="Action"><strong><?php echo esc_html(str_replace('_', ' ', ucfirst($entry['action_type']))); ?></strong></td>
-                                <td data-label="Statut"><span class="bjlg-status <?php echo esc_attr($status_class); ?>"><?php echo $status_icon . ' ' . esc_html(ucfirst($entry['status'])); ?></span></td>
-                                <td data-label="Détails"><?php echo esc_html($entry['details']); ?></td>
+                                <td class="bjlg-card-cell" data-label="Date"><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($entry['timestamp'])); ?></td>
+                                <td class="bjlg-card-cell" data-label="Action"><strong><?php echo esc_html(str_replace('_', ' ', ucfirst($entry['action_type']))); ?></strong></td>
+                                <td class="bjlg-card-cell" data-label="Statut"><span class="bjlg-status <?php echo esc_attr($status_class); ?>"><?php echo $status_icon . ' ' . esc_html(ucfirst($entry['status'])); ?></span></td>
+                                <td class="bjlg-card-cell" data-label="Détails"><?php echo esc_html($entry['details']); ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
