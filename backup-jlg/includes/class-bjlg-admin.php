@@ -207,64 +207,63 @@ class BJLG_Admin {
      * Section : Liste des sauvegardes
      */
     private function render_backup_list_section() {
-        $backups = glob(BJLG_BACKUP_DIR . '*.zip*');
         ?>
-        <div class="bjlg-section">
+        <div class="bjlg-section" id="bjlg-backup-list-section" data-default-page="1" data-default-per-page="10">
             <h2>Sauvegardes Disponibles</h2>
-            <?php if (!empty($backups)):
-                usort($backups, function($a, $b) { return filemtime($b) - filemtime($a); });
-                ?>
-                <table class="wp-list-table widefat striped bjlg-responsive-table bjlg-backup-table">
-                    <thead>
-                        <tr>
-                            <th scope="col">Nom du fichier</th>
-                            <th scope="col">Type</th>
-                            <th scope="col">Taille</th>
-                            <th scope="col">Date</th>
-                            <th scope="col">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($backups as $backup_file):
-                            $filename = basename($backup_file);
-                            $is_encrypted = (substr($filename, -4) === '.enc');
-                            ?>
-                            <tr class="bjlg-card-row">
-                                <td class="bjlg-card-cell" data-label="Nom du fichier">
-                                    <strong><?php echo esc_html($filename); ?></strong>
-                                    <?php if ($is_encrypted): ?><span class="bjlg-badge encrypted" style="background: #a78bfa; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-left: 5px;">Chiffré</span><?php endif; ?>
-                                </td>
-                                <td class="bjlg-card-cell" data-label="Type">
-                                    <?php
-                                    if (strpos($filename, 'full') !== false) { echo '<span class="bjlg-badge full" style="background: #34d399; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Complète</span>'; }
-                                    elseif (strpos($filename, 'incremental') !== false) { echo '<span class="bjlg-badge incremental" style="background: #60a5fa; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Incrémentale</span>'; }
-                                    else { echo '<span class="bjlg-badge standard" style="background: #9ca3af; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">Standard</span>'; }
-                                    ?>
-                                </td>
-                                <td class="bjlg-card-cell" data-label="Taille"><?php echo size_format(filesize($backup_file), 2); ?></td>
-                                <td class="bjlg-card-cell" data-label="Date"><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), filemtime($backup_file)); ?></td>
-                                <td class="bjlg-card-cell bjlg-card-actions-cell" data-label="Actions">
-                                    <div class="bjlg-card-actions">
-                                        <button class="button button-primary bjlg-restore-button" data-filename="<?php echo esc_attr($filename); ?>">Restaurer</button>
-                                        <button type="button" class="button bjlg-download-button" data-filename="<?php echo esc_attr($filename); ?>">Télécharger</button>
-                                        <button class="button button-link-delete bjlg-delete-button" data-filename="<?php echo esc_attr($filename); ?>">Supprimer</button>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-                <div class="tablenav bottom">
-                    <div class="alignleft">
-                        <p class="description">
-                            Total : <?php echo count($backups); ?> sauvegarde(s) | 
-                            Espace utilisé : <?php echo size_format(function_exists('bjlg_get_backup_size') ? bjlg_get_backup_size() : 0); ?>
-                        </p>
-                    </div>
+            <div class="bjlg-backup-toolbar">
+                <div class="alignleft actions">
+                    <label for="bjlg-backup-filter-type">
+                        <span class="screen-reader-text">Filtrer par type</span>
+                        <select id="bjlg-backup-filter-type" aria-label="Filtrer les sauvegardes par type">
+                            <option value="all" selected>Toutes les sauvegardes</option>
+                            <option value="full">Complètes</option>
+                            <option value="incremental">Incrémentales</option>
+                            <option value="database">Base de données</option>
+                            <option value="files">Fichiers</option>
+                        </select>
+                    </label>
+                    <label for="bjlg-backup-per-page">
+                        <span class="screen-reader-text">Nombre de sauvegardes par page</span>
+                        <select id="bjlg-backup-per-page" aria-label="Nombre de sauvegardes par page">
+                            <option value="5">5</option>
+                            <option value="10" selected>10</option>
+                            <option value="20">20</option>
+                            <option value="50">50</option>
+                        </select>
+                    </label>
+                    <button type="button" class="button" id="bjlg-backup-refresh">
+                        <span class="dashicons dashicons-update" aria-hidden="true"></span>
+                        Actualiser
+                    </button>
                 </div>
-            <?php else: ?>
-                <div class="notice notice-info"><p>Aucune sauvegarde locale trouvée. Créez votre première sauvegarde ci-dessus.</p></div>
-            <?php endif; ?>
+                <div class="alignright" id="bjlg-backup-summary" aria-live="polite"></div>
+            </div>
+            <div id="bjlg-backup-list-feedback" class="notice notice-error" role="alert" style="display:none;"></div>
+            <table class="wp-list-table widefat striped bjlg-responsive-table bjlg-backup-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Nom du fichier</th>
+                        <th scope="col">Composants</th>
+                        <th scope="col">Taille</th>
+                        <th scope="col">Date</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="bjlg-backup-table-body">
+                    <tr class="bjlg-backup-loading-row">
+                        <td colspan="5">
+                            <span class="spinner is-active" aria-hidden="true"></span>
+                            <span>Chargement des sauvegardes...</span>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            <div class="tablenav bottom">
+                <div class="tablenav-pages" id="bjlg-backup-pagination" aria-live="polite"></div>
+            </div>
+            <noscript>
+                <div class="notice notice-warning"><p>JavaScript est requis pour afficher la liste des sauvegardes.</p></div>
+            </noscript>
         </div>
         <?php
     }
