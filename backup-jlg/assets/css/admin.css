@@ -103,9 +103,11 @@
     .bjlg-responsive-table {
         border: 0;
         width: 100%;
+        box-shadow: none;
     }
 
-    .bjlg-responsive-table thead {
+    .bjlg-responsive-table thead,
+    .bjlg-responsive-table tfoot {
         display: none;
     }
 
@@ -123,46 +125,56 @@
     .bjlg-responsive-table .bjlg-card-row {
         background: #ffffff;
         border: 1px solid #dcdcde;
-        border-radius: 6px;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-        margin-bottom: 16px;
+        border-radius: 10px;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
+        margin-bottom: 20px;
         padding: 16px;
     }
 
-    .bjlg-responsive-table td {
-        border: 0;
-        padding: 0;
-        margin-bottom: 12px;
-    }
-
-    .bjlg-responsive-table td:last-child {
+    .bjlg-responsive-table .bjlg-card-row:last-child {
         margin-bottom: 0;
     }
 
-    .bjlg-responsive-table td::before {
+    .bjlg-responsive-table .bjlg-card-cell {
+        border: 0;
+        padding: 0;
+        margin-bottom: 14px;
+        word-break: break-word;
+    }
+
+    .bjlg-responsive-table .bjlg-card-cell:last-child {
+        margin-bottom: 0;
+    }
+
+    .bjlg-responsive-table .bjlg-card-cell::before {
         content: attr(data-label);
         display: block;
         font-weight: 600;
-        color: #50575e;
-        margin-bottom: 4px;
-        text-transform: none;
-        letter-spacing: 0;
+        color: #3c434a;
+        margin-bottom: 6px;
     }
 
-    .bjlg-card-actions {
+    .bjlg-responsive-table .bjlg-card-actions {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 10px;
     }
 
-    .bjlg-card-actions .button {
+    .bjlg-responsive-table .bjlg-card-actions .button {
         width: 100%;
         justify-content: center;
         text-align: center;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        min-height: 44px;
     }
 
-    .bjlg-card-actions .button-link-delete {
+    .bjlg-responsive-table .bjlg-card-actions .button-link-delete {
         padding-left: 0;
         padding-right: 0;
+    }
+
+    .bjlg-responsive-table .bjlg-card-actions .button .dashicons {
+        margin-right: 6px;
     }
 }
