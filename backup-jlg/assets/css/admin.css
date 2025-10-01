@@ -98,3 +98,71 @@
     border-radius: 4px;
     transition: width 0.4s ease;
 }
+
+@media screen and (max-width: 782px) {
+    .bjlg-responsive-table {
+        border: 0;
+        width: 100%;
+    }
+
+    .bjlg-responsive-table thead {
+        display: none;
+    }
+
+    .bjlg-responsive-table tbody,
+    .bjlg-responsive-table tr,
+    .bjlg-responsive-table td {
+        display: block;
+        width: 100%;
+    }
+
+    .bjlg-responsive-table tbody {
+        border: 0;
+    }
+
+    .bjlg-responsive-table .bjlg-card-row {
+        background: #ffffff;
+        border: 1px solid #dcdcde;
+        border-radius: 6px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        margin-bottom: 16px;
+        padding: 16px;
+    }
+
+    .bjlg-responsive-table td {
+        border: 0;
+        padding: 0;
+        margin-bottom: 12px;
+    }
+
+    .bjlg-responsive-table td:last-child {
+        margin-bottom: 0;
+    }
+
+    .bjlg-responsive-table td::before {
+        content: attr(data-label);
+        display: block;
+        font-weight: 600;
+        color: #50575e;
+        margin-bottom: 4px;
+        text-transform: none;
+        letter-spacing: 0;
+    }
+
+    .bjlg-card-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .bjlg-card-actions .button {
+        width: 100%;
+        justify-content: center;
+        text-align: center;
+    }
+
+    .bjlg-card-actions .button-link-delete {
+        padding-left: 0;
+        padding-right: 0;
+    }
+}
