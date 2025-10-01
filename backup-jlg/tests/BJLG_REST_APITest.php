@@ -2464,6 +2464,35 @@ namespace {
         $this->assertTrue(get_option('bjlg_ajax_debug_enabled'));
     }
 
+    public function test_handle_save_settings_returns_success_payload(): void
+    {
+        $settings = new BJLG\BJLG_Settings();
+
+        $previous_post = $_POST ?? [];
+
+        $_POST = [
+            'nonce' => 'test-nonce',
+            'by_number' => '5',
+            'by_age' => '9',
+        ];
+
+        try {
+            $settings->handle_save_settings();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('message', $response->data);
+            $this->assertSame('JSON response', $response->data['message']);
+        } finally {
+            $_POST = $previous_post;
+        }
+
+        $this->assertSame([
+            'by_number' => 5,
+            'by_age' => 9,
+        ], get_option('bjlg_cleanup_settings'));
+    }
+
         public function test_update_settings_rejects_empty_payload(): void
         {
             $api = new BJLG\BJLG_REST_API();
