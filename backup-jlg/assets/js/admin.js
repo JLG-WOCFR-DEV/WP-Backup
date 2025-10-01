@@ -315,10 +315,55 @@ jQuery(document).ready(function($) {
         const $button = $form.find('button[type="submit"]');
         const $progressArea = $('#bjlg-backup-progress-area');
         const $statusText = $('#bjlg-backup-status-text');
+        const $statusContainer = $('#bjlg-backup-status');
         const $progressBar = $('#bjlg-backup-progress-bar');
+        const $progressTrack = $('#bjlg-backup-progress-area .bjlg-progress-bar');
         const $debugWrapper = $('#bjlg-backup-debug-wrapper');
         const $debugOutput = $('#bjlg-backup-ajax-debug');
-        
+
+        let lastNumericProgress = Number.parseFloat($progressTrack.attr('aria-valuenow'));
+        if (!Number.isFinite(lastNumericProgress)) {
+            lastNumericProgress = 0;
+        }
+
+        function setProgress(value, displayText) {
+            if (!$progressBar.length || !$progressTrack.length) {
+                return;
+            }
+
+            let numericValue = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : lastNumericProgress;
+            if (Number.isFinite(value)) {
+                lastNumericProgress = numericValue;
+            }
+
+            let label = typeof displayText === 'string' ? displayText.trim() : '';
+            if (label === '') {
+                const formatted = (numericValue % 1 === 0) ? numericValue.toFixed(0) : numericValue.toFixed(1);
+                label = formatted + '%';
+            }
+
+            $progressBar.css('width', numericValue + '%').text(label);
+            $progressTrack.attr('aria-valuenow', numericValue);
+        }
+
+        function renderStatus(type, message) {
+            if (!$statusContainer.length || !$statusText.length) {
+                return;
+            }
+
+            const classes = ['notice', 'bjlg-inline-notice'];
+            if (type === 'error') {
+                classes.push('notice-error');
+            } else if (type === 'success') {
+                classes.push('notice-success');
+            } else {
+                classes.push('notice-info');
+            }
+
+            $statusContainer.attr('class', classes.join(' '));
+            $statusText.text(message || '');
+        }
+
         let components = [];
         $form.find('input[name="backup_components[]"]:checked').each(function() {
             components.push($(this).val());
@@ -328,15 +373,17 @@ jQuery(document).ready(function($) {
         const incremental = $form.find('input[name="incremental_backup"]').is(':checked');
 
         if (components.length === 0) {
-            alert('Veuillez sélectionner au moins un composant à sauvegarder.');
+            $progressArea.show();
+            renderStatus('error', 'Veuillez sélectionner au moins un composant à sauvegarder.');
+            setProgress(0);
             return;
         }
 
         $button.prop('disabled', true);
         $progressArea.show();
         if ($debugWrapper.length) $debugWrapper.show();
-        $statusText.text('Initialisation...');
-        $progressBar.css('width', '5%').text('5%');
+        renderStatus('info', 'Initialisation...');
+        setProgress(5);
 
         const data = {
             action: 'bjlg_start_backup_task',
@@ -365,7 +412,7 @@ jQuery(document).ready(function($) {
                 }
                 pollBackupProgress(response.data.task_id);
             } else {
-                $statusText.text('Erreur lors du lancement : ' + (response.data.message || 'Réponse invalide.'));
+                renderStatus('error', 'Erreur lors du lancement : ' + (response.data && response.data.message ? response.data.message : 'Réponse invalide.'));
                 $button.prop('disabled', false);
             }
         })
@@ -374,7 +421,7 @@ jQuery(document).ready(function($) {
                 debugReport += "\n\nERREUR CRITIQUE DE COMMUNICATION\nStatut: " + xhr.status + "\nRéponse brute:\n" + xhr.responseText;
                 $debugOutput.text(debugReport);
             }
-            $statusText.text('Erreur de communication.');
+            renderStatus('error', 'Erreur de communication.');
             $button.prop('disabled', false);
         });
 
@@ -387,35 +434,36 @@ jQuery(document).ready(function($) {
                 .done(function(response) {
                     if (response.success && response.data) {
                         const data = response.data;
-                        $statusText.text(data.status_text || 'Progression...');
+                        renderStatus(data.status === 'error' ? 'error' : 'info', data.status_text || 'Progression...');
 
-                        const progressValue = Number.parseFloat(data.progress);
-                        const hasNumericProgress = Number.isFinite(progressValue);
-                        const progressDisplay = hasNumericProgress ? progressValue.toFixed(1) : data.progress;
+                        const rawProgress = data.progress;
+                        const numericProgress = Number.parseFloat(rawProgress);
+                        if (Number.isFinite(numericProgress)) {
+                            setProgress(numericProgress);
+                        } else if (typeof rawProgress === 'string' && rawProgress.trim() !== '') {
+                            setProgress(lastNumericProgress, rawProgress);
+                        }
 
-                        $progressBar
-                            .css('width', progressDisplay + '%')
-                            .text(progressDisplay + '%');
-                        
                         if (data.progress >= 100) {
                             clearInterval(interval);
                             if (data.status === 'error') {
-                                $statusText.html('<span style="color:red;">❌ Erreur : ' + data.status_text + '</span>');
+                                renderStatus('error', '❌ Erreur : ' + (data.status_text || 'Une erreur est survenue.'));
                                 $button.prop('disabled', false);
                             } else {
-                                $statusText.html('✔️ Terminé ! La page va se recharger.');
+                                renderStatus('success', '✔️ Terminé ! La page va se recharger.');
+                                setProgress(100);
                                 setTimeout(() => window.location.reload(), 2000);
                             }
                         }
                     } else {
                         clearInterval(interval);
-                        $statusText.text('Erreur : La tâche de sauvegarde a été perdue.');
+                        renderStatus('error', 'Erreur : La tâche de sauvegarde a été perdue.');
                         $button.prop('disabled', false);
                     }
                 })
                 .fail(function() {
                      clearInterval(interval);
-                     $statusText.text('Erreur de communication lors du suivi.');
+                     renderStatus('error', 'Erreur de communication lors du suivi.');
                      $button.prop('disabled', false);
                 });
             }, 3000);

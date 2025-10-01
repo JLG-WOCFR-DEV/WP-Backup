@@ -168,8 +168,12 @@ class BJLG_Admin {
             </form>
             <div id="bjlg-backup-progress-area" style="display: none;">
                 <h3>Progression</h3>
-                <div class="bjlg-progress-bar"><div class="bjlg-progress-bar-inner" id="bjlg-backup-progress-bar">0%</div></div>
-                <p id="bjlg-backup-status-text">Initialisation...</p>
+                <div class="bjlg-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                    <div class="bjlg-progress-bar-inner" id="bjlg-backup-progress-bar">0%</div>
+                </div>
+                <div id="bjlg-backup-status" class="notice notice-info bjlg-inline-notice" role="status" aria-live="polite">
+                    <p id="bjlg-backup-status-text">Initialisation...</p>
+                </div>
             </div>
             <div id="bjlg-backup-debug-wrapper" style="display: none;">
                 <h3><span class="dashicons dashicons-info"></span> Détails techniques</h3>
