@@ -130,6 +130,10 @@ final class BJLG_Plugin {
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce'    => wp_create_nonce('bjlg_nonce'),
             'api_keys_nonce' => wp_create_nonce('bjlg_api_keys'),
+            'rest_nonce' => wp_create_nonce('wp_rest'),
+            'rest_namespace' => 'backup-jlg/v1',
+            'rest_root' => esc_url_raw(rest_url()),
+            'rest_backups' => esc_url_raw(rest_url('backup-jlg/v1/backups')),
         ]);
     }
 
