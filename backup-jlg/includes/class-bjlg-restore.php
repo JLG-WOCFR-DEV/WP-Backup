@@ -255,6 +255,29 @@ class BJLG_Restore {
 
         $uploaded_file = $_FILES['restore_file'];
 
+        $error_code = isset($uploaded_file['error']) ? (int) $uploaded_file['error'] : UPLOAD_ERR_OK;
+        if ($error_code !== UPLOAD_ERR_OK) {
+            $error_messages = [
+                UPLOAD_ERR_INI_SIZE => 'Le fichier dépasse la taille maximale autorisée par la configuration PHP.',
+                UPLOAD_ERR_FORM_SIZE => 'Le fichier dépasse la taille maximale autorisée par le formulaire.',
+                UPLOAD_ERR_PARTIAL => "Le fichier n'a été que partiellement téléversé.",
+                UPLOAD_ERR_NO_FILE => 'Aucun fichier téléversé.',
+                UPLOAD_ERR_NO_TMP_DIR => 'Le dossier temporaire est manquant sur le serveur.',
+                UPLOAD_ERR_CANT_WRITE => 'Impossible d\'écrire le fichier sur le disque.',
+                UPLOAD_ERR_EXTENSION => 'Une extension PHP a interrompu le téléversement.',
+            ];
+
+            $message = $error_messages[$error_code] ?? sprintf(
+                'Erreur lors du téléversement du fichier (code %d).',
+                $error_code
+            );
+
+            wp_send_json_error([
+                'message' => $message,
+                'upload_error_code' => $error_code,
+            ]);
+        }
+
         $original_filename = isset($uploaded_file['name']) ? $uploaded_file['name'] : '';
         $sanitized_filename = sanitize_file_name(wp_unslash($original_filename));
         if ($sanitized_filename === '') {
@@ -285,11 +308,75 @@ class BJLG_Restore {
             wp_send_json_error(['message' => 'Répertoire de sauvegarde non accessible en écriture.']);
         }
 
-        // Déplacer le fichier uploadé
-        $destination = BJLG_BACKUP_DIR . 'restore_' . uniqid() . '_' . $sanitized_filename;
-        
-        if (!move_uploaded_file($uploaded_file['tmp_name'], $destination)) {
-            wp_send_json_error(['message' => 'Impossible de déplacer le fichier téléversé.']);
+        if (!empty($uploaded_file['tmp_name'])) {
+            $is_uploaded = true;
+
+            if (function_exists('is_uploaded_file')) {
+                $is_uploaded = is_uploaded_file($uploaded_file['tmp_name']);
+            }
+
+            $is_uploaded = apply_filters(
+                'bjlg_restore_validate_is_uploaded_file',
+                $is_uploaded,
+                $uploaded_file
+            );
+
+            if (!$is_uploaded) {
+                wp_send_json_error([
+                    'message' => 'Le fichier fourni n\'est pas un téléversement valide.',
+                ]);
+            }
+        }
+
+        if (!function_exists('wp_handle_upload')) {
+            $maybe_admin_file = rtrim(ABSPATH, '/\\') . '/wp-admin/includes/file.php';
+            if (is_readable($maybe_admin_file)) {
+                require_once $maybe_admin_file;
+            }
+        }
+
+        if (!function_exists('wp_handle_upload')) {
+            wp_send_json_error(['message' => 'La fonction de gestion des téléversements est indisponible.']);
+        }
+
+        $handled_upload = wp_handle_upload($uploaded_file, ['test_form' => false]);
+
+        if (is_wp_error($handled_upload)) {
+            wp_send_json_error([
+                'message' => 'Impossible de traiter le fichier téléversé : ' . $handled_upload->get_error_message(),
+            ]);
+        }
+
+        if (isset($handled_upload['error'])) {
+            $error_message = is_string($handled_upload['error'])
+                ? $handled_upload['error']
+                : 'Erreur inconnue lors du traitement du fichier téléversé.';
+
+            wp_send_json_error([
+                'message' => 'Impossible de traiter le fichier téléversé : ' . $error_message,
+            ]);
+        }
+
+        if (empty($handled_upload['file']) || !file_exists($handled_upload['file'])) {
+            wp_send_json_error([
+                'message' => 'Le fichier téléversé est introuvable après traitement.',
+            ]);
+        }
+
+        // Déplacer le fichier uploadé vers le répertoire des sauvegardes
+        $destination = BJLG_BACKUP_DIR . 'restore_' . uniqid('', true) . '_' . $sanitized_filename;
+        $moved = @rename($handled_upload['file'], $destination);
+
+        if (!$moved) {
+            $moved = @copy($handled_upload['file'], $destination);
+
+            if ($moved) {
+                @unlink($handled_upload['file']);
+            }
+        }
+
+        if (!$moved) {
+            wp_send_json_error(['message' => 'Impossible de déplacer le fichier téléversé vers le répertoire des sauvegardes.']);
         }
 
         wp_send_json_success([

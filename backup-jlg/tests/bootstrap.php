@@ -139,6 +139,8 @@ $GLOBALS['bjlg_test_last_json_success'] = null;
 $GLOBALS['bjlg_test_last_json_error'] = null;
 $GLOBALS['bjlg_test_set_transient_mock'] = null;
 $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
+$GLOBALS['bjlg_test_wp_handle_upload_mock'] = null;
+$GLOBALS['bjlg_test_wp_check_filetype_and_ext_mock'] = null;
 $GLOBALS['bjlg_test_options'] = [];
 $GLOBALS['bjlg_registered_routes'] = [];
 $GLOBALS['bjlg_history_entries'] = [];
@@ -771,6 +773,85 @@ if (!function_exists('wp_salt')) {
 if (!function_exists('wp_unslash')) {
     function wp_unslash($value) {
         return $value;
+    }
+}
+
+if (!function_exists('wp_mkdir_p')) {
+    function wp_mkdir_p($target) {
+        if (is_dir($target)) {
+            return true;
+        }
+
+        if ($target === '' || $target === null) {
+            return false;
+        }
+
+        return mkdir($target, 0777, true);
+    }
+}
+
+if (!function_exists('wp_check_filetype_and_ext')) {
+    function wp_check_filetype_and_ext($file, $filename, $mimes = null) {
+        $mock = $GLOBALS['bjlg_test_wp_check_filetype_and_ext_mock'] ?? null;
+
+        if (is_callable($mock)) {
+            return $mock($file, $filename, $mimes);
+        }
+
+        $extension = strtolower((string) pathinfo((string) $filename, PATHINFO_EXTENSION));
+
+        if (is_array($mimes) && $mimes !== []) {
+            if ($extension === '' || !array_key_exists($extension, $mimes)) {
+                return [
+                    'ext' => false,
+                    'type' => false,
+                    'proper_filename' => false,
+                ];
+            }
+
+            return [
+                'ext' => $extension,
+                'type' => $mimes[$extension],
+                'proper_filename' => $filename,
+            ];
+        }
+
+        return [
+            'ext' => $extension ?: false,
+            'type' => $extension ? 'application/octet-stream' : false,
+            'proper_filename' => $filename,
+        ];
+    }
+}
+
+if (!function_exists('wp_handle_upload')) {
+    function wp_handle_upload($file, $overrides = false, $time = null, $action = '') {
+        $mock = $GLOBALS['bjlg_test_wp_handle_upload_mock'] ?? null;
+
+        if (is_callable($mock)) {
+            return $mock($file, $overrides, $time, $action);
+        }
+
+        $upload_dir = sys_get_temp_dir() . '/bjlg-uploaded-files';
+
+        if (!is_dir($upload_dir)) {
+            mkdir($upload_dir, 0777, true);
+        }
+
+        $original_name = isset($file['name']) ? basename((string) $file['name']) : 'upload.tmp';
+        $destination = $upload_dir . '/' . uniqid('upload_', true) . '_' . $original_name;
+
+        if (!empty($file['tmp_name']) && file_exists($file['tmp_name'])) {
+            copy($file['tmp_name'], $destination);
+        } else {
+            file_put_contents($destination, '');
+        }
+
+        return [
+            'file' => $destination,
+            'url' => 'http://example.com/' . basename($destination),
+            'type' => $file['type'] ?? '',
+        ];
     }
 }
 
