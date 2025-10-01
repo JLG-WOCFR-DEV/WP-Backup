@@ -145,13 +145,29 @@ class BJLG_Settings {
             }
 
             // --- Réglages de Chiffrement ---
-            if (isset($_POST['encryption_enabled'])) {
+            $encryption_fields = ['encryption_enabled', 'auto_encrypt', 'password_protect', 'compression_level', 'encryption_settings_submitted'];
+            $encryption_submitted = false;
+            foreach ($encryption_fields as $field) {
+                if (array_key_exists($field, $_POST)) {
+                    $encryption_submitted = true;
+                    break;
+                }
+            }
+
+            if ($encryption_submitted) {
+                $current_encryption = get_option('bjlg_encryption_settings', $this->default_settings['encryption']);
+
+                $compression_level = isset($_POST['compression_level'])
+                    ? max(0, intval(wp_unslash($_POST['compression_level'])))
+                    : (isset($current_encryption['compression_level']) ? max(0, intval($current_encryption['compression_level'])) : 6);
+
                 $encryption_settings = [
-                    'enabled' => $this->to_bool(wp_unslash($_POST['encryption_enabled'])),
-                    'auto_encrypt' => isset($_POST['auto_encrypt']) ? $this->to_bool(wp_unslash($_POST['auto_encrypt'])) : false,
-                    'password_protect' => isset($_POST['password_protect']) ? $this->to_bool(wp_unslash($_POST['password_protect'])) : false,
-                    'compression_level' => isset($_POST['compression_level']) ? max(0, intval(wp_unslash($_POST['compression_level']))) : 6
+                    'enabled' => array_key_exists('encryption_enabled', $_POST) ? $this->to_bool(wp_unslash($_POST['encryption_enabled'])) : false,
+                    'auto_encrypt' => array_key_exists('auto_encrypt', $_POST) ? $this->to_bool(wp_unslash($_POST['auto_encrypt'])) : false,
+                    'password_protect' => array_key_exists('password_protect', $_POST) ? $this->to_bool(wp_unslash($_POST['password_protect'])) : false,
+                    'compression_level' => $compression_level,
                 ];
+
                 update_option('bjlg_encryption_settings', $encryption_settings);
                 $saved_settings['encryption'] = $encryption_settings;
                 BJLG_Debug::log("Réglages de chiffrement sauvegardés.");
