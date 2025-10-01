@@ -254,7 +254,7 @@ class BJLG_Admin {
                 <table class="form-table">
                     <tbody>
                         <tr>
-                            <th scope="row">Fichier de sauvegarde</th>
+                            <th scope="row"><label for="bjlg-restore-file-input">Fichier de sauvegarde</label></th>
                             <td>
                                 <input type="file" id="bjlg-restore-file-input" name="restore_file" accept=".zip,.zip.enc" required>
                                 <p class="description">Formats acceptés : .zip, .zip.enc (chiffré)</p>
