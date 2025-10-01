@@ -1,5 +1,311 @@
 jQuery(document).ready(function($) {
 
+    // --- GESTIONNAIRE DE PLANIFICATION ---
+    const $scheduleForm = $('#bjlg-schedule-form');
+    if ($scheduleForm.length && typeof bjlg_ajax !== 'undefined') {
+        const $recurrenceSelect = $scheduleForm.find('#bjlg-schedule-recurrence');
+        const $weeklyOptionsRow = $scheduleForm.find('.bjlg-schedule-weekly-options');
+        const $timeOptionsRow = $scheduleForm.find('.bjlg-schedule-time-options');
+
+        let $feedback = $('#bjlg-schedule-feedback');
+        if (!$feedback.length) {
+            $feedback = $('<div/>', {
+                id: 'bjlg-schedule-feedback',
+                class: 'notice',
+                style: 'display:none;'
+            });
+
+            const $submitRow = $scheduleForm.find('.submit').last();
+            if ($submitRow.length) {
+                $feedback.insertBefore($submitRow);
+            } else {
+                $feedback.prependTo($scheduleForm);
+            }
+        }
+
+        let $nextRunDisplay = $('#bjlg-schedule-next-run');
+        if (!$nextRunDisplay.length) {
+            $nextRunDisplay = $('<p/>', {
+                id: 'bjlg-schedule-next-run',
+                class: 'description',
+                'aria-live': 'polite'
+            }).text('Prochaine exécution : Non planifiée');
+
+            const $submitRow = $scheduleForm.find('.submit').last();
+            if ($submitRow.length) {
+                $nextRunDisplay.insertAfter($submitRow);
+            } else {
+                $scheduleForm.append($nextRunDisplay);
+            }
+        }
+
+        let nextRunLabel = $nextRunDisplay.data('label');
+        if (typeof nextRunLabel !== 'string' || nextRunLabel.trim() === '') {
+            const initialText = ($nextRunDisplay.text() || '').trim();
+            const labelMatch = initialText.match(/^(.+?:)/);
+            if (labelMatch && labelMatch[1]) {
+                nextRunLabel = labelMatch[1];
+            } else {
+                nextRunLabel = 'Prochaine exécution :';
+            }
+        }
+
+        function setRowVisibility($row, shouldShow) {
+            if (!$row || !$row.length) {
+                return;
+            }
+
+            if (shouldShow) {
+                $row.show().attr('aria-hidden', 'false');
+            } else {
+                $row.hide().attr('aria-hidden', 'true');
+            }
+        }
+
+        function toggleScheduleOptions() {
+            const value = ($recurrenceSelect.val() || '').toString();
+            setRowVisibility($weeklyOptionsRow, value === 'weekly');
+            setRowVisibility($timeOptionsRow, value !== 'disabled');
+        }
+
+        if ($recurrenceSelect.length) {
+            $recurrenceSelect.on('change', toggleScheduleOptions);
+            toggleScheduleOptions();
+        }
+
+        function resetScheduleFeedback() {
+            if (!$feedback.length) {
+                return;
+            }
+
+            $feedback
+                .removeClass('notice-success notice-error notice-info')
+                .hide()
+                .empty()
+                .removeAttr('role');
+        }
+
+        function normalizeErrorList(raw) {
+            const messages = [];
+            const seen = new Set();
+
+            function pushMessage(value) {
+                if (typeof value !== 'string') {
+                    return;
+                }
+
+                const trimmed = value.trim();
+                if (trimmed === '' || seen.has(trimmed)) {
+                    return;
+                }
+
+                seen.add(trimmed);
+                messages.push(trimmed);
+            }
+
+            (function walk(value) {
+                if (value === undefined || value === null) {
+                    return;
+                }
+
+                if (typeof value === 'string') {
+                    pushMessage(value);
+                    return;
+                }
+
+                if (Array.isArray(value)) {
+                    value.forEach(walk);
+                    return;
+                }
+
+                if (typeof value === 'object') {
+                    if (typeof value.message === 'string') {
+                        pushMessage(value.message);
+                    }
+
+                    Object.keys(value).forEach(function(key) {
+                        if (key === 'message') {
+                            return;
+                        }
+                        walk(value[key]);
+                    });
+                }
+            })(raw);
+
+            return messages;
+        }
+
+        function renderScheduleFeedback(type, message, details) {
+            if (!$feedback.length) {
+                return;
+            }
+
+            const classes = ['notice'];
+            if (type === 'success') {
+                classes.push('notice-success');
+            } else if (type === 'error') {
+                classes.push('notice-error');
+            } else {
+                classes.push('notice-info');
+            }
+
+            $feedback.attr('class', classes.join(' '));
+
+            if (message && message.trim() !== '') {
+                $('<p/>').text(message).appendTo($feedback);
+            }
+
+            if (Array.isArray(details) && details.length) {
+                const $list = $('<ul/>');
+                details.forEach(function(item) {
+                    $('<li/>').text(item).appendTo($list);
+                });
+                $feedback.append($list);
+            }
+
+            $feedback.attr('role', 'alert').show();
+        }
+
+        function updateNextRunDisplay(nextRunText) {
+            if (!$nextRunDisplay.length) {
+                return;
+            }
+
+            const displayText = nextRunText && nextRunText.trim() !== ''
+                ? nextRunText.trim()
+                : 'Non planifiée';
+
+            $nextRunDisplay.text(nextRunLabel + ' ' + displayText);
+        }
+
+        updateNextRunDisplay(($nextRunDisplay.text() || '').replace(/^.*?:\s*/, ''));
+
+        $scheduleForm.on('submit', function(event) {
+            event.preventDefault();
+
+            resetScheduleFeedback();
+
+            const $submitButton = $scheduleForm.find('button[type="submit"]').first();
+            $submitButton.prop('disabled', true);
+
+            const payload = {
+                action: 'bjlg_save_schedule_settings',
+                nonce: bjlg_ajax.nonce
+            };
+
+            const serialized = $scheduleForm.serializeArray();
+            serialized.forEach(function(field) {
+                if (!field || !field.name) {
+                    return;
+                }
+
+                let name = field.name;
+                let value = field.value;
+
+                if (name === 'encrypt' || name === 'incremental') {
+                    value = 'true';
+                }
+
+                if (name.slice(-2) === '[]') {
+                    name = name.slice(0, -2);
+                    if (!Array.isArray(payload[name])) {
+                        payload[name] = [];
+                    }
+                    payload[name].push(value);
+                    return;
+                }
+
+                if (Object.prototype.hasOwnProperty.call(payload, name)) {
+                    if (!Array.isArray(payload[name])) {
+                        payload[name] = [payload[name]];
+                    }
+                    payload[name].push(value);
+                    return;
+                }
+
+                payload[name] = value;
+            });
+
+            ['encrypt', 'incremental'].forEach(function(fieldName) {
+                if (!$scheduleForm.find('[name="' + fieldName + '"]').length) {
+                    return;
+                }
+
+                if (typeof payload[fieldName] === 'undefined') {
+                    payload[fieldName] = 'false';
+                }
+            });
+
+            $.ajax({
+                url: bjlg_ajax.ajax_url,
+                method: 'POST',
+                data: payload
+            })
+                .done(function(response) {
+                    const data = response && typeof response === 'object' ? response.data || {} : {};
+
+                    if (response && response.success) {
+                        const message = data && typeof data.message === 'string'
+                            ? data.message
+                            : 'Planification enregistrée.';
+                        renderScheduleFeedback('success', message);
+                        if (data && Object.prototype.hasOwnProperty.call(data, 'next_run')) {
+                            updateNextRunDisplay(data.next_run);
+                        }
+                        return;
+                    }
+
+                    const payloadData = data && Object.keys(data).length ? data : (response && response.data) || response;
+                    const message = payloadData && typeof payloadData.message === 'string'
+                        ? payloadData.message
+                        : 'Impossible d\'enregistrer la planification.';
+                    const details = payloadData
+                        ? normalizeErrorList(payloadData.errors || payloadData.validation_errors || payloadData.field_errors)
+                        : [];
+
+                    renderScheduleFeedback('error', message, details);
+
+                    if (payloadData && Object.prototype.hasOwnProperty.call(payloadData, 'next_run')) {
+                        updateNextRunDisplay(payloadData.next_run);
+                    }
+                })
+                .fail(function(jqXHR) {
+                    let message = 'Erreur de communication avec le serveur.';
+                    let details = [];
+
+                    if (jqXHR && jqXHR.responseJSON) {
+                        const errorData = jqXHR.responseJSON.data || jqXHR.responseJSON;
+                        if (errorData && typeof errorData.message === 'string') {
+                            message = errorData.message;
+                        }
+                        details = normalizeErrorList(
+                            (errorData && (errorData.errors || errorData.validation_errors || errorData.field_errors)) || []
+                        );
+                    } else if (jqXHR && typeof jqXHR.responseText === 'string') {
+                        try {
+                            const parsed = JSON.parse(jqXHR.responseText);
+                            if (parsed && typeof parsed === 'object') {
+                                const errorData = parsed.data || parsed;
+                                if (errorData && typeof errorData.message === 'string') {
+                                    message = errorData.message;
+                                }
+                                details = normalizeErrorList(
+                                    (errorData && (errorData.errors || errorData.validation_errors || errorData.field_errors)) || []
+                                );
+                            }
+                        } catch (error) {
+                            // Ignore JSON parse errors and keep the default message.
+                        }
+                    }
+
+                    renderScheduleFeedback('error', message, details);
+                })
+                .always(function() {
+                    $submitButton.prop('disabled', false);
+                });
+        });
+    }
+
     // La navigation par onglets est gérée par PHP via rechargement de page.
 
     // --- GESTIONNAIRE DE SAUVEGARDE ASYNCHRONE ---

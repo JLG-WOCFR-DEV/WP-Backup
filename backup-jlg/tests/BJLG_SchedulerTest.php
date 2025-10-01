@@ -21,6 +21,19 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
     class_alias('BJLG_Debug', 'BJLG\\BJLG_Debug');
 }
 
+if (!function_exists('get_date_from_gmt')) {
+    function get_date_from_gmt($string, $format = 'Y-m-d H:i:s')
+    {
+        $timestamp = strtotime($string . ' UTC');
+
+        if ($timestamp === false) {
+            return '';
+        }
+
+        return gmdate($format, $timestamp);
+    }
+}
+
 require_once __DIR__ . '/../includes/class-bjlg-backup.php';
 require_once __DIR__ . '/../includes/class-bjlg-scheduler.php';
 
@@ -138,5 +151,50 @@ final class BJLG_SchedulerTest extends TestCase
             ),
             'Expected at least one log entry to contain "ERREUR".'
         );
+    }
+
+    public function test_handle_save_schedule_updates_settings_and_returns_next_run(): void
+    {
+        $_POST = [
+            'nonce' => 'test-nonce',
+            'recurrence' => 'daily',
+            'day' => 'tuesday',
+            'time' => '10:15',
+            'components' => ['db', 'plugins'],
+            'encrypt' => 'true',
+            'incremental' => 'true',
+        ];
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+
+        try {
+            $scheduler->handle_save_schedule();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('message', $response->data);
+            $this->assertArrayHasKey('next_run', $response->data);
+            $this->assertNotEmpty($response->data['next_run']);
+        }
+
+        $settings = get_option('bjlg_schedule_settings');
+
+        $this->assertSame('daily', $settings['recurrence']);
+        $this->assertSame('tuesday', $settings['day']);
+        $this->assertSame('10:15', $settings['time']);
+        $this->assertSame(['db', 'plugins'], $settings['components']);
+        $this->assertTrue($settings['encrypt']);
+        $this->assertTrue($settings['incremental']);
+
+        $this->assertArrayHasKey(
+            BJLG\BJLG_Scheduler::SCHEDULE_HOOK,
+            $GLOBALS['bjlg_test_scheduled_events']['recurring']
+        );
+
+        $event = $GLOBALS['bjlg_test_scheduled_events']['recurring'][BJLG\BJLG_Scheduler::SCHEDULE_HOOK];
+
+        $this->assertSame('daily', $event['recurrence']);
+        $this->assertIsInt($event['timestamp']);
+        $this->assertGreaterThan(0, $event['timestamp']);
     }
 }
