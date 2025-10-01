@@ -1294,4 +1294,377 @@ jQuery(document).ready(function($) {
             $button.prop('disabled', false).removeAttr('aria-busy');
         });
     });
+
+    // --- GESTION DES CLÉS API ---
+    const $apiKeysSection = $('#bjlg-api-keys-section');
+
+    if ($apiKeysSection.length && typeof bjlg_ajax !== 'undefined' && bjlg_ajax.ajax_url) {
+        const $feedback = $apiKeysSection.find('#bjlg-api-keys-feedback');
+        const $table = $apiKeysSection.find('#bjlg-api-keys-table');
+        const $tbody = $table.find('tbody');
+        const $createForm = $('#bjlg-api-keys-create-form');
+        const $labelInput = $('#bjlg-api-key-label');
+
+        function resetApiKeyFeedback() {
+            if (!$feedback.length) {
+                return;
+            }
+
+            $feedback
+                .removeClass('notice-success notice-error notice-info')
+                .hide()
+                .empty()
+                .removeAttr('role');
+        }
+
+        function showApiKeyFeedback(type, message, data) {
+            if (!$feedback.length) {
+                return;
+            }
+
+            resetApiKeyFeedback();
+
+            const classes = ['notice', 'bjlg-api-keys-feedback'];
+
+            if (type === 'success') {
+                classes.push('notice-success');
+            } else if (type === 'error') {
+                classes.push('notice-error');
+            } else {
+                classes.push('notice-info');
+            }
+
+            $feedback.attr('class', classes.join(' '));
+
+            if (message && message.trim() !== '') {
+                $('<p/>').text(message).appendTo($feedback);
+            }
+
+            if (data && typeof data.plain_key === 'string' && data.plain_key.trim() !== '') {
+                const $plain = $('<p/>').addClass('bjlg-api-key-plain');
+                $('<strong/>').text('Clé : ').appendTo($plain);
+                $('<code/>').text(data.plain_key).appendTo($plain);
+                $feedback.append($plain);
+
+                $('<p/>')
+                    .addClass('description')
+                    .text('Copiez cette clé maintenant, elle ne sera plus affichée ensuite.')
+                    .appendTo($feedback);
+            }
+
+            if (data && data.fingerprint) {
+                $('<p/>')
+                    .addClass('description')
+                    .append($('<span/>').text('Empreinte : '))
+                    .append($('<code/>').text(data.fingerprint))
+                    .appendTo($feedback);
+            }
+
+            $feedback.attr('role', 'alert').show();
+        }
+
+        function ensureApiKeysPlaceholder() {
+            const hasRows = $tbody.find('tr.bjlg-api-key-row').length > 0;
+
+            if (hasRows) {
+                $tbody.find('tr.bjlg-api-keys-empty').remove();
+                return;
+            }
+
+            if ($tbody.find('tr.bjlg-api-keys-empty').length) {
+                return;
+            }
+
+            $('<tr/>', { 'class': 'bjlg-api-keys-empty' })
+                .append($('<td/>', {
+                    colspan: 4,
+                    text: "Aucune clé API n'a encore été générée.",
+                }))
+                .appendTo($tbody);
+        }
+
+        function buildApiKeyRow(data) {
+            const id = data && typeof data.id === 'string' ? data.id : '';
+            const label = data && typeof data.label === 'string' && data.label.trim() !== ''
+                ? data.label.trim()
+                : 'Sans libellé';
+            const userDisplay = data && typeof data.user_display === 'string' && data.user_display.trim() !== ''
+                ? data.user_display.trim()
+                : '—';
+            const userLogin = data && typeof data.user_login === 'string' ? data.user_login.trim() : '';
+            const created = data && typeof data.created === 'string' && data.created.trim() !== ''
+                ? data.created.trim()
+                : '—';
+            const rotated = data && typeof data.last_rotated === 'string' && data.last_rotated.trim() !== ''
+                ? data.last_rotated.trim()
+                : created;
+            const fingerprint = data && typeof data.fingerprint === 'string' && data.fingerprint.trim() !== ''
+                ? data.fingerprint.trim()
+                : '—';
+
+            const $row = $('<tr/>', {
+                'class': 'bjlg-api-key-row',
+                'data-key-id': id,
+            });
+
+            const $detailsCell = $('<td/>');
+            $('<strong/>', { 'class': 'bjlg-api-key-label', text: label }).appendTo($detailsCell);
+
+            const $meta = $('<div/>', { 'class': 'description' }).appendTo($detailsCell);
+            const $created = $('<span/>', { 'class': 'bjlg-api-key-created' });
+            $created.append(document.createTextNode('Créée le '));
+            $('<span/>', { 'class': 'value', text: created }).appendTo($created);
+            $meta.append($created);
+
+            const $rotated = $('<span/>', { 'class': 'bjlg-api-key-rotated' });
+            $rotated.append(document.createTextNode(' · Dernière rotation : '));
+            $('<span/>', { 'class': 'value', text: rotated }).appendTo($rotated);
+            $meta.append($rotated);
+
+            $row.append($detailsCell);
+
+            const $ownerCell = $('<td/>');
+            $('<span/>', { 'class': 'bjlg-api-key-owner-name', text: userDisplay }).appendTo($ownerCell);
+
+            if (userLogin !== '') {
+                $('<div/>', {
+                    'class': 'description bjlg-api-key-owner-login',
+                    text: '@' + userLogin,
+                }).appendTo($ownerCell);
+            }
+
+            $row.append($ownerCell);
+
+            $('<td/>')
+                .append($('<code/>', { 'class': 'bjlg-api-key-fingerprint', text: fingerprint }))
+                .appendTo($row);
+
+            const $actions = $('<td/>', { 'class': 'bjlg-api-key-actions' });
+            $('<button/>', {
+                type: 'button',
+                'class': 'button bjlg-api-key-rotate',
+                'data-key-id': id,
+                text: 'Renouveler',
+            }).appendTo($actions);
+
+            $('<button/>', {
+                type: 'button',
+                'class': 'button-link-delete bjlg-api-key-revoke',
+                'data-key-id': id,
+                text: 'Révoquer',
+            }).appendTo($actions);
+
+            $row.append($actions);
+
+            return $row;
+        }
+
+        function getRowById(id) {
+            if (!id) {
+                return $();
+            }
+
+            let selectorId = id;
+
+            if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+                selectorId = CSS.escape(id);
+            } else {
+                selectorId = selectorId.replace(/"/g, '\\"');
+            }
+
+            return $tbody.find('tr[data-key-id="' + selectorId + '"]');
+        }
+
+        function replaceOrInsertRow(data) {
+            const $row = buildApiKeyRow(data);
+
+            if (!$row || !$row.length) {
+                return $();
+            }
+
+            const id = data && typeof data.id === 'string' ? data.id : '';
+            const $existing = getRowById(id);
+
+            if ($existing.length) {
+                $existing.replaceWith($row);
+            } else {
+                $tbody.prepend($row);
+            }
+
+            ensureApiKeysPlaceholder();
+
+            return $row;
+        }
+
+        function highlightRow($row) {
+            if (!$row || !$row.length) {
+                return;
+            }
+
+            $row.addClass('bjlg-api-key-row--updated');
+
+            setTimeout(function() {
+                $row.removeClass('bjlg-api-key-row--updated');
+            }, 1500);
+        }
+
+        function requestApiKey(action, extraData) {
+            const payload = $.extend({}, extraData, {
+                action: action,
+                nonce: bjlg_ajax.nonce,
+            });
+
+            return $.ajax({
+                url: bjlg_ajax.ajax_url,
+                method: 'POST',
+                dataType: 'json',
+                data: payload,
+            });
+        }
+
+        function extractErrorMessage(response, fallback) {
+            let message = fallback || 'Une erreur est survenue.';
+
+            if (!response) {
+                return message;
+            }
+
+            if (typeof response === 'string') {
+                return response;
+            }
+
+            if (response.message) {
+                message = response.message;
+            }
+
+            if (response.data) {
+                if (typeof response.data === 'string' && response.data.trim() !== '') {
+                    message = response.data.trim();
+                } else if (response.data.message) {
+                    message = response.data.message;
+                }
+            }
+
+            return message;
+        }
+
+        if ($createForm.length) {
+            $createForm.on('submit', function(event) {
+                event.preventDefault();
+
+                resetApiKeyFeedback();
+
+                const $submit = $createForm.find('button[type="submit"]').first();
+                $submit.prop('disabled', true).attr('aria-busy', 'true');
+
+                const labelValue = $labelInput.length ? $.trim($labelInput.val()) : '';
+
+                requestApiKey('bjlg_create_api_key', { label: labelValue })
+                    .done(function(response) {
+                        if (!response || !response.success) {
+                            const errorMessage = extractErrorMessage(response ? response.data : null, 'Impossible de créer la clé API.');
+                            showApiKeyFeedback('error', errorMessage, response ? response.data : null);
+                            return;
+                        }
+
+                        const data = response.data || {};
+                        const $row = replaceOrInsertRow(data);
+                        highlightRow($row);
+                        showApiKeyFeedback('success', data.message || 'Clé API créée.', data);
+
+                        if ($labelInput.length) {
+                            $labelInput.val('').trigger('change');
+                        }
+                    })
+                    .fail(function(xhr) {
+                        const response = xhr && xhr.responseJSON ? xhr.responseJSON : null;
+                        const errorMessage = extractErrorMessage(response, 'Erreur de communication avec le serveur.');
+                        showApiKeyFeedback('error', errorMessage, response ? response.data : null);
+                    })
+                    .always(function() {
+                        $submit.prop('disabled', false).removeAttr('aria-busy');
+                    });
+            });
+        }
+
+        $tbody.on('click', '.bjlg-api-key-revoke', function(event) {
+            event.preventDefault();
+
+            const $button = $(this);
+            const keyId = $button.data('keyId');
+
+            if (!keyId) {
+                return;
+            }
+
+            resetApiKeyFeedback();
+
+            $button.prop('disabled', true).attr('aria-busy', 'true');
+
+            requestApiKey('bjlg_revoke_api_key', { id: keyId })
+                .done(function(response) {
+                    if (!response || !response.success) {
+                        const errorMessage = extractErrorMessage(response ? response.data : null, 'Impossible de révoquer la clé API.');
+                        showApiKeyFeedback('error', errorMessage, response ? response.data : null);
+                        return;
+                    }
+
+                    const data = response.data || {};
+                    const $row = getRowById(keyId);
+                    if ($row.length) {
+                        $row.remove();
+                    }
+
+                    ensureApiKeysPlaceholder();
+                    showApiKeyFeedback('success', data.message || 'Clé API révoquée.', data);
+                })
+                .fail(function(xhr) {
+                    const response = xhr && xhr.responseJSON ? xhr.responseJSON : null;
+                    const errorMessage = extractErrorMessage(response, 'Erreur de communication avec le serveur.');
+                    showApiKeyFeedback('error', errorMessage, response ? response.data : null);
+                })
+                .always(function() {
+                    $button.prop('disabled', false).removeAttr('aria-busy');
+                });
+        });
+
+        $tbody.on('click', '.bjlg-api-key-rotate', function(event) {
+            event.preventDefault();
+
+            const $button = $(this);
+            const keyId = $button.data('keyId');
+
+            if (!keyId) {
+                return;
+            }
+
+            resetApiKeyFeedback();
+
+            $button.prop('disabled', true).attr('aria-busy', 'true');
+
+            requestApiKey('bjlg_rotate_api_key', { id: keyId })
+                .done(function(response) {
+                    if (!response || !response.success) {
+                        const errorMessage = extractErrorMessage(response ? response.data : null, 'Impossible de renouveler la clé API.');
+                        showApiKeyFeedback('error', errorMessage, response ? response.data : null);
+                        return;
+                    }
+
+                    const data = response.data || {};
+                    const $row = replaceOrInsertRow($.extend({}, data, { id: keyId }));
+                    highlightRow($row);
+                    showApiKeyFeedback('success', data.message || 'Clé API renouvelée.', data);
+                })
+                .fail(function(xhr) {
+                    const response = xhr && xhr.responseJSON ? xhr.responseJSON : null;
+                    const errorMessage = extractErrorMessage(response, 'Erreur de communication avec le serveur.');
+                    showApiKeyFeedback('error', errorMessage, response ? response.data : null);
+                })
+                .always(function() {
+                    $button.prop('disabled', false).removeAttr('aria-busy');
+                });
+        });
+
+        ensureApiKeysPlaceholder();
+    }
 });

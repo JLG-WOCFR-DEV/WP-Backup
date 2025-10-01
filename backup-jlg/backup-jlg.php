@@ -88,7 +88,7 @@ final class BJLG_Plugin {
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
             'class-bjlg-performance.php', 'class-bjlg-rate-limiter.php', 'class-bjlg-rest-api.php',
-            'class-bjlg-admin.php', 'class-bjlg-actions.php',
+            'class-bjlg-api-keys.php', 'class-bjlg-admin.php', 'class-bjlg-actions.php',
             'destinations/interface-bjlg-destination.php', 'destinations/class-bjlg-google-drive.php',
         ];
         foreach ($files_to_load as $file) {
@@ -101,6 +101,7 @@ final class BJLG_Plugin {
     
     private function init_services() {
         new BJLG\BJLG_Admin();
+        new BJLG\BJLG_API_Keys();
         new BJLG\BJLG_Actions();
 
         $encryption_service = new BJLG\BJLG_Encryption();

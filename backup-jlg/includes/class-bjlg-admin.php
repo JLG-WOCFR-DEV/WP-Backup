@@ -36,6 +36,7 @@ class BJLG_Admin {
             'history' => 'Historique',
             'health_check' => 'Bilan de Santé',
             'settings' => 'Réglages',
+            'api' => 'API & Intégrations',
             'logs' => 'Logs & Outils'
         ];
     }
@@ -94,6 +95,9 @@ class BJLG_Admin {
                         break;
                     case 'settings':
                         $this->render_settings_section();
+                        break;
+                    case 'api':
+                        $this->render_api_section();
                         break;
                     case 'logs':
                         $this->render_logs_section();
@@ -506,6 +510,101 @@ class BJLG_Admin {
                 
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les Réglages</button></p>
             </form>
+        </div>
+        <?php
+    }
+
+    /**
+     * Section : API & intégrations
+     */
+    private function render_api_section() {
+        $raw_keys = get_option('bjlg_api_keys', []);
+        $keys = [];
+
+        if (is_array($raw_keys)) {
+            foreach ($raw_keys as $entry) {
+                $formatted = BJLG_API_Keys::format_key_for_list($entry);
+
+                if ($formatted !== null) {
+                    $keys[] = $formatted;
+                }
+            }
+        }
+
+        ?>
+        <div class="bjlg-section bjlg-api-keys" id="bjlg-api-keys-section">
+            <h2>API &amp; Intégrations</h2>
+            <p class="description">
+                Générez des clés API pour connecter des intégrations externes (scripts, outils tiers, automatisations) en toute sécurité.
+            </p>
+
+            <div id="bjlg-api-keys-feedback" class="notice bjlg-api-keys-feedback" style="display:none;" aria-live="polite"></div>
+
+            <form id="bjlg-api-keys-create-form" class="bjlg-api-keys-form">
+                <?php if (function_exists('wp_nonce_field')) { wp_nonce_field('bjlg_nonce', 'bjlg_api_nonce'); } ?>
+                <h3><span class="dashicons dashicons-rest-api"></span> Créer une nouvelle clé</h3>
+                <p class="description">
+                    Chaque clé est associée à votre compte administrateur actuel et peut être révoquée à tout moment.
+                </p>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><label for="bjlg-api-key-label">Libellé</label></th>
+                        <td>
+                            <input type="text" id="bjlg-api-key-label" name="label" class="regular-text" placeholder="Intégration Zapier, script CLI, ...">
+                            <p class="description">Optionnel, pour vous aider à identifier la clé.</p>
+                        </td>
+                    </tr>
+                </table>
+                <p class="submit">
+                    <button type="submit" class="button button-primary">
+                        <span class="dashicons dashicons-plus"></span> Générer une clé API
+                    </button>
+                </p>
+            </form>
+
+            <h3><span class="dashicons dashicons-shield"></span> Clés existantes</h3>
+            <table class="wp-list-table widefat striped bjlg-api-keys-table" id="bjlg-api-keys-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Détails</th>
+                        <th scope="col">Propriétaire</th>
+                        <th scope="col">Empreinte</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (empty($keys)) : ?>
+                        <tr class="bjlg-api-keys-empty">
+                            <td colspan="4">Aucune clé API n'a encore été générée.</td>
+                        </tr>
+                    <?php else : ?>
+                        <?php foreach ($keys as $key) :
+                            $label = isset($key['label']) && $key['label'] !== '' ? $key['label'] : 'Sans libellé';
+                            ?>
+                            <tr class="bjlg-api-key-row" data-key-id="<?php echo esc_attr($key['id']); ?>">
+                                <td>
+                                    <strong class="bjlg-api-key-label"><?php echo esc_html($label); ?></strong>
+                                    <div class="description">
+                                        <span class="bjlg-api-key-created">Créée le&nbsp;<span class="value"><?php echo esc_html($key['created']); ?></span></span>
+                                        <span class="bjlg-api-key-rotated"> · Dernière rotation : <span class="value"><?php echo esc_html($key['last_rotated']); ?></span></span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="bjlg-api-key-owner-name"><?php echo esc_html($key['user_display']); ?></span>
+                                    <?php if (!empty($key['user_login'])) : ?>
+                                        <div class="description bjlg-api-key-owner-login">@<?php echo esc_html($key['user_login']); ?></div>
+                                    <?php endif; ?>
+                                </td>
+                                <td><code class="bjlg-api-key-fingerprint"><?php echo esc_html($key['fingerprint']); ?></code></td>
+                                <td class="bjlg-api-key-actions">
+                                    <button type="button" class="button bjlg-api-key-rotate" data-key-id="<?php echo esc_attr($key['id']); ?>">Renouveler</button>
+                                    <button type="button" class="button-link-delete bjlg-api-key-revoke" data-key-id="<?php echo esc_attr($key['id']); ?>">Révoquer</button>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </tbody>
+            </table>
         </div>
         <?php
     }
