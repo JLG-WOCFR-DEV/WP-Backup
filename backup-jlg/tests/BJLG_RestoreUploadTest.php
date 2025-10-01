@@ -84,8 +84,12 @@ final class BJLG_RestoreUploadTest extends TestCase
                 'Le fichier dépasse la taille maximale autorisée par la configuration PHP.',
                 $response->data['message']
             );
-            $this->assertArrayHasKey('upload_error_code', $response->data);
-            $this->assertSame(UPLOAD_ERR_INI_SIZE, $response->data['upload_error_code']);
+            $this->assertArrayHasKey('details', $response->data);
+            $this->assertIsArray($response->data['details']);
+            $this->assertArrayHasKey('upload_error_code', $response->data['details']);
+            $this->assertSame(UPLOAD_ERR_INI_SIZE, $response->data['details']['upload_error_code']);
+            $this->assertArrayHasKey('upload_error_key', $response->data['details']);
+            $this->assertSame('ini_size_limit_exceeded', $response->data['details']['upload_error_key']);
         }
     }
 
@@ -116,6 +120,9 @@ final class BJLG_RestoreUploadTest extends TestCase
             $this->assertIsArray($response->data);
             $this->assertArrayHasKey('message', $response->data);
             $this->assertSame('Type ou extension de fichier non autorisé.', $response->data['message']);
+            $this->assertArrayHasKey('details', $response->data);
+            $this->assertIsArray($response->data['details']);
+            $this->assertSame(['zip', 'enc'], $response->data['details']['allowed_extensions']);
         }
     }
 
@@ -166,6 +173,9 @@ final class BJLG_RestoreUploadTest extends TestCase
             $this->assertStringContainsString('restore_', basename($destination));
             $this->assertFileExists($destination);
             $this->assertStringEndsWith('.zip', $response->data['filename']);
+            $this->assertArrayHasKey('details', $response->data);
+            $this->assertSame('archive.zip', $response->data['details']['original_filename']);
+            $this->assertSame('archive.zip', $response->data['details']['sanitized_filename']);
 
             $this->temporaryPaths[] = $destination;
             $this->assertFileDoesNotExist($handledPath);

@@ -250,38 +250,38 @@ class BJLG_Restore {
         check_ajax_referer('bjlg_nonce', 'nonce');
 
         if (empty($_FILES['restore_file'])) {
-            wp_send_json_error(['message' => 'Aucun fichier téléversé.']);
+            wp_send_json_error([
+                'message' => 'Aucun fichier téléversé.',
+                'details' => [
+                    'reason' => 'missing_file_payload',
+                ],
+            ]);
         }
 
         $uploaded_file = $_FILES['restore_file'];
 
         $error_code = isset($uploaded_file['error']) ? (int) $uploaded_file['error'] : UPLOAD_ERR_OK;
         if ($error_code !== UPLOAD_ERR_OK) {
-            $error_messages = [
-                UPLOAD_ERR_INI_SIZE => 'Le fichier dépasse la taille maximale autorisée par la configuration PHP.',
-                UPLOAD_ERR_FORM_SIZE => 'Le fichier dépasse la taille maximale autorisée par le formulaire.',
-                UPLOAD_ERR_PARTIAL => "Le fichier n'a été que partiellement téléversé.",
-                UPLOAD_ERR_NO_FILE => 'Aucun fichier téléversé.',
-                UPLOAD_ERR_NO_TMP_DIR => 'Le dossier temporaire est manquant sur le serveur.',
-                UPLOAD_ERR_CANT_WRITE => 'Impossible d\'écrire le fichier sur le disque.',
-                UPLOAD_ERR_EXTENSION => 'Une extension PHP a interrompu le téléversement.',
-            ];
-
-            $message = $error_messages[$error_code] ?? sprintf(
-                'Erreur lors du téléversement du fichier (code %d).',
-                $error_code
-            );
+            $error_info = self::describe_upload_error($error_code);
 
             wp_send_json_error([
-                'message' => $message,
-                'upload_error_code' => $error_code,
+                'message' => $error_info['message'],
+                'details' => [
+                    'upload_error_code' => $error_code,
+                    'upload_error_key' => $error_info['key'],
+                ],
             ]);
         }
 
         $original_filename = isset($uploaded_file['name']) ? $uploaded_file['name'] : '';
         $sanitized_filename = sanitize_file_name(wp_unslash($original_filename));
         if ($sanitized_filename === '') {
-            wp_send_json_error(['message' => 'Nom de fichier invalide.']);
+            wp_send_json_error([
+                'message' => 'Nom de fichier invalide.',
+                'details' => [
+                    'original_filename' => $original_filename,
+                ],
+            ]);
         }
 
         // Vérifications de sécurité
@@ -296,16 +296,33 @@ class BJLG_Restore {
         );
 
         if (empty($checked_file['ext']) || empty($checked_file['type']) || !array_key_exists($checked_file['ext'], $allowed_mimes)) {
-            wp_send_json_error(['message' => 'Type ou extension de fichier non autorisé.']);
+            wp_send_json_error([
+                'message' => 'Type ou extension de fichier non autorisé.',
+                'details' => [
+                    'allowed_extensions' => array_keys($allowed_mimes),
+                    'detected_extension' => $checked_file['ext'],
+                    'detected_type' => $checked_file['type'],
+                ],
+            ]);
         }
 
         if (!wp_mkdir_p(BJLG_BACKUP_DIR)) {
-            wp_send_json_error(['message' => 'Répertoire de sauvegarde inaccessible.']);
+            wp_send_json_error([
+                'message' => 'Répertoire de sauvegarde inaccessible.',
+                'details' => [
+                    'backup_directory' => BJLG_BACKUP_DIR,
+                ],
+            ]);
         }
 
         $is_writable = function_exists('wp_is_writable') ? wp_is_writable(BJLG_BACKUP_DIR) : is_writable(BJLG_BACKUP_DIR);
         if (!$is_writable) {
-            wp_send_json_error(['message' => 'Répertoire de sauvegarde non accessible en écriture.']);
+            wp_send_json_error([
+                'message' => 'Répertoire de sauvegarde non accessible en écriture.',
+                'details' => [
+                    'backup_directory' => BJLG_BACKUP_DIR,
+                ],
+            ]);
         }
 
         if (!empty($uploaded_file['tmp_name'])) {
@@ -324,6 +341,9 @@ class BJLG_Restore {
             if (!$is_uploaded) {
                 wp_send_json_error([
                     'message' => 'Le fichier fourni n\'est pas un téléversement valide.',
+                    'details' => [
+                        'tmp_name' => $uploaded_file['tmp_name'],
+                    ],
                 ]);
             }
         }
@@ -336,7 +356,12 @@ class BJLG_Restore {
         }
 
         if (!function_exists('wp_handle_upload')) {
-            wp_send_json_error(['message' => 'La fonction de gestion des téléversements est indisponible.']);
+            wp_send_json_error([
+                'message' => 'La fonction de gestion des téléversements est indisponible.',
+                'details' => [
+                    'function' => 'wp_handle_upload',
+                ],
+            ]);
         }
 
         $handled_upload = wp_handle_upload($uploaded_file, ['test_form' => false]);
@@ -344,6 +369,10 @@ class BJLG_Restore {
         if (is_wp_error($handled_upload)) {
             wp_send_json_error([
                 'message' => 'Impossible de traiter le fichier téléversé : ' . $handled_upload->get_error_message(),
+                'details' => [
+                    'wp_error_code' => $handled_upload->get_error_code(),
+                    'wp_error_message' => $handled_upload->get_error_message(),
+                ],
             ]);
         }
 
@@ -354,12 +383,18 @@ class BJLG_Restore {
 
             wp_send_json_error([
                 'message' => 'Impossible de traiter le fichier téléversé : ' . $error_message,
+                'details' => [
+                    'wp_handle_upload_error' => $error_message,
+                ],
             ]);
         }
 
         if (empty($handled_upload['file']) || !file_exists($handled_upload['file'])) {
             wp_send_json_error([
                 'message' => 'Le fichier téléversé est introuvable après traitement.',
+                'details' => [
+                    'handled_upload' => $handled_upload,
+                ],
             ]);
         }
 
@@ -376,14 +411,76 @@ class BJLG_Restore {
         }
 
         if (!$moved) {
-            wp_send_json_error(['message' => 'Impossible de déplacer le fichier téléversé vers le répertoire des sauvegardes.']);
+            wp_send_json_error([
+                'message' => 'Impossible de déplacer le fichier téléversé vers le répertoire des sauvegardes.',
+                'details' => [
+                    'source' => $handled_upload['file'],
+                    'destination' => $destination,
+                ],
+            ]);
         }
 
         wp_send_json_success([
             'message' => 'Fichier téléversé avec succès.',
             'filename' => basename($destination),
-            'filepath' => $destination
+            'filepath' => $destination,
+            'details' => [
+                'original_filename' => $original_filename,
+                'sanitized_filename' => $sanitized_filename,
+            ],
         ]);
+    }
+
+    /**
+     * Retourne un message détaillé pour un code d'erreur d'upload.
+     *
+     * @param int $error_code
+     * @return array{key: string, message: string}
+     */
+    private static function describe_upload_error(int $error_code): array
+    {
+        $messages = [
+            UPLOAD_ERR_INI_SIZE => [
+                'key' => 'ini_size_limit_exceeded',
+                'message' => 'Le fichier dépasse la taille maximale autorisée par la configuration PHP.',
+            ],
+            UPLOAD_ERR_FORM_SIZE => [
+                'key' => 'form_size_limit_exceeded',
+                'message' => 'Le fichier dépasse la taille maximale autorisée par le formulaire.',
+            ],
+            UPLOAD_ERR_PARTIAL => [
+                'key' => 'partial_upload',
+                'message' => "Le fichier n'a été que partiellement téléversé.",
+            ],
+            UPLOAD_ERR_NO_FILE => [
+                'key' => 'no_file',
+                'message' => 'Aucun fichier téléversé.',
+            ],
+            UPLOAD_ERR_NO_TMP_DIR => [
+                'key' => 'missing_tmp_dir',
+                'message' => 'Le dossier temporaire est manquant sur le serveur.',
+            ],
+            UPLOAD_ERR_CANT_WRITE => [
+                'key' => 'cannot_write',
+                'message' => 'Impossible d\'écrire le fichier sur le disque.',
+            ],
+            UPLOAD_ERR_EXTENSION => [
+                'key' => 'extension_stopped_upload',
+                'message' => 'Une extension PHP a interrompu le téléversement.',
+            ],
+        ];
+
+        if (isset($messages[$error_code])) {
+            return $messages[$error_code];
+        }
+
+        return [
+            'key' => 'unknown_error',
+            'message' => sprintf(
+                'Erreur lors du téléversement du fichier (code %d).',
+                $error_code
+            ),
+        ];
     }
 
     /**
