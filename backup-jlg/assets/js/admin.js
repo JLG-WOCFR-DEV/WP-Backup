@@ -1600,6 +1600,18 @@ jQuery(document).ready(function($) {
             }
         });
 
+        $form.find('input[type="checkbox"]').each(function() {
+            const name = this.name;
+
+            if (!name || this.disabled || name.endsWith('[]')) {
+                return;
+            }
+
+            if (!Object.prototype.hasOwnProperty.call(data, name)) {
+                data[name] = '0';
+            }
+        });
+
         return data;
     }
 
