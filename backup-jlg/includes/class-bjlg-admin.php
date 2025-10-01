@@ -34,13 +34,20 @@ class BJLG_Admin {
      * Retourne les onglets par défaut
      */
     public function get_default_tabs($tabs) {
-        return [
+        $defaults = [
             'backup_restore' => 'Sauvegarde & Restauration',
             'history' => 'Historique',
             'health_check' => 'Bilan de Santé',
             'settings' => 'Réglages',
-            'logs' => 'Logs & Outils'
+            'logs' => 'Logs & Outils',
+            'api' => 'API & Intégrations',
         ];
+
+        if (is_array($tabs) && !empty($tabs)) {
+            return array_merge($defaults, $tabs);
+        }
+
+        return $defaults;
     }
 
     /**
@@ -100,6 +107,9 @@ class BJLG_Admin {
                         break;
                     case 'logs':
                         $this->render_logs_section();
+                        break;
+                    case 'api':
+                        $this->render_api_section();
                         break;
                     case 'backup_restore':
                     default:
@@ -552,6 +562,84 @@ class BJLG_Admin {
             <div id="bjlg-support-package-status" style="display: none;">
                 <p class="description">Génération du pack de support en cours...</p>
             </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * Section : API & Intégrations
+     */
+    private function render_api_section() {
+        $keys = BJLG_API_Keys::get_keys();
+        $has_keys = !empty($keys);
+        ?>
+        <div class="bjlg-section" id="bjlg-api-keys-section">
+            <h2>API &amp; Intégrations</h2>
+            <p class="description">
+                Gérez les clés d'accès utilisées par vos intégrations externes. Créez une nouvelle clé pour chaque service,
+                puis régénérez-la ou révoquez-la si nécessaire.
+            </p>
+
+            <div id="bjlg-api-keys-feedback" class="notice" style="display:none;" aria-live="polite"></div>
+
+            <form id="bjlg-create-api-key" class="bjlg-inline-form">
+                <h3>Créer une nouvelle clé</h3>
+                <p class="description">Donnez un nom à la clé pour identifier l'intégration correspondante.</p>
+                <label for="bjlg-api-key-label" class="screen-reader-text">Nom de la clé API</label>
+                <input type="text" id="bjlg-api-key-label" name="label" class="regular-text"
+                       placeholder="Ex. : CRM Marketing" autocomplete="off" />
+                <button type="submit" class="button button-primary">
+                    <span class="dashicons dashicons-plus"></span> Générer une clé API
+                </button>
+            </form>
+
+            <p class="description bjlg-api-keys-empty"<?php echo $has_keys ? ' style="display:none;"' : ''; ?>>
+                Aucune clé API n'a été générée pour le moment.
+            </p>
+
+            <table id="bjlg-api-keys-table" class="wp-list-table widefat striped bjlg-responsive-table"<?php echo $has_keys ? '' : ' style="display:none;"'; ?>>
+                <thead>
+                    <tr>
+                        <th scope="col">Nom</th>
+                        <th scope="col">Clé</th>
+                        <th scope="col">Créée le</th>
+                        <th scope="col">Dernière rotation</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($keys as $key): ?>
+                    <tr data-key-id="<?php echo esc_attr($key['id']); ?>" data-created-at="<?php echo esc_attr($key['created_at']); ?>" data-last-rotated-at="<?php echo esc_attr($key['last_rotated_at']); ?>">
+                        <td>
+                            <strong class="bjlg-api-key-label"><?php echo esc_html($key['label']); ?></strong>
+                        </td>
+                        <td>
+                            <code class="bjlg-api-key-value" aria-label="Clé API"><?php echo esc_html($key['secret']); ?></code>
+                        </td>
+                        <td>
+                            <time class="bjlg-api-key-created" datetime="<?php echo esc_attr($key['created_at_iso']); ?>">
+                                <?php echo esc_html($key['created_at_human']); ?>
+                            </time>
+                        </td>
+                        <td>
+                            <time class="bjlg-api-key-rotated" datetime="<?php echo esc_attr($key['last_rotated_at_iso']); ?>">
+                                <?php echo esc_html($key['last_rotated_at_human']); ?>
+                            </time>
+                        </td>
+                        <td>
+                            <div class="bjlg-api-key-actions">
+                                <button type="button" class="button bjlg-rotate-api-key" data-key-id="<?php echo esc_attr($key['id']); ?>">
+                                    <span class="dashicons dashicons-update"></span> Régénérer
+                                </button>
+                                <button type="button" class="button button-link-delete bjlg-revoke-api-key" data-key-id="<?php echo esc_attr($key['id']); ?>">
+                                    <span class="dashicons dashicons-no"></span> Révoquer
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
         </div>
         <?php
     }

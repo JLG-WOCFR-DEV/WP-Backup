@@ -88,7 +88,7 @@ final class BJLG_Plugin {
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
             'class-bjlg-performance.php', 'class-bjlg-rate-limiter.php', 'class-bjlg-rest-api.php',
-            'class-bjlg-admin.php', 'class-bjlg-actions.php',
+            'class-bjlg-api-keys.php', 'class-bjlg-admin.php', 'class-bjlg-actions.php',
             'destinations/interface-bjlg-destination.php', 'destinations/class-bjlg-google-drive.php', 'destinations/class-bjlg-aws-s3.php',
         ];
         foreach ($files_to_load as $file) {
@@ -117,17 +117,19 @@ final class BJLG_Plugin {
         new BJLG\BJLG_Incremental();
         new BJLG\BJLG_REST_API();
         new BJLG\BJLG_Settings();
+        new BJLG\BJLG_API_Keys();
     }
-    
+
     public function enqueue_admin_assets($hook) {
         if (strpos($hook, 'backup-jlg') === false) return;
-        
+
         wp_enqueue_style('bjlg-admin', BJLG_PLUGIN_URL . 'assets/css/admin.css', [], BJLG_VERSION);
         wp_enqueue_style('bjlg-admin-advanced', BJLG_PLUGIN_URL . 'assets/css/admin-advanced.css', [], BJLG_VERSION);
         wp_enqueue_script('bjlg-admin', BJLG_PLUGIN_URL . 'assets/js/admin.js', ['jquery'], BJLG_VERSION, true);
         wp_localize_script('bjlg-admin', 'bjlg_ajax', [
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce'    => wp_create_nonce('bjlg_nonce'),
+            'api_keys_nonce' => wp_create_nonce('bjlg_api_keys'),
         ]);
     }
 
