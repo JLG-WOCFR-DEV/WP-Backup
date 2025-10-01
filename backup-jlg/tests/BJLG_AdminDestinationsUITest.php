@@ -32,5 +32,6 @@ final class BJLG_AdminDestinationsUITest extends TestCase
         $this->assertStringContainsString('Amazon S3', $html);
         $this->assertStringContainsString("name='s3_access_key'", $html);
         $this->assertStringContainsString('bjlg-s3-test-connection', $html);
+        $this->assertStringContainsString("name='s3_kms_key_id'", $html);
     }
 }
