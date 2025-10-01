@@ -125,6 +125,7 @@ namespace {
         private static $tests_without_auth_key = [
             'test_a_authenticate_returns_error_when_auth_key_missing',
             'test_client_ip_helper_ignores_untrusted_forwarded_for',
+            'test_api_info_documentation_points_to_api_tab',
         ];
 
         public function runBare(): void
@@ -207,6 +208,21 @@ namespace {
                     'user_id' => $user_id,
                 ];
             }, 10, 4);
+        }
+
+        public function test_api_info_documentation_points_to_api_tab(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $response = $api->get_api_info(new class() {
+            });
+
+            $this->assertIsArray($response);
+            $this->assertArrayHasKey('documentation', $response);
+            $this->assertSame(
+                admin_url('admin.php?page=backup-jlg&tab=api'),
+                $response['documentation']
+            );
         }
 
         private function makeUser(int $id, string $login, ?array $caps = null, ?array $roles = null): object

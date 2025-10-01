@@ -1010,7 +1010,7 @@ class BJLG_REST_API {
                 'requests_per_minute' => 60,
                 'requests_per_hour' => 1000
             ],
-            'documentation' => get_site_url() . '/wp-admin/admin.php?page=backup-jlg&tab=api_docs'
+            'documentation' => admin_url('admin.php?page=backup-jlg&tab=api')
         ]);
     }
     
