@@ -595,8 +595,176 @@ jQuery(document).ready(function($) {
     // --- GESTIONNAIRE SAUVEGARDE DES RÉGLAGES ---
     $('.bjlg-settings-form').on('submit', function(e) {
         e.preventDefault();
-        // ... (Code complet fourni précédemment) ...
+
+        const $form = $(this);
+        const $submit = $form.find('button[type="submit"], input[type="submit"]').first();
+        const $feedback = ensureFeedbackElement($form);
+
+        if ($feedback.length) {
+            $feedback.removeClass('notice-success notice-error').hide().empty();
+        }
+
+        const payload = collectFormData($form);
+        payload.action = 'bjlg_save_settings';
+        payload.nonce = bjlg_ajax.nonce;
+
+        const submitState = rememberSubmitState($submit);
+        setSubmitLoadingState($submit);
+
+        $.post(bjlg_ajax.ajax_url, payload)
+            .done(function(response) {
+                const normalized = normalizeSettingsResponse(response);
+                if (normalized.success) {
+                    showFeedback($feedback, 'success', normalized.message || 'Réglages sauvegardés avec succès !');
+                } else {
+                    const message = normalized.message || 'Une erreur est survenue lors de la sauvegarde des réglages.';
+                    showFeedback($feedback, 'error', message);
+                }
+            })
+            .fail(function(xhr) {
+                let message = 'Impossible de sauvegarder les réglages.';
+
+                if (xhr && xhr.responseJSON) {
+                    if (xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                        message = xhr.responseJSON.data.message;
+                    } else if (xhr.responseJSON.message) {
+                        message = xhr.responseJSON.message;
+                    }
+                }
+
+                showFeedback($feedback, 'error', message);
+            })
+            .always(function() {
+                restoreSubmitState($submit, submitState);
+            });
     });
+
+    function collectFormData($form) {
+        const data = {};
+
+        $.each($form.serializeArray(), function(_, field) {
+            if (Object.prototype.hasOwnProperty.call(data, field.name)) {
+                if (!Array.isArray(data[field.name])) {
+                    data[field.name] = [data[field.name]];
+                }
+                data[field.name].push(field.value);
+            } else {
+                data[field.name] = field.value;
+            }
+        });
+
+        return data;
+    }
+
+    function ensureFeedbackElement($form) {
+        let $feedback = $form.find('.bjlg-settings-feedback');
+
+        if (!$feedback.length) {
+            $feedback = $('<div class="bjlg-settings-feedback notice" role="status" aria-live="polite" style="display:none;"></div>');
+            $form.prepend($feedback);
+        }
+
+        return $feedback;
+    }
+
+    function showFeedback($feedback, type, message) {
+        if (!$feedback || !$feedback.length) {
+            return;
+        }
+
+        const isSuccess = type === 'success';
+
+        $feedback
+            .removeClass('notice-success notice-error')
+            .addClass(isSuccess ? 'notice-success' : 'notice-error')
+            .text(message)
+            .show();
+    }
+
+    function normalizeSettingsResponse(response) {
+        if (typeof response === 'string' && response !== '') {
+            try {
+                response = JSON.parse(response);
+            } catch (error) {
+                return { success: false, message: response };
+            }
+        }
+
+        if (response && typeof response === 'object') {
+            if (typeof response.success !== 'undefined') {
+                const data = response.data || {};
+                return {
+                    success: response.success === true,
+                    message: data.message || response.message || ''
+                };
+            }
+
+            if (response.message || response.saved) {
+                return {
+                    success: true,
+                    message: response.message || ''
+                };
+            }
+        }
+
+        return { success: false, message: '' };
+    }
+
+    function rememberSubmitState($submit) {
+        if (!$submit || !$submit.length) {
+            return null;
+        }
+
+        if ($submit.data('bjlg-original-state')) {
+            return $submit.data('bjlg-original-state');
+        }
+
+        const isButton = $submit.is('button');
+        const state = {
+            isButton: isButton,
+            content: isButton ? $submit.html() : $submit.val()
+        };
+
+        $submit.data('bjlg-original-state', state);
+
+        return state;
+    }
+
+    function setSubmitLoadingState($submit) {
+        if (!$submit || !$submit.length) {
+            return;
+        }
+
+        const state = $submit.data('bjlg-original-state');
+
+        $submit.prop('disabled', true).addClass('is-busy');
+
+        const loadingText = $submit.attr('data-loading-label') || $submit.data('bjlg-loading-label') || 'Enregistrement...';
+
+        if (state) {
+            if (state.isButton) {
+                $submit.html(loadingText);
+            } else {
+                $submit.val(loadingText);
+            }
+        }
+    }
+
+    function restoreSubmitState($submit, state) {
+        if (!$submit || !$submit.length) {
+            return;
+        }
+
+        if (state) {
+            if (state.isButton) {
+                $submit.html(state.content);
+            } else {
+                $submit.val(state.content);
+            }
+        }
+
+        $submit.prop('disabled', false).removeClass('is-busy');
+    }
 
     // --- DEMANDE DE TÉLÉCHARGEMENT SÉCURISÉ ---
     $('body').on('click', '.bjlg-download-button', function(e) {

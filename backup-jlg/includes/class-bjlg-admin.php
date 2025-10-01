@@ -399,6 +399,7 @@ class BJLG_Admin {
             
             <h3><span class="dashicons dashicons-cloud"></span> Destinations Cloud</h3>
             <form class="bjlg-settings-form">
+                <div class="bjlg-settings-feedback notice" role="status" aria-live="polite" style="display:none;"></div>
                 <?php
                 if (!empty($this->destinations)) {
                     foreach ($this->destinations as $destination) {
@@ -469,6 +470,7 @@ class BJLG_Admin {
             <p class="description"><strong>Compatibilité :</strong> L'ancien format <code><?php echo esc_html(add_query_arg(BJLG_Webhooks::WEBHOOK_QUERY_VAR, 'VOTRE_CLE', home_url('/'))); ?></code> reste supporté provisoirement mais sera retiré après la période de transition.</p>
 
             <form class="bjlg-settings-form">
+                <div class="bjlg-settings-feedback notice" role="status" aria-live="polite" style="display:none;"></div>
                 <h3><span class="dashicons dashicons-trash"></span> Rétention des Sauvegardes</h3>
                 <table class="form-table">
                     <tr>
