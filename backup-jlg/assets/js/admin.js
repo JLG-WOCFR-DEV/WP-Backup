@@ -318,6 +318,43 @@ jQuery(document).ready(function($) {
         const $progressBar = $('#bjlg-backup-progress-bar');
         const $debugWrapper = $('#bjlg-backup-debug-wrapper');
         const $debugOutput = $('#bjlg-backup-ajax-debug');
+
+        function setBackupBusyState(isBusy) {
+            const busyValue = isBusy ? 'true' : 'false';
+            $statusText.attr('aria-busy', busyValue);
+            $progressBar.attr('aria-busy', busyValue);
+        }
+
+        function updateBackupProgress(progressValue) {
+            if (Number.isFinite(progressValue)) {
+                const clamped = Math.max(0, Math.min(100, progressValue));
+                const displayValue = Number.isInteger(clamped)
+                    ? String(clamped)
+                    : clamped.toFixed(1).replace(/\.0$/, '');
+                const percentText = displayValue + '%';
+                $progressBar
+                    .css('width', percentText)
+                    .text(percentText)
+                    .attr('aria-valuenow', String(clamped))
+                    .attr('aria-valuetext', percentText);
+                return clamped;
+            }
+
+            if (typeof progressValue === 'string' && progressValue.trim() !== '') {
+                const textValue = progressValue.trim();
+                $progressBar
+                    .text(textValue)
+                    .removeAttr('aria-valuenow')
+                    .attr('aria-valuetext', textValue);
+            }
+
+            return null;
+        }
+
+        function setBackupStatusText(message) {
+            const textValue = typeof message === 'string' ? message.trim() : '';
+            $statusText.text(textValue === '' ? '' : textValue);
+        }
         
         let components = [];
         $form.find('input[name="backup_components[]"]:checked').each(function() {
@@ -335,8 +372,9 @@ jQuery(document).ready(function($) {
         $button.prop('disabled', true);
         $progressArea.show();
         if ($debugWrapper.length) $debugWrapper.show();
-        $statusText.text('Initialisation...');
-        $progressBar.css('width', '5%').text('5%');
+        setBackupBusyState(true);
+        setBackupStatusText('Initialisation...');
+        updateBackupProgress(5);
 
         const data = {
             action: 'bjlg_start_backup_task',
@@ -365,7 +403,8 @@ jQuery(document).ready(function($) {
                 }
                 pollBackupProgress(response.data.task_id);
             } else {
-                $statusText.text('Erreur lors du lancement : ' + (response.data.message || 'Réponse invalide.'));
+                setBackupBusyState(false);
+                setBackupStatusText('❌ Erreur lors du lancement : ' + (response.data.message || 'Réponse invalide.'));
                 $button.prop('disabled', false);
             }
         })
@@ -374,7 +413,8 @@ jQuery(document).ready(function($) {
                 debugReport += "\n\nERREUR CRITIQUE DE COMMUNICATION\nStatut: " + xhr.status + "\nRéponse brute:\n" + xhr.responseText;
                 $debugOutput.text(debugReport);
             }
-            $statusText.text('Erreur de communication.');
+            setBackupBusyState(false);
+            setBackupStatusText('❌ Erreur de communication.');
             $button.prop('disabled', false);
         });
 
@@ -387,35 +427,37 @@ jQuery(document).ready(function($) {
                 .done(function(response) {
                     if (response.success && response.data) {
                         const data = response.data;
-                        $statusText.text(data.status_text || 'Progression...');
+                        setBackupStatusText(data.status_text || 'Progression...');
+                        setBackupBusyState(true);
 
                         const progressValue = Number.parseFloat(data.progress);
-                        const hasNumericProgress = Number.isFinite(progressValue);
-                        const progressDisplay = hasNumericProgress ? progressValue.toFixed(1) : data.progress;
+                        updateBackupProgress(progressValue);
 
-                        $progressBar
-                            .css('width', progressDisplay + '%')
-                            .text(progressDisplay + '%');
-                        
-                        if (data.progress >= 100) {
+                        if (Number.isFinite(progressValue) && progressValue >= 100) {
                             clearInterval(interval);
                             if (data.status === 'error') {
-                                $statusText.html('<span style="color:red;">❌ Erreur : ' + data.status_text + '</span>');
+                                setBackupBusyState(false);
+                                setBackupStatusText('❌ Erreur : ' + (data.status_text || 'La sauvegarde a échoué.'));
                                 $button.prop('disabled', false);
                             } else {
-                                $statusText.html('✔️ Terminé ! La page va se recharger.');
+                                setBackupBusyState(false);
+                                updateBackupProgress(100);
+                                setBackupStatusText('✔️ Terminé ! La page va se recharger.');
                                 setTimeout(() => window.location.reload(), 2000);
                             }
+                            return;
                         }
                     } else {
                         clearInterval(interval);
-                        $statusText.text('Erreur : La tâche de sauvegarde a été perdue.');
+                        setBackupBusyState(false);
+                        setBackupStatusText('❌ Erreur : La tâche de sauvegarde a été perdue.');
                         $button.prop('disabled', false);
                     }
                 })
                 .fail(function() {
                      clearInterval(interval);
-                     $statusText.text('Erreur de communication lors du suivi.');
+                     setBackupBusyState(false);
+                     setBackupStatusText('❌ Erreur de communication lors du suivi.');
                      $button.prop('disabled', false);
                 });
             }, 3000);
@@ -444,6 +486,43 @@ jQuery(document).ready(function($) {
             : '';
         const $errorNotice = $('#bjlg-restore-errors');
         const errorFieldClass = 'bjlg-input-error';
+
+        function setRestoreBusyState(isBusy) {
+            const busyValue = isBusy ? 'true' : 'false';
+            $statusText.attr('aria-busy', busyValue);
+            $progressBar.attr('aria-busy', busyValue);
+        }
+
+        function updateRestoreProgress(progressValue) {
+            if (Number.isFinite(progressValue)) {
+                const clamped = Math.max(0, Math.min(100, progressValue));
+                const displayValue = Number.isInteger(clamped)
+                    ? String(clamped)
+                    : clamped.toFixed(1).replace(/\.0$/, '');
+                const percentText = displayValue + '%';
+                $progressBar
+                    .css('width', percentText)
+                    .text(percentText)
+                    .attr('aria-valuenow', String(clamped))
+                    .attr('aria-valuetext', percentText);
+                return clamped;
+            }
+
+            if (typeof progressValue === 'string' && progressValue.trim() !== '') {
+                const textValue = progressValue.trim();
+                $progressBar
+                    .text(textValue)
+                    .removeAttr('aria-valuenow')
+                    .attr('aria-valuetext', textValue);
+            }
+
+            return null;
+        }
+
+        function setRestoreStatusText(message) {
+            const textValue = typeof message === 'string' ? message.trim() : '';
+            $statusText.text(textValue === '' ? '' : textValue);
+        }
 
         function applyPasswordHelpText(text) {
             if (!passwordHelp) {
@@ -705,8 +784,9 @@ jQuery(document).ready(function($) {
 
         $button.prop('disabled', true);
         $statusWrapper.show();
-        $statusText.text('Téléversement du fichier en cours...');
-        $progressBar.css('width', '0%').text('0%');
+        setRestoreBusyState(true);
+        setRestoreStatusText('Téléversement du fichier en cours...');
+        updateRestoreProgress(0);
         if ($debugWrapper.length) {
             $debugWrapper.show();
         }
@@ -742,7 +822,7 @@ jQuery(document).ready(function($) {
         .done(function(response) {
             appendRestoreDebug('Réponse du serveur (téléversement)', response);
             if (response.success && response.data && response.data.filename) {
-                $statusText.text('Fichier téléversé. Préparation de la restauration...');
+                setRestoreStatusText('Fichier téléversé. Préparation de la restauration...');
                 runRestore(response.data.filename, createRestorePoint);
             } else {
                 const payload = response && response.data ? response.data : {};
@@ -750,7 +830,8 @@ jQuery(document).ready(function($) {
                     ? payload.message
                     : 'Réponse invalide du serveur.';
                 displayRestoreErrors(message, getValidationErrors(payload));
-                $statusText.html('<span style="color:red;">❌ ' + message + '</span>');
+                setRestoreBusyState(false);
+                setRestoreStatusText('❌ ' + message);
                 $button.prop('disabled', false);
             }
         })
@@ -771,7 +852,8 @@ jQuery(document).ready(function($) {
             }
             const errors = xhr && xhr.responseJSON ? getValidationErrors(xhr.responseJSON.data) : null;
             displayRestoreErrors(errorMessage, errors);
-            $statusText.html('<span style="color:red;">❌ ' + errorMessage + '</span>');
+            setRestoreBusyState(false);
+            setRestoreStatusText('❌ ' + errorMessage);
             $button.prop('disabled', false);
         });
 
@@ -784,7 +866,8 @@ jQuery(document).ready(function($) {
                 password: passwordInput ? passwordInput.value : ''
             };
 
-            $statusText.text('Initialisation de la restauration...');
+            setRestoreBusyState(true);
+            setRestoreStatusText('Initialisation de la restauration...');
             appendRestoreDebug('--- 2. DÉMARRAGE DE LA RESTAURATION ---\nRequête envoyée', requestData);
 
             $.ajax({
@@ -802,7 +885,8 @@ jQuery(document).ready(function($) {
                         ? payload.message
                         : 'Impossible de démarrer la restauration.';
                     displayRestoreErrors(message, getValidationErrors(payload));
-                    $statusText.html('<span style="color:red;">❌ ' + message + '</span>');
+                    setRestoreBusyState(false);
+                    setRestoreStatusText('❌ ' + message);
                     $button.prop('disabled', false);
                 }
             })
@@ -823,7 +907,8 @@ jQuery(document).ready(function($) {
                 }
                 const errors = xhr && xhr.responseJSON ? getValidationErrors(xhr.responseJSON.data) : null;
                 displayRestoreErrors(errorMessage, errors);
-                $statusText.html('<span style="color:red;">❌ ' + errorMessage + '</span>');
+                setRestoreBusyState(false);
+                setRestoreStatusText('❌ ' + errorMessage);
                 $button.prop('disabled', false);
             });
         }
@@ -850,27 +935,26 @@ jQuery(document).ready(function($) {
                         const data = response.data;
 
                         if (data.status_text) {
-                            $statusText.text(data.status_text);
+                            setRestoreStatusText(data.status_text);
                         }
 
+                        setRestoreBusyState(true);
+
                         const progressValue = Number.parseFloat(data.progress);
-                        if (Number.isFinite(progressValue)) {
-                            const clampedProgress = Math.max(0, Math.min(100, progressValue));
-                            $progressBar
-                                .css('width', clampedProgress + '%')
-                                .text(clampedProgress + '%');
-                        }
+                        updateRestoreProgress(progressValue);
 
                         if (data.status === 'error') {
                             clearInterval(interval);
                             const message = data.status_text || 'La restauration a échoué.';
                             displayRestoreErrors(message, getValidationErrors(data));
-                            $statusText.html('<span style="color:red;">❌ ' + message + '</span>');
+                            setRestoreBusyState(false);
+                            setRestoreStatusText('❌ ' + message);
                             $button.prop('disabled', false);
                         } else if (data.status === 'complete' || (Number.isFinite(progressValue) && progressValue >= 100)) {
                             clearInterval(interval);
-                            $progressBar.css('width', '100%').text('100%');
-                            $statusText.html('✔️ Restauration terminée ! La page va se recharger.');
+                            setRestoreBusyState(false);
+                            updateRestoreProgress(100);
+                            setRestoreStatusText('✔️ Restauration terminée ! La page va se recharger.');
                             setTimeout(() => window.location.reload(), 3000);
                         }
                     } else {
@@ -878,7 +962,8 @@ jQuery(document).ready(function($) {
                         const message = response && response.data && response.data.message
                             ? response.data.message
                             : 'Tâche de restauration introuvable.';
-                        $statusText.html('<span style="color:red;">❌ ' + message + '</span>');
+                        setRestoreBusyState(false);
+                        setRestoreStatusText('❌ ' + message);
                         $button.prop('disabled', false);
                     }
                 })
@@ -891,7 +976,8 @@ jQuery(document).ready(function($) {
                         }
                     );
                     clearInterval(interval);
-                    $statusText.html('<span style="color:red;">❌ Erreur de communication lors du suivi de la restauration.</span>');
+                    setRestoreBusyState(false);
+                    setRestoreStatusText('❌ Erreur de communication lors du suivi de la restauration.');
                     $button.prop('disabled', false);
                 });
             }, 3000);
