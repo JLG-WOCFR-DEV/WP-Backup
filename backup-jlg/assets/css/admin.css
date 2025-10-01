@@ -22,6 +22,32 @@
     margin-top: 25px;
 }
 
+/* Formulaires et actions
+--------------------------------------------- */
+
+.bjlg-form-table-group {
+    margin-bottom: 24px;
+}
+
+.bjlg-form-table-group:last-child {
+    margin-bottom: 0;
+}
+
+.bjlg-section .submit {
+    margin-top: 24px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+    text-align: center;
+}
+
+.bjlg-section .submit .button {
+    min-width: 220px;
+    padding-left: 20px;
+    padding-right: 20px;
+}
+
 /* Navigation par onglets
 --------------------------------------------- */
 
@@ -97,4 +123,89 @@
     font-weight: bold;
     border-radius: 4px;
     transition: width 0.4s ease;
+}
+
+@media (max-width: 782px) {
+    .bjlg-form-table-group .form-table,
+    .bjlg-form-table-group .form-table tbody,
+    .bjlg-form-table-group .form-table tr {
+        display: block;
+        width: 100%;
+    }
+
+    .bjlg-form-table-group .form-table {
+        border-spacing: 0;
+    }
+
+    .bjlg-form-table-group .form-table tr {
+        padding: 16px;
+        margin-bottom: 16px;
+        background-color: #f9f9f9;
+        border: 1px solid #dcdcde;
+        border-radius: 6px;
+    }
+
+    .bjlg-form-table-group .form-table tr:last-child {
+        margin-bottom: 0;
+    }
+
+    .bjlg-form-table-group .form-table th,
+    .bjlg-form-table-group .form-table td {
+        display: block;
+        width: 100%;
+        padding: 0;
+    }
+
+    .bjlg-form-table-group .form-table th {
+        font-weight: 600;
+        margin-bottom: 8px;
+    }
+
+    .bjlg-form-table-group .form-table td > :not(.description) {
+        width: 100%;
+        max-width: 100%;
+    }
+
+    .bjlg-form-table-group .form-table td fieldset {
+        margin: 0;
+        padding: 0;
+    }
+
+    .bjlg-form-table-group .form-table td fieldset br {
+        display: none;
+    }
+
+    .bjlg-form-table-group .form-table td fieldset label,
+    .bjlg-form-table-group .form-table td > label {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        line-height: 1.4;
+        padding: 8px 0;
+    }
+
+    .bjlg-form-table-group .form-table td fieldset label .description,
+    .bjlg-form-table-group .form-table td > label .description {
+        display: block;
+        margin-top: 4px;
+    }
+
+    .bjlg-form-table-group .form-table td .description {
+        margin-top: 8px;
+    }
+
+    .bjlg-form-table-group .form-table td input[type="checkbox"] {
+        margin-top: 3px;
+    }
+
+    .bjlg-section .submit {
+        justify-content: center;
+    }
+
+    .bjlg-section .submit .button {
+        width: 100%;
+        justify-content: center;
+        padding-top: 12px;
+        padding-bottom: 12px;
+    }
 }

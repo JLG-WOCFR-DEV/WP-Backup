@@ -120,43 +120,45 @@ class BJLG_Admin {
             <h2>Créer une sauvegarde</h2>
             <form id="bjlg-backup-creation-form">
                 <p>Choisissez les composants à inclure dans votre sauvegarde.</p>
-                <table class="form-table">
-                    <tbody>
-                        <tr>
-                            <th scope="row">Contenu de la sauvegarde</th>
-                            <td>
-                                <fieldset>
-                                    <label><input type="checkbox" name="backup_components[]" value="db" checked> <strong>Base de données</strong> <span class="description">Toutes les tables WordPress</span></label><br>
-                                    <label><input type="checkbox" name="backup_components[]" value="plugins" checked> Extensions (<code>/wp-content/plugins</code>)</label><br>
-                                    <label><input type="checkbox" name="backup_components[]" value="themes" checked> Thèmes (<code>/wp-content/themes</code>)</label><br>
-                                    <label><input type="checkbox" name="backup_components[]" value="uploads" checked> Médias (<code>/wp-content/uploads</code>)</label>
-                                </fieldset>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Options</th>
-                            <td>
-                                <fieldset>
-                                    <label>
-                                        <input type="checkbox" name="encrypt_backup" value="1">
-                                        Chiffrer la sauvegarde (AES-256)
-                                    </label>
-                                    <p class="description">
-                                        Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
-                                    </p>
-                                    <br>
-                                    <label>
-                                        <input type="checkbox" name="incremental_backup" value="1">
-                                        Sauvegarde incrémentale
-                                    </label>
-                                    <p class="description">
-                                        Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
-                                    </p>
-                                </fieldset>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
+                <div class="bjlg-form-table-group bjlg-form-table-group--backup">
+                    <table class="form-table">
+                        <tbody>
+                            <tr>
+                                <th scope="row">Contenu de la sauvegarde</th>
+                                <td>
+                                    <fieldset>
+                                        <label><input type="checkbox" name="backup_components[]" value="db" checked> <strong>Base de données</strong> <span class="description">Toutes les tables WordPress</span></label><br>
+                                        <label><input type="checkbox" name="backup_components[]" value="plugins" checked> Extensions (<code>/wp-content/plugins</code>)</label><br>
+                                        <label><input type="checkbox" name="backup_components[]" value="themes" checked> Thèmes (<code>/wp-content/themes</code>)</label><br>
+                                        <label><input type="checkbox" name="backup_components[]" value="uploads" checked> Médias (<code>/wp-content/uploads</code>)</label>
+                                    </fieldset>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Options</th>
+                                <td>
+                                    <fieldset>
+                                        <label>
+                                            <input type="checkbox" name="encrypt_backup" value="1">
+                                            Chiffrer la sauvegarde (AES-256)
+                                        </label>
+                                        <p class="description">
+                                            Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
+                                        </p>
+                                        <br>
+                                        <label>
+                                            <input type="checkbox" name="incremental_backup" value="1">
+                                            Sauvegarde incrémentale
+                                        </label>
+                                        <p class="description">
+                                            Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
+                                        </p>
+                                    </fieldset>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
                 <p class="submit">
                     <button id="bjlg-create-backup" type="submit" class="button button-primary button-hero">
                         <span class="dashicons dashicons-backup"></span> Lancer la création de la sauvegarde
@@ -241,39 +243,41 @@ class BJLG_Admin {
             <h2>Restaurer depuis un fichier</h2>
             <p>Si vous avez un fichier de sauvegarde sur votre ordinateur, vous pouvez le téléverser ici pour lancer une restauration.</p>
             <form id="bjlg-restore-form" method="post" enctype="multipart/form-data">
-                <table class="form-table">
-                    <tbody>
-                        <tr>
-                            <th scope="row">Fichier de sauvegarde</th>
-                            <td>
-                                <input type="file" id="bjlg-restore-file-input" name="restore_file" accept=".zip,.zip.enc" required>
-                                <p class="description">Formats acceptés : .zip, .zip.enc (chiffré)</p>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row"><label for="bjlg-restore-password">Mot de passe</label></th>
-                            <td>
-                                <input type="password"
-                                       id="bjlg-restore-password"
-                                       name="password"
-                                       class="regular-text"
-                                       autocomplete="current-password"
-                                       aria-describedby="bjlg-restore-password-help"
-                                       placeholder="Requis pour les archives .zip.enc">
-                                <p class="description"
-                                   id="bjlg-restore-password-help"
-                                   data-default-text="<?php echo esc_attr('Requis pour restaurer les sauvegardes chiffrées (.zip.enc). Laissez vide pour les archives non chiffrées.'); ?>"
-                                   data-encrypted-text="<?php echo esc_attr('Mot de passe obligatoire : renseignez-le pour déchiffrer l\'archive (.zip.enc).'); ?>">
-                                    Requis pour restaurer les sauvegardes chiffrées (<code>.zip.enc</code>). Laissez vide pour les archives non chiffrées.
-                                </p>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Options</th>
-                            <td><label><input type="checkbox" name="create_backup_before_restore" value="1" checked> Créer une sauvegarde de sécurité avant la restauration</label></td>
-                        </tr>
-                    </tbody>
-                </table>
+                <div class="bjlg-form-table-group bjlg-form-table-group--restore">
+                    <table class="form-table">
+                        <tbody>
+                            <tr>
+                                <th scope="row">Fichier de sauvegarde</th>
+                                <td>
+                                    <input type="file" id="bjlg-restore-file-input" name="restore_file" accept=".zip,.zip.enc" required>
+                                    <p class="description">Formats acceptés : .zip, .zip.enc (chiffré)</p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><label for="bjlg-restore-password">Mot de passe</label></th>
+                                <td>
+                                    <input type="password"
+                                           id="bjlg-restore-password"
+                                           name="password"
+                                           class="regular-text"
+                                           autocomplete="current-password"
+                                           aria-describedby="bjlg-restore-password-help"
+                                           placeholder="Requis pour les archives .zip.enc">
+                                    <p class="description"
+                                       id="bjlg-restore-password-help"
+                                       data-default-text="<?php echo esc_attr('Requis pour restaurer les sauvegardes chiffrées (.zip.enc). Laissez vide pour les archives non chiffrées.'); ?>"
+                                       data-encrypted-text="<?php echo esc_attr('Mot de passe obligatoire : renseignez-le pour déchiffrer l\'archive (.zip.enc).'); ?>">
+                                        Requis pour restaurer les sauvegardes chiffrées (<code>.zip.enc</code>). Laissez vide pour les archives non chiffrées.
+                                    </p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Options</th>
+                                <td><label><input type="checkbox" name="create_backup_before_restore" value="1" checked> Créer une sauvegarde de sécurité avant la restauration</label></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
                 <div id="bjlg-restore-errors" class="notice notice-error" style="display: none;" role="alert"></div>
                 <p class="submit">
                     <button type="submit" class="button button-primary"><span class="dashicons dashicons-upload"></span> Téléverser et Restaurer</button>
@@ -395,38 +399,40 @@ class BJLG_Admin {
             
             <h3><span class="dashicons dashicons-calendar-alt"></span> Planification des Sauvegardes</h3>
             <form id="bjlg-schedule-form">
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">Fréquence</th>
-                        <td>
-                            <select name="recurrence" id="bjlg-schedule-recurrence">
-                                <option value="disabled" <?php selected($schedule_settings['recurrence'], 'disabled'); ?>>Désactivée</option>
-                                <option value="hourly" <?php selected($schedule_settings['recurrence'], 'hourly'); ?>>Toutes les heures</option>
-                                <option value="daily" <?php selected($schedule_settings['recurrence'], 'daily'); ?>>Journalière</option>
-                                <option value="weekly" <?php selected($schedule_settings['recurrence'], 'weekly'); ?>>Hebdomadaire</option>
-                                <option value="monthly" <?php selected($schedule_settings['recurrence'], 'monthly'); ?>>Mensuelle</option>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr class="bjlg-schedule-weekly-options" <?php echo ($schedule_settings['recurrence'] !== 'weekly') ? 'style="display:none;"' : ''; ?>>
-                        <th scope="row">Jour de la semaine</th>
-                        <td>
-                            <select name="day" id="bjlg-schedule-day">
-                                <?php $days = ['monday' => 'Lundi', 'tuesday' => 'Mardi', 'wednesday' => 'Mercredi', 'thursday' => 'Jeudi', 'friday' => 'Vendredi', 'saturday' => 'Samedi', 'sunday' => 'Dimanche'];
-                                foreach ($days as $day_key => $day_name): ?>
-                                    <option value="<?php echo $day_key; ?>" <?php selected(isset($schedule_settings['day']) ? $schedule_settings['day'] : 'sunday', $day_key); ?>><?php echo $day_name; ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr class="bjlg-schedule-time-options" <?php echo ($schedule_settings['recurrence'] === 'disabled') ? 'style="display:none;"' : ''; ?>>
-                        <th scope="row">Heure</th>
-                        <td>
-                            <input type="time" name="time" id="bjlg-schedule-time" value="<?php echo esc_attr(isset($schedule_settings['time']) ? $schedule_settings['time'] : '23:59'); ?>">
-                            <p class="description">Heure locale du serveur</p>
-                        </td>
-                    </tr>
-                </table>
+                <div class="bjlg-form-table-group bjlg-form-table-group--schedule">
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row">Fréquence</th>
+                            <td>
+                                <select name="recurrence" id="bjlg-schedule-recurrence">
+                                    <option value="disabled" <?php selected($schedule_settings['recurrence'], 'disabled'); ?>>Désactivée</option>
+                                    <option value="hourly" <?php selected($schedule_settings['recurrence'], 'hourly'); ?>>Toutes les heures</option>
+                                    <option value="daily" <?php selected($schedule_settings['recurrence'], 'daily'); ?>>Journalière</option>
+                                    <option value="weekly" <?php selected($schedule_settings['recurrence'], 'weekly'); ?>>Hebdomadaire</option>
+                                    <option value="monthly" <?php selected($schedule_settings['recurrence'], 'monthly'); ?>>Mensuelle</option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr class="bjlg-schedule-weekly-options" <?php echo ($schedule_settings['recurrence'] !== 'weekly') ? 'style="display:none;"' : ''; ?>>
+                            <th scope="row">Jour de la semaine</th>
+                            <td>
+                                <select name="day" id="bjlg-schedule-day">
+                                    <?php $days = ['monday' => 'Lundi', 'tuesday' => 'Mardi', 'wednesday' => 'Mercredi', 'thursday' => 'Jeudi', 'friday' => 'Vendredi', 'saturday' => 'Samedi', 'sunday' => 'Dimanche'];
+                                    foreach ($days as $day_key => $day_name): ?>
+                                        <option value="<?php echo $day_key; ?>" <?php selected(isset($schedule_settings['day']) ? $schedule_settings['day'] : 'sunday', $day_key); ?>><?php echo $day_name; ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr class="bjlg-schedule-time-options" <?php echo ($schedule_settings['recurrence'] === 'disabled') ? 'style="display:none;"' : ''; ?>>
+                            <th scope="row">Heure</th>
+                            <td>
+                                <input type="time" name="time" id="bjlg-schedule-time" value="<?php echo esc_attr(isset($schedule_settings['time']) ? $schedule_settings['time'] : '23:59'); ?>">
+                                <p class="description">Heure locale du serveur</p>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer la planification</button></p>
             </form>
             
@@ -453,37 +459,41 @@ class BJLG_Admin {
 
             <form class="bjlg-settings-form">
                 <h3><span class="dashicons dashicons-trash"></span> Rétention des Sauvegardes</h3>
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">Conserver par nombre</th>
-                        <td>
-                            <input name="by_number" type="number" class="small-text" value="<?php echo esc_attr(isset($cleanup_settings['by_number']) ? $cleanup_settings['by_number'] : 3); ?>" min="0"> sauvegardes
-                            <p class="description">0 = illimité</p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Conserver par ancienneté</th>
-                        <td>
-                            <input name="by_age" type="number" class="small-text" value="<?php echo esc_attr(isset($cleanup_settings['by_age']) ? $cleanup_settings['by_age'] : 0); ?>" min="0"> jours
-                            <p class="description">0 = illimité</p>
-                        </td>
-                    </tr>
-                </table>
-                
+                <div class="bjlg-form-table-group bjlg-form-table-group--retention">
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row">Conserver par nombre</th>
+                            <td>
+                                <input name="by_number" type="number" class="small-text" value="<?php echo esc_attr(isset($cleanup_settings['by_number']) ? $cleanup_settings['by_number'] : 3); ?>" min="0"> sauvegardes
+                                <p class="description">0 = illimité</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Conserver par ancienneté</th>
+                            <td>
+                                <input name="by_age" type="number" class="small-text" value="<?php echo esc_attr(isset($cleanup_settings['by_age']) ? $cleanup_settings['by_age'] : 0); ?>" min="0"> jours
+                                <p class="description">0 = illimité</p>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
                 <h3><span class="dashicons dashicons-admin-appearance"></span> Marque Blanche</h3>
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">Nom du plugin</th>
-                        <td>
-                            <input type="text" name="plugin_name" value="<?php echo esc_attr(isset($wl_settings['plugin_name']) ? $wl_settings['plugin_name'] : ''); ?>" class="regular-text" placeholder="Backup - JLG">
-                            <p class="description">Laissez vide pour utiliser le nom par défaut</p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Visibilité</th>
-                        <td><label><input type="checkbox" name="hide_from_non_admins" <?php checked(isset($wl_settings['hide_from_non_admins']) && $wl_settings['hide_from_non_admins']); ?>> Cacher le plugin pour les non-administrateurs</label></td>
-                    </tr>
-                </table>
+                <div class="bjlg-form-table-group bjlg-form-table-group--whitelabel">
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row">Nom du plugin</th>
+                            <td>
+                                <input type="text" name="plugin_name" value="<?php echo esc_attr(isset($wl_settings['plugin_name']) ? $wl_settings['plugin_name'] : ''); ?>" class="regular-text" placeholder="Backup - JLG">
+                                <p class="description">Laissez vide pour utiliser le nom par défaut</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Visibilité</th>
+                            <td><label><input type="checkbox" name="hide_from_non_admins" <?php checked(isset($wl_settings['hide_from_non_admins']) && $wl_settings['hide_from_non_admins']); ?>> Cacher le plugin pour les non-administrateurs</label></td>
+                        </tr>
+                    </table>
+                </div>
                 
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les Réglages</button></p>
             </form>
