@@ -1441,7 +1441,11 @@ class BJLG_REST_API {
                 default:
                     return new WP_Error(
                         'invalid_setting_key',
-                        sprintf(__('The "%s" setting cannot be updated via the REST API.', 'backup-jlg'), $key),
+                        sprintf(
+                            /* translators: %s: invalid settings key. */
+                            __('The "%s" setting cannot be updated via the REST API.', 'backup-jlg'),
+                            $key
+                        ),
                         ['status' => 400]
                     );
             }
@@ -1468,7 +1472,11 @@ class BJLG_REST_API {
         if (!is_array($value)) {
             return new WP_Error(
                 'invalid_setting_structure',
-                sprintf(__('The "%s" setting must be a JSON object.', 'backup-jlg'), $key),
+                sprintf(
+                    /* translators: %s: settings key. */
+                    __('The "%s" setting must be a JSON object.', 'backup-jlg'),
+                    $key
+                ),
                 ['status' => 400]
             );
         }
@@ -1533,7 +1541,11 @@ class BJLG_REST_API {
             if (!array_key_exists($required_key, $value)) {
                 return new WP_Error(
                     'invalid_cleanup_settings',
-                    sprintf(__('Missing cleanup setting "%s".', 'backup-jlg'), $required_key),
+                    sprintf(
+                        /* translators: %s: cleanup setting key. */
+                        __('Missing cleanup setting "%s".', 'backup-jlg'),
+                        $required_key
+                    ),
                     ['status' => 400]
                 );
             }
@@ -1571,7 +1583,11 @@ class BJLG_REST_API {
             if (!array_key_exists($required_key, $value)) {
                 return new WP_Error(
                     'invalid_schedule_settings',
-                    sprintf(__('Missing schedule setting "%s".', 'backup-jlg'), $required_key),
+                    sprintf(
+                        /* translators: %s: schedule setting key. */
+                        __('Missing schedule setting "%s".', 'backup-jlg'),
+                        $required_key
+                    ),
                     ['status' => 400]
                 );
             }

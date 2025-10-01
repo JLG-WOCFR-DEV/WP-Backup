@@ -115,7 +115,7 @@ class BJLG_Settings {
      */
     public function handle_save_settings() {
         if (!current_user_can(BJLG_CAPABILITY)) {
-            wp_send_json_error(['message' => 'Permission refusée.']);
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')]);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
         
@@ -130,7 +130,11 @@ class BJLG_Settings {
                 ];
                 update_option('bjlg_cleanup_settings', $cleanup_settings);
                 $saved_settings['cleanup'] = $cleanup_settings;
-                BJLG_Debug::log("Réglages de nettoyage sauvegardés : " . print_r($cleanup_settings, true));
+                BJLG_Debug::log(sprintf(
+                    /* translators: %s: serialized cleanup settings. */
+                    __('Réglages de nettoyage sauvegardés : %s', 'backup-jlg'),
+                    print_r($cleanup_settings, true)
+                ));
             }
 
             // --- Réglages de la Marque Blanche ---
@@ -141,7 +145,11 @@ class BJLG_Settings {
                 ];
                 update_option('bjlg_whitelabel_settings', $wl_settings);
                 $saved_settings['whitelabel'] = $wl_settings;
-                BJLG_Debug::log("Réglages de marque blanche sauvegardés : " . print_r($wl_settings, true));
+                BJLG_Debug::log(sprintf(
+                    /* translators: %s: serialized whitelabel settings. */
+                    __('Réglages de marque blanche sauvegardés : %s', 'backup-jlg'),
+                    print_r($wl_settings, true)
+                ));
             }
 
             // --- Réglages de Chiffrement ---
@@ -154,7 +162,7 @@ class BJLG_Settings {
                 ];
                 update_option('bjlg_encryption_settings', $encryption_settings);
                 $saved_settings['encryption'] = $encryption_settings;
-                BJLG_Debug::log("Réglages de chiffrement sauvegardés.");
+                BJLG_Debug::log(__('Réglages de chiffrement sauvegardés.', 'backup-jlg'));
             }
 
             // --- Réglages Google Drive ---
@@ -167,7 +175,7 @@ class BJLG_Settings {
                 ];
                 update_option('bjlg_gdrive_settings', $gdrive_settings);
                 $saved_settings['gdrive'] = $gdrive_settings;
-                BJLG_Debug::log("Identifiants Google Drive sauvegardés.");
+                BJLG_Debug::log(__('Identifiants Google Drive sauvegardés.', 'backup-jlg'));
             }
 
             // --- Réglages Amazon S3 ---
@@ -190,7 +198,7 @@ class BJLG_Settings {
 
                 update_option('bjlg_s3_settings', $s3_settings);
                 $saved_settings['s3'] = $s3_settings;
-                BJLG_Debug::log('Réglages Amazon S3 sauvegardés.');
+                BJLG_Debug::log(__('Réglages Amazon S3 sauvegardés.', 'backup-jlg'));
             }
 
             // --- Réglages de Notifications ---
@@ -220,7 +228,7 @@ class BJLG_Settings {
                 ];
                 update_option('bjlg_notification_settings', $notifications_settings);
                 $saved_settings['notifications'] = $notifications_settings;
-                BJLG_Debug::log("Réglages de notifications sauvegardés.");
+                BJLG_Debug::log(__('Réglages de notifications sauvegardés.', 'backup-jlg'));
             }
 
             // --- Réglages de Performance ---
@@ -232,7 +240,7 @@ class BJLG_Settings {
                 ];
                 update_option('bjlg_performance_settings', $performance_settings);
                 $saved_settings['performance'] = $performance_settings;
-                BJLG_Debug::log("Réglages de performance sauvegardés.");
+                BJLG_Debug::log(__('Réglages de performance sauvegardés.', 'backup-jlg'));
             }
 
             // --- Réglages Webhooks ---
@@ -248,7 +256,7 @@ class BJLG_Settings {
                 ];
                 update_option('bjlg_webhook_settings', $webhook_settings);
                 $saved_settings['webhooks'] = $webhook_settings;
-                BJLG_Debug::log("Réglages de webhooks sauvegardés.");
+                BJLG_Debug::log(__('Réglages de webhooks sauvegardés.', 'backup-jlg'));
             }
 
             // --- Réglage du débogueur AJAX ---
@@ -256,20 +264,24 @@ class BJLG_Settings {
                 $ajax_debug_enabled = $this->to_bool(wp_unslash($_POST['ajax_debug_enabled']));
                 update_option('bjlg_ajax_debug_enabled', $ajax_debug_enabled);
                 $saved_settings['ajax_debug'] = $ajax_debug_enabled;
-                BJLG_Debug::log("Réglage du débogueur AJAX mis à jour.");
+                BJLG_Debug::log(__('Réglage du débogueur AJAX mis à jour.', 'backup-jlg'));
             }
 
-            BJLG_History::log('settings_updated', 'success', 'Les réglages ont été mis à jour.');
-            
+            BJLG_History::log('settings_updated', 'success', __('Les réglages ont été mis à jour.', 'backup-jlg'));
+
             do_action('bjlg_settings_saved', $saved_settings);
-            
+
             wp_send_json_success([
-                'message' => 'Réglages sauvegardés avec succès !',
+                'message' => __('Réglages sauvegardés avec succès !', 'backup-jlg'),
                 'saved' => $saved_settings
             ]);
 
         } catch (Exception $e) {
-            BJLG_History::log('settings_updated', 'failure', 'Erreur : ' . $e->getMessage());
+            BJLG_History::log('settings_updated', 'failure', sprintf(
+                /* translators: %s: error message. */
+                __('Erreur : %s', 'backup-jlg'),
+                $e->getMessage()
+            ));
             wp_send_json_error(['message' => $e->getMessage()]);
         }
     }
@@ -279,7 +291,7 @@ class BJLG_Settings {
      */
     public function handle_get_settings() {
         if (!current_user_can(BJLG_CAPABILITY)) {
-            wp_send_json_error(['message' => 'Permission refusée.']);
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')]);
         }
         
         $settings = [
@@ -302,7 +314,7 @@ class BJLG_Settings {
      */
     public function handle_reset_settings() {
         if (!current_user_can('manage_options')) {
-            wp_send_json_error(['message' => 'Permission refusée.']);
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')]);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
         
@@ -315,18 +327,22 @@ class BJLG_Settings {
                 foreach ($this->default_settings as $key => $defaults) {
                     update_option('bjlg_' . $key . '_settings', $defaults);
                 }
-                BJLG_History::log('settings_reset', 'info', 'Tous les réglages ont été réinitialisés');
+                BJLG_History::log('settings_reset', 'info', __('Tous les réglages ont été réinitialisés', 'backup-jlg'));
             } else {
                 if (isset($this->default_settings[$section])) {
                     update_option('bjlg_' . $section . '_settings', $this->default_settings[$section]);
-                    BJLG_History::log('settings_reset', 'info', "Réglages '$section' réinitialisés");
+                    BJLG_History::log('settings_reset', 'info', sprintf(
+                        /* translators: %s: settings section key. */
+                        __("Réglages '%s' réinitialisés", 'backup-jlg'),
+                        $section
+                    ));
                 } else {
-                    throw new Exception("Section de réglages invalide.");
+                    throw new Exception(__('Section de réglages invalide.', 'backup-jlg'));
                 }
             }
-            
-            wp_send_json_success(['message' => 'Réglages réinitialisés avec succès.']);
-            
+
+            wp_send_json_success(['message' => __('Réglages réinitialisés avec succès.', 'backup-jlg')]);
+
         } catch (Exception $e) {
             wp_send_json_error(['message' => $e->getMessage()]);
         }
@@ -337,7 +353,7 @@ class BJLG_Settings {
      */
     public function handle_export_settings() {
         if (!current_user_can('manage_options')) {
-            wp_send_json_error(['message' => 'Permission refusée.']);
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')]);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
         
@@ -371,8 +387,8 @@ class BJLG_Settings {
             'settings' => $settings
         ];
         
-        BJLG_History::log('settings_exported', 'success', 'Paramètres exportés');
-        
+        BJLG_History::log('settings_exported', 'success', __('Paramètres exportés', 'backup-jlg'));
+
         wp_send_json_success([
             'filename' => 'bjlg-settings-' . date('Y-m-d-His') . '.json',
             'data' => base64_encode(json_encode($export_data, JSON_PRETTY_PRINT))
@@ -384,12 +400,12 @@ class BJLG_Settings {
      */
     public function handle_import_settings() {
         if (!current_user_can('manage_options')) {
-            wp_send_json_error(['message' => 'Permission refusée.']);
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')]);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
         
         if (empty($_POST['import_data'])) {
-            wp_send_json_error(['message' => 'Aucune donnée à importer.']);
+            wp_send_json_error(['message' => __('Aucune donnée à importer.', 'backup-jlg')]);
         }
 
         try {
@@ -397,14 +413,14 @@ class BJLG_Settings {
             $import_data = json_decode(base64_decode($raw_import), true);
 
             if (empty($import_data) || !isset($import_data['settings'])) {
-                throw new Exception("Format de données invalide.");
+                throw new Exception(__('Format de données invalide.', 'backup-jlg'));
             }
 
             // Vérifier la compatibilité de version
             if (isset($import_data['version'])) {
                 $import_version = $import_data['version'];
                 if (version_compare($import_version, BJLG_VERSION, '>')) {
-                    throw new Exception("Les paramètres proviennent d'une version plus récente du plugin.");
+                    throw new Exception(__('Les paramètres proviennent d\'une version plus récente du plugin.', 'backup-jlg'));
                 }
             }
             
@@ -412,19 +428,31 @@ class BJLG_Settings {
             $sanitized_settings = $this->sanitize_imported_settings((array) $import_data['settings']);
 
             if (empty($sanitized_settings)) {
-                throw new Exception("Aucun réglage valide à importer.");
+                throw new Exception(__('Aucun réglage valide à importer.', 'backup-jlg'));
             }
 
             foreach ($sanitized_settings as $key => $value) {
                 update_option($key, $value);
             }
             
-            BJLG_History::log('settings_imported', 'success', 'Paramètres importés depuis ' . ($import_data['site_url'] ?? 'inconnu'));
-            
-            wp_send_json_success(['message' => 'Paramètres importés avec succès.']);
+            BJLG_History::log(
+                'settings_imported',
+                'success',
+                sprintf(
+                    /* translators: %s: source site URL. */
+                    __('Paramètres importés depuis %s', 'backup-jlg'),
+                    $import_data['site_url'] ?? __('inconnu', 'backup-jlg')
+                )
+            );
+
+            wp_send_json_success(['message' => __('Paramètres importés avec succès.', 'backup-jlg')]);
             
         } catch (Exception $e) {
-            BJLG_History::log('settings_imported', 'failure', 'Erreur : ' . $e->getMessage());
+            BJLG_History::log('settings_imported', 'failure', sprintf(
+                /* translators: %s: error message. */
+                __('Erreur : %s', 'backup-jlg'),
+                $e->getMessage()
+            ));
             wp_send_json_error(['message' => $e->getMessage()]);
         }
     }

@@ -1,0 +1,934 @@
+# Copyright (C) 2025 JLG
+# This file is distributed under the GPL-2.0-or-later.
+msgid ""
+msgstr ""
+"Project-Id-Version: Backup - JLG 2.0.3\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/backup-jlg\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: 2025-10-01T15:10:14+00:00\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"X-Generator: WP-CLI 2.12.0\n"
+"X-Domain: backup-jlg\n"
+
+#. Plugin Name of the plugin
+#: backup-jlg.php
+#: includes/class-bjlg-admin.php:51
+#: includes/class-bjlg-admin.php:571
+msgid "Backup - JLG"
+msgstr ""
+
+#. Plugin URI of the plugin
+#. Author URI of the plugin
+#: backup-jlg.php
+msgid "https://jlg.dev"
+msgstr ""
+
+#. Description of the plugin
+#: backup-jlg.php
+msgid "Sauvegarde & restauration pour WordPress avec chiffrement, API REST et intégrations."
+msgstr ""
+
+#. Author of the plugin
+#: backup-jlg.php
+msgid "JLG"
+msgstr ""
+
+#: includes/class-bjlg-actions.php:81
+#: includes/class-bjlg-rest-api.php:1791
+#: includes/class-bjlg-rest-api.php:1814
+msgid "Impossible de créer un token de téléchargement."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:38
+msgid "Sauvegarde & Restauration"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:39
+msgid "Historique"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:40
+msgid "Bilan de Santé"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:41
+msgid "Réglages"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:42
+msgid "Logs & Outils"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:123
+msgid "Créer une sauvegarde"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:125
+msgid "Choisissez les composants à inclure dans votre sauvegarde."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:129
+msgid "Contenu de la sauvegarde"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:132
+msgid "Base de données"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:132
+msgid "Toutes les tables WordPress"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:133
+msgid "Extensions"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:134
+msgid "Thèmes"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:135
+msgid "Médias"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:140
+#: includes/class-bjlg-admin.php:313
+msgid "Options"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:145
+msgid "Chiffrer la sauvegarde (AES-256)"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:148
+msgid "Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:153
+msgid "Sauvegarde incrémentale"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:156
+msgid "Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:165
+msgid "Lancer la création de la sauvegarde"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:170
+msgid "Progression"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:172
+msgid "Initialisation..."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:175
+#: includes/class-bjlg-admin.php:329
+msgid "Détails techniques"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:189
+msgid "Sauvegardes disponibles"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:196
+#: includes/class-bjlg-admin.php:209
+msgid "Nom du fichier"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:197
+#: includes/class-bjlg-admin.php:213
+msgid "Type"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:198
+#: includes/class-bjlg-admin.php:233
+msgid "Taille"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:199
+#: includes/class-bjlg-admin.php:234
+#: includes/class-bjlg-admin.php:348
+#: includes/class-bjlg-admin.php:376
+msgid "Date"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:200
+#: includes/class-bjlg-admin.php:235
+msgid "Actions"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:211
+msgid "Chiffré"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:218
+msgid "Complète"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:223
+msgid "Incrémentale"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:228
+msgid "Standard"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:237
+msgid "Restaurer"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:238
+msgid "Télécharger"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:239
+msgid "Supprimer"
+msgstr ""
+
+#. translators: %d: number of backups
+#: includes/class-bjlg-admin.php:252
+#, php-format
+msgid "Total : %d sauvegarde(s)"
+msgstr ""
+
+#. translators: %s: total backup size
+#: includes/class-bjlg-admin.php:258
+#, php-format
+msgid "Espace utilisé : %s"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:266
+msgid "Aucune sauvegarde locale trouvée. Créez votre première sauvegarde ci-dessus."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:278
+msgid "Restaurer depuis un fichier"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:279
+msgid "Si vous avez un fichier de sauvegarde sur votre ordinateur, vous pouvez le téléverser ici pour lancer une restauration."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:284
+msgid "Fichier de sauvegarde"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:287
+msgid "Formats acceptés : .zip, .zip.enc (chiffré)"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:291
+msgid "Mot de passe"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:299
+msgid "Requis pour les archives .zip.enc"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:302
+msgid "Requis pour restaurer les sauvegardes chiffrées (.zip.enc). Laissez vide pour les archives non chiffrées."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:303
+msgid "Mot de passe obligatoire : renseignez-le pour déchiffrer l'archive (.zip.enc)."
+msgstr ""
+
+#. translators: %s: file extension
+#: includes/class-bjlg-admin.php:306
+#, php-format
+msgid "Requis pour restaurer les sauvegardes chiffrées (%s). Laissez vide pour les archives non chiffrées."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:314
+msgid "Créer une sauvegarde de sécurité avant la restauration"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:320
+msgid "Téléverser et restaurer"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:324
+msgid "Statut de la restauration"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:326
+msgid "Préparation..."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:343
+msgid "Historique des 50 dernières actions"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:349
+#: includes/class-bjlg-admin.php:377
+msgid "Action"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:350
+#: includes/class-bjlg-admin.php:378
+msgid "Statut"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:351
+#: includes/class-bjlg-admin.php:379
+msgid "Détails"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:361
+msgid "Succès"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:366
+msgid "Échec"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:372
+msgid "Information"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:385
+msgid "Aucun historique trouvé."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:387
+msgid "L'historique est conservé pendant 30 jours. Les entrées plus anciennes sont automatiquement supprimées."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:399
+msgid "Mode Débogage"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:400
+msgid "Tâches planifiées (Cron)"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:403
+msgid "Dossier de sauvegarde"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:404
+msgid "Espace disque"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:405
+msgid "Limite Mémoire PHP"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:406
+msgid "Temps d'exécution PHP"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:410
+msgid "Bilan de santé du système"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:411
+msgid "État du plugin"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:423
+msgid "Configuration serveur"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:435
+msgid "Relancer les vérifications"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:450
+msgid "Configuration du plugin"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:452
+msgid "Destinations cloud"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:461
+msgid "Aucune destination cloud configurée. Activez Google Drive ou Amazon S3 en complétant leurs réglages."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:466
+msgid "Planification des sauvegardes"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:470
+msgid "Fréquence"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:473
+msgid "Désactivée"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:474
+msgid "Toutes les heures"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:475
+msgid "Journalière"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:476
+msgid "Hebdomadaire"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:477
+msgid "Mensuelle"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:482
+msgid "Jour de la semaine"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:486
+msgid "Lundi"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:487
+msgid "Mardi"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:488
+msgid "Mercredi"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:489
+msgid "Jeudi"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:490
+msgid "Vendredi"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:491
+msgid "Samedi"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:492
+msgid "Dimanche"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:501
+msgid "Heure"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:504
+msgid "Heure locale du serveur"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:508
+msgid "Enregistrer la planification"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:511
+msgid "Webhook"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:512
+msgid "Utilisez ce point de terminaison pour déclencher une sauvegarde à distance en toute sécurité :"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:514
+msgid "Point de terminaison"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:517
+msgid "Copier l'URL"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:521
+msgid "Clé secrète"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:524
+msgid "Copier la clé"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:525
+msgid "Régénérer"
+msgstr ""
+
+#. translators: %s: HTTP header name
+#: includes/class-bjlg-admin.php:531
+#, php-format
+msgid "Envoyez une requête %1$sPOST%2$s à l'URL ci-dessus en ajoutant l'en-tête %3$s (ou %4$sAuthorization: Bearer &lt;clé&gt;%5$s) contenant votre clé."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:540
+msgid "Compatibilité :"
+msgstr ""
+
+#. translators: %s: legacy webhook URL
+#: includes/class-bjlg-admin.php:542
+#, php-format
+msgid "L'ancien format %s reste supporté provisoirement mais sera retiré après la période de transition."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:548
+msgid "Rétention des sauvegardes"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:551
+msgid "Conserver par nombre"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:553
+msgid "sauvegardes"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:554
+#: includes/class-bjlg-admin.php:561
+msgid "0 = illimité"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:558
+msgid "Conserver par ancienneté"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:560
+msgid "jours"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:566
+msgid "Marque blanche"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:569
+msgid "Nom du plugin"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:572
+msgid "Laissez vide pour utiliser le nom par défaut"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:576
+msgid "Visibilité"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:577
+msgid "Cacher le plugin pour les non-administrateurs"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:581
+msgid "Enregistrer les réglages"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:594
+msgid "Journaux et outils de diagnostic"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:596
+msgid "Emplacements des fichiers"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:598
+msgid "Sauvegardes :"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:599
+msgid "Journal du plugin :"
+msgstr ""
+
+#. translators: %s: constant name.
+#: includes/class-bjlg-admin.php:602
+#: includes/class-bjlg-admin.php:609
+#, php-format
+msgid "si %s est activé"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:606
+msgid "Journal d'erreurs WP :"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:616
+msgid "Journal d'activité du plugin"
+msgstr ""
+
+#. translators: 1: opening code tag, 2: closing code tag, 3: opening wp-config code tag, 4: closing wp-config code tag.
+#: includes/class-bjlg-admin.php:621
+#, php-format
+msgid "Pour activer : ajoutez %1$sdefine('BJLG_DEBUG', true);%2$s dans votre %3$swp-config.php%4$s"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:629
+#: includes/class-bjlg-admin.php:644
+msgid "Classe BJLG_Debug non trouvée."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:631
+msgid "Journal d'erreurs PHP de WordPress"
+msgstr ""
+
+#. translators: 1: opening code tag, 2: closing code tag, 3: opening wp-config code tag, 4: closing wp-config code tag.
+#: includes/class-bjlg-admin.php:636
+#, php-format
+msgid "Pour activer : ajoutez %1$sdefine('WP_DEBUG_LOG', true);%2$s dans votre %3$swp-config.php%4$s"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:646
+msgid "Outils de support"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:647
+msgid "Générez un pack de support contenant les journaux et les informations système pour faciliter le diagnostic."
+msgstr ""
+
+#: includes/class-bjlg-admin.php:650
+msgid "Créer un pack de support"
+msgstr ""
+
+#: includes/class-bjlg-admin.php:654
+msgid "Génération du pack de support en cours..."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:111
+msgid "Le paramètre per_page doit être un entier compris entre 1 et 100."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:261
+msgid "Le paramètre limit doit être un entier compris entre 1 et 500."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:321
+msgid "Trop de requêtes. Veuillez patienter."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:447
+#: includes/class-bjlg-rest-api.php:1036
+msgid "Cette clé API n'est associée à aucun utilisateur."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:460
+msgid "L'utilisateur associé à cette clé API est introuvable."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:471
+msgid "Les permissions de l'utilisateur lié à cette clé API sont insuffisantes."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:879
+msgid "Token JWT invalide."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:892
+msgid "Le token JWT est mal formé."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:901
+msgid "Impossible de décoder le token JWT."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:909
+msgid "Le token JWT est invalide."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:917
+msgid "Le token JWT a expiré."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:925
+msgid "Clé d’authentification WordPress manquante."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:936
+msgid "La signature du token JWT est invalide."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:947
+msgid "Les informations utilisateur sont manquantes dans le token."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:965
+msgid "Utilisateur introuvable pour ce token."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:975
+msgid "Les permissions de cet utilisateur ne sont plus valides."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1054
+msgid "Cette clé API ne peut pas être utilisée pour cet utilisateur."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1135
+msgid "La clé AUTH_KEY est manquante; impossible de générer un token JWT."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1294
+msgid "Aucun composant valide fourni pour la sauvegarde."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1349
+#: includes/class-bjlg-webhooks.php:295
+msgid "Une sauvegarde est déjà en cours. Réessayez ultérieurement."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1361
+#: includes/class-bjlg-webhooks.php:317
+msgid "Impossible d'initialiser la sauvegarde. Veuillez réessayer."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1375
+#: includes/class-bjlg-webhooks.php:335
+msgid "Impossible de planifier la tâche de sauvegarde en arrière-plan."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1403
+#: includes/class-bjlg-rest-api.php:2052
+msgid "Format de composant invalide."
+msgstr ""
+
+#. translators: %s: invalid settings key.
+#: includes/class-bjlg-rest-api.php:1446
+#: includes/class-bjlg-rest-api.php:1509
+#, php-format
+msgid "The \"%s\" setting cannot be updated via the REST API."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1463
+msgid "No valid settings were provided."
+msgstr ""
+
+#. translators: %s: settings key.
+#: includes/class-bjlg-rest-api.php:1477
+#, php-format
+msgid "The \"%s\" setting must be a JSON object."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1499
+msgid "The settings sanitizer is not available."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1535
+msgid "Cleanup settings must be provided as a JSON object."
+msgstr ""
+
+#. translators: %s: cleanup setting key.
+#: includes/class-bjlg-rest-api.php:1546
+#, php-format
+msgid "Missing cleanup setting \"%s\"."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1560
+msgid "Cleanup settings must contain valid integers."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1575
+msgid "Schedule settings must be provided as a JSON object."
+msgstr ""
+
+#. translators: %s: schedule setting key.
+#: includes/class-bjlg-rest-api.php:1588
+#, php-format
+msgid "Missing schedule setting \"%s\"."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1602
+msgid "Invalid schedule recurrence value."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1613
+msgid "Invalid schedule day value."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1623
+msgid "Invalid schedule time format. Expected HH:MM."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1637
+msgid "At least one valid component must be provided for the schedule."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1648
+msgid "Schedule boolean settings must be true or false."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1761
+msgid "Le token de téléchargement fourni est invalide ou expiré."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1774
+msgid "Le token fourni ne correspond pas à cette sauvegarde."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1830
+msgid "La sauvegarde demandée est introuvable."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1831
+msgid "Impossible de déterminer la taille de la sauvegarde."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1894
+msgid "Aucun composant valide fourni pour la restauration."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1964
+msgid "Impossible de sécuriser le mot de passe fourni."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:1992
+msgid "Impossible d'initialiser la tâche de restauration."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:2023
+msgid "Impossible de planifier la tâche de restauration en arrière-plan."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:2218
+msgid "The request payload must be a JSON object with settings data."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:2280
+msgid "The request payload must be a JSON object with schedule data."
+msgstr ""
+
+#: includes/class-bjlg-rest-api.php:2313
+msgid "Invalid task identifier."
+msgstr ""
+
+#: includes/class-bjlg-scheduler.php:63
+msgid "Une fois par semaine"
+msgstr ""
+
+#: includes/class-bjlg-scheduler.php:68
+msgid "Une fois par mois"
+msgstr ""
+
+#: includes/class-bjlg-scheduler.php:73
+msgid "Deux fois par jour"
+msgstr ""
+
+#: includes/class-bjlg-settings.php:118
+#: includes/class-bjlg-settings.php:294
+#: includes/class-bjlg-settings.php:317
+#: includes/class-bjlg-settings.php:356
+#: includes/class-bjlg-settings.php:403
+msgid "Permission refusée."
+msgstr ""
+
+#. translators: %s: serialized cleanup settings.
+#: includes/class-bjlg-settings.php:135
+#, php-format
+msgid "Réglages de nettoyage sauvegardés : %s"
+msgstr ""
+
+#. translators: %s: serialized whitelabel settings.
+#: includes/class-bjlg-settings.php:150
+#, php-format
+msgid "Réglages de marque blanche sauvegardés : %s"
+msgstr ""
+
+#: includes/class-bjlg-settings.php:165
+msgid "Réglages de chiffrement sauvegardés."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:178
+msgid "Identifiants Google Drive sauvegardés."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:201
+msgid "Réglages Amazon S3 sauvegardés."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:231
+msgid "Réglages de notifications sauvegardés."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:243
+msgid "Réglages de performance sauvegardés."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:259
+msgid "Réglages de webhooks sauvegardés."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:267
+msgid "Réglage du débogueur AJAX mis à jour."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:270
+msgid "Les réglages ont été mis à jour."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:275
+msgid "Réglages sauvegardés avec succès !"
+msgstr ""
+
+#. translators: %s: error message.
+#: includes/class-bjlg-settings.php:282
+#: includes/class-bjlg-settings.php:453
+#, php-format
+msgid "Erreur : %s"
+msgstr ""
+
+#: includes/class-bjlg-settings.php:330
+msgid "Tous les réglages ont été réinitialisés"
+msgstr ""
+
+#. translators: %s: settings section key.
+#: includes/class-bjlg-settings.php:336
+#, php-format
+msgid "Réglages '%s' réinitialisés"
+msgstr ""
+
+#: includes/class-bjlg-settings.php:340
+msgid "Section de réglages invalide."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:344
+msgid "Réglages réinitialisés avec succès."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:390
+msgid "Paramètres exportés"
+msgstr ""
+
+#: includes/class-bjlg-settings.php:408
+msgid "Aucune donnée à importer."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:416
+msgid "Format de données invalide."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:423
+msgid "Les paramètres proviennent d'une version plus récente du plugin."
+msgstr ""
+
+#: includes/class-bjlg-settings.php:431
+msgid "Aucun réglage valide à importer."
+msgstr ""
+
+#. translators: %s: source site URL.
+#: includes/class-bjlg-settings.php:443
+#, php-format
+msgid "Paramètres importés depuis %s"
+msgstr ""
+
+#: includes/class-bjlg-settings.php:444
+msgid "inconnu"
+msgstr ""
+
+#: includes/class-bjlg-settings.php:448
+msgid "Paramètres importés avec succès."
+msgstr ""
+
+#: includes/class-bjlg-webhooks.php:185
+msgid "Missing webhook key. Provide it via the X-BJLG-Webhook-Key header or POST body."
+msgstr ""
+
+#. translators: %s: comma-separated list of allowed components.
+#: includes/class-bjlg-webhooks.php:256
+#, php-format
+msgid "No valid components were requested. Allowed components are: %s."
+msgstr ""
+
+#: includes/class-bjlg-webhooks.php:274
+msgid "Too many webhook requests. Please slow down."
+msgstr ""

@@ -252,6 +252,7 @@ class BJLG_Webhooks {
 
                 wp_send_json_error([
                     'message' => sprintf(
+                        /* translators: %s: comma-separated list of allowed components. */
                         __('No valid components were requested. Allowed components are: %s.', 'backup-jlg'),
                         implode(', ', $allowed_components)
                     ),
