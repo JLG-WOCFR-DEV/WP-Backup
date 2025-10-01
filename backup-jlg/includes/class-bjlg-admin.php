@@ -165,8 +165,28 @@ class BJLG_Admin {
             </form>
             <div id="bjlg-backup-progress-area" style="display: none;">
                 <h3>Progression</h3>
-                <div class="bjlg-progress-bar"><div class="bjlg-progress-bar-inner" id="bjlg-backup-progress-bar">0%</div></div>
-                <p id="bjlg-backup-status-text">Initialisation...</p>
+                <div class="bjlg-progress-bar"><div class="bjlg-progress-bar-inner"
+                        id="bjlg-backup-progress-bar"
+                        role="progressbar"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                        aria-valuetext="0%"
+                        aria-live="off"
+                        aria-atomic="false"
+                        aria-busy="false">0%</div></div>
+                <p id="bjlg-backup-status-text"
+                   class="bjlg-progress-status"
+                   role="progressbar"
+                   aria-valuemin="0"
+                   aria-valuemax="100"
+                   aria-valuenow="0"
+                   aria-valuetext="Initialisation..."
+                   aria-live="polite"
+                   aria-atomic="true"
+                   aria-busy="false">
+                    <span class="bjlg-progress-status-message" role="status" aria-live="polite" aria-atomic="true">Initialisation...</span>
+                </p>
             </div>
             <div id="bjlg-backup-debug-wrapper" style="display: none;">
                 <h3><span class="dashicons dashicons-info"></span> Détails techniques</h3>
@@ -291,8 +311,28 @@ class BJLG_Admin {
             </form>
             <div id="bjlg-restore-status" style="display: none;">
                 <h3>Statut de la restauration</h3>
-                <div class="bjlg-progress-bar"><div class="bjlg-progress-bar-inner" id="bjlg-restore-progress-bar">0%</div></div>
-                <p id="bjlg-restore-status-text">Préparation...</p>
+                <div class="bjlg-progress-bar"><div class="bjlg-progress-bar-inner"
+                        id="bjlg-restore-progress-bar"
+                        role="progressbar"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                        aria-valuetext="0%"
+                        aria-live="off"
+                        aria-atomic="false"
+                        aria-busy="false">0%</div></div>
+                <p id="bjlg-restore-status-text"
+                   class="bjlg-progress-status"
+                   role="progressbar"
+                   aria-valuemin="0"
+                   aria-valuemax="100"
+                   aria-valuenow="0"
+                   aria-valuetext="Préparation..."
+                   aria-live="polite"
+                   aria-atomic="true"
+                   aria-busy="false">
+                    <span class="bjlg-progress-status-message" role="status" aria-live="polite" aria-atomic="true">Préparation...</span>
+                </p>
             </div>
             <div id="bjlg-restore-debug-wrapper" style="display: none;">
                 <h3><span class="dashicons dashicons-info"></span> Détails techniques</h3>

@@ -19,6 +19,12 @@ if (!function_exists('esc_html')) {
     }
 }
 
+if (!function_exists('esc_attr')) {
+    function esc_attr($text) {
+        return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
+    }
+}
+
 if (!defined('WP_CONTENT_DIR')) {
     $wp_content_dir = sys_get_temp_dir() . '/bjlg-wp-content';
     if (!is_dir($wp_content_dir)) {
