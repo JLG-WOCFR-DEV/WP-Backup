@@ -25,6 +25,9 @@ class BJLG_Admin {
         if (class_exists(BJLG_Google_Drive::class)) {
             $this->destinations['google_drive'] = new BJLG_Google_Drive();
         }
+        if (class_exists(BJLG_AWS_S3::class)) {
+            $this->destinations['aws_s3'] = new BJLG_AWS_S3();
+        }
     }
 
     /**
@@ -406,7 +409,7 @@ class BJLG_Admin {
                         $destination->render_settings();
                     }
                 } else {
-                    echo '<p class="description">Aucune destination cloud configurée. Pour activer Google Drive, installez les dépendances via Composer.</p>';
+                    echo '<p class="description">Aucune destination cloud configurée. Activez Google Drive ou Amazon S3 en complétant leurs réglages.</p>';
                 }
                 ?>
             </form>

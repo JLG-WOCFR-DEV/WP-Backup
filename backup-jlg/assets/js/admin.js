@@ -898,6 +898,65 @@ jQuery(document).ready(function($) {
         }
     });
 
+    // --- TEST DE CONNEXION AMAZON S3 ---
+    $(document).on('click', '.bjlg-s3-test-connection', function(e) {
+        e.preventDefault();
+
+        const $button = $(this);
+        const $container = $button.closest('.bjlg-destination--s3');
+        if (!$container.length) {
+            return;
+        }
+
+        const $feedback = $container.find('.bjlg-s3-test-feedback');
+        if ($feedback.length) {
+            $feedback.removeClass('notice-success notice-error').hide().empty();
+        }
+
+        const payload = {
+            action: 'bjlg_test_s3_connection',
+            nonce: bjlg_ajax.nonce,
+            s3_access_key: $container.find('input[name="s3_access_key"]').val() || '',
+            s3_secret_key: $container.find('input[name="s3_secret_key"]').val() || '',
+            s3_region: $container.find('input[name="s3_region"]').val() || '',
+            s3_bucket: $container.find('input[name="s3_bucket"]').val() || '',
+            s3_server_side_encryption: $container.find('select[name="s3_server_side_encryption"]').val() || '',
+            s3_object_prefix: $container.find('input[name="s3_object_prefix"]').val() || ''
+        };
+
+        if (!$button.data('bjlg-original-text')) {
+            $button.data('bjlg-original-text', $button.text());
+        }
+
+        $button.prop('disabled', true).text('Test en cours...');
+
+        $.post(bjlg_ajax.ajax_url, payload)
+            .done(function(response) {
+                const message = response && response.data && response.data.message
+                    ? response.data.message
+                    : 'Connexion Amazon S3 vérifiée avec succès.';
+                showFeedback($feedback, 'success', message);
+            })
+            .fail(function(xhr) {
+                let message = 'Impossible de tester la connexion Amazon S3.';
+                if (xhr && xhr.responseJSON) {
+                    if (xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                        message = xhr.responseJSON.data.message;
+                    } else if (xhr.responseJSON.message) {
+                        message = xhr.responseJSON.message;
+                    }
+                } else if (xhr && xhr.responseText) {
+                    message = xhr.responseText;
+                }
+
+                showFeedback($feedback, 'error', message);
+            })
+            .always(function() {
+                const original = $button.data('bjlg-original-text') || 'Tester la connexion';
+                $button.prop('disabled', false).text(original);
+            });
+    });
+
     // --- GESTIONNAIRE SAUVEGARDE DES RÉGLAGES ---
     $('.bjlg-settings-form').on('submit', function(e) {
         e.preventDefault();

@@ -19,6 +19,18 @@ if (!function_exists('esc_html')) {
     }
 }
 
+if (!function_exists('esc_attr')) {
+    function esc_attr($text) {
+        return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+if (!function_exists('esc_url')) {
+    function esc_url($url) {
+        return htmlspecialchars((string) $url, ENT_QUOTES, 'UTF-8');
+    }
+}
+
 if (!defined('WP_CONTENT_DIR')) {
     $wp_content_dir = sys_get_temp_dir() . '/bjlg-wp-content';
     if (!is_dir($wp_content_dir)) {
@@ -536,6 +548,12 @@ if (!function_exists('get_home_url')) {
     }
 }
 
+if (!function_exists('home_url')) {
+    function home_url($path = '', $scheme = null) {
+        return get_home_url(null, $path, $scheme);
+    }
+}
+
 if (!function_exists('is_multisite')) {
     function is_multisite() {
         return false;
@@ -619,6 +637,30 @@ if (!function_exists('sanitize_key')) {
     function sanitize_key($key) {
         $key = strtolower((string) $key);
         return preg_replace('/[^a-z0-9_]/', '', $key);
+    }
+}
+
+if (!function_exists('checked')) {
+    function checked($checked, $current = true, $echo = true) {
+        $result = ($checked == $current) ? ' checked="checked"' : '';
+
+        if ($echo) {
+            echo $result;
+        }
+
+        return $result;
+    }
+}
+
+if (!function_exists('selected')) {
+    function selected($selected, $current = true, $echo = true) {
+        $result = ($selected == $current) ? ' selected="selected"' : '';
+
+        if ($echo) {
+            echo $result;
+        }
+
+        return $result;
     }
 }
 
@@ -926,7 +968,19 @@ if (!function_exists('admin_url')) {
 }
 
 if (!function_exists('add_query_arg')) {
-    function add_query_arg($args, $url) {
+    function add_query_arg($key, $value = false, $url = false) {
+        if (is_array($key)) {
+            $params = $key;
+            $url = (string) $value;
+        } else {
+            $params = [$key => $value];
+            $url = (string) $url;
+        }
+
+        if ($url === '' || $url === false) {
+            $url = 'https://example.com/';
+        }
+
         $parsed_url = parse_url($url);
         $query = [];
 
@@ -934,13 +988,13 @@ if (!function_exists('add_query_arg')) {
             parse_str($parsed_url['query'], $query);
         }
 
-        foreach ($args as $key => $value) {
-            if ($value === false) {
-                unset($query[$key]);
+        foreach ($params as $param_key => $param_value) {
+            if ($param_value === false) {
+                unset($query[$param_key]);
                 continue;
             }
 
-            $query[$key] = $value;
+            $query[$param_key] = $param_value;
         }
 
         $parsed_url['query'] = http_build_query($query);
