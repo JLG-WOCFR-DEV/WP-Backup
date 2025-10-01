@@ -52,6 +52,15 @@ class BJLG_Settings {
             'folder_id' => '',
             'enabled' => false,
         ],
+        's3' => [
+            'access_key' => '',
+            'secret_key' => '',
+            'region' => '',
+            'bucket' => '',
+            'server_side_encryption' => '',
+            'object_prefix' => '',
+            'enabled' => false,
+        ],
         'advanced' => [
             'debug_mode' => false,
             'ajax_debug' => false,
@@ -159,6 +168,29 @@ class BJLG_Settings {
                 update_option('bjlg_gdrive_settings', $gdrive_settings);
                 $saved_settings['gdrive'] = $gdrive_settings;
                 BJLG_Debug::log("Identifiants Google Drive sauvegardés.");
+            }
+
+            // --- Réglages Amazon S3 ---
+            if (isset($_POST['s3_access_key']) || isset($_POST['s3_bucket'])) {
+                $s3_settings = [
+                    'access_key' => isset($_POST['s3_access_key']) ? sanitize_text_field(wp_unslash($_POST['s3_access_key'])) : '',
+                    'secret_key' => isset($_POST['s3_secret_key']) ? sanitize_text_field(wp_unslash($_POST['s3_secret_key'])) : '',
+                    'region' => isset($_POST['s3_region']) ? sanitize_text_field(wp_unslash($_POST['s3_region'])) : '',
+                    'bucket' => isset($_POST['s3_bucket']) ? sanitize_text_field(wp_unslash($_POST['s3_bucket'])) : '',
+                    'server_side_encryption' => isset($_POST['s3_server_side_encryption']) ? sanitize_text_field(wp_unslash($_POST['s3_server_side_encryption'])) : '',
+                    'object_prefix' => isset($_POST['s3_object_prefix']) ? sanitize_text_field(wp_unslash($_POST['s3_object_prefix'])) : '',
+                    'enabled' => isset($_POST['s3_enabled']) ? $this->to_bool(wp_unslash($_POST['s3_enabled'])) : false,
+                ];
+
+                if (!in_array($s3_settings['server_side_encryption'], ['AES256', 'aws:kms'], true)) {
+                    $s3_settings['server_side_encryption'] = '';
+                }
+
+                $s3_settings['object_prefix'] = trim($s3_settings['object_prefix']);
+
+                update_option('bjlg_s3_settings', $s3_settings);
+                $saved_settings['s3'] = $s3_settings;
+                BJLG_Debug::log('Réglages Amazon S3 sauvegardés.');
             }
 
             // --- Réglages de Notifications ---
