@@ -1717,6 +1717,7 @@ jQuery(document).ready(function($) {
             }
 
             const testedAtFormatted = data && data.tested_at_formatted ? String(data.tested_at_formatted) : '';
+            const testedAtRaw = data && typeof data.tested_at !== 'undefined' ? Number(data.tested_at) : null;
             const statusMessage = data && data.status_message ? String(data.status_message) : (fallbackMessage ? String(fallbackMessage) : '');
             const parts = [];
 
@@ -1745,6 +1746,14 @@ jQuery(document).ready(function($) {
                 .append($('<span/>', { class: iconClass, 'aria-hidden': 'true' }))
                 .append(document.createTextNode(' ' + parts.join(' ')))
                 .show();
+
+            if (testedAtRaw && Number.isFinite(testedAtRaw)) {
+                $lastTest.attr('data-bjlg-tested-at', testedAtRaw);
+                $container.attr('data-bjlg-tested-at', testedAtRaw);
+            } else {
+                $lastTest.removeAttr('data-bjlg-tested-at');
+                $container.removeAttr('data-bjlg-tested-at');
+            }
         }
 
         $.post(bjlg_ajax.ajax_url, payload)

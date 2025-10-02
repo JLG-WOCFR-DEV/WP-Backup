@@ -150,7 +150,8 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             $last_test_style = " style='display:none;'";
         }
 
-        echo "<p class='{$last_test_classes}'{$last_test_style}>{$last_test_content}</p>";
+        $last_test_aria = " role='status' aria-live='polite'";
+        echo "<p class='{$last_test_classes}'{$last_test_style}{$last_test_aria}>{$last_test_content}</p>";
 
         if (!$settings['enabled']) {
             echo "<p class='description'>Enregistrez vos identifiants puis activez Google Drive pour poursuivre la connexion.</p>";
@@ -437,6 +438,10 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
                 'folder_name' => $result['folder_name'],
             ];
 
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('Test de connexion Google Drive réussi. ' . $result['message']);
+            }
+
             wp_send_json_success($response);
         } catch (Exception $exception) {
             $tested_at = time();
@@ -453,7 +458,11 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
                 'tested_at_formatted' => gmdate('d/m/Y H:i:s', $tested_at),
             ];
 
-            wp_send_json_error($response);
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('ERREUR test connexion Google Drive : ' . $exception->getMessage());
+            }
+
+            wp_send_json_error($response, 400);
         }
     }
 
