@@ -275,7 +275,7 @@ class BJLG_Admin {
         <div class="bjlg-section" id="bjlg-backup-list-section" data-default-page="1" data-default-per-page="10">
             <h2>Sauvegardes Disponibles</h2>
             <div class="bjlg-backup-toolbar">
-                <div class="alignleft actions">
+                <div class="bjlg-toolbar-controls actions">
                     <label for="bjlg-backup-filter-type">
                         <span class="screen-reader-text">Filtrer par type</span>
                         <select id="bjlg-backup-filter-type" aria-label="Filtrer les sauvegardes par type">
@@ -300,7 +300,10 @@ class BJLG_Admin {
                         Actualiser
                     </button>
                 </div>
-                <div class="alignright" id="bjlg-backup-summary" aria-live="polite"></div>
+                <div class="bjlg-toolbar-summary">
+                    <span class="bjlg-summary-label">Résumé :</span>
+                    <div class="bjlg-summary-content" id="bjlg-backup-summary" aria-live="polite"></div>
+                </div>
             </div>
             <div id="bjlg-backup-list-feedback" class="notice notice-error" role="alert" style="display:none;"></div>
             <table class="wp-list-table widefat striped bjlg-responsive-table bjlg-backup-table">
