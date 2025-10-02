@@ -126,7 +126,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         echo "<tr><th scope='row'>Activer Google Drive</th><td><label><input type='checkbox' name='gdrive_enabled' value='true'{$enabled_attr}> Activer l'envoi automatique vers Google Drive.</label></td></tr>";
         echo "</table>";
 
-        echo "<div class='notice bjlg-gdrive-test-feedback' role='status' aria-live='polite' style='display:none;'></div>";
+        echo "<div class='notice bjlg-gdrive-test-feedback bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p class='bjlg-gdrive-test-actions'><button type='button' class='button bjlg-gdrive-test-connection'>Tester la connexion</button> <span class='spinner bjlg-gdrive-test-spinner' style='float:none;margin:0 0 0 8px;display:none;'></span></p>";
 
         $last_test_style = '';

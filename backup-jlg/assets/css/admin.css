@@ -93,6 +93,10 @@
     margin-bottom: 10px;
 }
 
+.bjlg-fw-600 {
+    font-weight: 600;
+}
+
 .bjlg-description-offset {
     margin-top: -4px;
 }

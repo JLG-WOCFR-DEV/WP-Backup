@@ -599,7 +599,7 @@ class BJLG_Admin {
             
             <h3><span class="dashicons dashicons-cloud"></span> Destinations Cloud</h3>
             <form class="bjlg-settings-form">
-                <div class="bjlg-settings-feedback notice" role="status" aria-live="polite" style="display:none;"></div>
+                <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
                 <?php
                 if (!empty($this->destinations)) {
                     foreach ($this->destinations as $destination) {
@@ -823,8 +823,8 @@ class BJLG_Admin {
             
             <h3><span class="dashicons dashicons-admin-links"></span> Webhook</h3>
             <p>Utilisez ce point de terminaison pour déclencher une sauvegarde à distance en toute sécurité :</p>
-            <div class="bjlg-webhook-url" style="margin-bottom: 10px;">
-                <label for="bjlg-webhook-endpoint" style="display:block; font-weight:600;">Point de terminaison</label>
+            <div class="bjlg-webhook-url bjlg-mb-10">
+                <label for="bjlg-webhook-endpoint" class="bjlg-label-block bjlg-fw-600">Point de terminaison</label>
                 <div class="bjlg-form-field-group">
                     <div class="bjlg-form-field-control">
                         <input type="text" id="bjlg-webhook-endpoint" readonly value="<?php echo esc_url(BJLG_Webhooks::get_webhook_endpoint()); ?>" class="regular-text code">
@@ -834,8 +834,8 @@ class BJLG_Admin {
                     </div>
                 </div>
             </div>
-            <div class="bjlg-webhook-url" style="margin-bottom: 10px;">
-                <label for="bjlg-webhook-key" style="display:block; font-weight:600;">Clé secrète</label>
+            <div class="bjlg-webhook-url bjlg-mb-10">
+                <label for="bjlg-webhook-key" class="bjlg-label-block bjlg-fw-600">Clé secrète</label>
                 <div class="bjlg-form-field-group">
                     <div class="bjlg-form-field-control">
                         <input type="text" id="bjlg-webhook-key" readonly value="<?php echo esc_attr($webhook_key); ?>" class="regular-text code">
@@ -851,7 +851,7 @@ class BJLG_Admin {
             <p class="description"><strong>Compatibilité :</strong> L'ancien format <code><?php echo esc_html(add_query_arg(BJLG_Webhooks::WEBHOOK_QUERY_VAR, 'VOTRE_CLE', home_url('/'))); ?></code> reste supporté provisoirement mais sera retiré après la période de transition.</p>
 
             <form class="bjlg-settings-form">
-                <div class="bjlg-settings-feedback notice" role="status" aria-live="polite" style="display:none;"></div>
+                <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
                 <h3><span class="dashicons dashicons-trash"></span> Rétention des Sauvegardes</h3>
                 <table class="form-table">
                     <tr>
