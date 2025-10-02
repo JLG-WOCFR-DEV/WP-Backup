@@ -657,7 +657,34 @@ class BJLG_Scheduler {
 
     private function sanitize_components($components) {
         $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
-        $components = (array) $components;
+        $group_aliases = [
+            'files' => ['plugins', 'themes', 'uploads'],
+            'content' => ['plugins', 'themes', 'uploads'],
+            'all_files' => ['plugins', 'themes', 'uploads'],
+        ];
+        $single_aliases = [
+            'database' => 'db',
+            'db_only' => 'db',
+            'sql' => 'db',
+            'plugins_dir' => 'plugins',
+            'themes_dir' => 'themes',
+            'uploads_dir' => 'uploads',
+            'media' => 'uploads',
+        ];
+
+        if (is_string($components)) {
+            $decoded = json_decode($components, true);
+            if (is_array($decoded)) {
+                $components = $decoded;
+            } else {
+                $components = preg_split('/[\s,;|]+/', $components, -1, PREG_SPLIT_NO_EMPTY);
+            }
+        }
+
+        if (!is_array($components)) {
+            $components = (array) $components;
+        }
+
         $sanitized = [];
 
         foreach ($components as $component) {
@@ -672,6 +699,27 @@ class BJLG_Scheduler {
             }
 
             $component = sanitize_key($component);
+
+            if ($component === '') {
+                continue;
+            }
+
+            if (in_array($component, ['all', 'full', 'everything'], true)) {
+                return $allowed_components;
+            }
+
+            if (isset($group_aliases[$component])) {
+                foreach ($group_aliases[$component] as $alias) {
+                    if (!in_array($alias, $sanitized, true)) {
+                        $sanitized[] = $alias;
+                    }
+                }
+                continue;
+            }
+
+            if (isset($single_aliases[$component])) {
+                $component = $single_aliases[$component];
+            }
 
             if (in_array($component, $allowed_components, true) && !in_array($component, $sanitized, true)) {
                 $sanitized[] = $component;

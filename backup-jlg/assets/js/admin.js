@@ -69,7 +69,10 @@ jQuery(document).ready(function($) {
         }
 
         if ($recurrenceSelect.length) {
-            $recurrenceSelect.on('change', toggleScheduleOptions);
+            $recurrenceSelect.on('change', function() {
+                toggleScheduleOptions();
+                updateScheduleSummary();
+            });
             toggleScheduleOptions();
         }
 
@@ -199,6 +202,15 @@ jQuery(document).ready(function($) {
             marginBottom: '6px'
         };
 
+        const recurrenceLabels = {
+            disabled: 'Désactivée',
+            hourly: 'Toutes les heures',
+            twice_daily: 'Deux fois par jour',
+            daily: 'Journalière',
+            weekly: 'Hebdomadaire',
+            monthly: 'Mensuelle'
+        };
+
         const componentLabels = {
             db: { label: 'Base de données', color: '#6366f1' },
             plugins: { label: 'Extensions', color: '#f59e0b' },
@@ -206,136 +218,198 @@ jQuery(document).ready(function($) {
             uploads: { label: 'Médias', color: '#3b82f6' }
         };
 
-        function createScheduleBadge(label, color, extraClasses) {
+        const $summary = $('#bjlg-schedule-summary');
+        const $overview = $('#bjlg-schedule-overview');
+        const $overviewContent = $('#bjlg-schedule-overview-content');
+        const $overviewFrequency = $('#bjlg-schedule-overview-frequency');
+
+        function createScheduleBadgeElement(badge) {
+            const classes = Array.isArray(badge.classes) ? badge.classes.slice() : [];
+            classes.unshift('bjlg-badge');
+
             const $badge = $('<span/>', {
-                class: ['bjlg-badge'].concat(extraClasses || []).join(' '),
-                text: label
+                class: classes.join(' '),
+                text: badge.label
             });
 
-            $badge.css($.extend({}, badgeStyles, { backgroundColor: color || '#4b5563' }));
+            const styles = $.extend({}, badgeStyles, {
+                backgroundColor: badge.color || '#4b5563'
+            });
+
+            $badge.css(styles);
 
             return $badge;
         }
 
-        function wrapScheduleBadgeGroup(title, badges) {
-            const $group = $('<div/>', { class: 'bjlg-badge-group' }).css(groupStyles);
-            $('<strong/>', { text: title + ' :' }).css({ marginRight: '4px' }).appendTo($group);
-            badges.forEach(function($badge) {
-                $group.append($badge);
-            });
-            return $group;
-        }
-
-        function updateScheduleSummary() {
-            const $summary = $('#bjlg-schedule-summary');
-            if (!$summary.length) {
+        function renderScheduleBadgeGroups($target, groups) {
+            if (!$target || !$target.length) {
                 return;
             }
 
-            const selectedComponents = [];
+            const fragment = $(document.createDocumentFragment());
+
+            groups.forEach(function(group) {
+                const $group = $('<div/>', { class: 'bjlg-badge-group' }).css(groupStyles);
+                $('<strong/>', { text: group.title + ' :' }).css({ marginRight: '4px' }).appendTo($group);
+
+                group.badges.forEach(function(badge) {
+                    $group.append(createScheduleBadgeElement(badge));
+                });
+
+                fragment.append($group);
+            });
+
+            $target.empty().append(fragment);
+        }
+
+        function countPatternEntries(rawValue) {
+            if (typeof rawValue !== 'string') {
+                return 0;
+            }
+
+            return rawValue.split(/[\r\n,]+/).reduce(function(total, entry) {
+                return entry.trim() === '' ? total : total + 1;
+            }, 0);
+        }
+
+        function updateScheduleSummary() {
+            if (!$summary.length && !$overviewContent.length && !$overviewFrequency.length) {
+                return;
+            }
+
+            const recurrenceValue = ($recurrenceSelect.val() || '').toString();
+
+            if ($overview.length) {
+                $overview.attr('data-recurrence', recurrenceValue);
+            }
+
+            if ($overviewFrequency && $overviewFrequency.length) {
+                const prefix = ($overviewFrequency.data('prefix') || '').toString();
+                const label = recurrenceLabels[recurrenceValue] || (recurrenceValue ? recurrenceValue : '—');
+                $overviewFrequency.text(prefix + label);
+            }
+
+            const componentBadges = [];
+            const seenComponents = new Set();
+
             $scheduleForm.find('input[name="components[]"]').each(function() {
                 const $input = $(this);
                 const value = ($input.val() || '').toString();
-                if ($input.is(':checked') && value) {
-                    selectedComponents.push(value);
+                if (!$input.is(':checked') || value === '') {
+                    return;
                 }
+
+                const key = value.toLowerCase();
+                if (seenComponents.has(key)) {
+                    return;
+                }
+                seenComponents.add(key);
+
+                const config = componentLabels[key] || { label: value, color: '#4b5563' };
+                componentBadges.push({
+                    label: config.label,
+                    color: config.color,
+                    classes: ['bjlg-badge-component']
+                });
             });
+
+            if (!componentBadges.length) {
+                componentBadges.push({
+                    label: 'Aucun composant',
+                    color: '#4b5563',
+                    classes: ['bjlg-badge-component', 'bjlg-badge-empty']
+                });
+            }
 
             const encryptChecked = $scheduleForm.find('[name="encrypt"]').is(':checked');
             const incrementalChecked = $scheduleForm.find('[name="incremental"]').is(':checked');
 
-            const componentBadges = [];
-            if (selectedComponents.length) {
-                selectedComponents.forEach(function(component) {
-                    const config = componentLabels[component] || { label: component, color: '#4b5563' };
-                    componentBadges.push(createScheduleBadge(config.label, config.color, ['bjlg-badge-component']));
-                });
-            } else {
-                componentBadges.push($('<span/>', { class: 'description', text: 'Aucun composant sélectionné' }));
-            }
-
-            const optionBadges = [];
-            optionBadges.push(createScheduleBadge(
-                encryptChecked ? 'Chiffrée' : 'Non chiffrée',
-                encryptChecked ? '#7c3aed' : '#4b5563',
-                ['bjlg-badge-encrypted']
-            ));
-            optionBadges.push(createScheduleBadge(
-                incrementalChecked ? 'Incrémentale' : 'Complète',
-                incrementalChecked ? '#2563eb' : '#6b7280',
-                ['bjlg-badge-incremental']
-            ));
-
-            const includeRaw = ($scheduleForm.find('[name="include_patterns"]').val() || '').toString();
-            const includeLines = includeRaw
-                .split(/\r?\n/)
-                .map(function(line) { return line.trim(); })
-                .filter(function(line) { return line !== ''; });
-            const includeBadges = [];
-            if (includeLines.length) {
-                includeBadges.push(createScheduleBadge(
-                    includeLines.length + ' motif(s)',
-                    '#0ea5e9',
-                    ['bjlg-badge-include']
-                ));
-            } else {
-                includeBadges.push(createScheduleBadge('Tout le contenu', '#10b981', ['bjlg-badge-include']));
-            }
-
-            const excludeRaw = ($scheduleForm.find('[name="exclude_patterns"]').val() || '').toString();
-            const excludeLines = excludeRaw
-                .split(/\r?\n/)
-                .map(function(line) { return line.trim(); })
-                .filter(function(line) { return line !== ''; });
-            const excludeBadges = [];
-            if (excludeLines.length) {
-                excludeBadges.push(createScheduleBadge(
-                    excludeLines.length + ' exclusion(s)',
-                    '#f97316',
-                    ['bjlg-badge-exclude']
-                ));
-            } else {
-                excludeBadges.push(createScheduleBadge('Aucune', '#4b5563', ['bjlg-badge-exclude']));
-            }
-
-            const postChecks = [];
-            $scheduleForm.find('input[name="post_checks[]"]:checked').each(function() {
-                const value = ($(this).val() || '').toString();
-                if (value) {
-                    postChecks.push(value);
+            const optionBadges = [
+                {
+                    label: encryptChecked ? 'Chiffrée' : 'Non chiffrée',
+                    color: encryptChecked ? '#7c3aed' : '#4b5563',
+                    classes: ['bjlg-badge-encrypted']
+                },
+                {
+                    label: incrementalChecked ? 'Incrémentale' : 'Complète',
+                    color: incrementalChecked ? '#2563eb' : '#6b7280',
+                    classes: ['bjlg-badge-incremental']
                 }
-            });
+            ];
+
+            const includeCount = countPatternEntries(($scheduleForm.find('[name="include_patterns"]').val() || '').toString());
+            const excludeCount = countPatternEntries(($scheduleForm.find('[name="exclude_patterns"]').val() || '').toString());
+
+            const includeBadges = includeCount > 0
+                ? [{ label: includeCount + ' motif(s)', color: '#0ea5e9', classes: ['bjlg-badge-include'] }]
+                : [{ label: 'Tout le contenu', color: '#10b981', classes: ['bjlg-badge-include'] }];
+
+            const excludeBadges = excludeCount > 0
+                ? [{ label: excludeCount + ' exclusion(s)', color: '#f97316', classes: ['bjlg-badge-exclude'] }]
+                : [{ label: 'Aucune', color: '#4b5563', classes: ['bjlg-badge-exclude'] }];
+
+            const checksumChecked = $scheduleForm.find('input[name="post_checks[]"][value="checksum"]').is(':checked');
+            const dryRunChecked = $scheduleForm.find('input[name="post_checks[]"][value="dry_run"]').is(':checked');
+
             const controlBadges = [];
-            if (postChecks.indexOf('checksum') !== -1) {
-                controlBadges.push(createScheduleBadge('Checksum', '#2563eb', ['bjlg-badge-checksum']));
+            if (checksumChecked) {
+                controlBadges.push({ label: 'Checksum', color: '#2563eb', classes: ['bjlg-badge-checksum'] });
             }
-            if (postChecks.indexOf('dry_run') !== -1) {
-                controlBadges.push(createScheduleBadge('Test restauration', '#7c3aed', ['bjlg-badge-restore']));
+            if (dryRunChecked) {
+                controlBadges.push({ label: 'Test restauration', color: '#7c3aed', classes: ['bjlg-badge-restore'] });
             }
             if (!controlBadges.length) {
-                controlBadges.push(createScheduleBadge('Aucun contrôle', '#4b5563', ['bjlg-badge-control']));
+                controlBadges.push({ label: 'Aucun contrôle', color: '#4b5563', classes: ['bjlg-badge-control'] });
             }
 
             const destinationBadges = [];
+            const seenDestinations = new Set();
+
             $scheduleForm.find('input[name="secondary_destinations[]"]:checked').each(function() {
-                const $checkbox = $(this);
-                const labelText = ($checkbox.closest('label').text() || '').trim().replace(/\s+/g, ' ');
-                const display = labelText !== '' ? labelText : ($checkbox.val() || '').toString();
-                destinationBadges.push(createScheduleBadge(display, '#0ea5e9', ['bjlg-badge-destination']));
+                const $input = $(this);
+                const value = ($input.val() || '').toString();
+                if (value === '') {
+                    return;
+                }
+
+                const normalized = value.toLowerCase();
+                if (seenDestinations.has(normalized)) {
+                    return;
+                }
+                seenDestinations.add(normalized);
+
+                const labelText = ($input.closest('label').text() || '').trim().replace(/\s+/g, ' ');
+                destinationBadges.push({
+                    label: labelText !== '' ? labelText : value,
+                    color: '#0ea5e9',
+                    classes: ['bjlg-badge-destination']
+                });
             });
+
             if (!destinationBadges.length) {
-                destinationBadges.push(createScheduleBadge('Stockage local', '#4b5563', ['bjlg-badge-destination']));
+                destinationBadges.push({
+                    label: 'Stockage local',
+                    color: '#4b5563',
+                    classes: ['bjlg-badge-destination']
+                });
             }
 
-            const fragment = $(document.createDocumentFragment());
-            fragment.append(wrapScheduleBadgeGroup('Composants', componentBadges));
-            fragment.append(wrapScheduleBadgeGroup('Options', optionBadges));
-            fragment.append(wrapScheduleBadgeGroup('Inclusions', includeBadges));
-            fragment.append(wrapScheduleBadgeGroup('Exclusions', excludeBadges));
-            fragment.append(wrapScheduleBadgeGroup('Contrôles', controlBadges));
-            fragment.append(wrapScheduleBadgeGroup('Destinations', destinationBadges));
+            const groups = [
+                { title: 'Composants', badges: componentBadges },
+                { title: 'Options', badges: optionBadges },
+                { title: 'Inclusions', badges: includeBadges },
+                { title: 'Exclusions', badges: excludeBadges },
+                { title: 'Contrôles', badges: controlBadges },
+                { title: 'Destinations', badges: destinationBadges }
+            ];
 
-            $summary.empty().append(fragment);
+            if ($summary.length) {
+                renderScheduleBadgeGroups($summary, groups);
+            }
+
+            if ($overviewContent.length) {
+                renderScheduleBadgeGroups($overviewContent, groups);
+            }
         }
 
         $scheduleForm.on('change', 'input[name="components[]"], [name="encrypt"], [name="incremental"]', updateScheduleSummary);
@@ -385,7 +459,7 @@ jQuery(document).ready(function($) {
                     componentValues.push(value);
                 }
             });
-            payload.components = componentValues.length ? componentValues : [''];
+            payload.components = componentValues;
 
             ['encrypt', 'incremental'].forEach(function(fieldName) {
                 const $field = $scheduleForm.find('[name="' + fieldName + '"]');
