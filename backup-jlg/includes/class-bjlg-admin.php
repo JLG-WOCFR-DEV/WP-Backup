@@ -28,6 +28,9 @@ class BJLG_Admin {
         if (class_exists(BJLG_AWS_S3::class)) {
             $this->destinations['aws_s3'] = new BJLG_AWS_S3();
         }
+        if (class_exists(BJLG_SFTP::class)) {
+            $this->destinations['sftp'] = new BJLG_SFTP();
+        }
     }
 
     /**
@@ -283,20 +286,9 @@ class BJLG_Admin {
      * Section : Liste des sauvegardes
      */
     private function render_backup_list_section() {
-        $schedule_settings = $this->get_schedule_settings_for_display();
-        $schedule_components = $schedule_settings['components'];
-        $schedule_encrypt = !empty($schedule_settings['encrypt']);
-        $schedule_incremental = !empty($schedule_settings['incremental']);
-        $schedule_post_checks = is_array($schedule_settings['post_checks']) ? $schedule_settings['post_checks'] : [];
-        $schedule_destinations = is_array($schedule_settings['secondary_destinations'])
-            ? $schedule_settings['secondary_destinations']
-            : [];
-        $schedule_include_patterns = is_array($schedule_settings['include_patterns'])
-            ? $schedule_settings['include_patterns']
-            : [];
-        $schedule_exclude_patterns = is_array($schedule_settings['exclude_patterns'])
-            ? $schedule_settings['exclude_patterns']
-            : [];
+        $schedule_collection = $this->get_schedule_settings_for_display();
+        $schedules = is_array($schedule_collection['schedules']) ? $schedule_collection['schedules'] : [];
+        $next_runs = is_array($schedule_collection['next_runs']) ? $schedule_collection['next_runs'] : [];
         $recurrence_labels = [
             'disabled' => 'Désactivée',
             'hourly' => 'Toutes les heures',
@@ -305,17 +297,6 @@ class BJLG_Admin {
             'weekly' => 'Hebdomadaire',
             'monthly' => 'Mensuelle',
         ];
-        $current_recurrence = isset($schedule_settings['recurrence']) ? $schedule_settings['recurrence'] : 'disabled';
-        $current_recurrence_label = $recurrence_labels[$current_recurrence] ?? ucfirst($current_recurrence);
-        $schedule_summary_markup = $this->get_schedule_summary_markup(
-            $schedule_components,
-            $schedule_encrypt,
-            $schedule_incremental,
-            $schedule_post_checks,
-            $schedule_destinations,
-            $schedule_include_patterns,
-            $schedule_exclude_patterns
-        );
         ?>
         <div class="bjlg-section" id="bjlg-backup-list-section" data-default-page="1" data-default-per-page="10">
             <h2>Sauvegardes Disponibles</h2>
@@ -354,23 +335,87 @@ class BJLG_Admin {
                 id="bjlg-schedule-overview"
                 class="bjlg-schedule-overview"
                 aria-live="polite"
-                data-recurrence="<?php echo esc_attr($current_recurrence); ?>"
+                data-next-runs="<?php echo esc_attr(wp_json_encode($next_runs)); ?>"
             >
-                <div
-                    class="bjlg-schedule-overview-header"
-                >
+                <header class="bjlg-schedule-overview-header">
                     <span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span>
                     <strong>Sauvegardes planifiées</strong>
-                    <span
-                        id="bjlg-schedule-overview-frequency"
-                        class="bjlg-schedule-overview-frequency"
-                        data-prefix="Fréquence : "
-                    >
-                        Fréquence : <?php echo esc_html($current_recurrence_label); ?>
-                    </span>
-                </div>
-                <div id="bjlg-schedule-overview-content" class="bjlg-schedule-overview-content">
-                    <?php echo $schedule_summary_markup; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                </header>
+                <div class="bjlg-schedule-overview-list">
+                    <?php if (!empty($schedules)): ?>
+                        <?php foreach ($schedules as $index => $schedule):
+                            if (!is_array($schedule)) {
+                                continue;
+                            }
+
+                            $schedule_id = isset($schedule['id']) && $schedule['id'] !== ''
+                                ? (string) $schedule['id']
+                                : 'schedule_' . ($index + 1);
+                            $label = isset($schedule['label']) && $schedule['label'] !== ''
+                                ? (string) $schedule['label']
+                                : sprintf('Planification #%d', $index + 1);
+                            $components = isset($schedule['components']) && is_array($schedule['components'])
+                                ? $schedule['components']
+                                : [];
+                            $encrypt = !empty($schedule['encrypt']);
+                            $incremental = !empty($schedule['incremental']);
+                            $post_checks = isset($schedule['post_checks']) && is_array($schedule['post_checks'])
+                                ? $schedule['post_checks']
+                                : [];
+                            $destinations = isset($schedule['secondary_destinations']) && is_array($schedule['secondary_destinations'])
+                                ? $schedule['secondary_destinations']
+                                : [];
+                            $include_patterns = isset($schedule['include_patterns']) && is_array($schedule['include_patterns'])
+                                ? $schedule['include_patterns']
+                                : [];
+                            $exclude_patterns = isset($schedule['exclude_patterns']) && is_array($schedule['exclude_patterns'])
+                                ? $schedule['exclude_patterns']
+                                : [];
+                            $recurrence = isset($schedule['recurrence']) ? (string) $schedule['recurrence'] : 'disabled';
+                            $recurrence_label = $recurrence_labels[$recurrence] ?? ucfirst($recurrence);
+                            $next_run_summary = $next_runs[$schedule_id] ?? [];
+                            $next_run_formatted = isset($next_run_summary['next_run_formatted']) && $next_run_summary['next_run_formatted'] !== ''
+                                ? (string) $next_run_summary['next_run_formatted']
+                                : 'Non planifié';
+                            $next_run_relative = isset($next_run_summary['next_run_relative']) && $next_run_summary['next_run_relative'] !== ''
+                                ? (string) $next_run_summary['next_run_relative']
+                                : '';
+                            $summary_markup = $this->get_schedule_summary_markup(
+                                $components,
+                                $encrypt,
+                                $incremental,
+                                $post_checks,
+                                $destinations,
+                                $include_patterns,
+                                $exclude_patterns
+                            );
+                            ?>
+                            <article
+                                class="bjlg-schedule-overview-card"
+                                data-schedule-id="<?php echo esc_attr($schedule_id); ?>"
+                                data-recurrence="<?php echo esc_attr($recurrence); ?>"
+                            >
+                                <header class="bjlg-schedule-overview-card__header">
+                                    <h4 class="bjlg-schedule-overview-card__title"><?php echo esc_html($label); ?></h4>
+                                    <p class="bjlg-schedule-overview-frequency" data-prefix="Fréquence : ">
+                                        Fréquence : <?php echo esc_html($recurrence_label); ?>
+                                    </p>
+                                    <p class="bjlg-schedule-overview-next-run">
+                                        <strong>Prochaine exécution :</strong>
+                                        <span class="bjlg-next-run-value"><?php echo esc_html($next_run_formatted); ?></span>
+                                        <span class="bjlg-next-run-relative"<?php echo $next_run_relative === '' ? ' style="display:none;"' : ''; ?>>
+                                            <?php echo $next_run_relative !== '' ? '(' . esc_html($next_run_relative) . ')' : ''; ?>
+                                        </span>
+                                    </p>
+                                </header>
+                                <div class="bjlg-schedule-overview-card__summary">
+                                    <?php echo $summary_markup; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                                </div>
+                            </article>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <p class="description">Aucune planification active pour le moment.</p>
+                    <?php endif; ?>
                 </div>
             </div>
             <div id="bjlg-backup-list-feedback" class="notice notice-error" role="alert" style="display:none;"></div>
@@ -573,23 +618,27 @@ class BJLG_Admin {
      */
     private function render_settings_section() {
         $cleanup_settings = get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
-        $schedule_settings = $this->get_schedule_settings_for_display();
+        $schedule_collection = $this->get_schedule_settings_for_display();
+        $schedules = isset($schedule_collection['schedules']) && is_array($schedule_collection['schedules'])
+            ? array_values($schedule_collection['schedules'])
+            : [];
+        $next_runs = isset($schedule_collection['next_runs']) && is_array($schedule_collection['next_runs'])
+            ? $schedule_collection['next_runs']
+            : [];
+        $default_schedule = isset($schedule_collection['default']) && is_array($schedule_collection['default'])
+            ? $schedule_collection['default']
+            : BJLG_Settings::get_default_schedule_entry();
 
-        $selected_components = $schedule_settings['components'];
         $components_labels = [
             'db' => 'Base de données',
             'plugins' => 'Extensions',
             'themes' => 'Thèmes',
             'uploads' => 'Médias',
         ];
-        $encrypt_enabled = !empty($schedule_settings['encrypt']);
-        $incremental_enabled = !empty($schedule_settings['incremental']);
-        $schedule_include_patterns = $schedule_settings['include_patterns'];
-        $schedule_exclude_patterns = $schedule_settings['exclude_patterns'];
-        $schedule_post_checks = $schedule_settings['post_checks'];
-        $schedule_secondary_destinations = $schedule_settings['secondary_destinations'];
-        $schedule_include_text = esc_textarea(implode("\n", array_map('strval', $schedule_include_patterns)));
-        $schedule_exclude_text = esc_textarea(implode("\n", array_map('strval', $schedule_exclude_patterns)));
+        $default_next_run_summary = [
+            'next_run_formatted' => 'Non planifié',
+            'next_run_relative' => '',
+        ];
         $destination_choices = $this->get_destination_choices();
         $wl_settings = get_option('bjlg_whitelabel_settings', ['plugin_name' => '', 'hide_from_non_admins' => false]);
         $webhook_key = class_exists(BJLG_Webhooks::class) ? BJLG_Webhooks::get_webhook_key() : '';
@@ -612,213 +661,63 @@ class BJLG_Admin {
             </form>
             
             <h3><span class="dashicons dashicons-calendar-alt"></span> Planification des Sauvegardes</h3>
-            <form id="bjlg-schedule-form">
-                <?php
-                $weekly_row_hidden = $schedule_settings['recurrence'] !== 'weekly';
-                $weekly_row_classes = 'bjlg-schedule-weekly-options';
-                if ($weekly_row_hidden) {
-                    $weekly_row_classes .= ' bjlg-hidden';
-                }
-                $weekly_row_aria = $weekly_row_hidden ? 'true' : 'false';
+            <form
+                id="bjlg-schedule-form"
+                data-default-schedule="<?php echo esc_attr(wp_json_encode($default_schedule)); ?>"
+                data-next-runs="<?php echo esc_attr(wp_json_encode($next_runs)); ?>"
+            >
+                <div id="bjlg-schedule-feedback" class="notice" role="status" aria-live="polite" style="display:none;"></div>
+                <div class="bjlg-schedule-list">
+                    <?php if (!empty($schedules)): ?>
+                        <?php foreach ($schedules as $index => $schedule):
+                            if (!is_array($schedule)) {
+                                continue;
+                            }
 
-                $time_row_hidden = $schedule_settings['recurrence'] === 'disabled';
-                $time_row_classes = 'bjlg-schedule-time-options';
-                if ($time_row_hidden) {
-                    $time_row_classes .= ' bjlg-hidden';
-                }
-                $time_row_aria = $time_row_hidden ? 'true' : 'false';
-                ?>
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">Fréquence</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <select name="recurrence" id="bjlg-schedule-recurrence">
-                                <option value="disabled" <?php selected($schedule_settings['recurrence'], 'disabled'); ?>>Désactivée</option>
-                                <option value="hourly" <?php selected($schedule_settings['recurrence'], 'hourly'); ?>>Toutes les heures</option>
-                                <option value="daily" <?php selected($schedule_settings['recurrence'], 'daily'); ?>>Journalière</option>
-                                <option value="weekly" <?php selected($schedule_settings['recurrence'], 'weekly'); ?>>Hebdomadaire</option>
-                                <option value="monthly" <?php selected($schedule_settings['recurrence'], 'monthly'); ?>>Mensuelle</option>
-                                </select>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr class="<?php echo esc_attr($weekly_row_classes); ?>" aria-hidden="<?php echo esc_attr($weekly_row_aria); ?>">
-                        <th scope="row">Jour de la semaine</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <select name="day" id="bjlg-schedule-day">
-                                <?php $days = ['monday' => 'Lundi', 'tuesday' => 'Mardi', 'wednesday' => 'Mercredi', 'thursday' => 'Jeudi', 'friday' => 'Vendredi', 'saturday' => 'Samedi', 'sunday' => 'Dimanche'];
-                                foreach ($days as $day_key => $day_name): ?>
-                                    <option value="<?php echo $day_key; ?>" <?php selected(isset($schedule_settings['day']) ? $schedule_settings['day'] : 'sunday', $day_key); ?>><?php echo $day_name; ?></option>
-                                <?php endforeach; ?>
-                                </select>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr class="<?php echo esc_attr($time_row_classes); ?>" aria-hidden="<?php echo esc_attr($time_row_aria); ?>">
-                        <th scope="row">Heure</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <input type="time" name="time" id="bjlg-schedule-time" value="<?php echo esc_attr(isset($schedule_settings['time']) ? $schedule_settings['time'] : '23:59'); ?>">
-                                <p class="description">Heure locale du serveur</p>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Composants</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <fieldset>
-                                    <legend class="screen-reader-text">Composants inclus dans la sauvegarde planifiée</legend>
-                                    <?php foreach ($components_labels as $component_key => $component_label): ?>
-                                        <label class="bjlg-label-block bjlg-mb-4">
-                                            <input type="checkbox"
-                                                   name="components[]"
-                                                   value="<?php echo esc_attr($component_key); ?>"
-                                                   <?php checked(in_array($component_key, $selected_components, true)); ?>>
-                                            <?php if ($component_key === 'db'): ?>
-                                                <strong><?php echo esc_html($component_label); ?></strong>
-                                                <span class="description">Toutes les tables WordPress</span>
-                                            <?php else: ?>
-                                                <?php
-                                                switch ($component_key) {
-                                                    case 'plugins':
-                                                        $path = '/wp-content/plugins';
-                                                        break;
-                                                    case 'themes':
-                                                        $path = '/wp-content/themes';
-                                                        break;
-                                                    case 'uploads':
-                                                        $path = '/wp-content/uploads';
-                                                        break;
-                                                    default:
-                                                        $path = '';
-                                                }
-                                                ?>
-                                                <?php echo esc_html($component_label); ?>
-                                                <?php if ($path !== ''): ?><span class="description">(<code><?php echo esc_html($path); ?></code>)</span><?php endif; ?>
-                                            <?php endif; ?>
-                                        </label>
-                                    <?php endforeach; ?>
-                                </fieldset>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Options</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <fieldset>
-                                    <legend class="screen-reader-text">Options supplémentaires de la sauvegarde planifiée</legend>
-                                    <label class="bjlg-switch bjlg-mb-6">
-                                        <input type="checkbox"
-                                               id="bjlg-schedule-encrypt"
-                                               name="encrypt"
-                                               value="1"
-                                               role="switch"
-                                               aria-checked="<?php echo $encrypt_enabled ? 'true' : 'false'; ?>"
-                                               <?php checked($encrypt_enabled); ?>>
-                                        <span class="bjlg-switch-label"><strong>Chiffrer la sauvegarde (AES-256)</strong></span>
-                                    </label>
-                                    <p class="description bjlg-description-offset bjlg-mb-10">
-                                        Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
-                                    </p>
-                                    <label class="bjlg-switch bjlg-mb-6">
-                                        <input type="checkbox"
-                                               id="bjlg-schedule-incremental"
-                                               name="incremental"
-                                               value="1"
-                                               role="switch"
-                                               aria-checked="<?php echo $incremental_enabled ? 'true' : 'false'; ?>"
-                                               <?php checked($incremental_enabled); ?>>
-                                        <span class="bjlg-switch-label"><strong>Sauvegarde incrémentale</strong></span>
-                                    </label>
-                                    <p class="description bjlg-description-offset">
-                                        Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
-                                    </p>
-                                </fieldset>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Inclusions personnalisées</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <textarea name="include_patterns" rows="3" class="large-text code" placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"><?php echo $schedule_include_text; ?></textarea>
-                                <p class="description">Motifs appliqués à chaque exécution planifiée. Laissez vide pour inclure tout le contenu sélectionné.</p>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Exclusions</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <textarea name="exclude_patterns" rows="3" class="large-text code" placeholder="*/cache/*&#10;*.log"><?php echo $schedule_exclude_text; ?></textarea>
-                                <p class="description">Ajoutez des motifs supplémentaires pour ignorer des dossiers ou fichiers lors des sauvegardes planifiées.</p>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Vérifications post-sauvegarde</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <fieldset>
-                                    <label>
-                                        <input type="checkbox" name="post_checks[]" value="checksum" <?php checked(!empty($schedule_post_checks['checksum'])); ?>> Vérifier l'intégrité (SHA-256)
-                                    </label>
-                                    <p class="description">Calcule un hachage de l'archive pour garantir son intégrité.</p>
-                                    <label>
-                                        <input type="checkbox" name="post_checks[]" value="dry_run" <?php checked(!empty($schedule_post_checks['dry_run'])); ?>> Test de restauration à blanc
-                                    </label>
-                                    <p class="description">Ouvre l'archive après sa création pour valider une restauration (ignoré si l'archive est chiffrée).</p>
-                                </fieldset>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Destinations secondaires</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <fieldset>
-                                    <?php if (!empty($destination_choices)): ?>
-                                        <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
-                                            <label class="bjlg-label-block bjlg-mb-4">
-                                                <input type="checkbox"
-                                                       name="secondary_destinations[]"
-                                                       value="<?php echo esc_attr($destination_id); ?>"
-                                                       <?php checked(in_array($destination_id, $schedule_secondary_destinations, true)); ?>>
-                                                <?php echo esc_html($destination_label); ?>
-                                            </label>
-                                        <?php endforeach; ?>
-                                    <?php else: ?>
-                                        <p class="description">Aucune destination distante n'est disponible pour le moment.</p>
-                                    <?php endif; ?>
-                                    <p class="description">Si l'envoi vers la première destination échoue, les suivantes sont tentées automatiquement.</p>
-                                </fieldset>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Résumé</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <div id="bjlg-schedule-summary" class="bjlg-schedule-summary" aria-live="polite">
-                                    <?php echo $this->get_schedule_summary_markup(
-                                        $selected_components,
-                                        $encrypt_enabled,
-                                        $incremental_enabled,
-                                        $schedule_post_checks,
-                                        $schedule_secondary_destinations,
-                                        $schedule_include_patterns,
-                                        $schedule_exclude_patterns
-                                    ); ?>
-                                </div>
-                            </div>
-                        </td>
-                    </tr>
-                </table>
-                <p class="submit"><button type="submit" class="button button-primary">Enregistrer la planification</button></p>
+                            $schedule_id = isset($schedule['id']) ? (string) $schedule['id'] : '';
+                            $next_run_summary = $schedule_id !== '' && isset($next_runs[$schedule_id])
+                                ? $next_runs[$schedule_id]
+                                : $default_next_run_summary;
+
+                            echo $this->render_schedule_item(
+                                $schedule,
+                                is_array($next_run_summary) ? $next_run_summary : $default_next_run_summary,
+                                $components_labels,
+                                $destination_choices,
+                                $index,
+                                false
+                            );
+                        endforeach; ?>
+                    <?php else: ?>
+                        <?php
+                        echo $this->render_schedule_item(
+                            $default_schedule,
+                            $default_next_run_summary,
+                            $components_labels,
+                            $destination_choices,
+                            0,
+                            false
+                        );
+                        ?>
+                    <?php endif; ?>
+                    <?php
+                    echo $this->render_schedule_item(
+                        $default_schedule,
+                        $default_next_run_summary,
+                        $components_labels,
+                        $destination_choices,
+                        count($schedules),
+                        true
+                    );
+                    ?>
+                </div>
+                <p class="bjlg-schedule-actions">
+                    <button type="button" class="button button-secondary bjlg-add-schedule">
+                        <span class="dashicons dashicons-plus" aria-hidden="true"></span>
+                        Ajouter une planification
+                    </button>
+                </p>
+                <p class="submit"><button type="submit" class="button button-primary">Enregistrer les planifications</button></p>
             </form>
             
             <h3><span class="dashicons dashicons-admin-links"></span> Webhook</h3>
@@ -1057,6 +956,7 @@ class BJLG_Admin {
             $choices = [
                 'google_drive' => 'Google Drive',
                 'aws_s3' => 'Amazon S3',
+                'sftp' => 'Serveur SFTP',
             ];
         }
 
@@ -1084,53 +984,59 @@ class BJLG_Admin {
     }
 
     private function get_schedule_settings_for_display() {
-        $defaults = [
-            'recurrence' => 'weekly',
-            'day' => 'sunday',
-            'time' => '23:59',
-            'components' => ['db', 'plugins', 'themes', 'uploads'],
-            'encrypt' => false,
-            'incremental' => false,
-            'include_patterns' => [],
-            'exclude_patterns' => [],
-            'post_checks' => ['checksum' => true, 'dry_run' => false],
-            'secondary_destinations' => [],
-        ];
+        $default_schedule = BJLG_Settings::get_default_schedule_entry();
+        $default_schedule['id'] = '';
+        $default_schedule['label'] = 'Nouvelle planification';
 
-        $settings = [];
+        $schedules = [];
+        $next_runs = [];
 
         if (class_exists(BJLG_Scheduler::class)) {
             $scheduler = BJLG_Scheduler::instance();
             if ($scheduler && method_exists($scheduler, 'get_schedule_settings')) {
-                $settings = $scheduler->get_schedule_settings();
+                $collection = $scheduler->get_schedule_settings();
+                if (is_array($collection) && isset($collection['schedules']) && is_array($collection['schedules'])) {
+                    $schedules = $collection['schedules'];
+                }
+
+                if ($scheduler && method_exists($scheduler, 'get_next_runs_summary')) {
+                    $next_runs = $scheduler->get_next_runs_summary($schedules);
+                }
             }
         }
 
-        if (!is_array($settings) || empty($settings)) {
-            $settings = get_option('bjlg_schedule_settings', []);
+        if (empty($schedules)) {
+            $stored = get_option('bjlg_schedule_settings', []);
+            $collection = BJLG_Settings::sanitize_schedule_collection($stored);
+            $schedules = $collection['schedules'];
         }
 
-        if (!is_array($settings)) {
-            $settings = [];
+        if (empty($next_runs)) {
+            foreach ($schedules as $schedule) {
+                if (!is_array($schedule) || empty($schedule['id'])) {
+                    continue;
+                }
+                $next_runs[$schedule['id']] = [
+                    'id' => $schedule['id'],
+                    'label' => $schedule['label'] ?? $schedule['id'],
+                    'recurrence' => $schedule['recurrence'] ?? 'disabled',
+                    'enabled' => ($schedule['recurrence'] ?? 'disabled') !== 'disabled',
+                    'next_run' => null,
+                    'next_run_formatted' => 'Non planifié',
+                    'next_run_relative' => null,
+                ];
+            }
         }
 
-        $settings = wp_parse_args($settings, $defaults);
+        if (empty($schedules)) {
+            $schedules = [$default_schedule];
+        }
 
-        $settings['components'] = array_values(array_map('strval', (array) $settings['components']));
-        $settings['include_patterns'] = BJLG_Settings::sanitize_pattern_list($settings['include_patterns']);
-        $settings['exclude_patterns'] = BJLG_Settings::sanitize_pattern_list($settings['exclude_patterns']);
-        $settings['secondary_destinations'] = BJLG_Settings::sanitize_destination_list(
-            $settings['secondary_destinations'],
-            BJLG_Settings::get_known_destination_ids()
-        );
-
-        $post_checks = is_array($settings['post_checks']) ? $settings['post_checks'] : [];
-        $settings['post_checks'] = BJLG_Settings::sanitize_post_checks($post_checks, ['checksum' => true, 'dry_run' => false]);
-
-        $settings['encrypt'] = !empty($settings['encrypt']);
-        $settings['incremental'] = !empty($settings['incremental']);
-
-        return $settings;
+        return [
+            'schedules' => $schedules,
+            'next_runs' => $next_runs,
+            'default' => $default_schedule,
+        ];
     }
 
     private function get_schedule_summary_markup(
@@ -1234,6 +1140,249 @@ class BJLG_Admin {
             . $this->wrap_schedule_badge_group('Exclusions', $exclude_badges)
             . $this->wrap_schedule_badge_group('Contrôles', $control_badges)
             . $this->wrap_schedule_badge_group('Destinations', $destination_badges);
+    }
+
+    private function render_schedule_item(
+        array $schedule,
+        array $next_run_summary,
+        array $components_labels,
+        array $destination_choices,
+        int $index,
+        bool $is_template = false
+    ) {
+        $schedule_id = isset($schedule['id']) ? (string) $schedule['id'] : '';
+        $label = isset($schedule['label']) ? (string) $schedule['label'] : '';
+        if ($label === '' && !$is_template) {
+            $label = sprintf('Planification #%d', $index + 1);
+        }
+
+        $recurrence = isset($schedule['recurrence']) ? (string) $schedule['recurrence'] : 'disabled';
+        $day = isset($schedule['day']) ? (string) $schedule['day'] : 'sunday';
+        $time = isset($schedule['time']) ? (string) $schedule['time'] : '23:59';
+
+        $schedule_components = isset($schedule['components']) && is_array($schedule['components']) ? $schedule['components'] : [];
+        $include_patterns = isset($schedule['include_patterns']) && is_array($schedule['include_patterns']) ? $schedule['include_patterns'] : [];
+        $exclude_patterns = isset($schedule['exclude_patterns']) && is_array($schedule['exclude_patterns']) ? $schedule['exclude_patterns'] : [];
+        $post_checks = isset($schedule['post_checks']) && is_array($schedule['post_checks']) ? $schedule['post_checks'] : [];
+        $secondary_destinations = isset($schedule['secondary_destinations']) && is_array($schedule['secondary_destinations'])
+            ? $schedule['secondary_destinations']
+            : [];
+
+        $encrypt_enabled = !empty($schedule['encrypt']);
+        $incremental_enabled = !empty($schedule['incremental']);
+
+        $include_text = esc_textarea(implode("\n", array_map('strval', $include_patterns)));
+        $exclude_text = esc_textarea(implode("\n", array_map('strval', $exclude_patterns)));
+
+        $weekly_hidden = $recurrence !== 'weekly';
+        $time_hidden = $recurrence === 'disabled';
+        $weekly_classes = 'bjlg-schedule-weekly-options' . ($weekly_hidden ? ' bjlg-hidden' : '');
+        $time_classes = 'bjlg-schedule-time-options' . ($time_hidden ? ' bjlg-hidden' : '');
+
+        $next_run_text = isset($next_run_summary['next_run_formatted']) && $next_run_summary['next_run_formatted'] !== ''
+            ? $next_run_summary['next_run_formatted']
+            : 'Non planifié';
+        $next_run_relative = isset($next_run_summary['next_run_relative']) && $next_run_summary['next_run_relative'] !== ''
+            ? $next_run_summary['next_run_relative']
+            : '';
+
+        $field_prefix = $schedule_id !== '' ? $schedule_id : 'schedule_' . ($index + 1);
+        if ($is_template) {
+            $field_prefix = '__index__';
+        }
+
+        $summary_html = $this->get_schedule_summary_markup(
+            $schedule_components,
+            $encrypt_enabled,
+            $incremental_enabled,
+            $post_checks,
+            $secondary_destinations,
+            $include_patterns,
+            $exclude_patterns
+        );
+
+        $classes = ['bjlg-schedule-item'];
+        if ($is_template) {
+            $classes[] = 'bjlg-schedule-item--template';
+        }
+
+        ob_start();
+        ?>
+        <div class="<?php echo esc_attr(implode(' ', $classes)); ?>"
+             data-schedule-id="<?php echo esc_attr($schedule_id); ?>"
+             <?php echo $is_template ? "data-template='true' style='display:none;'" : ''; ?>>
+            <input type="hidden" data-field="id" value="<?php echo esc_attr($schedule_id); ?>">
+            <header class="bjlg-schedule-item__header">
+                <div class="bjlg-schedule-item__title">
+                    <span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span>
+                    <label class="screen-reader-text" for="bjlg-schedule-label-<?php echo esc_attr($field_prefix); ?>">Nom de la planification</label>
+                    <input type="text"
+                           id="bjlg-schedule-label-<?php echo esc_attr($field_prefix); ?>"
+                           class="regular-text"
+                           data-field="label"
+                           value="<?php echo esc_attr($label); ?>"
+                           placeholder="Nom de la planification">
+                </div>
+                <div class="bjlg-schedule-item__meta">
+                    <p class="description bjlg-schedule-next-run" data-field="next_run_display">
+                        <strong>Prochaine exécution :</strong>
+                        <span class="bjlg-next-run-value"><?php echo esc_html($next_run_text); ?></span>
+                        <?php if ($next_run_relative !== ''): ?>
+                            <span class="bjlg-next-run-relative">(<?php echo esc_html($next_run_relative); ?>)</span>
+                        <?php endif; ?>
+                    </p>
+                    <button type="button" class="button-link-delete bjlg-remove-schedule"<?php echo $is_template ? ' disabled' : ''; ?>>Supprimer</button>
+                </div>
+            </header>
+            <div class="bjlg-schedule-item__body">
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">Fréquence</th>
+                        <td>
+                            <select data-field="recurrence" name="schedules[<?php echo esc_attr($field_prefix); ?>][recurrence]">
+                                <option value="disabled" <?php selected($recurrence, 'disabled'); ?>>Désactivée</option>
+                                <option value="hourly" <?php selected($recurrence, 'hourly'); ?>>Toutes les heures</option>
+                                <option value="twice_daily" <?php selected($recurrence, 'twice_daily'); ?>>Deux fois par jour</option>
+                                <option value="daily" <?php selected($recurrence, 'daily'); ?>>Journalière</option>
+                                <option value="weekly" <?php selected($recurrence, 'weekly'); ?>>Hebdomadaire</option>
+                                <option value="monthly" <?php selected($recurrence, 'monthly'); ?>>Mensuelle</option>
+                            </select>
+                        </td>
+                    </tr>
+                    <tr class="<?php echo esc_attr($weekly_classes); ?>" aria-hidden="<?php echo esc_attr($weekly_hidden ? 'true' : 'false'); ?>">
+                        <th scope="row">Jour de la semaine</th>
+                        <td>
+                            <select data-field="day" name="schedules[<?php echo esc_attr($field_prefix); ?>][day]">
+                                <?php $days = ['monday' => 'Lundi', 'tuesday' => 'Mardi', 'wednesday' => 'Mercredi', 'thursday' => 'Jeudi', 'friday' => 'Vendredi', 'saturday' => 'Samedi', 'sunday' => 'Dimanche'];
+                                foreach ($days as $day_key => $day_name): ?>
+                                    <option value="<?php echo esc_attr($day_key); ?>" <?php selected($day, $day_key); ?>><?php echo esc_html($day_name); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </td>
+                    </tr>
+                    <tr class="<?php echo esc_attr($time_classes); ?>" aria-hidden="<?php echo esc_attr($time_hidden ? 'true' : 'false'); ?>">
+                        <th scope="row">Heure</th>
+                        <td>
+                            <input type="time" data-field="time" name="schedules[<?php echo esc_attr($field_prefix); ?>][time]" value="<?php echo esc_attr($time); ?>">
+                            <p class="description">Heure locale du site</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Composants</th>
+                        <td>
+                            <fieldset>
+                                <?php foreach ($components_labels as $component_key => $component_label): ?>
+                                    <label class="bjlg-label-block bjlg-mb-4">
+                                        <input type="checkbox"
+                                               data-field="components"
+                                               name="schedules[<?php echo esc_attr($field_prefix); ?>][components][]"
+                                               value="<?php echo esc_attr($component_key); ?>"
+                                               <?php checked(in_array($component_key, $schedule_components, true)); ?>>
+                                        <?php if ($component_key === 'db'): ?>
+                                            <strong><?php echo esc_html($component_label); ?></strong>
+                                            <span class="description">Toutes les tables WordPress</span>
+                                        <?php else: ?>
+                                            <?php echo esc_html($component_label); ?>
+                                        <?php endif; ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            </fieldset>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Options</th>
+                        <td>
+                            <label class="bjlg-label-block">
+                                <input type="checkbox"
+                                       data-field="encrypt"
+                                       name="schedules[<?php echo esc_attr($field_prefix); ?>][encrypt]"
+                                       value="1" <?php checked($encrypt_enabled); ?>>
+                                Chiffrer la sauvegarde
+                            </label>
+                            <label class="bjlg-label-block">
+                                <input type="checkbox"
+                                       data-field="incremental"
+                                       name="schedules[<?php echo esc_attr($field_prefix); ?>][incremental]"
+                                       value="1" <?php checked($incremental_enabled); ?>>
+                                Sauvegarde incrémentale
+                            </label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Inclusions</th>
+                        <td>
+                            <textarea rows="3"
+                                      class="large-text code"
+                                      data-field="include_patterns"
+                                      name="schedules[<?php echo esc_attr($field_prefix); ?>][include_patterns]"
+                                      placeholder="wp-content/uploads/*&#10;wp-content/themes/mon-theme/*"><?php echo $include_text; ?></textarea>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Exclusions</th>
+                        <td>
+                            <textarea rows="3"
+                                      class="large-text code"
+                                      data-field="exclude_patterns"
+                                      name="schedules[<?php echo esc_attr($field_prefix); ?>][exclude_patterns]"
+                                      placeholder="*/cache/*&#10;*.tmp"><?php echo $exclude_text; ?></textarea>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Contrôles post-sauvegarde</th>
+                        <td>
+                            <label class="bjlg-label-block">
+                                <input type="checkbox"
+                                       data-field="post_checks"
+                                       name="schedules[<?php echo esc_attr($field_prefix); ?>][post_checks][]"
+                                       value="checksum" <?php checked(!empty($post_checks['checksum'])); ?>>
+                                Vérification checksum
+                            </label>
+                            <label class="bjlg-label-block">
+                                <input type="checkbox"
+                                       data-field="post_checks"
+                                       name="schedules[<?php echo esc_attr($field_prefix); ?>][post_checks][]"
+                                       value="dry_run" <?php checked(!empty($post_checks['dry_run'])); ?>>
+                                Test de restauration
+                            </label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Destinations secondaires</th>
+                        <td>
+                            <?php if (!empty($destination_choices)): ?>
+                                <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
+                                    <label class="bjlg-label-block">
+                                        <input type="checkbox"
+                                               data-field="secondary_destinations"
+                                               name="schedules[<?php echo esc_attr($field_prefix); ?>][secondary_destinations][]"
+                                               value="<?php echo esc_attr($destination_id); ?>"
+                                               <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>>
+                                        <?php echo esc_html($destination_label); ?>
+                                    </label>
+                                <?php endforeach; ?>
+                                <p class="description">En cas d'échec de la première destination, les suivantes seront tentées.</p>
+                            <?php else: ?>
+                                <p class="description">Aucune destination distante disponible.</p>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Résumé</th>
+                        <td>
+                            <div class="bjlg-schedule-summary" data-field="summary" aria-live="polite">
+                                <?php echo $summary_html; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+                <p class="bjlg-schedule-inline-actions">
+                    <button type="button" class="button button-secondary bjlg-run-schedule-now"<?php echo $is_template ? ' disabled' : ''; ?>>Exécuter maintenant</button>
+                </p>
+            </div>
+        </div>
+        <?php
+        return ob_get_clean();
     }
 
     private function wrap_schedule_badge_group($title, array $badges) {
