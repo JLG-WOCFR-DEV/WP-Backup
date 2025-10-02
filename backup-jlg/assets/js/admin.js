@@ -1480,6 +1480,116 @@ jQuery(document).ready(function($) {
         }
     });
 
+    // --- TEST DE CONNEXION GOOGLE DRIVE ---
+    $(document).on('click', '.bjlg-gdrive-test-connection', function(e) {
+        e.preventDefault();
+
+        const $button = $(this);
+        const $container = $button.closest('.bjlg-destination--gdrive');
+        if (!$container.length) {
+            return;
+        }
+
+        const $feedback = $container.find('.bjlg-gdrive-test-feedback');
+        const $spinner = $container.find('.bjlg-gdrive-test-spinner');
+        const $lastTest = $container.find('.bjlg-gdrive-last-test');
+
+        if ($feedback.length) {
+            $feedback.removeClass('notice-success notice-error').hide().empty();
+        }
+
+        const payload = {
+            action: 'bjlg_test_gdrive_connection',
+            nonce: bjlg_ajax.nonce,
+            gdrive_client_id: $container.find('input[name="gdrive_client_id"]').val() || '',
+            gdrive_client_secret: $container.find('input[name="gdrive_client_secret"]').val() || '',
+            gdrive_folder_id: $container.find('input[name="gdrive_folder_id"]').val() || ''
+        };
+
+        if (!$button.data('bjlg-original-text')) {
+            $button.data('bjlg-original-text', $button.text());
+        }
+
+        $button.prop('disabled', true).text('Test en cours...');
+
+        if ($spinner.length) {
+            $spinner.addClass('is-active').show();
+        }
+
+        function updateLastTest(status, data, fallbackMessage) {
+            if (!$lastTest.length) {
+                return;
+            }
+
+            const testedAtFormatted = data && data.tested_at_formatted ? String(data.tested_at_formatted) : '';
+            const statusMessage = data && data.status_message ? String(data.status_message) : (fallbackMessage ? String(fallbackMessage) : '');
+            const parts = [];
+
+            if (testedAtFormatted) {
+                if (status === 'success') {
+                    parts.push('Dernier test réussi le ' + testedAtFormatted + '.');
+                } else {
+                    parts.push('Dernier test échoué le ' + testedAtFormatted + '.');
+                }
+            } else if (status === 'success') {
+                parts.push('Dernier test réussi.');
+            } else {
+                parts.push('Dernier test : échec.');
+            }
+
+            if (statusMessage) {
+                parts.push(statusMessage);
+            }
+
+            const iconClass = status === 'success' ? 'dashicons dashicons-yes' : 'dashicons dashicons-warning';
+
+            $lastTest
+                .css('display', '')
+                .css('color', status === 'success' ? '' : '#b32d2e')
+                .empty()
+                .append($('<span/>', { class: iconClass, 'aria-hidden': 'true' }))
+                .append(document.createTextNode(' ' + parts.join(' ')))
+                .show();
+        }
+
+        $.post(bjlg_ajax.ajax_url, payload)
+            .done(function(response) {
+                const data = response && response.data ? response.data : {};
+                const message = data.message ? String(data.message) : 'Connexion Google Drive vérifiée avec succès.';
+
+                showFeedback($feedback, 'success', message);
+                updateLastTest('success', data, message);
+            })
+            .fail(function(xhr) {
+                let message = 'Impossible de tester la connexion Google Drive.';
+                let data = null;
+
+                if (xhr && xhr.responseJSON) {
+                    if (xhr.responseJSON.data) {
+                        data = xhr.responseJSON.data;
+                        if (data.message) {
+                            message = String(data.message);
+                        }
+                    } else if (xhr.responseJSON.message) {
+                        message = String(xhr.responseJSON.message);
+                    }
+                } else if (xhr && xhr.responseText) {
+                    message = xhr.responseText;
+                }
+
+                showFeedback($feedback, 'error', message);
+                updateLastTest('error', data, message);
+            })
+            .always(function() {
+                const original = $button.data('bjlg-original-text') || 'Tester la connexion';
+                $button.prop('disabled', false).text(original);
+
+                if ($spinner.length) {
+                    $spinner.removeClass('is-active').hide();
+                }
+            });
+    });
+
     // --- TEST DE CONNEXION AMAZON S3 ---
     $(document).on('click', '.bjlg-s3-test-connection', function(e) {
         e.preventDefault();
