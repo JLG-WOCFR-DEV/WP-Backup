@@ -16,6 +16,7 @@ class BJLG_Admin {
         $this->load_destinations();
         add_action('admin_menu', [$this, 'create_admin_page']);
         add_filter('bjlg_admin_tabs', [$this, 'get_default_tabs']);
+        add_action('wp_ajax_bjlg_get_admin_summary', [$this, 'handle_get_admin_summary']);
     }
 
     /**
@@ -74,15 +75,18 @@ class BJLG_Admin {
     public function render_admin_page() {
         $active_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'backup_restore';
         $page_url = admin_url('admin.php?page=backup-jlg');
-        
+
         $tabs = apply_filters('bjlg_admin_tabs', []);
+        $summary = $this->get_dashboard_summary_data();
         ?>
         <div class="wrap bjlg-wrap">
             <h1>
-                <span class="dashicons dashicons-database-export"></span> 
+                <span class="dashicons dashicons-database-export"></span>
                 <?php echo esc_html(get_admin_page_title()); ?>
                 <span class="bjlg-version">v<?php echo esc_html(BJLG_VERSION); ?></span>
             </h1>
+
+            <?php $this->render_summary_section($summary); ?>
 
             <nav class="nav-tab-wrapper">
                 <?php foreach ($tabs as $tab_key => $tab_label): ?>
@@ -122,6 +126,509 @@ class BJLG_Admin {
             </div>
         </div>
         <?php
+    }
+
+    private function render_summary_section($summary) {
+        $metrics = isset($summary['metrics']) && is_array($summary['metrics'])
+            ? $summary['metrics']
+            : [];
+        $generated_display = '';
+        $generated_timestamp = '';
+        if (isset($summary['generated_at']) && is_array($summary['generated_at'])) {
+            $generated_display = isset($summary['generated_at']['display']) ? (string) $summary['generated_at']['display'] : '';
+            $generated_timestamp = isset($summary['generated_at']['timestamp']) ? (string) $summary['generated_at']['timestamp'] : '';
+        }
+
+        ?>
+        <div class="bjlg-section bjlg-summary-section" id="bjlg-dashboard-summary" data-refresh-action="bjlg_get_admin_summary">
+            <div class="bjlg-summary-header">
+                <h2>Résumé</h2>
+                <div class="bjlg-summary-toolbar">
+                    <p class="bjlg-summary-updated">
+                        <span class="dashicons dashicons-clock"></span>
+                        <span data-field="generated" data-timestamp="<?php echo esc_attr($generated_timestamp); ?>">
+                            <?php echo esc_html($generated_display); ?>
+                        </span>
+                    </p>
+                    <button type="button" class="button bjlg-summary-refresh" aria-label="Rafraîchir le résumé">
+                        <span class="dashicons dashicons-update"></span>
+                        <span class="bjlg-summary-refresh-label">Rafraîchir</span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="bjlg-summary-feedback" class="bjlg-summary-feedback" role="status" aria-live="polite"></div>
+
+            <div class="bjlg-summary-grid" role="list">
+                <?php foreach ($metrics as $metric_key => $metric_data):
+                    $metric = $this->ensure_metric_defaults($metric_data, $metric_key);
+                    $status = $metric['status'];
+                    $status_label = $metric['status_label'];
+                    ?>
+                    <article class="bjlg-summary-card status-<?php echo esc_attr($status); ?>" data-metric="<?php echo esc_attr($metric_key); ?>" role="listitem">
+                        <header class="bjlg-summary-card-header">
+                            <span class="bjlg-status-indicator" aria-hidden="true"></span>
+                            <div class="bjlg-summary-card-titles">
+                                <h3><?php echo esc_html($metric['label']); ?></h3>
+                                <span class="bjlg-summary-status-label" data-field="status_label"><?php echo esc_html($status_label); ?></span>
+                                <span class="screen-reader-text bjlg-summary-status-sr">Statut : <?php echo esc_html($status_label); ?></span>
+                            </div>
+                        </header>
+                        <p class="bjlg-summary-value" data-field="value" aria-live="polite"><?php echo esc_html($metric['value']); ?></p>
+                        <p class="bjlg-summary-detail" data-field="detail" aria-live="polite"><?php echo esc_html($metric['detail']); ?></p>
+                    </article>
+                <?php endforeach; ?>
+            </div>
+
+            <div class="bjlg-quick-actions" role="region" aria-labelledby="bjlg-quick-actions-title">
+                <div class="bjlg-quick-actions-header">
+                    <h3 id="bjlg-quick-actions-title">Actions rapides</h3>
+                    <p class="description">Déclenchez immédiatement une sauvegarde ou préparez une restauration.</p>
+                </div>
+                <div class="bjlg-quick-actions-buttons">
+                    <button type="button" class="button button-primary bjlg-quick-action" data-action="backup-now">
+                        <span class="dashicons dashicons-cloud-upload"></span>
+                        Sauvegarder maintenant
+                    </button>
+                    <button type="button" class="button button-secondary bjlg-quick-action" data-action="restore">
+                        <span class="dashicons dashicons-backup"></span>
+                        Restaurer
+                    </button>
+                </div>
+            </div>
+        </div>
+        <?php
+    }
+
+    public function handle_get_admin_summary() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error([
+                'message' => __('Permission refusée.', 'backup-jlg')
+            ], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        try {
+            $summary = $this->get_dashboard_summary_data();
+            wp_send_json_success($summary);
+        } catch (\Throwable $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('Erreur lors de la récupération du résumé : ' . $exception->getMessage());
+            }
+
+            wp_send_json_error([
+                'message' => __('Impossible de récupérer le résumé du tableau de bord.', 'backup-jlg')
+            ], 500);
+        }
+    }
+
+    private function get_dashboard_summary_data() {
+        $metrics = [
+            'last_backup' => $this->build_last_backup_metric(),
+            'next_schedule' => $this->build_schedule_metric(),
+            'storage' => $this->build_storage_metric(),
+            'health' => $this->build_health_metric(),
+        ];
+
+        $timestamp = current_time('timestamp');
+
+        return [
+            'metrics' => $metrics,
+            'generated_at' => [
+                'timestamp' => $timestamp,
+                'display' => $this->format_datetime($timestamp),
+            ],
+        ];
+    }
+
+    private function build_last_backup_metric() {
+        $metric = [
+            'label' => 'Dernière sauvegarde',
+            'value' => 'Aucune sauvegarde',
+            'detail' => 'Aucun fichier de sauvegarde n\'a encore été généré.',
+            'status' => 'error',
+            'status_label' => 'À planifier',
+            'timestamp' => null,
+        ];
+
+        if (!class_exists(BJLG_History::class)) {
+            return $metric;
+        }
+
+        $history = BJLG_History::get_history(1, ['action_type' => 'backup_created']);
+        if (empty($history)) {
+            return $metric;
+        }
+
+        $entry = $history[0];
+        $status = isset($entry['status']) ? strtolower((string) $entry['status']) : '';
+        $timestamp = isset($entry['timestamp']) ? strtotime($entry['timestamp']) : 0;
+        $now = current_time('timestamp');
+
+        if ($timestamp) {
+            $metric['value'] = $this->format_datetime($timestamp);
+            $metric['timestamp'] = $timestamp;
+        } else {
+            $metric['value'] = 'Date inconnue';
+        }
+
+        $detail_parts = [];
+        if (!empty($entry['user_name'])) {
+            $detail_parts[] = sprintf('Par %s', $entry['user_name']);
+        }
+
+        if (!empty($entry['details'])) {
+            $detail_parts[] = $this->clean_summary_text($entry['details']);
+        }
+
+        if ($timestamp) {
+            $detail_parts[] = sprintf('Il y a %s', human_time_diff($timestamp, $now));
+        }
+
+        if ($status === 'success') {
+            $metric['status'] = 'success';
+            $metric['status_label'] = 'À jour';
+        } elseif ($status === 'failure' || $status === 'error') {
+            $metric['status'] = 'error';
+            $metric['status_label'] = 'Échec';
+            $detail_parts[] = 'La dernière tentative s\'est soldée par un échec.';
+        } else {
+            $metric['status'] = 'warning';
+            $metric['status_label'] = 'À surveiller';
+        }
+
+        if ($timestamp) {
+            $age = max(0, $now - $timestamp);
+            if ($age > 2 * WEEK_IN_SECONDS) {
+                $metric['status'] = 'error';
+                $metric['status_label'] = 'Obsolète';
+                $detail_parts[] = 'Aucune sauvegarde récente. Lancez une nouvelle sauvegarde.';
+            } elseif ($age > WEEK_IN_SECONDS && $metric['status'] !== 'error') {
+                $metric['status'] = 'warning';
+                $metric['status_label'] = 'À surveiller';
+                $detail_parts[] = 'Pensez à planifier une sauvegarde plus récente.';
+            }
+        }
+
+        $metric['detail'] = $detail_parts ? implode(' · ', array_unique(array_filter($detail_parts))) : 'Historique disponible.';
+
+        return $metric;
+    }
+
+    private function build_schedule_metric() {
+        $metric = [
+            'label' => 'Prochaine exécution',
+            'value' => 'Planification indisponible',
+            'detail' => 'Impossible de récupérer la planification actuelle.',
+            'status' => 'warning',
+            'status_label' => 'À vérifier',
+            'timestamp' => null,
+        ];
+
+        if (!class_exists(BJLG_Scheduler::class)) {
+            return $metric;
+        }
+
+        $scheduler = BJLG_Scheduler::instance();
+        $settings = $scheduler->get_schedule_settings();
+
+        if (!is_array($settings) || empty($settings) || $settings['recurrence'] === 'disabled') {
+            $metric['value'] = 'Planification désactivée';
+            $metric['detail'] = 'Les sauvegardes automatiques sont désactivées.';
+            $metric['status'] = 'info';
+            $metric['status_label'] = 'Désactivée';
+            return $metric;
+        }
+
+        $next_run_gmt = wp_next_scheduled(BJLG_Scheduler::SCHEDULE_HOOK);
+        $next_run_local = $this->convert_gmt_to_local_timestamp($next_run_gmt);
+
+        if (!$next_run_local) {
+            $metric['value'] = 'Aucune exécution planifiée';
+            $metric['detail'] = 'Re-sauvegardez les réglages de planification pour recréer la tâche WP-Cron.';
+            $metric['status'] = 'error';
+            $metric['status_label'] = 'Critique';
+            return $metric;
+        }
+
+        $metric['value'] = $this->format_datetime($next_run_local);
+        $metric['timestamp'] = $next_run_local;
+
+        $description = $this->describe_schedule($settings);
+        $now = current_time('timestamp');
+
+        $detail_parts = [];
+        if ($description !== '') {
+            $detail_parts[] = $description;
+        }
+
+        if ($next_run_local <= $now) {
+            $metric['status'] = 'warning';
+            $metric['status_label'] = 'En retard';
+            $delay = human_time_diff($next_run_local, $now);
+            $detail_parts[] = 'Retard estimé : ' . $delay . '.';
+        } else {
+            $metric['status'] = 'success';
+            $metric['status_label'] = 'À jour';
+            $remaining = human_time_diff($now, $next_run_local);
+            $detail_parts[] = 'Dans ' . $remaining . '.';
+        }
+
+        $metric['detail'] = implode(' · ', $detail_parts);
+
+        if (method_exists($scheduler, 'is_schedule_overdue') && $scheduler->is_schedule_overdue()) {
+            $metric['status'] = 'error';
+            $metric['status_label'] = 'En retard';
+            if (strpos($metric['detail'], 'Retard') === false) {
+                $metric['detail'] .= ' · La planification semble en retard.';
+            }
+        }
+
+        return $metric;
+    }
+
+    private function build_storage_metric() {
+        $metric = [
+            'label' => 'Volume occupé',
+            'value' => '0 B',
+            'detail' => 'Aucun fichier trouvé dans le répertoire de sauvegarde.',
+            'status' => 'info',
+            'status_label' => 'Vide',
+            'bytes' => 0,
+        ];
+
+        if (!defined('BJLG_BACKUP_DIR')) {
+            return $metric;
+        }
+
+        $files = glob(trailingslashit(BJLG_BACKUP_DIR) . '*.zip*') ?: [];
+        $total_size = 0;
+        foreach ($files as $file) {
+            if (is_file($file)) {
+                $total_size += filesize($file);
+            }
+        }
+
+        $metric['value'] = $this->format_bytes($total_size);
+        $metric['bytes'] = $total_size;
+
+        $count = count($files);
+        if ($count > 0) {
+            $metric['detail'] = sprintf(_n('%d archive stockée', '%d archives stockées', $count, 'backup-jlg'), $count);
+        }
+
+        $gb = 1024 * 1024 * 1024;
+        $warning_threshold = 5 * $gb;
+        $critical_threshold = 20 * $gb;
+
+        if ($total_size >= $critical_threshold) {
+            $metric['status'] = 'error';
+            $metric['status_label'] = 'Critique';
+            $metric['detail'] .= ' · Réduisez le nombre d\'archives pour libérer de l\'espace.';
+        } elseif ($total_size >= $warning_threshold) {
+            $metric['status'] = 'warning';
+            $metric['status_label'] = 'Élevé';
+            $metric['detail'] .= ' · Pensez à nettoyer les anciennes sauvegardes.';
+        } elseif ($count > 0) {
+            $metric['status'] = 'success';
+            $metric['status_label'] = 'Optimal';
+        }
+
+        return $metric;
+    }
+
+    private function build_health_metric() {
+        $metric = [
+            'label' => 'Santé du système',
+            'value' => 'Diagnostic indisponible',
+            'detail' => 'Le service de contrôle de santé n\'est pas chargé.',
+            'status' => 'info',
+            'status_label' => 'Information',
+        ];
+
+        if (!class_exists(BJLG_Health_Check::class)) {
+            return $metric;
+        }
+
+        $health = new BJLG_Health_Check();
+        $results = $health->get_all_checks();
+
+        if (empty($results) || !is_array($results)) {
+            $metric['value'] = 'Aucun test';
+            $metric['detail'] = 'Aucun résultat de santé disponible.';
+            return $metric;
+        }
+
+        $counts = [
+            'success' => 0,
+            'warning' => 0,
+            'error' => 0,
+            'info' => 0,
+        ];
+
+        foreach ($results as $check) {
+            if (!is_array($check) || empty($check['status'])) {
+                continue;
+            }
+            $status = strtolower((string) $check['status']);
+            if (isset($counts[$status])) {
+                $counts[$status]++;
+            }
+        }
+
+        if ($counts['error'] > 0) {
+            $metric['status'] = 'error';
+            $metric['status_label'] = 'Critique';
+            $metric['value'] = 'Attention requise';
+            $metric['detail'] = sprintf('%d test(s) en erreur, %d avertissement(s).', $counts['error'], $counts['warning']);
+        } elseif ($counts['warning'] > 0) {
+            $metric['status'] = 'warning';
+            $metric['status_label'] = 'À surveiller';
+            $metric['value'] = 'Vérifications nécessaires';
+            $metric['detail'] = sprintf('%d avertissement(s), aucun test critique.', $counts['warning']);
+        } elseif ($counts['info'] > 0) {
+            $metric['status'] = 'info';
+            $metric['status_label'] = 'Information';
+            $metric['value'] = 'Informations disponibles';
+            $metric['detail'] = sprintf('%d information(s) complémentaire(s).', $counts['info']);
+        } else {
+            $metric['status'] = 'success';
+            $metric['status_label'] = 'Optimal';
+            $metric['value'] = 'Tout est opérationnel';
+            $metric['detail'] = sprintf('%d contrôles réussis.', $counts['success']);
+        }
+
+        return $metric;
+    }
+
+    private function describe_schedule($settings) {
+        if (!is_array($settings)) {
+            return '';
+        }
+
+        $recurrence_labels = [
+            'hourly' => 'Toutes les heures',
+            'twice_daily' => 'Deux fois par jour',
+            'daily' => 'Quotidienne',
+            'weekly' => 'Hebdomadaire',
+            'monthly' => 'Mensuelle',
+        ];
+
+        $day_labels = [
+            'monday' => 'lundi',
+            'tuesday' => 'mardi',
+            'wednesday' => 'mercredi',
+            'thursday' => 'jeudi',
+            'friday' => 'vendredi',
+            'saturday' => 'samedi',
+            'sunday' => 'dimanche',
+        ];
+
+        $recurrence = isset($settings['recurrence']) ? (string) $settings['recurrence'] : '';
+        $day = isset($settings['day']) ? strtolower((string) $settings['day']) : '';
+        $time = isset($settings['time']) ? (string) $settings['time'] : '';
+
+        $parts = [];
+        if ($recurrence && isset($recurrence_labels[$recurrence])) {
+            $parts[] = 'Fréquence : ' . $recurrence_labels[$recurrence];
+        }
+
+        if ($recurrence === 'weekly' && $day && isset($day_labels[$day])) {
+            $parts[] = 'Jour : ' . ucfirst($day_labels[$day]);
+        }
+
+        if ($time) {
+            $parts[] = 'Heure : ' . $time;
+        }
+
+        return implode(' · ', $parts);
+    }
+
+    private function format_datetime($timestamp) {
+        if (!is_numeric($timestamp) || $timestamp <= 0) {
+            return '';
+        }
+
+        if (function_exists('wp_date')) {
+            return wp_date('d/m/Y H:i', (int) $timestamp);
+        }
+
+        return date_i18n('d/m/Y H:i', (int) $timestamp);
+    }
+
+    private function convert_gmt_to_local_timestamp($timestamp) {
+        if (!is_numeric($timestamp) || $timestamp <= 0) {
+            return 0;
+        }
+
+        if (function_exists('get_date_from_gmt')) {
+            $converted = get_date_from_gmt(gmdate('Y-m-d H:i:s', (int) $timestamp), 'U');
+            if ($converted !== false && $converted !== '') {
+                return (int) $converted;
+            }
+        }
+
+        return (int) $timestamp;
+    }
+
+    private function format_bytes($bytes) {
+        if (!is_numeric($bytes)) {
+            return '0 B';
+        }
+
+        if (function_exists('size_format')) {
+            return size_format($bytes);
+        }
+
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $bytes = max($bytes, 0);
+        $power = $bytes > 0 ? floor(log($bytes, 1024)) : 0;
+        $power = min($power, count($units) - 1);
+        $value = $bytes / pow(1024, $power);
+
+        if (function_exists('number_format_i18n')) {
+            $formatted = number_format_i18n($value, $power >= 2 ? 2 : 0);
+        } else {
+            $formatted = number_format($value, $power >= 2 ? 2 : 0);
+        }
+
+        return $formatted . ' ' . $units[$power];
+    }
+
+    private function ensure_metric_defaults($metric, $key) {
+        $defaults = [
+            'label' => ucfirst(str_replace('_', ' ', (string) $key)),
+            'value' => '—',
+            'detail' => '—',
+            'status' => 'info',
+            'status_label' => 'Information',
+        ];
+
+        if (!is_array($metric)) {
+            $metric = [];
+        }
+
+        $metric = wp_parse_args($metric, $defaults);
+
+        $valid_statuses = ['success', 'warning', 'error', 'info'];
+        if (!in_array($metric['status'], $valid_statuses, true)) {
+            $metric['status'] = 'info';
+        }
+
+        if ($metric['detail'] === '') {
+            $metric['detail'] = '—';
+        }
+
+        return $metric;
+    }
+
+    private function clean_summary_text($text) {
+        if (function_exists('wp_strip_all_tags')) {
+            return trim(wp_strip_all_tags($text));
+        }
+
+        return trim(strip_tags((string) $text));
     }
 
     /**

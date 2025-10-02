@@ -20,6 +20,79 @@
     box-shadow: 0 4px 12px rgba(0,0,0,0.1);
 }
 
+.bjlg-summary-section {
+    background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+    border-radius: 14px;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.bjlg-summary-section .bjlg-summary-card {
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    box-shadow: none;
+    backdrop-filter: blur(6px);
+}
+
+.bjlg-summary-section .bjlg-summary-card:hover,
+.bjlg-summary-section .bjlg-summary-card:focus-within {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 32px rgba(15, 23, 42, 0.15);
+}
+
+.bjlg-summary-section .bjlg-summary-value {
+    font-size: 1.75em;
+}
+
+.bjlg-summary-section .bjlg-summary-status-label {
+    letter-spacing: 0.08em;
+}
+
+.bjlg-summary-section .bjlg-summary-feedback {
+    border-radius: 10px;
+    font-size: 0.95em;
+}
+
+.bjlg-summary-section .bjlg-quick-actions-buttons .button {
+    font-weight: 600;
+    padding-left: 22px;
+    padding-right: 22px;
+    border-radius: 999px;
+}
+
+.bjlg-summary-section .bjlg-quick-actions-buttons .button.button-primary {
+    background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+    border-color: transparent;
+}
+
+.bjlg-summary-section .bjlg-quick-actions-buttons .button.button-primary:hover,
+.bjlg-summary-section .bjlg-quick-actions-buttons .button.button-primary:focus {
+    background: linear-gradient(135deg, #1d4ed8 0%, #6d28d9 100%);
+    box-shadow: 0 12px 24px rgba(79, 70, 229, 0.25);
+}
+
+.bjlg-summary-section .bjlg-quick-actions-buttons .button.button-secondary {
+    border-radius: 999px;
+    border-color: rgba(79, 70, 229, 0.35);
+    color: #3730a3;
+}
+
+.bjlg-summary-section .bjlg-summary-card.status-success {
+    border-left-color: #16a34a;
+}
+
+.bjlg-summary-section .bjlg-summary-card.status-warning {
+    border-left-color: #d97706;
+}
+
+.bjlg-summary-section .bjlg-summary-card.status-error {
+    border-left-color: #dc2626;
+}
+
+.bjlg-summary-section .bjlg-summary-card.status-info {
+    border-left-color: #2563eb;
+}
+
 .bjlg-status-card {
     background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     border-radius: 12px;

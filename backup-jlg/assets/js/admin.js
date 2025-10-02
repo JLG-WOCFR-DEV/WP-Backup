@@ -1,5 +1,261 @@
 jQuery(document).ready(function($) {
 
+    (function setupDashboardSummary() {
+        const $summary = $('#bjlg-dashboard-summary');
+        if (!$summary.length || typeof bjlg_ajax === 'undefined') {
+            return;
+        }
+
+        const $feedback = $('#bjlg-summary-feedback');
+        const $refreshButton = $summary.find('.bjlg-summary-refresh');
+        const statusClasses = ['status-success', 'status-warning', 'status-error', 'status-info'];
+        let isLoading = false;
+        let refreshTimeout = null;
+        let feedbackTimeout = null;
+
+        function setLoading(state) {
+            isLoading = !!state;
+            $summary.toggleClass('is-loading', isLoading);
+            $refreshButton.prop('disabled', isLoading);
+        }
+
+        function setFeedback(type, message) {
+            if (!$feedback.length) {
+                return;
+            }
+
+            if (feedbackTimeout) {
+                window.clearTimeout(feedbackTimeout);
+                feedbackTimeout = null;
+            }
+
+            const classes = ['bjlg-summary-feedback'];
+            if (type && typeof type === 'string') {
+                classes.push('is-' + type);
+            }
+            $feedback.attr('class', classes.join(' '));
+
+            if (typeof message === 'string' && message.trim() !== '') {
+                $feedback.text(message.trim()).show();
+
+                if (type === 'success' || type === 'info') {
+                    feedbackTimeout = window.setTimeout(function() {
+                        setFeedback('', '');
+                    }, 6000);
+                }
+            } else {
+                $feedback.text('').hide();
+            }
+        }
+
+        function applyMetric(metricKey, metricData) {
+            const $card = $summary.find('[data-metric="' + metricKey + '"]');
+            if (!$card.length) {
+                return;
+            }
+
+            const status = metricData && typeof metricData.status === 'string'
+                ? metricData.status
+                : 'info';
+
+            statusClasses.forEach(function(className) {
+                $card.removeClass(className);
+            });
+            $card.addClass('status-' + status);
+
+            const value = metricData && Object.prototype.hasOwnProperty.call(metricData, 'value')
+                ? metricData.value
+                : '—';
+            const detail = metricData && Object.prototype.hasOwnProperty.call(metricData, 'detail')
+                ? metricData.detail
+                : '—';
+            const statusLabel = metricData && Object.prototype.hasOwnProperty.call(metricData, 'status_label')
+                ? metricData.status_label
+                : '';
+
+            const $valueField = $card.find('[data-field="value"]');
+            const $detailField = $card.find('[data-field="detail"]');
+            const $statusField = $card.find('[data-field="status_label"]');
+            const $srStatus = $card.find('.bjlg-summary-status-sr');
+
+            if ($valueField.length) {
+                $valueField.text(typeof value === 'string' ? value : String(value));
+            }
+
+            if ($detailField.length) {
+                $detailField.text(typeof detail === 'string' ? detail : String(detail));
+            }
+
+            if ($statusField.length) {
+                $statusField.text(typeof statusLabel === 'string' ? statusLabel : '');
+            }
+
+            if ($srStatus.length) {
+                const spoken = typeof statusLabel === 'string' && statusLabel.trim() !== ''
+                    ? statusLabel
+                    : status;
+                $srStatus.text('Statut : ' + spoken);
+            }
+        }
+
+        function applySummary(data) {
+            if (!data || typeof data !== 'object') {
+                return;
+            }
+
+            if (data.metrics && typeof data.metrics === 'object') {
+                Object.keys(data.metrics).forEach(function(key) {
+                    applyMetric(key, data.metrics[key]);
+                });
+            }
+
+            if (data.generated_at && typeof data.generated_at === 'object') {
+                const $generated = $summary.find('[data-field="generated"]');
+                if ($generated.length) {
+                    if (typeof data.generated_at.display === 'string') {
+                        $generated.text(data.generated_at.display);
+                    }
+                    if (Object.prototype.hasOwnProperty.call(data.generated_at, 'timestamp')) {
+                        $generated.attr('data-timestamp', data.generated_at.timestamp);
+                    }
+                }
+            }
+        }
+
+        function scheduleAutoRefresh() {
+            if (refreshTimeout) {
+                window.clearTimeout(refreshTimeout);
+            }
+            refreshTimeout = window.setTimeout(function() {
+                refreshSummary(true);
+            }, 5 * 60 * 1000);
+        }
+
+        function refreshSummary(isAuto) {
+            if (isLoading) {
+                return;
+            }
+
+            setLoading(true);
+            if (!isAuto) {
+                setFeedback('info', 'Actualisation en cours…');
+            }
+
+            $.ajax({
+                url: bjlg_ajax.ajax_url,
+                method: 'POST',
+                data: {
+                    action: 'bjlg_get_admin_summary',
+                    nonce: bjlg_ajax.nonce
+                }
+            })
+                .done(function(response) {
+                    if (response && response.success && response.data) {
+                        applySummary(response.data);
+                        setFeedback('success', 'Résumé mis à jour.');
+                    } else {
+                        const message = response && response.data && response.data.message
+                            ? response.data.message
+                            : 'Impossible de mettre à jour le résumé.';
+                        setFeedback('error', message);
+                    }
+                })
+                .fail(function(jqXHR) {
+                    let message = 'Erreur lors de la mise à jour du résumé.';
+                    if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.data && jqXHR.responseJSON.data.message) {
+                        message = jqXHR.responseJSON.data.message;
+                    }
+                    setFeedback('error', message);
+                })
+                .always(function() {
+                    setLoading(false);
+                    scheduleAutoRefresh();
+                });
+        }
+
+        function scrollIntoView($element) {
+            if (!$element || !$element.length) {
+                return;
+            }
+
+            const node = $element.get(0);
+            if (node && typeof node.scrollIntoView === 'function') {
+                try {
+                    node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                } catch (error) {
+                    node.scrollIntoView(true);
+                }
+            }
+        }
+
+        function focusElement($element) {
+            if (!$element || !$element.length) {
+                return;
+            }
+
+            const node = $element.get(0);
+            if (node && typeof node.focus === 'function') {
+                node.focus({ preventScroll: true });
+            }
+        }
+
+        function triggerQuickBackup() {
+            const $form = $('#bjlg-backup-creation-form');
+            if (!$form.length) {
+                setFeedback('error', 'Formulaire de sauvegarde introuvable.');
+                return;
+            }
+
+            scrollIntoView($form);
+            const $submitButton = $form.find('button[type="submit"]').first();
+            if ($submitButton.length) {
+                focusElement($submitButton);
+            }
+
+            $form.trigger('submit');
+            setFeedback('info', 'Sauvegarde immédiate lancée.');
+        }
+
+        function triggerQuickRestore() {
+            const $form = $('#bjlg-restore-form');
+            if (!$form.length) {
+                setFeedback('error', 'Zone de restauration introuvable.');
+                return;
+            }
+
+            scrollIntoView($form);
+            window.setTimeout(function() {
+                const $fileInput = $form.find('#bjlg-restore-file-input');
+                if ($fileInput.length) {
+                    focusElement($fileInput);
+                } else {
+                    $form.attr('tabindex', '-1');
+                    focusElement($form);
+                    window.setTimeout(function() {
+                        $form.removeAttr('tabindex');
+                    }, 1200);
+                }
+            }, 200);
+
+            setFeedback('info', 'Formulaire de restauration focalisé.');
+        }
+
+        $refreshButton.on('click', function() {
+            refreshSummary(false);
+        });
+
+        $summary.on('click', '.bjlg-quick-action', function() {
+            const action = ($(this).data('action') || '').toString();
+            if (action === 'backup-now') {
+                triggerQuickBackup();
+            } else if (action === 'restore') {
+                triggerQuickRestore();
+            }
+        });
+
+        scheduleAutoRefresh();
+    })();
+
     // --- GESTIONNAIRE DE PLANIFICATION ---
     const $scheduleForm = $('#bjlg-schedule-form');
     if ($scheduleForm.length && typeof bjlg_ajax !== 'undefined') {
