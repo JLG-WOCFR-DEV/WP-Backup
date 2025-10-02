@@ -283,6 +283,39 @@ class BJLG_Admin {
      * Section : Liste des sauvegardes
      */
     private function render_backup_list_section() {
+        $schedule_settings = $this->get_schedule_settings_for_display();
+        $schedule_components = $schedule_settings['components'];
+        $schedule_encrypt = !empty($schedule_settings['encrypt']);
+        $schedule_incremental = !empty($schedule_settings['incremental']);
+        $schedule_post_checks = is_array($schedule_settings['post_checks']) ? $schedule_settings['post_checks'] : [];
+        $schedule_destinations = is_array($schedule_settings['secondary_destinations'])
+            ? $schedule_settings['secondary_destinations']
+            : [];
+        $schedule_include_patterns = is_array($schedule_settings['include_patterns'])
+            ? $schedule_settings['include_patterns']
+            : [];
+        $schedule_exclude_patterns = is_array($schedule_settings['exclude_patterns'])
+            ? $schedule_settings['exclude_patterns']
+            : [];
+        $recurrence_labels = [
+            'disabled' => 'Désactivée',
+            'hourly' => 'Toutes les heures',
+            'twice_daily' => 'Deux fois par jour',
+            'daily' => 'Journalière',
+            'weekly' => 'Hebdomadaire',
+            'monthly' => 'Mensuelle',
+        ];
+        $current_recurrence = isset($schedule_settings['recurrence']) ? $schedule_settings['recurrence'] : 'disabled';
+        $current_recurrence_label = $recurrence_labels[$current_recurrence] ?? ucfirst($current_recurrence);
+        $schedule_summary_markup = $this->get_schedule_summary_markup(
+            $schedule_components,
+            $schedule_encrypt,
+            $schedule_incremental,
+            $schedule_post_checks,
+            $schedule_destinations,
+            $schedule_include_patterns,
+            $schedule_exclude_patterns
+        );
         ?>
         <div class="bjlg-section" id="bjlg-backup-list-section" data-default-page="1" data-default-per-page="10">
             <h2>Sauvegardes Disponibles</h2>
@@ -315,6 +348,32 @@ class BJLG_Admin {
                 <div class="bjlg-toolbar-summary">
                     <span class="bjlg-summary-label">Résumé :</span>
                     <div class="bjlg-summary-content" id="bjlg-backup-summary" aria-live="polite"></div>
+                </div>
+            </div>
+            <div
+                id="bjlg-schedule-overview"
+                class="bjlg-schedule-overview"
+                aria-live="polite"
+                data-recurrence="<?php echo esc_attr($current_recurrence); ?>"
+                style="margin:15px 0; padding:12px; border:1px solid #e5e7eb; background:#f8fafc; border-radius:6px;"
+            >
+                <div
+                    class="bjlg-schedule-overview-header"
+                    style="display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;"
+                >
+                    <span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span>
+                    <strong>Sauvegardes planifiées</strong>
+                    <span
+                        id="bjlg-schedule-overview-frequency"
+                        class="bjlg-schedule-overview-frequency"
+                        data-prefix="Fréquence : "
+                        style="font-weight:600; color:#1f2937;"
+                    >
+                        Fréquence : <?php echo esc_html($current_recurrence_label); ?>
+                    </span>
+                </div>
+                <div id="bjlg-schedule-overview-content" class="bjlg-schedule-overview-content">
+                    <?php echo $schedule_summary_markup; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
                 </div>
             </div>
             <div id="bjlg-backup-list-feedback" class="notice notice-error" role="alert" style="display:none;"></div>
@@ -517,29 +576,9 @@ class BJLG_Admin {
      */
     private function render_settings_section() {
         $cleanup_settings = get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
-        $schedule_default = [
-            'recurrence' => 'weekly',
-            'day' => 'sunday',
-            'time' => '23:59',
-            'components' => ['db', 'plugins', 'themes', 'uploads'],
-            'encrypt' => false,
-            'incremental' => false,
-        ];
+        $schedule_settings = $this->get_schedule_settings_for_display();
 
-        if (class_exists(BJLG_Scheduler::class)) {
-            $scheduler = BJLG_Scheduler::instance();
-            if (method_exists($scheduler, 'get_schedule_settings')) {
-                $schedule_settings = $scheduler->get_schedule_settings();
-            } else {
-                $schedule_settings = wp_parse_args(get_option('bjlg_schedule_settings', []), $schedule_default);
-            }
-        } else {
-            $schedule_settings = wp_parse_args(get_option('bjlg_schedule_settings', []), $schedule_default);
-        }
-
-        $selected_components = isset($schedule_settings['components']) && is_array($schedule_settings['components'])
-            ? $schedule_settings['components']
-            : $schedule_default['components'];
+        $selected_components = $schedule_settings['components'];
         $components_labels = [
             'db' => 'Base de données',
             'plugins' => 'Extensions',
@@ -548,18 +587,10 @@ class BJLG_Admin {
         ];
         $encrypt_enabled = !empty($schedule_settings['encrypt']);
         $incremental_enabled = !empty($schedule_settings['incremental']);
-        $schedule_include_patterns = isset($schedule_settings['include_patterns']) && is_array($schedule_settings['include_patterns'])
-            ? $schedule_settings['include_patterns']
-            : [];
-        $schedule_exclude_patterns = isset($schedule_settings['exclude_patterns']) && is_array($schedule_settings['exclude_patterns'])
-            ? $schedule_settings['exclude_patterns']
-            : [];
-        $schedule_post_checks = isset($schedule_settings['post_checks']) && is_array($schedule_settings['post_checks'])
-            ? $schedule_settings['post_checks']
-            : ['checksum' => true, 'dry_run' => false];
-        $schedule_secondary_destinations = isset($schedule_settings['secondary_destinations']) && is_array($schedule_settings['secondary_destinations'])
-            ? $schedule_settings['secondary_destinations']
-            : [];
+        $schedule_include_patterns = $schedule_settings['include_patterns'];
+        $schedule_exclude_patterns = $schedule_settings['exclude_patterns'];
+        $schedule_post_checks = $schedule_settings['post_checks'];
+        $schedule_secondary_destinations = $schedule_settings['secondary_destinations'];
         $schedule_include_text = esc_textarea(implode("\n", array_map('strval', $schedule_include_patterns)));
         $schedule_exclude_text = esc_textarea(implode("\n", array_map('strval', $schedule_exclude_patterns)));
         $destination_choices = $this->get_destination_choices();
@@ -1038,6 +1069,56 @@ class BJLG_Admin {
         }
 
         return $choices;
+    }
+
+    private function get_schedule_settings_for_display() {
+        $defaults = [
+            'recurrence' => 'weekly',
+            'day' => 'sunday',
+            'time' => '23:59',
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'encrypt' => false,
+            'incremental' => false,
+            'include_patterns' => [],
+            'exclude_patterns' => [],
+            'post_checks' => ['checksum' => true, 'dry_run' => false],
+            'secondary_destinations' => [],
+        ];
+
+        $settings = [];
+
+        if (class_exists(BJLG_Scheduler::class)) {
+            $scheduler = BJLG_Scheduler::instance();
+            if ($scheduler && method_exists($scheduler, 'get_schedule_settings')) {
+                $settings = $scheduler->get_schedule_settings();
+            }
+        }
+
+        if (!is_array($settings) || empty($settings)) {
+            $settings = get_option('bjlg_schedule_settings', []);
+        }
+
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+
+        $settings = wp_parse_args($settings, $defaults);
+
+        $settings['components'] = array_values(array_map('strval', (array) $settings['components']));
+        $settings['include_patterns'] = BJLG_Settings::sanitize_pattern_list($settings['include_patterns']);
+        $settings['exclude_patterns'] = BJLG_Settings::sanitize_pattern_list($settings['exclude_patterns']);
+        $settings['secondary_destinations'] = BJLG_Settings::sanitize_destination_list(
+            $settings['secondary_destinations'],
+            BJLG_Settings::get_known_destination_ids()
+        );
+
+        $post_checks = is_array($settings['post_checks']) ? $settings['post_checks'] : [];
+        $settings['post_checks'] = BJLG_Settings::sanitize_post_checks($post_checks, ['checksum' => true, 'dry_run' => false]);
+
+        $settings['encrypt'] = !empty($settings['encrypt']);
+        $settings['incremental'] = !empty($settings['incremental']);
+
+        return $settings;
     }
 
     private function get_schedule_summary_markup(
