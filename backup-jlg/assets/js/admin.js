@@ -1764,7 +1764,7 @@ jQuery(document).ready(function($) {
         const $lastTest = $container.find('.bjlg-gdrive-last-test');
 
         if ($feedback.length) {
-            $feedback.removeClass('notice-success notice-error').hide().empty();
+            $feedback.removeClass('notice-success notice-error').hide().addClass('bjlg-hidden').empty();
         }
 
         const payload = {
@@ -1880,7 +1880,7 @@ jQuery(document).ready(function($) {
 
         const $feedback = $container.find('.bjlg-s3-test-feedback');
         if ($feedback.length) {
-            $feedback.removeClass('notice-success notice-error').hide().empty();
+            $feedback.removeClass('notice-success notice-error').hide().addClass('bjlg-hidden').empty();
         }
 
         const payload = {
@@ -1936,7 +1936,7 @@ jQuery(document).ready(function($) {
         const $feedback = ensureFeedbackElement($form);
 
         if ($feedback.length) {
-            $feedback.removeClass('notice-success notice-error').hide().empty();
+            $feedback.removeClass('notice-success notice-error').hide().addClass('bjlg-hidden').empty();
         }
 
         const payload = collectFormData($form);
@@ -2007,7 +2007,7 @@ jQuery(document).ready(function($) {
         let $feedback = $form.find('.bjlg-settings-feedback');
 
         if (!$feedback.length) {
-            $feedback = $('<div class="bjlg-settings-feedback notice" role="status" aria-live="polite" style="display:none;"></div>');
+            $feedback = $('<div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>');
             $form.prepend($feedback);
         }
 
@@ -2022,7 +2022,7 @@ jQuery(document).ready(function($) {
         const isSuccess = type === 'success';
 
         $feedback
-            .removeClass('notice-success notice-error')
+            .removeClass('notice-success notice-error bjlg-hidden')
             .addClass(isSuccess ? 'notice-success' : 'notice-error')
             .text(message)
             .show();

@@ -105,7 +105,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         echo "<tr><th scope='row'>Activer Amazon S3</th><td><label><input type='checkbox' name='s3_enabled' value='true'{$enabled_attr}> Activer l'envoi automatique vers Amazon S3.</label></td></tr>";
         echo "</table>";
 
-        echo "<div class='notice bjlg-s3-test-feedback' role='status' aria-live='polite' style='display:none;'></div>";
+        echo "<div class='notice bjlg-s3-test-feedback bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p><button type='button' class='button bjlg-s3-test-connection'>Tester la connexion</button></p>";
 
         if ($status['last_result'] === 'success' && $status['tested_at'] > 0) {
