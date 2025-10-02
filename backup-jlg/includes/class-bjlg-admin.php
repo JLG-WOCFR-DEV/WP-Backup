@@ -430,7 +430,37 @@ class BJLG_Admin {
      */
     private function render_settings_section() {
         $cleanup_settings = get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
-        $schedule_settings = get_option('bjlg_schedule_settings', ['recurrence' => 'weekly', 'day' => 'sunday', 'time' => '23:59']);
+        $schedule_default = [
+            'recurrence' => 'weekly',
+            'day' => 'sunday',
+            'time' => '23:59',
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'encrypt' => false,
+            'incremental' => false,
+        ];
+
+        if (class_exists(BJLG_Scheduler::class)) {
+            $scheduler = BJLG_Scheduler::instance();
+            if (method_exists($scheduler, 'get_schedule_settings')) {
+                $schedule_settings = $scheduler->get_schedule_settings();
+            } else {
+                $schedule_settings = wp_parse_args(get_option('bjlg_schedule_settings', []), $schedule_default);
+            }
+        } else {
+            $schedule_settings = wp_parse_args(get_option('bjlg_schedule_settings', []), $schedule_default);
+        }
+
+        $selected_components = isset($schedule_settings['components']) && is_array($schedule_settings['components'])
+            ? $schedule_settings['components']
+            : $schedule_default['components'];
+        $components_labels = [
+            'db' => 'Base de données',
+            'plugins' => 'Extensions',
+            'themes' => 'Thèmes',
+            'uploads' => 'Médias',
+        ];
+        $encrypt_enabled = !empty($schedule_settings['encrypt']);
+        $incremental_enabled = !empty($schedule_settings['incremental']);
         $wl_settings = get_option('bjlg_whitelabel_settings', ['plugin_name' => '', 'hide_from_non_admins' => false]);
         $webhook_key = class_exists(BJLG_Webhooks::class) ? BJLG_Webhooks::get_webhook_key() : '';
         ?>
@@ -482,6 +512,86 @@ class BJLG_Admin {
                         <td>
                             <input type="time" name="time" id="bjlg-schedule-time" value="<?php echo esc_attr(isset($schedule_settings['time']) ? $schedule_settings['time'] : '23:59'); ?>">
                             <p class="description">Heure locale du serveur</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Composants</th>
+                        <td>
+                            <fieldset>
+                                <legend class="screen-reader-text">Composants inclus dans la sauvegarde planifiée</legend>
+                                <?php foreach ($components_labels as $component_key => $component_label): ?>
+                                    <label style="display:block; margin-bottom:4px;">
+                                        <input type="checkbox"
+                                               name="components[]"
+                                               value="<?php echo esc_attr($component_key); ?>"
+                                               <?php checked(in_array($component_key, $selected_components, true)); ?>>
+                                        <?php if ($component_key === 'db'): ?>
+                                            <strong><?php echo esc_html($component_label); ?></strong>
+                                            <span class="description">Toutes les tables WordPress</span>
+                                        <?php else: ?>
+                                            <?php
+                                            switch ($component_key) {
+                                                case 'plugins':
+                                                    $path = '/wp-content/plugins';
+                                                    break;
+                                                case 'themes':
+                                                    $path = '/wp-content/themes';
+                                                    break;
+                                                case 'uploads':
+                                                    $path = '/wp-content/uploads';
+                                                    break;
+                                                default:
+                                                    $path = '';
+                                            }
+                                            ?>
+                                            <?php echo esc_html($component_label); ?>
+                                            <?php if ($path !== ''): ?><span class="description">(<code><?php echo esc_html($path); ?></code>)</span><?php endif; ?>
+                                        <?php endif; ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            </fieldset>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Options</th>
+                        <td>
+                            <fieldset>
+                                <legend class="screen-reader-text">Options supplémentaires de la sauvegarde planifiée</legend>
+                                <label class="bjlg-switch" style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                                    <input type="checkbox"
+                                           id="bjlg-schedule-encrypt"
+                                           name="encrypt"
+                                           value="1"
+                                           role="switch"
+                                           aria-checked="<?php echo $encrypt_enabled ? 'true' : 'false'; ?>"
+                                           <?php checked($encrypt_enabled); ?>>
+                                    <span class="bjlg-switch-label"><strong>Chiffrer la sauvegarde (AES-256)</strong></span>
+                                </label>
+                                <p class="description" style="margin-top:-4px; margin-bottom:10px;">
+                                    Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
+                                </p>
+                                <label class="bjlg-switch" style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                                    <input type="checkbox"
+                                           id="bjlg-schedule-incremental"
+                                           name="incremental"
+                                           value="1"
+                                           role="switch"
+                                           aria-checked="<?php echo $incremental_enabled ? 'true' : 'false'; ?>"
+                                           <?php checked($incremental_enabled); ?>>
+                                    <span class="bjlg-switch-label"><strong>Sauvegarde incrémentale</strong></span>
+                                </label>
+                                <p class="description" style="margin-top:-4px;">
+                                    Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
+                                </p>
+                            </fieldset>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Résumé</th>
+                        <td>
+                            <div id="bjlg-schedule-summary" class="bjlg-schedule-summary" aria-live="polite">
+                                <?php echo $this->get_schedule_summary_markup($selected_components, $encrypt_enabled, $incremental_enabled); ?>
+                            </div>
                         </td>
                     </tr>
                 </table>
@@ -669,5 +779,91 @@ class BJLG_Admin {
             </table>
         </div>
         <?php
+    }
+
+    private function get_schedule_summary_markup(array $components, $encrypt, $incremental) {
+        $component_config = [
+            'db' => ['label' => 'Base de données', 'color' => '#6366f1'],
+            'plugins' => ['label' => 'Extensions', 'color' => '#f59e0b'],
+            'themes' => ['label' => 'Thèmes', 'color' => '#10b981'],
+            'uploads' => ['label' => 'Médias', 'color' => '#3b82f6'],
+        ];
+
+        $component_badges = [];
+        foreach ($components as $component) {
+            if (isset($component_config[$component])) {
+                $component_badges[] = $this->format_schedule_badge(
+                    $component_config[$component]['label'],
+                    $component_config[$component]['color'],
+                    'bjlg-badge-component'
+                );
+            }
+        }
+
+        if (empty($component_badges)) {
+            $component_badges[] = '<span class="description">Aucun composant sélectionné</span>';
+        }
+
+        $option_badges = [];
+        $option_badges[] = $this->format_schedule_badge(
+            $encrypt ? 'Chiffrée' : 'Non chiffrée',
+            $encrypt ? '#7c3aed' : '#4b5563',
+            'bjlg-badge-encrypted'
+        );
+        $option_badges[] = $this->format_schedule_badge(
+            $incremental ? 'Incrémentale' : 'Complète',
+            $incremental ? '#2563eb' : '#6b7280',
+            'bjlg-badge-incremental'
+        );
+
+        return $this->wrap_schedule_badge_group('Composants', $component_badges)
+            . $this->wrap_schedule_badge_group('Options', $option_badges);
+    }
+
+    private function wrap_schedule_badge_group($title, array $badges) {
+        $style = 'display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-bottom:6px;';
+        $title_style = 'margin-right:4px;';
+
+        return sprintf(
+            '<div class="bjlg-badge-group" style="%s"><strong style="%s">%s :</strong>%s</div>',
+            esc_attr($style),
+            esc_attr($title_style),
+            esc_html($title),
+            implode('', $badges)
+        );
+    }
+
+    private function format_schedule_badge($label, $color, $extra_class = '') {
+        $color = $this->normalize_badge_color($color);
+        $style = sprintf(
+            'display:inline-flex;align-items:center;justify-content:center;border-radius:4px;padding:2px 6px;font-size:0.8em;font-weight:600;color:#ffffff;background-color:%s;margin-right:4px;margin-top:2px;',
+            $color
+        );
+
+        $class_attr = 'bjlg-badge';
+        if (!empty($extra_class)) {
+            $class_attr .= ' ' . $extra_class;
+        }
+
+        return sprintf(
+            '<span class="%s" style="%s">%s</span>',
+            esc_attr($class_attr),
+            esc_attr($style),
+            esc_html($label)
+        );
+    }
+
+    private function normalize_badge_color($color) {
+        if (!is_string($color)) {
+            return '#4b5563';
+        }
+
+        $color = trim($color);
+
+        if (!preg_match('/^#[0-9a-fA-F]{6}$/', $color)) {
+            return '#4b5563';
+        }
+
+        return strtolower($color);
     }
 }

@@ -178,7 +178,109 @@ jQuery(document).ready(function($) {
             $nextRunDisplay.text(nextRunLabel + ' ' + displayText);
         }
 
+        const badgeStyles = {
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: '4px',
+            padding: '2px 6px',
+            fontSize: '0.8em',
+            fontWeight: '600',
+            color: '#ffffff',
+            marginRight: '4px',
+            marginTop: '2px'
+        };
+
+        const groupStyles = {
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: '4px',
+            marginBottom: '6px'
+        };
+
+        const componentLabels = {
+            db: { label: 'Base de données', color: '#6366f1' },
+            plugins: { label: 'Extensions', color: '#f59e0b' },
+            themes: { label: 'Thèmes', color: '#10b981' },
+            uploads: { label: 'Médias', color: '#3b82f6' }
+        };
+
+        function createScheduleBadge(label, color, extraClasses) {
+            const $badge = $('<span/>', {
+                class: ['bjlg-badge'].concat(extraClasses || []).join(' '),
+                text: label
+            });
+
+            $badge.css($.extend({}, badgeStyles, { backgroundColor: color || '#4b5563' }));
+
+            return $badge;
+        }
+
+        function wrapScheduleBadgeGroup(title, badges) {
+            const $group = $('<div/>', { class: 'bjlg-badge-group' }).css(groupStyles);
+            $('<strong/>', { text: title + ' :' }).css({ marginRight: '4px' }).appendTo($group);
+            badges.forEach(function($badge) {
+                $group.append($badge);
+            });
+            return $group;
+        }
+
+        function updateScheduleSummary() {
+            const $summary = $('#bjlg-schedule-summary');
+            if (!$summary.length) {
+                return;
+            }
+
+            const selectedComponents = [];
+            $scheduleForm.find('input[name="components[]"]').each(function() {
+                const $input = $(this);
+                const value = ($input.val() || '').toString();
+                if ($input.is(':checked') && value) {
+                    selectedComponents.push(value);
+                }
+            });
+
+            const encryptChecked = $scheduleForm.find('[name="encrypt"]').is(':checked');
+            const incrementalChecked = $scheduleForm.find('[name="incremental"]').is(':checked');
+
+            const componentBadges = [];
+            if (selectedComponents.length) {
+                selectedComponents.forEach(function(component) {
+                    const config = componentLabels[component] || { label: component, color: '#4b5563' };
+                    componentBadges.push(createScheduleBadge(config.label, config.color, ['bjlg-badge-component']));
+                });
+            } else {
+                componentBadges.push($('<span/>', { class: 'description', text: 'Aucun composant sélectionné' }));
+            }
+
+            const optionBadges = [];
+            optionBadges.push(createScheduleBadge(
+                encryptChecked ? 'Chiffrée' : 'Non chiffrée',
+                encryptChecked ? '#7c3aed' : '#4b5563',
+                ['bjlg-badge-encrypted']
+            ));
+            optionBadges.push(createScheduleBadge(
+                incrementalChecked ? 'Incrémentale' : 'Complète',
+                incrementalChecked ? '#2563eb' : '#6b7280',
+                ['bjlg-badge-incremental']
+            ));
+
+            const fragment = $(document.createDocumentFragment());
+            fragment.append(wrapScheduleBadgeGroup('Composants', componentBadges));
+            fragment.append(wrapScheduleBadgeGroup('Options', optionBadges));
+
+            $summary.empty().append(fragment);
+        }
+
+        $scheduleForm.on('change', 'input[name="components[]"], [name="encrypt"], [name="incremental"]', updateScheduleSummary);
+        $scheduleForm.on('change', '[role="switch"]', function() {
+            const $input = $(this);
+            $input.attr('aria-checked', $input.is(':checked') ? 'true' : 'false');
+        });
+
         updateNextRunDisplay(($nextRunDisplay.text() || '').replace(/^.*?:\s*/, ''));
+        updateScheduleSummary();
 
         $scheduleForm.on('submit', function(event) {
             event.preventDefault();
@@ -193,47 +295,37 @@ jQuery(document).ready(function($) {
                 nonce: bjlg_ajax.nonce
             };
 
-            const serialized = $scheduleForm.serializeArray();
-            serialized.forEach(function(field) {
-                if (!field || !field.name) {
-                    return;
+            const recurrenceField = $scheduleForm.find('[name="recurrence"]');
+            if (recurrenceField.length) {
+                payload.recurrence = (recurrenceField.val() || '').toString();
+            }
+
+            const dayField = $scheduleForm.find('[name="day"]');
+            if (dayField.length) {
+                payload.day = (dayField.val() || '').toString();
+            }
+
+            const timeField = $scheduleForm.find('[name="time"]');
+            if (timeField.length) {
+                payload.time = (timeField.val() || '').toString();
+            }
+
+            const componentValues = [];
+            $scheduleForm.find('input[name="components[]"]').each(function() {
+                const $input = $(this);
+                const value = ($input.val() || '').toString();
+                if ($input.is(':checked') && value) {
+                    componentValues.push(value);
                 }
-
-                let name = field.name;
-                let value = field.value;
-
-                if (name === 'encrypt' || name === 'incremental') {
-                    value = 'true';
-                }
-
-                if (name.slice(-2) === '[]') {
-                    name = name.slice(0, -2);
-                    if (!Array.isArray(payload[name])) {
-                        payload[name] = [];
-                    }
-                    payload[name].push(value);
-                    return;
-                }
-
-                if (Object.prototype.hasOwnProperty.call(payload, name)) {
-                    if (!Array.isArray(payload[name])) {
-                        payload[name] = [payload[name]];
-                    }
-                    payload[name].push(value);
-                    return;
-                }
-
-                payload[name] = value;
             });
+            payload.components = componentValues.length ? componentValues : [''];
 
             ['encrypt', 'incremental'].forEach(function(fieldName) {
-                if (!$scheduleForm.find('[name="' + fieldName + '"]').length) {
+                const $field = $scheduleForm.find('[name="' + fieldName + '"]');
+                if (!$field.length) {
                     return;
                 }
-
-                if (typeof payload[fieldName] === 'undefined') {
-                    payload[fieldName] = 'false';
-                }
+                payload[fieldName] = $field.is(':checked') ? 'true' : 'false';
             });
 
             $.ajax({
@@ -252,6 +344,7 @@ jQuery(document).ready(function($) {
                         if (data && Object.prototype.hasOwnProperty.call(data, 'next_run')) {
                             updateNextRunDisplay(data.next_run);
                         }
+                        updateScheduleSummary();
                         return;
                     }
 
