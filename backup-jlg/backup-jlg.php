@@ -88,7 +88,7 @@ final class BJLG_Plugin {
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
             'class-bjlg-performance.php', 'class-bjlg-rate-limiter.php', 'class-bjlg-rest-api.php',
-            'class-bjlg-api-keys.php', 'class-bjlg-admin.php', 'class-bjlg-actions.php',
+            'class-bjlg-api-keys.php', 'class-bjlg-admin-advanced.php', 'class-bjlg-admin.php', 'class-bjlg-actions.php',
             'destinations/interface-bjlg-destination.php', 'destinations/class-bjlg-google-drive.php', 'destinations/class-bjlg-aws-s3.php', 'destinations/class-bjlg-sftp.php',
         ];
         foreach ($files_to_load as $file) {
