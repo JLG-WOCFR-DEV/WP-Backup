@@ -37,6 +37,12 @@ if (!function_exists('esc_textarea')) {
     }
 }
 
+if (!function_exists('wp_json_encode')) {
+    function wp_json_encode($data, $options = 0, $depth = 512) {
+        return json_encode($data, $options, $depth);
+    }
+}
+
 if (!function_exists('wp_parse_args')) {
     function wp_parse_args($args, $defaults = []) {
         if (is_object($args)) {
@@ -104,6 +110,10 @@ if (!defined('WP_MEMORY_LIMIT')) {
 
 if (!defined('HOUR_IN_SECONDS')) {
     define('HOUR_IN_SECONDS', 3600);
+}
+
+if (!defined('MINUTE_IN_SECONDS')) {
+    define('MINUTE_IN_SECONDS', 60);
 }
 
 if (!defined('DAY_IN_SECONDS')) {
@@ -1030,12 +1040,32 @@ if (!function_exists('wp_unschedule_event')) {
     }
 }
 
+if (!function_exists('bjlg_build_cron_event_key')) {
+    function bjlg_build_cron_event_key($hook, $args) {
+        if (!is_array($args)) {
+            $args = (array) $args;
+        }
+
+        if (empty($args)) {
+            return $hook . '::default';
+        }
+
+        return $hook . '::' . md5(serialize(array_values($args)));
+    }
+}
+
 if (!function_exists('wp_schedule_event')) {
     function wp_schedule_event($timestamp, $recurrence, $hook, $args = []) {
-        $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook] = [
+        $key = bjlg_build_cron_event_key($hook, $args);
+
+        if (!isset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook])) {
+            $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook] = [];
+        }
+
+        $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key] = [
             'timestamp' => $timestamp,
             'recurrence' => $recurrence,
-            'args' => $args,
+            'args' => (array) $args,
         ];
 
         return true;
@@ -1043,26 +1073,93 @@ if (!function_exists('wp_schedule_event')) {
 }
 
 if (!function_exists('wp_next_scheduled')) {
-    function wp_next_scheduled($hook) {
-        if (isset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook])) {
-            return $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook]['timestamp'];
+    function wp_next_scheduled($hook, $args = []) {
+        $has_args = func_num_args() > 1;
+
+        if (empty($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook])) {
+            return false;
         }
 
-        return false;
+        if ($has_args) {
+            $key = bjlg_build_cron_event_key($hook, $args);
+            if (isset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key])) {
+                return $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key]['timestamp'];
+            }
+
+            return false;
+        }
+
+        $timestamps = array_map(
+            static function ($event) {
+                return $event['timestamp'];
+            },
+            $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook]
+        );
+
+        if (empty($timestamps)) {
+            return false;
+        }
+
+        return min($timestamps);
     }
 }
 
 if (!function_exists('wp_clear_scheduled_hook')) {
-    function wp_clear_scheduled_hook($hook) {
-        unset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook]);
+    function wp_clear_scheduled_hook($hook, $args = []) {
+        $has_args = func_num_args() > 1;
+
+        if ($has_args) {
+            $key = bjlg_build_cron_event_key($hook, $args);
+            if (isset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key])) {
+                unset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key]);
+                if (empty($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook])) {
+                    unset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook]);
+                }
+            }
+        } else {
+            unset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook]);
+        }
 
         foreach ($GLOBALS['bjlg_test_scheduled_events']['single'] as $index => $event) {
-            if ($event['hook'] === $hook) {
-                unset($GLOBALS['bjlg_test_scheduled_events']['single'][$index]);
+            if ($event['hook'] !== $hook) {
+                continue;
             }
+
+            if ($has_args && $event['args'] !== (array) $args) {
+                continue;
+            }
+
+            unset($GLOBALS['bjlg_test_scheduled_events']['single'][$index]);
         }
 
         return true;
+    }
+}
+
+if (!function_exists('human_time_diff')) {
+    function human_time_diff($from, $to = 0) {
+        $from = (int) $from;
+        $to = $to ? (int) $to : time();
+        $diff = abs($to - $from);
+
+        if ($diff <= 0) {
+            return '0 seconds';
+        }
+
+        $units = [
+            DAY_IN_SECONDS => 'day',
+            HOUR_IN_SECONDS => 'hour',
+            MINUTE_IN_SECONDS => 'minute',
+        ];
+
+        foreach ($units as $seconds => $label) {
+            if ($diff >= $seconds) {
+                $value = (int) floor($diff / $seconds);
+                return $value . ' ' . $label . ($value > 1 ? 's' : '');
+            }
+        }
+
+        return $diff . ' seconds';
     }
 }
 
