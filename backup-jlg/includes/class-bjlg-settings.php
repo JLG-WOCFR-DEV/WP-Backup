@@ -41,6 +41,11 @@ class BJLG_Settings {
                 'backup_failed' => true,
                 'cleanup_complete' => false,
                 'storage_warning' => true
+            ],
+            'channels' => [
+                'email' => ['enabled' => false],
+                'slack' => ['enabled' => false, 'webhook_url' => ''],
+                'discord' => ['enabled' => false, 'webhook_url' => ''],
             ]
         ],
         'performance' => [
@@ -270,61 +275,237 @@ class BJLG_Settings {
             }
 
             // --- Réglages de Notifications ---
-            if (isset($_POST['notifications_enabled'])) {
-                $notifications_settings = [
-                    'enabled' => $this->to_bool(wp_unslash($_POST['notifications_enabled'])),
-                    'email_recipients' => isset($_POST['email_recipients']) ? sanitize_text_field(wp_unslash($_POST['email_recipients'])) : '',
-                    'events' => [
-                        'backup_complete' => isset($_POST['notify_backup_complete']) ? $this->to_bool(wp_unslash($_POST['notify_backup_complete'])) : false,
-                        'backup_failed' => isset($_POST['notify_backup_failed']) ? $this->to_bool(wp_unslash($_POST['notify_backup_failed'])) : false,
-                        'cleanup_complete' => isset($_POST['notify_cleanup_complete']) ? $this->to_bool(wp_unslash($_POST['notify_cleanup_complete'])) : false,
-                        'storage_warning' => isset($_POST['notify_storage_warning']) ? $this->to_bool(wp_unslash($_POST['notify_storage_warning'])) : false
-                    ],
+            $notification_request_fields = [
+                'notifications_enabled',
+                'email_recipients',
+                'notify_backup_complete',
+                'notify_backup_failed',
+                'notify_cleanup_complete',
+                'notify_storage_warning',
+                'channel_email',
+                'channel_slack',
+                'slack_webhook_url',
+                'channel_discord',
+                'discord_webhook_url',
+            ];
+
+            $should_update_notifications = false;
+            foreach ($notification_request_fields as $field) {
+                if (array_key_exists($field, $_POST)) {
+                    $should_update_notifications = true;
+                    break;
+                }
+            }
+
+            if ($should_update_notifications) {
+                $notification_defaults = [
+                    'enabled' => false,
+                    'email_recipients' => '',
+                    'events' => $this->default_settings['notifications']['events'],
                     'channels' => [
-                        'email' => [
-                            'enabled' => isset($_POST['channel_email']) ? $this->to_bool(wp_unslash($_POST['channel_email'])) : false
-                        ],
-                        'slack' => [
-                            'enabled' => isset($_POST['channel_slack']) ? $this->to_bool(wp_unslash($_POST['channel_slack'])) : false,
-                            'webhook_url' => isset($_POST['slack_webhook_url']) ? esc_url_raw(wp_unslash($_POST['slack_webhook_url'])) : ''
-                        ],
-                        'discord' => [
-                            'enabled' => isset($_POST['channel_discord']) ? $this->to_bool(wp_unslash($_POST['channel_discord'])) : false,
-                            'webhook_url' => isset($_POST['discord_webhook_url']) ? esc_url_raw(wp_unslash($_POST['discord_webhook_url'])) : ''
-                        ]
-                    ]
+                        'email' => ['enabled' => false],
+                        'slack' => ['enabled' => false, 'webhook_url' => ''],
+                        'discord' => ['enabled' => false, 'webhook_url' => ''],
+                    ],
                 ];
+
+                $notifications_settings = get_option('bjlg_notification_settings', []);
+                if (!is_array($notifications_settings)) {
+                    $notifications_settings = [];
+                }
+                $notifications_settings = wp_parse_args($notifications_settings, $notification_defaults);
+                $notifications_settings['events'] = isset($notifications_settings['events']) && is_array($notifications_settings['events'])
+                    ? wp_parse_args($notifications_settings['events'], $notification_defaults['events'])
+                    : $notification_defaults['events'];
+                $notifications_settings['channels'] = isset($notifications_settings['channels']) && is_array($notifications_settings['channels'])
+                    ? wp_parse_args($notifications_settings['channels'], $notification_defaults['channels'])
+                    : $notification_defaults['channels'];
+
+                if (array_key_exists('notifications_enabled', $_POST)) {
+                    $notifications_settings['enabled'] = $this->to_bool(wp_unslash($_POST['notifications_enabled']));
+                }
+
+                $event_map = [
+                    'backup_complete' => 'notify_backup_complete',
+                    'backup_failed' => 'notify_backup_failed',
+                    'cleanup_complete' => 'notify_cleanup_complete',
+                    'storage_warning' => 'notify_storage_warning',
+                ];
+                foreach ($event_map as $event_key => $field_name) {
+                    if (array_key_exists($field_name, $_POST)) {
+                        $notifications_settings['events'][$event_key] = $this->to_bool(wp_unslash($_POST[$field_name]));
+                    }
+                }
+
+                $channel_map = [
+                    'email' => 'channel_email',
+                    'slack' => 'channel_slack',
+                    'discord' => 'channel_discord',
+                ];
+                foreach ($channel_map as $channel_key => $field_name) {
+                    if (!isset($notifications_settings['channels'][$channel_key])) {
+                        $notifications_settings['channels'][$channel_key] = $notification_defaults['channels'][$channel_key];
+                    }
+                    if (array_key_exists($field_name, $_POST)) {
+                        $notifications_settings['channels'][$channel_key]['enabled'] = $this->to_bool(wp_unslash($_POST[$field_name]));
+                    }
+                }
+
+                $slack_source = array_key_exists('slack_webhook_url', $_POST)
+                    ? wp_unslash($_POST['slack_webhook_url'])
+                    : ($notifications_settings['channels']['slack']['webhook_url'] ?? '');
+                $slack_url = $this->validate_optional_url($slack_source, 'Slack');
+                $notifications_settings['channels']['slack']['webhook_url'] = $slack_url;
+
+                $discord_source = array_key_exists('discord_webhook_url', $_POST)
+                    ? wp_unslash($_POST['discord_webhook_url'])
+                    : ($notifications_settings['channels']['discord']['webhook_url'] ?? '');
+                $discord_url = $this->validate_optional_url($discord_source, 'Discord');
+                $notifications_settings['channels']['discord']['webhook_url'] = $discord_url;
+
+                $email_source = array_key_exists('email_recipients', $_POST)
+                    ? wp_unslash($_POST['email_recipients'])
+                    : ($notifications_settings['email_recipients'] ?? '');
+
+                $email_validation = $this->normalize_email_recipients($email_source);
+
+                if (!empty($email_validation['invalid'])) {
+                    throw new Exception(sprintf(
+                        'Les adresses e-mail suivantes sont invalides : %s.',
+                        implode(', ', $email_validation['invalid'])
+                    ));
+                }
+
+                if (
+                    !empty($notifications_settings['enabled'])
+                    && !empty($notifications_settings['channels']['email']['enabled'])
+                    && empty($email_validation['valid'])
+                ) {
+                    throw new Exception('Veuillez renseigner au moins une adresse e-mail valide pour les notifications.');
+                }
+
+                if (!empty($notifications_settings['channels']['slack']['enabled']) && $slack_url === '') {
+                    throw new Exception('Veuillez fournir une URL de webhook Slack valide pour activer ce canal.');
+                }
+
+                if (!empty($notifications_settings['channels']['discord']['enabled']) && $discord_url === '') {
+                    throw new Exception('Veuillez fournir une URL de webhook Discord valide pour activer ce canal.');
+                }
+
+                $notifications_settings['email_recipients'] = implode(', ', $email_validation['valid']);
+
                 update_option('bjlg_notification_settings', $notifications_settings);
                 $saved_settings['notifications'] = $notifications_settings;
-                BJLG_Debug::log("Réglages de notifications sauvegardés.");
+                BJLG_Debug::log('Réglages de notifications sauvegardés.');
             }
 
             // --- Réglages de Performance ---
-            if (isset($_POST['multi_threading'])) {
-                $performance_settings = [
-                    'multi_threading' => $this->to_bool(wp_unslash($_POST['multi_threading'])),
-                    'max_workers' => isset($_POST['max_workers']) ? max(1, intval(wp_unslash($_POST['max_workers']))) : 2,
-                    'chunk_size' => isset($_POST['chunk_size']) ? max(1, intval(wp_unslash($_POST['chunk_size']))) : 50
-                ];
+            $performance_fields = ['multi_threading', 'max_workers', 'chunk_size', 'compression_level'];
+            $should_update_performance = false;
+            foreach ($performance_fields as $field) {
+                if (array_key_exists($field, $_POST)) {
+                    $should_update_performance = true;
+                    break;
+                }
+            }
+
+            if ($should_update_performance) {
+                $performance_defaults = $this->default_settings['performance'];
+                $performance_settings = get_option('bjlg_performance_settings', []);
+                if (!is_array($performance_settings)) {
+                    $performance_settings = [];
+                }
+                $performance_settings = wp_parse_args($performance_settings, $performance_defaults);
+
+                if (array_key_exists('multi_threading', $_POST)) {
+                    $performance_settings['multi_threading'] = $this->to_bool(wp_unslash($_POST['multi_threading']));
+                }
+                if (array_key_exists('max_workers', $_POST)) {
+                    $performance_settings['max_workers'] = max(1, min(20, intval(wp_unslash($_POST['max_workers']))));
+                }
+                if (array_key_exists('chunk_size', $_POST)) {
+                    $performance_settings['chunk_size'] = max(1, min(500, intval(wp_unslash($_POST['chunk_size']))));
+                }
+                if (array_key_exists('compression_level', $_POST)) {
+                    $performance_settings['compression_level'] = min(9, max(0, intval(wp_unslash($_POST['compression_level']))));
+                }
+
                 update_option('bjlg_performance_settings', $performance_settings);
                 $saved_settings['performance'] = $performance_settings;
-                BJLG_Debug::log("Réglages de performance sauvegardés.");
+                BJLG_Debug::log('Réglages de performance sauvegardés.');
             }
 
             // --- Réglages Webhooks ---
-            if (isset($_POST['webhook_enabled'])) {
-                $webhook_settings = [
-                    'enabled' => $this->to_bool(wp_unslash($_POST['webhook_enabled'])),
+            $webhook_fields = [
+                'webhook_enabled',
+                'webhook_backup_complete',
+                'webhook_backup_failed',
+                'webhook_cleanup_complete',
+                'webhook_secret',
+            ];
+
+            $should_update_webhooks = false;
+            foreach ($webhook_fields as $field) {
+                if (array_key_exists($field, $_POST)) {
+                    $should_update_webhooks = true;
+                    break;
+                }
+            }
+
+            if ($should_update_webhooks) {
+                $webhook_defaults = [
+                    'enabled' => false,
                     'urls' => [
-                        'backup_complete' => isset($_POST['webhook_backup_complete']) ? esc_url_raw(wp_unslash($_POST['webhook_backup_complete'])) : '',
-                        'backup_failed' => isset($_POST['webhook_backup_failed']) ? esc_url_raw(wp_unslash($_POST['webhook_backup_failed'])) : '',
-                        'cleanup_complete' => isset($_POST['webhook_cleanup_complete']) ? esc_url_raw(wp_unslash($_POST['webhook_cleanup_complete'])) : ''
+                        'backup_complete' => '',
+                        'backup_failed' => '',
+                        'cleanup_complete' => '',
                     ],
-                    'secret' => isset($_POST['webhook_secret']) ? sanitize_text_field(wp_unslash($_POST['webhook_secret'])) : ''
+                    'secret' => '',
                 ];
+
+                $webhook_settings = get_option('bjlg_webhook_settings', []);
+                if (!is_array($webhook_settings)) {
+                    $webhook_settings = [];
+                }
+                $webhook_settings = wp_parse_args($webhook_settings, $webhook_defaults);
+                $webhook_settings['urls'] = isset($webhook_settings['urls']) && is_array($webhook_settings['urls'])
+                    ? wp_parse_args($webhook_settings['urls'], $webhook_defaults['urls'])
+                    : $webhook_defaults['urls'];
+
+                if (array_key_exists('webhook_enabled', $_POST)) {
+                    $webhook_settings['enabled'] = $this->to_bool(wp_unslash($_POST['webhook_enabled']));
+                }
+
+                $webhook_labels = [
+                    'backup_complete' => 'de sauvegarde terminée',
+                    'backup_failed' => "d'échec de sauvegarde",
+                    'cleanup_complete' => 'de fin de nettoyage',
+                ];
+
+                foreach ($webhook_labels as $url_key => $label) {
+                    $field = 'webhook_' . $url_key;
+                    $source = array_key_exists($field, $_POST)
+                        ? wp_unslash($_POST[$field])
+                        : ($webhook_settings['urls'][$url_key] ?? '');
+                    $webhook_settings['urls'][$url_key] = $this->validate_optional_url($source, $label);
+                }
+
+                if (array_key_exists('webhook_secret', $_POST)) {
+                    $webhook_settings['secret'] = sanitize_text_field(wp_unslash($_POST['webhook_secret']));
+                }
+
+                if (!empty($webhook_settings['enabled'])) {
+                    $non_empty = array_filter($webhook_settings['urls'], static function ($value) {
+                        return is_string($value) && $value !== '';
+                    });
+                    if (empty($non_empty)) {
+                        throw new Exception('Veuillez renseigner au moins une URL de webhook active lorsque les webhooks personnalisés sont activés.');
+                    }
+                }
+
                 update_option('bjlg_webhook_settings', $webhook_settings);
                 $saved_settings['webhooks'] = $webhook_settings;
-                BJLG_Debug::log("Réglages de webhooks sauvegardés.");
+                BJLG_Debug::log('Réglages de webhooks sauvegardés.');
             }
 
             // --- Réglage du débogueur AJAX ---
@@ -1166,17 +1347,83 @@ class BJLG_Settings {
      * Valide une adresse email ou une liste d'adresses
      */
     public function validate_email_list($emails) {
-        $email_list = explode(',', $emails);
-        $valid_emails = [];
+        $normalized = $this->normalize_email_recipients($emails);
+        return implode(',', $normalized['valid']);
+    }
 
-        foreach ($email_list as $email) {
-            $email = trim($email);
-            if (is_email($email)) {
-                $valid_emails[] = $email;
+    /**
+     * Normalise et valide une liste d'adresses e-mail.
+     *
+     * @param string|array $value
+     * @return array{valid: array<int, string>, invalid: array<int, string>}
+     */
+    private function normalize_email_recipients($value) {
+        if (is_array($value)) {
+            $value = implode(',', $value);
+        }
+
+        $value = str_replace(["\r\n", "\r"], "\n", (string) $value);
+        $parts = preg_split('/[,;\n]+/', $value);
+
+        $valid = [];
+        $seen = [];
+        $invalid = [];
+
+        if (is_array($parts)) {
+            foreach ($parts as $part) {
+                $candidate = trim($part);
+                if ($candidate === '') {
+                    continue;
+                }
+
+                $sanitized = sanitize_email($candidate);
+                if ($sanitized && is_email($sanitized)) {
+                    if (!isset($seen[$sanitized])) {
+                        $seen[$sanitized] = true;
+                        $valid[] = $sanitized;
+                    }
+                } else {
+                    $invalid[] = $candidate;
+                }
             }
         }
 
-        return implode(',', $valid_emails);
+        return [
+            'valid' => $valid,
+            'invalid' => $invalid,
+        ];
+    }
+
+    /**
+     * Valide une URL de webhook optionnelle.
+     *
+     * @param string $value
+     * @param string $context_label
+     * @return string
+     * @throws Exception
+     */
+    private function validate_optional_url($value, $context_label) {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return '';
+        }
+
+        $sanitized = esc_url_raw($value);
+        $is_valid = $sanitized !== '';
+
+        if ($is_valid) {
+            if (function_exists('wp_http_validate_url')) {
+                $is_valid = (bool) wp_http_validate_url($sanitized);
+            } else {
+                $is_valid = (bool) filter_var($sanitized, FILTER_VALIDATE_URL);
+            }
+        }
+
+        if (!$is_valid) {
+            throw new Exception(sprintf("L'URL du webhook %s est invalide.", $context_label));
+        }
+
+        return $sanitized;
     }
     
     /**

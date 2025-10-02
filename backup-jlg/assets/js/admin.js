@@ -2378,15 +2378,20 @@ jQuery(document).ready(function($) {
         $.post(bjlg_ajax.ajax_url, payload)
             .done(function(response) {
                 const normalized = normalizeSettingsResponse(response);
+                const successMessage = $form.data('successMessage');
+                const errorMessage = $form.data('errorMessage');
+
                 if (normalized.success) {
-                    showFeedback($feedback, 'success', normalized.message || 'Réglages sauvegardés avec succès !');
+                    const message = successMessage || normalized.message || 'Réglages sauvegardés avec succès !';
+                    showFeedback($feedback, 'success', message);
                 } else {
-                    const message = normalized.message || 'Une erreur est survenue lors de la sauvegarde des réglages.';
+                    const message = normalized.message || errorMessage || 'Une erreur est survenue lors de la sauvegarde des réglages.';
                     showFeedback($feedback, 'error', message);
                 }
             })
             .fail(function(xhr) {
-                let message = 'Impossible de sauvegarder les réglages.';
+                const errorMessage = $form.data('errorMessage');
+                let message = errorMessage || 'Impossible de sauvegarder les réglages.';
 
                 if (xhr && xhr.responseJSON) {
                     if (xhr.responseJSON.data && xhr.responseJSON.data.message) {
