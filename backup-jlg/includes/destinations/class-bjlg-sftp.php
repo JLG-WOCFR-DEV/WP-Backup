@@ -1,0 +1,411 @@
+<?php
+namespace BJLG;
+
+use Exception;
+use phpseclib3\Crypt\PublicKeyLoader;
+use phpseclib3\Net\SFTP as PhpseclibSFTP;
+use phpseclib3\Exception\UnableToConnectException;
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+if (!interface_exists(BJLG_Destination_Interface::class)) {
+    return;
+}
+
+$bjlg_base_dir = defined('BJLG_PLUGIN_DIR') ? BJLG_PLUGIN_DIR : dirname(__DIR__, 2) . '/';
+$bjlg_autoload = $bjlg_base_dir . 'vendor-bjlg/autoload.php';
+if (file_exists($bjlg_autoload)) {
+    require_once $bjlg_autoload;
+}
+
+/**
+ * Destination SFTP permettant de téléverser les sauvegardes sur un serveur SSH.
+ */
+class BJLG_SFTP implements BJLG_Destination_Interface {
+
+    private const OPTION_SETTINGS = 'bjlg_sftp_settings';
+    private const OPTION_STATUS = 'bjlg_sftp_status';
+
+    /** @var callable */
+    private $connection_factory;
+
+    /** @var callable */
+    private $time_provider;
+
+    public function __construct(?callable $connection_factory = null, ?callable $time_provider = null) {
+        $this->connection_factory = $connection_factory ?: static function (string $host, int $port) {
+            return new PhpseclibSFTP($host, $port);
+        };
+        $this->time_provider = $time_provider ?: static function () {
+            return time();
+        };
+
+        if (function_exists('add_action')) {
+            add_action('wp_ajax_bjlg_test_sftp_connection', [$this, 'handle_test_connection']);
+            add_action('admin_post_bjlg_sftp_disconnect', [$this, 'handle_disconnect_request']);
+        }
+    }
+
+    public function get_id() {
+        return 'sftp';
+    }
+
+    public function get_name() {
+        return 'Serveur SFTP';
+    }
+
+    public function is_connected() {
+        $settings = $this->get_settings();
+
+        return !empty($settings['enabled'])
+            && $settings['host'] !== ''
+            && $settings['username'] !== ''
+            && ($settings['password'] !== '' || $settings['private_key'] !== '');
+    }
+
+    public function disconnect() {
+        $defaults = $this->get_default_settings();
+        update_option(self::OPTION_SETTINGS, $defaults);
+
+        if (function_exists('delete_option')) {
+            delete_option(self::OPTION_STATUS);
+        } else {
+            update_option(self::OPTION_STATUS, []);
+        }
+    }
+
+    public function render_settings() {
+        $settings = $this->get_settings();
+        $status = $this->get_status();
+        $connected = $this->is_connected();
+        $phpseclib_available = class_exists(PhpseclibSFTP::class);
+
+        echo "<div class='bjlg-destination bjlg-destination--sftp'>";
+        echo "<h4><span class='dashicons dashicons-shield-alt'></span> Serveur SFTP</h4>";
+
+        if (!$phpseclib_available) {
+            echo "<p class='description'>L'extension PHP <code>phpseclib3</code> est requise pour le support SFTP. Installez les dépendances via Composer.</p></div>";
+            return;
+        }
+
+        echo "<p class='description'>Connectez un serveur SFTP sécurisé pour répliquer vos sauvegardes hors site.</p>";
+
+        echo "<table class='form-table'>";
+        echo "<tr><th scope='row'>Hôte</th><td><input type='text' name='sftp_host' value='" . esc_attr($settings['host']) . "' class='regular-text' placeholder='sftp.example.com' autocomplete='off'></td></tr>";
+        echo "<tr><th scope='row'>Port</th><td><input type='number' name='sftp_port' value='" . esc_attr((string) $settings['port']) . "' class='small-text' min='1' max='65535'></td></tr>";
+        echo "<tr><th scope='row'>Utilisateur</th><td><input type='text' name='sftp_username' value='" . esc_attr($settings['username']) . "' class='regular-text' autocomplete='off'></td></tr>";
+        echo "<tr><th scope='row'>Mot de passe</th><td><input type='password' name='sftp_password' value='" . esc_attr($settings['password']) . "' class='regular-text' autocomplete='new-password'><p class='description'>Laissez vide si vous utilisez une clé privée.</p></td></tr>";
+        echo "<tr><th scope='row'>Clé privée</th><td><textarea name='sftp_private_key' rows='5' class='large-text code' placeholder='-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----'>" . esc_textarea($settings['private_key']) . "</textarea><p class='description'>Format OpenSSH ou PEM. Optionnel.</p></td></tr>";
+        echo "<tr><th scope='row'>Phrase secrète</th><td><input type='password' name='sftp_passphrase' value='" . esc_attr($settings['passphrase']) . "' class='regular-text' autocomplete='new-password'></td></tr>";
+        echo "<tr><th scope='row'>Chemin distant</th><td><input type='text' name='sftp_remote_path' value='" . esc_attr($settings['remote_path']) . "' class='regular-text' placeholder='/backups/wordpress'><p class='description'>Dossier cible pour les sauvegardes. Il sera créé s'il n'existe pas.</p></td></tr>";
+        echo "<tr><th scope='row'>Empreinte SSH attendue</th><td><input type='text' name='sftp_fingerprint' value='" . esc_attr($settings['fingerprint']) . "' class='regular-text' placeholder='SHA256:...'><p class='description'>Optionnel. Ajoutez l'empreinte SHA256 du serveur pour renforcer la sécurité.</p></td></tr>";
+        echo "<tr><th scope='row'>Activer SFTP</th><td><label><input type='checkbox' name='sftp_enabled' value='true'" . ($settings['enabled'] ? " checked='checked'" : '') . "> Activer l'envoi automatique vers ce serveur.</label></td></tr>";
+        echo "</table>";
+
+        echo "<div class='notice bjlg-sftp-test-feedback' role='status' aria-live='polite' style='display:none;'></div>";
+        echo "<p class='bjlg-sftp-test-actions'><button type='button' class='button bjlg-sftp-test-connection'>Tester la connexion</button> <span class='spinner bjlg-sftp-test-spinner' style='float:none;margin-left:8px;display:none;'></span></p>";
+
+        if ($status['last_result'] === 'success' && $status['tested_at'] > 0) {
+            $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
+            echo "<p class='description'><span class='dashicons dashicons-yes'></span> Dernier test réussi le {$tested_at}.";
+            if ($status['message'] !== '') {
+                echo ' ' . esc_html($status['message']);
+            }
+            echo '</p>';
+        } elseif ($status['last_result'] === 'error' && $status['tested_at'] > 0) {
+            $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
+            echo "<p class='description' style='color:#b32d2e;'><span class='dashicons dashicons-warning'></span> Dernier test échoué le {$tested_at}.";
+            if ($status['message'] !== '') {
+                echo ' ' . esc_html($status['message']);
+            }
+            echo '</p>';
+        }
+
+        if ($connected) {
+            echo "<p class='description'><span class='dashicons dashicons-lock'></span> Connexion SFTP configurée.</p>";
+            echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' style='margin-top:10px;'>";
+            echo "<input type='hidden' name='action' value='bjlg_sftp_disconnect'>";
+            if (function_exists('wp_nonce_field')) {
+                wp_nonce_field('bjlg_sftp_disconnect', 'bjlg_sftp_nonce');
+            }
+            echo "<button type='submit' class='button'>Déconnecter SFTP</button>";
+            echo '</form>';
+        }
+
+        echo '</div>';
+    }
+
+    public function upload_file($filepath, $task_id) {
+        if (is_array($filepath)) {
+            $errors = [];
+
+            foreach ($filepath as $single_path) {
+                try {
+                    $this->upload_file($single_path, $task_id);
+                } catch (Exception $exception) {
+                    $errors[] = $exception->getMessage();
+                }
+            }
+
+            if (!empty($errors)) {
+                throw new Exception('Erreurs SFTP : ' . implode(' | ', $errors));
+            }
+
+            return;
+        }
+
+        if (!class_exists(PhpseclibSFTP::class)) {
+            throw new Exception("La bibliothèque phpseclib n'est pas disponible pour SFTP.");
+        }
+
+        if (!is_readable($filepath)) {
+            throw new Exception('Fichier de sauvegarde introuvable : ' . $filepath);
+        }
+
+        $settings = $this->get_settings();
+        if (!$this->is_connected()) {
+            throw new Exception("Le connecteur SFTP n'est pas configuré.");
+        }
+
+        $connection = $this->connect($settings);
+
+        $remote_path = $this->normalize_remote_path($settings['remote_path']);
+        if ($remote_path !== '' && !$this->ensure_remote_directory($connection, $remote_path)) {
+            throw new Exception('Impossible de créer le dossier distant : ' . $remote_path);
+        }
+
+        $remote_file = rtrim($remote_path, '/') . '/' . basename($filepath);
+        $remote_file = ltrim($remote_file, '/');
+
+        $this->log(sprintf('Transfert de "%s" vers SFTP (%s).', basename($filepath), $remote_file));
+
+        $success = $connection->put($remote_file, $filepath, PhpseclibSFTP::SOURCE_LOCAL_FILE);
+
+        if (!$success) {
+            throw new Exception('Impossible de téléverser la sauvegarde via SFTP.');
+        }
+
+        $this->log(sprintf('Sauvegarde "%s" envoyée sur le serveur SFTP.', basename($filepath)));
+    }
+
+    public function handle_test_connection() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée.']);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $posted = wp_unslash($_POST);
+
+        $settings = [
+            'host' => isset($posted['sftp_host']) ? sanitize_text_field($posted['sftp_host']) : '',
+            'port' => isset($posted['sftp_port']) ? max(1, min(65535, (int) $posted['sftp_port'])) : 22,
+            'username' => isset($posted['sftp_username']) ? sanitize_text_field($posted['sftp_username']) : '',
+            'password' => isset($posted['sftp_password']) ? (string) $posted['sftp_password'] : '',
+            'private_key' => isset($posted['sftp_private_key']) ? (string) $posted['sftp_private_key'] : '',
+            'passphrase' => isset($posted['sftp_passphrase']) ? (string) $posted['sftp_passphrase'] : '',
+            'remote_path' => isset($posted['sftp_remote_path']) ? sanitize_text_field($posted['sftp_remote_path']) : '',
+            'fingerprint' => isset($posted['sftp_fingerprint']) ? sanitize_text_field($posted['sftp_fingerprint']) : '',
+            'enabled' => !empty($posted['sftp_enabled']) && $posted['sftp_enabled'] !== 'false',
+        ];
+
+        if ($settings['host'] === '' || $settings['username'] === '') {
+            wp_send_json_error([
+                'message' => "Impossible de tester la connexion.",
+                'errors' => ['Renseignez au minimum l\'hôte et l\'utilisateur.'],
+            ]);
+        }
+
+        try {
+            $connection = $this->connect($settings);
+            $cwd = $connection->pwd();
+            $message = $cwd ? sprintf('Répertoire courant : %s', $cwd) : 'Connexion établie.';
+
+            $this->store_settings($settings);
+            $this->store_status('success', $message);
+
+            wp_send_json_success([
+                'message' => 'Connexion SFTP réussie !',
+                'details' => $message,
+            ]);
+        } catch (Exception $exception) {
+            $this->store_status('error', $exception->getMessage());
+            wp_send_json_error([
+                'message' => "Connexion SFTP impossible.",
+                'errors' => [$exception->getMessage()],
+            ]);
+        }
+    }
+
+    public function handle_disconnect_request() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_die('Permission refusée.');
+        }
+
+        check_admin_referer('bjlg_sftp_disconnect', 'bjlg_sftp_nonce');
+
+        $this->disconnect();
+
+        wp_safe_redirect(add_query_arg(['page' => 'backup-jlg', 'tab' => 'settings'], admin_url('admin.php')));
+        exit;
+    }
+
+    private function connect(array $settings) {
+        if (!class_exists(PhpseclibSFTP::class)) {
+            throw new Exception("La bibliothèque phpseclib n'est pas disponible.");
+        }
+
+        try {
+            /** @var PhpseclibSFTP $connection */
+            $connection = call_user_func($this->connection_factory, $settings['host'], (int) $settings['port']);
+        } catch (UnableToConnectException $exception) {
+            throw new Exception('Connexion impossible : ' . $exception->getMessage());
+        }
+
+        if (!$connection instanceof PhpseclibSFTP) {
+            throw new Exception('Impossible d\'initialiser la connexion SFTP.');
+        }
+
+        $fingerprint = $settings['fingerprint'];
+        if ($fingerprint !== '') {
+            $server_fp = $connection->getServerPublicHostKey() ? $connection->getServerPublicHostKey()->getFingerprint('sha256') : '';
+            if ($server_fp === '' || !hash_equals(strtolower($fingerprint), strtolower($server_fp))) {
+                throw new Exception('Empreinte du serveur inattendue.');
+            }
+        }
+
+        $auth_success = false;
+        if ($settings['private_key'] !== '') {
+            try {
+                $key = PublicKeyLoader::load($settings['private_key'], $settings['passphrase'] !== '' ? $settings['passphrase'] : false);
+            } catch (Exception $exception) {
+                throw new Exception('Clé privée invalide : ' . $exception->getMessage());
+            }
+            $auth_success = $connection->login($settings['username'], $key);
+        }
+
+        if (!$auth_success && $settings['password'] !== '') {
+            $auth_success = $connection->login($settings['username'], $settings['password']);
+        }
+
+        if (!$auth_success) {
+            throw new Exception('Authentification SFTP refusée.');
+        }
+
+        return $connection;
+    }
+
+    private function ensure_remote_directory(PhpseclibSFTP $connection, string $path): bool {
+        $normalized = $this->normalize_remote_path($path);
+        if ($normalized === '') {
+            return true;
+        }
+
+        $parts = array_filter(explode('/', $normalized), static function ($part) {
+            return $part !== '' && $part !== '.';
+        });
+
+        $current = '';
+        foreach ($parts as $part) {
+            $current .= '/' . $part;
+            if (!$connection->is_dir($current)) {
+                if (!$connection->mkdir($current)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private function normalize_remote_path(string $path): string {
+        $path = trim($path);
+        if ($path === '') {
+            return '';
+        }
+
+        $path = str_replace(['\\'], '/', $path);
+        $path = preg_replace('#/+#', '/', $path);
+
+        return trim($path, '/');
+    }
+
+    private function get_settings(): array {
+        $stored = get_option(self::OPTION_SETTINGS, []);
+        $defaults = $this->get_default_settings();
+
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+
+        $settings = wp_parse_args($stored, $defaults);
+
+        $settings['host'] = sanitize_text_field($settings['host']);
+        $settings['port'] = (int) $settings['port'];
+        if ($settings['port'] <= 0 || $settings['port'] > 65535) {
+            $settings['port'] = 22;
+        }
+
+        $settings['username'] = sanitize_text_field($settings['username']);
+        $settings['password'] = (string) $settings['password'];
+        $settings['private_key'] = (string) $settings['private_key'];
+        $settings['passphrase'] = (string) $settings['passphrase'];
+        $settings['remote_path'] = sanitize_text_field($settings['remote_path']);
+        $settings['fingerprint'] = sanitize_text_field($settings['fingerprint']);
+        $settings['enabled'] = !empty($settings['enabled']);
+
+        return $settings;
+    }
+
+    private function get_default_settings(): array {
+        return [
+            'host' => '',
+            'port' => 22,
+            'username' => '',
+            'password' => '',
+            'private_key' => '',
+            'passphrase' => '',
+            'remote_path' => '',
+            'fingerprint' => '',
+            'enabled' => false,
+        ];
+    }
+
+    private function store_settings(array $settings): void {
+        $defaults = $this->get_default_settings();
+        $normalized = array_merge($defaults, $settings);
+        update_option(self::OPTION_SETTINGS, $normalized);
+    }
+
+    private function get_status(): array {
+        $status = get_option(self::OPTION_STATUS, []);
+        if (!is_array($status)) {
+            $status = [];
+        }
+
+        return wp_parse_args($status, [
+            'last_result' => 'unknown',
+            'tested_at' => 0,
+            'message' => '',
+        ]);
+    }
+
+    private function store_status(string $result, string $message): void {
+        $status = [
+            'last_result' => $result,
+            'tested_at' => call_user_func($this->time_provider),
+            'message' => $message,
+        ];
+
+        update_option(self::OPTION_STATUS, $status);
+    }
+
+    private function log($message): void {
+        if (class_exists(BJLG_Debug::class)) {
+            BJLG_Debug::log($message);
+        }
+    }
+}
+

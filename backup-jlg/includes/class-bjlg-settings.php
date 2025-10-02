@@ -15,6 +15,9 @@ class BJLG_Settings {
     /** @var self|null */
     private static $instance = null;
 
+    private const VALID_SCHEDULE_RECURRENCES = ['disabled', 'hourly', 'twice_daily', 'daily', 'weekly', 'monthly'];
+    private const VALID_SCHEDULE_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
     private $default_settings = [
         'cleanup' => [
             'by_number' => 3,
@@ -59,6 +62,17 @@ class BJLG_Settings {
             'bucket' => '',
             'server_side_encryption' => '',
             'object_prefix' => '',
+            'enabled' => false,
+        ],
+        'sftp' => [
+            'host' => '',
+            'port' => 22,
+            'username' => '',
+            'password' => '',
+            'private_key' => '',
+            'passphrase' => '',
+            'remote_path' => '',
+            'fingerprint' => '',
             'enabled' => false,
         ],
         'advanced' => [
@@ -697,52 +711,7 @@ class BJLG_Settings {
                 return $sanitized;
 
             case 'bjlg_schedule_settings':
-                $defaults = [
-                    'recurrence' => 'disabled',
-                    'day' => 'sunday',
-                    'time' => '23:59',
-                    'components' => ['db', 'plugins', 'themes', 'uploads'],
-                    'encrypt' => false,
-                    'incremental' => false,
-                ];
-                $sanitized = $defaults;
-
-                if (is_array($value)) {
-                    if (isset($value['recurrence'])) {
-                        $candidate = sanitize_key($value['recurrence']);
-                        $valid = ['disabled', 'hourly', 'twice_daily', 'daily', 'weekly', 'monthly'];
-                        if (in_array($candidate, $valid, true)) {
-                            $sanitized['recurrence'] = $candidate;
-                        }
-                    }
-                    if (isset($value['day'])) {
-                        $candidate = sanitize_key($value['day']);
-                        $valid_days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-                        if (in_array($candidate, $valid_days, true)) {
-                            $sanitized['day'] = $candidate;
-                        }
-                    }
-                    if (isset($value['time']) && is_string($value['time'])) {
-                        $candidate = sanitize_text_field($value['time']);
-                        if (preg_match('/^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/', $candidate)) {
-                            $sanitized['time'] = $candidate;
-                        }
-                    }
-                    if (isset($value['components']) && is_array($value['components'])) {
-                        $components = array_filter(array_map('sanitize_key', $value['components']));
-                        if (!empty($components)) {
-                            $sanitized['components'] = array_values(array_unique($components));
-                        }
-                    }
-                    if (isset($value['encrypt'])) {
-                        $sanitized['encrypt'] = $this->to_bool($value['encrypt']);
-                    }
-                    if (isset($value['incremental'])) {
-                        $sanitized['incremental'] = $this->to_bool($value['incremental']);
-                    }
-                }
-
-                return $sanitized;
+                return self::sanitize_schedule_collection($value);
 
             default:
                 return null;
@@ -896,8 +865,264 @@ class BJLG_Settings {
         ];
     }
 
+    public static function get_default_schedule_entry(): array {
+        return [
+            'id' => '',
+            'label' => '',
+            'recurrence' => 'disabled',
+            'day' => 'sunday',
+            'time' => '23:59',
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'encrypt' => false,
+            'incremental' => false,
+            'include_patterns' => [],
+            'exclude_patterns' => [],
+            'post_checks' => self::get_default_backup_post_checks(),
+            'secondary_destinations' => [],
+        ];
+    }
+
+    public static function sanitize_schedule_collection($raw) {
+        if (is_string($raw)) {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                $raw = $decoded;
+            }
+        }
+
+        $entries = [];
+
+        if (is_array($raw) && array_key_exists('schedules', $raw)) {
+            $entries = is_array($raw['schedules']) ? array_values($raw['schedules']) : [];
+        } elseif (self::looks_like_schedule_entry($raw)) {
+            $entries = [$raw];
+        } elseif (is_array($raw)) {
+            $entries = array_values($raw);
+        }
+
+        $sanitized = [];
+        $seen_ids = [];
+        $index = 0;
+
+        foreach ($entries as $entry) {
+            $sanitized_entry = self::sanitize_schedule_entry($entry, $index);
+            $index++;
+
+            $id = $sanitized_entry['id'];
+            if ($id === '') {
+                continue;
+            }
+
+            if (isset($seen_ids[$id])) {
+                continue;
+            }
+
+            $seen_ids[$id] = true;
+            $sanitized[] = $sanitized_entry;
+        }
+
+        if (empty($sanitized)) {
+            $default = self::get_default_schedule_entry();
+            $default['id'] = self::generate_schedule_id();
+            $default['label'] = 'Planification #1';
+            $sanitized[] = $default;
+        }
+
+        return [
+            'version' => 2,
+            'schedules' => array_values($sanitized),
+        ];
+    }
+
+    public static function sanitize_schedule_entry($entry, int $index = 0): array {
+        $defaults = self::get_default_schedule_entry();
+        $entry = is_array($entry) ? $entry : [];
+
+        $id = '';
+        if (isset($entry['id']) && is_scalar($entry['id'])) {
+            $id = sanitize_key((string) $entry['id']);
+        }
+        if ($id === '') {
+            $id = self::generate_schedule_id();
+        }
+
+        $label = isset($entry['label']) ? sanitize_text_field($entry['label']) : '';
+        if ($label === '') {
+            $label = sprintf('Planification #%d', $index + 1);
+        }
+
+        $recurrence = isset($entry['recurrence']) ? sanitize_key($entry['recurrence']) : $defaults['recurrence'];
+        if (!in_array($recurrence, self::VALID_SCHEDULE_RECURRENCES, true)) {
+            $recurrence = $defaults['recurrence'];
+        }
+
+        $day = isset($entry['day']) ? sanitize_key($entry['day']) : $defaults['day'];
+        if (!in_array($day, self::VALID_SCHEDULE_DAYS, true)) {
+            $day = $defaults['day'];
+        }
+
+        $time = isset($entry['time']) ? sanitize_text_field($entry['time']) : $defaults['time'];
+        if (!preg_match('/^([0-1]?\d|2[0-3]):([0-5]\d)$/', $time)) {
+            $time = $defaults['time'];
+        }
+
+        $components = self::sanitize_schedule_components($entry['components'] ?? $defaults['components']);
+        if (empty($components)) {
+            $components = $defaults['components'];
+        }
+
+        $include_patterns = self::sanitize_pattern_list($entry['include_patterns'] ?? $defaults['include_patterns']);
+        $exclude_patterns = self::sanitize_pattern_list($entry['exclude_patterns'] ?? $defaults['exclude_patterns']);
+
+        $post_checks = self::sanitize_post_checks(
+            $entry['post_checks'] ?? $defaults['post_checks'],
+            self::get_default_backup_post_checks()
+        );
+
+        $secondary_destinations = self::sanitize_destination_list(
+            $entry['secondary_destinations'] ?? $defaults['secondary_destinations'],
+            self::get_known_destination_ids()
+        );
+
+        return [
+            'id' => $id,
+            'label' => $label,
+            'recurrence' => $recurrence,
+            'day' => $day,
+            'time' => $time,
+            'components' => array_values($components),
+            'encrypt' => self::to_bool_static($entry['encrypt'] ?? $defaults['encrypt']),
+            'incremental' => self::to_bool_static($entry['incremental'] ?? $defaults['incremental']),
+            'include_patterns' => $include_patterns,
+            'exclude_patterns' => $exclude_patterns,
+            'post_checks' => $post_checks,
+            'secondary_destinations' => $secondary_destinations,
+        ];
+    }
+
+    private static function sanitize_schedule_components($components): array {
+        $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+        $group_aliases = [
+            'files' => ['plugins', 'themes', 'uploads'],
+            'content' => ['plugins', 'themes', 'uploads'],
+            'all_files' => ['plugins', 'themes', 'uploads'],
+        ];
+        $single_aliases = [
+            'database' => 'db',
+            'db_only' => 'db',
+            'sql' => 'db',
+            'plugins_dir' => 'plugins',
+            'themes_dir' => 'themes',
+            'uploads_dir' => 'uploads',
+            'media' => 'uploads',
+        ];
+
+        if (is_string($components)) {
+            $decoded = json_decode($components, true);
+            if (is_array($decoded)) {
+                $components = $decoded;
+            } else {
+                $components = preg_split('/[\s,;|]+/', $components, -1, PREG_SPLIT_NO_EMPTY);
+            }
+        }
+
+        if (!is_array($components)) {
+            $components = (array) $components;
+        }
+
+        $sanitized = [];
+
+        foreach ($components as $component) {
+            if (!is_scalar($component)) {
+                continue;
+            }
+
+            $component = (string) $component;
+
+            if (preg_match('#[\\/]#', $component)) {
+                continue;
+            }
+
+            $component = sanitize_key($component);
+
+            if ($component === '') {
+                continue;
+            }
+
+            if (in_array($component, ['all', 'full', 'everything'], true)) {
+                return $allowed_components;
+            }
+
+            if (isset($group_aliases[$component])) {
+                foreach ($group_aliases[$component] as $alias) {
+                    if (!in_array($alias, $sanitized, true)) {
+                        $sanitized[] = $alias;
+                    }
+                }
+                continue;
+            }
+
+            if (isset($single_aliases[$component])) {
+                $component = $single_aliases[$component];
+            }
+
+            if (in_array($component, $allowed_components, true) && !in_array($component, $sanitized, true)) {
+                $sanitized[] = $component;
+            }
+        }
+
+        return array_values($sanitized);
+    }
+
+    private static function generate_schedule_id(): string {
+        if (function_exists('wp_generate_uuid4')) {
+            $uuid = wp_generate_uuid4();
+        } else {
+            $uuid = uniqid('bjlg_', true);
+        }
+
+        $normalized = preg_replace('/[^a-z0-9]+/', '_', strtolower((string) $uuid));
+        $normalized = trim((string) $normalized, '_');
+
+        if ($normalized === '') {
+            $normalized = (string) time();
+        }
+
+        return 'bjlg_schedule_' . $normalized;
+    }
+
+    private static function looks_like_schedule_entry($value): bool {
+        if (!is_array($value)) {
+            return false;
+        }
+
+        return array_key_exists('recurrence', $value) || array_key_exists('components', $value);
+    }
+
+    private static function to_bool_static($value): bool {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value === 1;
+        }
+
+        if (is_string($value)) {
+            $normalized = strtolower(trim($value));
+            if (in_array($normalized, ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+            if (in_array($normalized, ['0', 'false', 'no', 'off', ''], true)) {
+                return false;
+            }
+        }
+
+        return (bool) $value;
+    }
+
     public static function get_known_destination_ids() {
-        $destinations = ['google_drive', 'aws_s3'];
+        $destinations = ['google_drive', 'aws_s3', 'sftp'];
 
         /** @var array<int, string> $filtered */
         $filtered = apply_filters('bjlg_known_destination_ids', $destinations);

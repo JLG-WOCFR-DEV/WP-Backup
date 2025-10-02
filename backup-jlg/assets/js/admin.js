@@ -1,141 +1,70 @@
 jQuery(document).ready(function($) {
 
     // --- GESTIONNAIRE DE PLANIFICATION ---
-    const $scheduleForm = $('#bjlg-schedule-form');
-    if ($scheduleForm.length && typeof bjlg_ajax !== 'undefined') {
-        const $recurrenceSelect = $scheduleForm.find('#bjlg-schedule-recurrence');
-        const $weeklyOptionsRow = $scheduleForm.find('.bjlg-schedule-weekly-options');
-        const $timeOptionsRow = $scheduleForm.find('.bjlg-schedule-time-options');
-
-        let $feedback = $('#bjlg-schedule-feedback');
-        if (!$feedback.length) {
-            $feedback = $('<div/>', {
-                id: 'bjlg-schedule-feedback',
-                class: 'notice',
-                style: 'display:none;'
-            });
-
-            const $submitRow = $scheduleForm.find('.submit').last();
-            if ($submitRow.length) {
-                $feedback.insertBefore($submitRow);
-            } else {
-                $feedback.prependTo($scheduleForm);
-            }
+    (function setupScheduleManager() {
+        const $scheduleForm = $('#bjlg-schedule-form');
+        if (!$scheduleForm.length || typeof bjlg_ajax !== 'object') {
+            return;
         }
 
-        let $nextRunDisplay = $('#bjlg-schedule-next-run');
-        if (!$nextRunDisplay.length) {
-            $nextRunDisplay = $('<p/>', {
-                id: 'bjlg-schedule-next-run',
-                class: 'description',
-                'aria-live': 'polite'
-            }).text('Prochaine exécution : Non planifiée');
-
-            const $submitRow = $scheduleForm.find('.submit').last();
-            if ($submitRow.length) {
-                $nextRunDisplay.insertAfter($submitRow);
-            } else {
-                $scheduleForm.append($nextRunDisplay);
-            }
+        const $scheduleList = $scheduleForm.find('.bjlg-schedule-list');
+        const $template = $scheduleList.find('.bjlg-schedule-item--template').first();
+        if (!$template.length) {
+            return;
         }
 
-        let nextRunLabel = $nextRunDisplay.data('label');
-        if (typeof nextRunLabel !== 'string' || nextRunLabel.trim() === '') {
-            const initialText = ($nextRunDisplay.text() || '').trim();
-            const labelMatch = initialText.match(/^(.+?:)/);
-            if (labelMatch && labelMatch[1]) {
-                nextRunLabel = labelMatch[1];
-            } else {
-                nextRunLabel = 'Prochaine exécution :';
-            }
-        }
+        const recurrenceLabels = {
+            disabled: 'Désactivée',
+            hourly: 'Toutes les heures',
+            twice_daily: 'Deux fois par jour',
+            daily: 'Journalière',
+            weekly: 'Hebdomadaire',
+            monthly: 'Mensuelle'
+        };
 
-        function setRowVisibility($row, shouldShow) {
-            if (!$row || !$row.length) {
+        const componentLabels = {
+            db: { label: 'Base de données', color: '#6366f1' },
+            plugins: { label: 'Extensions', color: '#f59e0b' },
+            themes: { label: 'Thèmes', color: '#10b981' },
+            uploads: { label: 'Médias', color: '#3b82f6' }
+        };
+
+        const defaultNextRunSummary = { next_run_formatted: 'Non planifié', next_run_relative: '' };
+        const defaultScheduleData = parseJSONAttr($scheduleForm.attr('data-default-schedule')) || {};
+        const initialNextRuns = parseJSONAttr($scheduleForm.attr('data-next-runs')) || {};
+        let newScheduleCounter = 0;
+
+        const destinationLabels = {};
+        $scheduleForm.find('[data-field="secondary_destinations"]').each(function() {
+            const value = ($(this).val() || '').toString();
+            if (!value || destinationLabels[value]) {
                 return;
             }
+            const labelText = ($(this).closest('label').text() || value).replace(/\s+/g, ' ').trim();
+            destinationLabels[value] = labelText || value;
+        });
 
-            if (shouldShow) {
-                $row.show().attr('aria-hidden', 'false');
-            } else {
-                $row.hide().attr('aria-hidden', 'true');
+        const $feedback = $('#bjlg-schedule-feedback');
+
+        function parseJSONAttr(raw) {
+            if (typeof raw !== 'string' || raw.trim() === '') {
+                return null;
             }
-        }
-
-        function toggleScheduleOptions() {
-            const value = ($recurrenceSelect.val() || '').toString();
-            setRowVisibility($weeklyOptionsRow, value === 'weekly');
-            setRowVisibility($timeOptionsRow, value !== 'disabled');
-        }
-
-        if ($recurrenceSelect.length) {
-            $recurrenceSelect.on('change', function() {
-                toggleScheduleOptions();
-                updateScheduleSummary();
-            });
-            toggleScheduleOptions();
+            try {
+                return JSON.parse(raw);
+            } catch (error) {
+                return null;
+            }
         }
 
         function resetScheduleFeedback() {
             if (!$feedback.length) {
                 return;
             }
-
-            $feedback
-                .removeClass('notice-success notice-error notice-info')
+            $feedback.removeClass('notice-success notice-error notice-info')
                 .hide()
                 .empty()
                 .removeAttr('role');
-        }
-
-        function normalizeErrorList(raw) {
-            const messages = [];
-            const seen = new Set();
-
-            function pushMessage(value) {
-                if (typeof value !== 'string') {
-                    return;
-                }
-
-                const trimmed = value.trim();
-                if (trimmed === '' || seen.has(trimmed)) {
-                    return;
-                }
-
-                seen.add(trimmed);
-                messages.push(trimmed);
-            }
-
-            (function walk(value) {
-                if (value === undefined || value === null) {
-                    return;
-                }
-
-                if (typeof value === 'string') {
-                    pushMessage(value);
-                    return;
-                }
-
-                if (Array.isArray(value)) {
-                    value.forEach(walk);
-                    return;
-                }
-
-                if (typeof value === 'object') {
-                    if (typeof value.message === 'string') {
-                        pushMessage(value.message);
-                    }
-
-                    Object.keys(value).forEach(function(key) {
-                        if (key === 'message') {
-                            return;
-                        }
-                        walk(value[key]);
-                    });
-                }
-            })(raw);
-
-            return messages;
         }
 
         function renderScheduleFeedback(type, message, details) {
@@ -148,7 +77,7 @@ jQuery(document).ready(function($) {
                 classes.push('notice-success');
             } else if (type === 'error') {
                 classes.push('notice-error');
-            } else {
+            } else if (type === 'info') {
                 classes.push('notice-info');
             }
 
@@ -169,16 +98,164 @@ jQuery(document).ready(function($) {
             $feedback.attr('role', 'alert').show();
         }
 
-        function updateNextRunDisplay(nextRunText) {
-            if (!$nextRunDisplay.length) {
-                return;
+        function normalizeErrorList(raw) {
+            const messages = [];
+            const seen = new Set();
+
+            function push(value) {
+                if (typeof value !== 'string') {
+                    return;
+                }
+                const trimmed = value.trim();
+                if (!trimmed || seen.has(trimmed)) {
+                    return;
+                }
+                seen.add(trimmed);
+                messages.push(trimmed);
             }
 
-            const displayText = nextRunText && nextRunText.trim() !== ''
-                ? nextRunText.trim()
-                : 'Non planifiée';
+            (function walk(value) {
+                if (value === undefined || value === null) {
+                    return;
+                }
+                if (typeof value === 'string') {
+                    push(value);
+                    return;
+                }
+                if (Array.isArray(value)) {
+                    value.forEach(walk);
+                    return;
+                }
+                if (typeof value === 'object') {
+                    if (typeof value.message === 'string') {
+                        push(value.message);
+                    }
+                    Object.keys(value).forEach(function(key) {
+                        if (key === 'message') {
+                            return;
+                        }
+                        walk(value[key]);
+                    });
+                }
+            })(raw);
 
-            $nextRunDisplay.text(nextRunLabel + ' ' + displayText);
+            return messages;
+        }
+
+        function scheduleItems() {
+            return $scheduleList.find('.bjlg-schedule-item').not('.bjlg-schedule-item--template');
+        }
+
+        function cloneTemplate() {
+            const $clone = $template.clone();
+            $clone.removeClass('bjlg-schedule-item--template');
+            $clone.removeAttr('data-template');
+            $clone.removeAttr('style');
+            return $clone;
+        }
+
+        function assignFieldPrefix($item, prefix) {
+            $item.find('[name]').each(function() {
+                const $field = $(this);
+                const name = $field.attr('name');
+                if (!name) {
+                    return;
+                }
+                const updated = name.replace(/schedules\[[^\]]+\]/, 'schedules[' + prefix + ']');
+                $field.attr('name', updated);
+            });
+
+            const $labelField = $item.find('[data-field="label"]');
+            if ($labelField.length) {
+                const oldId = $labelField.attr('id');
+                const newId = 'bjlg-schedule-label-' + prefix;
+                $labelField.attr('id', newId);
+                if (typeof oldId === 'string') {
+                    $item.find('label[for="' + oldId + '"]').attr('for', newId);
+                }
+                $item.find('label[for^="bjlg-schedule-label-"]').attr('for', newId);
+            }
+        }
+
+        function setScheduleId($item, scheduleId) {
+            $item.attr('data-schedule-id', scheduleId || '');
+            $item.find('[data-field="id"]').val(scheduleId || '');
+            updateRunButtonState($item);
+        }
+
+        function updateRunButtonState($item) {
+            const $button = $item.find('.bjlg-run-schedule-now');
+            if (!$button.length) {
+                return;
+            }
+            const scheduleId = ($item.find('[data-field="id"]').val() || '').toString();
+            $button.prop('disabled', !scheduleId);
+        }
+
+        function toggleScheduleRows($item) {
+            const recurrence = ($item.find('[data-field="recurrence"]').val() || '').toString();
+            const $weekly = $item.find('.bjlg-schedule-weekly-options');
+            const $time = $item.find('.bjlg-schedule-time-options');
+
+            if ($weekly.length) {
+                if (recurrence === 'weekly') {
+                    $weekly.show().attr('aria-hidden', 'false');
+                } else {
+                    $weekly.hide().attr('aria-hidden', 'true');
+                }
+            }
+
+            if ($time.length) {
+                if (recurrence === 'disabled') {
+                    $time.hide().attr('aria-hidden', 'true');
+                } else {
+                    $time.show().attr('aria-hidden', 'false');
+                }
+            }
+        }
+
+        function normalizePatterns(value) {
+            if (Array.isArray(value)) {
+                return value.map(function(entry) {
+                    return (entry || '').toString().trim();
+                }).filter(Boolean);
+            }
+            if (typeof value !== 'string') {
+                return [];
+            }
+            return value.split(/[
+,]+/).map(function(entry) {
+                return entry.trim();
+            }).filter(Boolean);
+        }
+
+        function patternsToTextarea(value) {
+            if (Array.isArray(value)) {
+                return value.join('
+');
+            }
+            if (typeof value === 'string') {
+                return value;
+            }
+            return '';
+        }
+
+        function normalizePostChecks(value) {
+            const normalized = { checksum: false, dry_run: false };
+            if (Array.isArray(value)) {
+                value.forEach(function(entry) {
+                    const key = (entry || '').toString().toLowerCase();
+                    if (key === 'checksum' || key === 'dry_run') {
+                        normalized[key] = true;
+                    }
+                });
+                return normalized;
+            }
+            if (value && typeof value === 'object') {
+                normalized.checksum = !!value.checksum;
+                normalized.dry_run = !!value.dry_run;
+            }
+            return normalized;
         }
 
         const badgeStyles = {
@@ -202,42 +279,12 @@ jQuery(document).ready(function($) {
             marginBottom: '6px'
         };
 
-        const recurrenceLabels = {
-            disabled: 'Désactivée',
-            hourly: 'Toutes les heures',
-            twice_daily: 'Deux fois par jour',
-            daily: 'Journalière',
-            weekly: 'Hebdomadaire',
-            monthly: 'Mensuelle'
-        };
-
-        const componentLabels = {
-            db: { label: 'Base de données', color: '#6366f1' },
-            plugins: { label: 'Extensions', color: '#f59e0b' },
-            themes: { label: 'Thèmes', color: '#10b981' },
-            uploads: { label: 'Médias', color: '#3b82f6' }
-        };
-
-        const $summary = $('#bjlg-schedule-summary');
-        const $overview = $('#bjlg-schedule-overview');
-        const $overviewContent = $('#bjlg-schedule-overview-content');
-        const $overviewFrequency = $('#bjlg-schedule-overview-frequency');
-
         function createScheduleBadgeElement(badge) {
             const classes = Array.isArray(badge.classes) ? badge.classes.slice() : [];
             classes.unshift('bjlg-badge');
-
-            const $badge = $('<span/>', {
-                class: classes.join(' '),
-                text: badge.label
-            });
-
-            const styles = $.extend({}, badgeStyles, {
-                backgroundColor: badge.color || '#4b5563'
-            });
-
+            const $badge = $('<span/>', { class: classes.join(' '), text: badge.label });
+            const styles = $.extend({}, badgeStyles, { backgroundColor: badge.color || '#4b5563' });
             $badge.css(styles);
-
             return $badge;
         }
 
@@ -245,117 +292,64 @@ jQuery(document).ready(function($) {
             if (!$target || !$target.length) {
                 return;
             }
-
             const fragment = $(document.createDocumentFragment());
-
             groups.forEach(function(group) {
                 const $group = $('<div/>', { class: 'bjlg-badge-group' }).css(groupStyles);
-                $('<strong/>', { text: group.title + ' :' }).css({ marginRight: '4px' }).appendTo($group);
-
+                $('<strong/>', { class: 'bjlg-badge-group-title', text: group.title + ' :' }).appendTo($group);
                 group.badges.forEach(function(badge) {
                     $group.append(createScheduleBadgeElement(badge));
                 });
-
                 fragment.append($group);
             });
-
             $target.empty().append(fragment);
         }
 
-        function countPatternEntries(rawValue) {
-            if (typeof rawValue !== 'string') {
-                return 0;
-            }
-
-            return rawValue.split(/[\r\n,]+/).reduce(function(total, entry) {
-                return entry.trim() === '' ? total : total + 1;
-            }, 0);
-        }
-
-        function updateScheduleSummary() {
-            if (!$summary.length && !$overviewContent.length && !$overviewFrequency.length) {
-                return;
-            }
-
-            const recurrenceValue = ($recurrenceSelect.val() || '').toString();
-
-            if ($overview.length) {
-                $overview.attr('data-recurrence', recurrenceValue);
-            }
-
-            if ($overviewFrequency && $overviewFrequency.length) {
-                const prefix = ($overviewFrequency.data('prefix') || '').toString();
-                const label = recurrenceLabels[recurrenceValue] || (recurrenceValue ? recurrenceValue : '—');
-                $overviewFrequency.text(prefix + label);
-            }
-
+        function buildSummaryGroupsFromData(data) {
+            const components = Array.isArray(data.components) ? data.components : [];
             const componentBadges = [];
             const seenComponents = new Set();
-
-            $scheduleForm.find('input[name="components[]"]').each(function() {
-                const $input = $(this);
-                const value = ($input.val() || '').toString();
-                if (!$input.is(':checked') || value === '') {
-                    return;
-                }
-
-                const key = value.toLowerCase();
-                if (seenComponents.has(key)) {
+            components.forEach(function(component) {
+                const key = (component || '').toString();
+                if (!key || seenComponents.has(key)) {
                     return;
                 }
                 seenComponents.add(key);
-
-                const config = componentLabels[key] || { label: value, color: '#4b5563' };
-                componentBadges.push({
-                    label: config.label,
-                    color: config.color,
-                    classes: ['bjlg-badge-component']
-                });
+                const config = componentLabels[key] || { label: key, color: '#4b5563' };
+                componentBadges.push({ label: config.label, color: config.color, classes: ['bjlg-badge-component'] });
             });
-
             if (!componentBadges.length) {
-                componentBadges.push({
-                    label: 'Aucun composant',
-                    color: '#4b5563',
-                    classes: ['bjlg-badge-component', 'bjlg-badge-empty']
-                });
+                componentBadges.push({ label: 'Aucun composant', color: '#4b5563', classes: ['bjlg-badge-component', 'bjlg-badge-empty'] });
             }
-
-            const encryptChecked = $scheduleForm.find('[name="encrypt"]').is(':checked');
-            const incrementalChecked = $scheduleForm.find('[name="incremental"]').is(':checked');
 
             const optionBadges = [
                 {
-                    label: encryptChecked ? 'Chiffrée' : 'Non chiffrée',
-                    color: encryptChecked ? '#7c3aed' : '#4b5563',
+                    label: data.encrypt ? 'Chiffrée' : 'Non chiffrée',
+                    color: data.encrypt ? '#7c3aed' : '#4b5563',
                     classes: ['bjlg-badge-encrypted']
                 },
                 {
-                    label: incrementalChecked ? 'Incrémentale' : 'Complète',
-                    color: incrementalChecked ? '#2563eb' : '#6b7280',
+                    label: data.incremental ? 'Incrémentale' : 'Complète',
+                    color: data.incremental ? '#2563eb' : '#6b7280',
                     classes: ['bjlg-badge-incremental']
                 }
             ];
 
-            const includeCount = countPatternEntries(($scheduleForm.find('[name="include_patterns"]').val() || '').toString());
-            const excludeCount = countPatternEntries(($scheduleForm.find('[name="exclude_patterns"]').val() || '').toString());
-
-            const includeBadges = includeCount > 0
-                ? [{ label: includeCount + ' motif(s)', color: '#0ea5e9', classes: ['bjlg-badge-include'] }]
+            const includePatterns = normalizePatterns(data.include_patterns);
+            const includeBadges = includePatterns.length
+                ? [{ label: includePatterns.length + ' motif(s)', color: '#0ea5e9', classes: ['bjlg-badge-include'] }]
                 : [{ label: 'Tout le contenu', color: '#10b981', classes: ['bjlg-badge-include'] }];
 
-            const excludeBadges = excludeCount > 0
-                ? [{ label: excludeCount + ' exclusion(s)', color: '#f97316', classes: ['bjlg-badge-exclude'] }]
+            const excludePatterns = normalizePatterns(data.exclude_patterns);
+            const excludeBadges = excludePatterns.length
+                ? [{ label: excludePatterns.length + ' exclusion(s)', color: '#f97316', classes: ['bjlg-badge-exclude'] }]
                 : [{ label: 'Aucune', color: '#4b5563', classes: ['bjlg-badge-exclude'] }];
 
-            const checksumChecked = $scheduleForm.find('input[name="post_checks[]"][value="checksum"]').is(':checked');
-            const dryRunChecked = $scheduleForm.find('input[name="post_checks[]"][value="dry_run"]').is(':checked');
-
+            const postChecks = normalizePostChecks(data.post_checks);
             const controlBadges = [];
-            if (checksumChecked) {
+            if (postChecks.checksum) {
                 controlBadges.push({ label: 'Checksum', color: '#2563eb', classes: ['bjlg-badge-checksum'] });
             }
-            if (dryRunChecked) {
+            if (postChecks.dry_run) {
                 controlBadges.push({ label: 'Test restauration', color: '#7c3aed', classes: ['bjlg-badge-restore'] });
             }
             if (!controlBadges.length) {
@@ -363,38 +357,22 @@ jQuery(document).ready(function($) {
             }
 
             const destinationBadges = [];
+            const destinations = Array.isArray(data.secondary_destinations) ? data.secondary_destinations : [];
             const seenDestinations = new Set();
-
-            $scheduleForm.find('input[name="secondary_destinations[]"]:checked').each(function() {
-                const $input = $(this);
-                const value = ($input.val() || '').toString();
-                if (value === '') {
+            destinations.forEach(function(destination) {
+                const key = (destination || '').toString();
+                if (!key || seenDestinations.has(key)) {
                     return;
                 }
-
-                const normalized = value.toLowerCase();
-                if (seenDestinations.has(normalized)) {
-                    return;
-                }
-                seenDestinations.add(normalized);
-
-                const labelText = ($input.closest('label').text() || '').trim().replace(/\s+/g, ' ');
-                destinationBadges.push({
-                    label: labelText !== '' ? labelText : value,
-                    color: '#0ea5e9',
-                    classes: ['bjlg-badge-destination']
-                });
+                seenDestinations.add(key);
+                const label = destinationLabels[key] || key;
+                destinationBadges.push({ label: label, color: '#0ea5e9', classes: ['bjlg-badge-destination'] });
             });
-
             if (!destinationBadges.length) {
-                destinationBadges.push({
-                    label: 'Stockage local',
-                    color: '#4b5563',
-                    classes: ['bjlg-badge-destination']
-                });
+                destinationBadges.push({ label: 'Stockage local', color: '#4b5563', classes: ['bjlg-badge-destination'] });
             }
 
-            const groups = [
+            return [
                 { title: 'Composants', badges: componentBadges },
                 { title: 'Options', badges: optionBadges },
                 { title: 'Inclusions', badges: includeBadges },
@@ -402,164 +380,446 @@ jQuery(document).ready(function($) {
                 { title: 'Contrôles', badges: controlBadges },
                 { title: 'Destinations', badges: destinationBadges }
             ];
-
-            if ($summary.length) {
-                renderScheduleBadgeGroups($summary, groups);
-            }
-
-            if ($overviewContent.length) {
-                renderScheduleBadgeGroups($overviewContent, groups);
-            }
         }
 
-        $scheduleForm.on('change', 'input[name="components[]"], [name="encrypt"], [name="incremental"]', updateScheduleSummary);
-        $scheduleForm.on('input', 'textarea[name="include_patterns"], textarea[name="exclude_patterns"]', updateScheduleSummary);
-        $scheduleForm.on('change', 'input[name="post_checks[]"], input[name="secondary_destinations[]"]', updateScheduleSummary);
-        $scheduleForm.on('change', '[role="switch"]', function() {
-            const $input = $(this);
-            $input.attr('aria-checked', $input.is(':checked') ? 'true' : 'false');
+        function collectScheduleData($item, forSummary) {
+            const id = ($item.find('[data-field="id"]').val() || '').toString();
+            const label = ($item.find('[data-field="label"]').val() || '').toString();
+            const recurrence = ($item.find('[data-field="recurrence"]').val() || 'disabled').toString();
+            const day = ($item.find('[data-field="day"]').val() || 'sunday').toString();
+            const time = ($item.find('[data-field="time"]').val() || '23:59').toString();
+
+            const components = [];
+            $item.find('[data-field="components"]').each(function() {
+                const value = ($(this).val() || '').toString();
+                if ($(this).is(':checked') && value) {
+                    components.push(value);
+                }
+            });
+
+            const encrypt = $item.find('[data-field="encrypt"]').is(':checked');
+            const incremental = $item.find('[data-field="incremental"]').is(':checked');
+
+            const includeRaw = ($item.find('[data-field="include_patterns"]').val() || '').toString();
+            const excludeRaw = ($item.find('[data-field="exclude_patterns"]').val() || '').toString();
+
+            const postChecksValues = [];
+            $item.find('[data-field="post_checks"]:checked').each(function() {
+                const value = ($(this).val() || '').toString();
+                if (value) {
+                    postChecksValues.push(value);
+                }
+            });
+
+            const destinations = [];
+            $item.find('[data-field="secondary_destinations"]:checked').each(function() {
+                const value = ($(this).val() || '').toString();
+                if (value) {
+                    destinations.push(value);
+                }
+            });
+
+            const data = {
+                id: id,
+                label: label,
+                recurrence: recurrence,
+                day: day,
+                time: time,
+                components: components,
+                encrypt: encrypt,
+                incremental: incremental,
+                post_checks: postChecksValues,
+                secondary_destinations: destinations
+            };
+
+            if (forSummary) {
+                data.include_patterns = normalizePatterns(includeRaw);
+                data.exclude_patterns = normalizePatterns(excludeRaw);
+            } else {
+                data.include_patterns = includeRaw;
+                data.exclude_patterns = excludeRaw;
+            }
+
+            return data;
+        }
+
+        function updateScheduleSummaryForItem($item) {
+            const summaryData = collectScheduleData($item, true);
+            const $summary = $item.find('[data-field="summary"]');
+            renderScheduleBadgeGroups($summary, buildSummaryGroupsFromData(summaryData));
+        }
+
+        function populateScheduleItem($item, schedule, nextRun, index) {
+            const prefix = schedule && schedule.id ? schedule.id : 'schedule_' + (index + 1);
+            assignFieldPrefix($item, prefix);
+            const scheduleId = schedule && schedule.id ? schedule.id : '';
+            setScheduleId($item, scheduleId);
+
+            $item.find('[data-field="label"]').val(schedule && schedule.label ? schedule.label : '');
+
+            $item.find('[data-field="recurrence"]').val(schedule && schedule.recurrence ? schedule.recurrence : 'disabled');
+            $item.find('[data-field="day"]').val(schedule && schedule.day ? schedule.day : 'sunday');
+            $item.find('[data-field="time"]').val(schedule && schedule.time ? schedule.time : '23:59');
+
+            const components = Array.isArray(schedule && schedule.components) ? schedule.components : (defaultScheduleData.components || []);
+            $item.find('[data-field="components"]').each(function() {
+                const value = ($(this).val() || '').toString();
+                $(this).prop('checked', components.indexOf(value) !== -1);
+            });
+
+            $item.find('[data-field="encrypt"]').prop('checked', !!(schedule && schedule.encrypt));
+            $item.find('[data-field="incremental"]').prop('checked', !!(schedule && schedule.incremental));
+
+            const includeValue = schedule && schedule.include_patterns ? schedule.include_patterns : (defaultScheduleData.include_patterns || []);
+            const excludeValue = schedule && schedule.exclude_patterns ? schedule.exclude_patterns : (defaultScheduleData.exclude_patterns || []);
+            $item.find('[data-field="include_patterns"]').val(patternsToTextarea(includeValue));
+            $item.find('[data-field="exclude_patterns"]').val(patternsToTextarea(excludeValue));
+
+            const postChecks = normalizePostChecks(schedule && schedule.post_checks);
+            $item.find('[data-field="post_checks"]').each(function() {
+                const value = ($(this).val() || '').toString();
+                if (value === 'checksum') {
+                    $(this).prop('checked', postChecks.checksum);
+                } else if (value === 'dry_run') {
+                    $(this).prop('checked', postChecks.dry_run);
+                } else {
+                    $(this).prop('checked', postChecks[value] || false);
+                }
+            });
+
+            const destinations = Array.isArray(schedule && schedule.secondary_destinations) ? schedule.secondary_destinations : (defaultScheduleData.secondary_destinations || []);
+            $item.find('[data-field="secondary_destinations"]').each(function() {
+                const value = ($(this).val() || '').toString();
+                $(this).prop('checked', destinations.indexOf(value) !== -1);
+            });
+
+            const info = nextRun && typeof nextRun === 'object' ? nextRun : defaultNextRunSummary;
+            const $nextRunValue = $item.find('.bjlg-next-run-value');
+            if ($nextRunValue.length) {
+                $nextRunValue.text(info.next_run_formatted || 'Non planifié');
+            }
+            const $nextRunRelative = $item.find('.bjlg-next-run-relative');
+            if ($nextRunRelative.length) {
+                if (info.next_run_relative) {
+                    $nextRunRelative.text('(' + info.next_run_relative + ')').show();
+                } else {
+                    $nextRunRelative.text('').hide();
+                }
+            }
+
+            toggleScheduleRows($item);
+            updateScheduleSummaryForItem($item);
+            updateRunButtonState($item);
+        }
+
+        function rebuildScheduleItems(schedules, nextRuns) {
+            scheduleItems().remove();
+
+            if (!Array.isArray(schedules) || !schedules.length) {
+                const $item = cloneTemplate();
+                populateScheduleItem($item, defaultScheduleData, defaultNextRunSummary, 0);
+                $item.insertBefore($template);
+                return;
+            }
+
+            schedules.forEach(function(schedule, index) {
+                if (!schedule || typeof schedule !== 'object') {
+                    return;
+                }
+                const scheduleId = schedule.id || 'schedule_' + (index + 1);
+                const nextRun = nextRuns && typeof nextRuns === 'object' ? nextRuns[scheduleId] : null;
+                const $item = cloneTemplate();
+                populateScheduleItem($item, schedule, nextRun, index);
+                $item.insertBefore($template);
+            });
+        }
+
+        function rebuildOverview(schedules, nextRuns) {
+            const $overview = $('#bjlg-schedule-overview');
+            if (!$overview.length) {
+                return;
+            }
+            const $list = $overview.find('.bjlg-schedule-overview-list');
+            if (!$list.length) {
+                return;
+            }
+
+            $list.empty();
+
+            if (!Array.isArray(schedules) || !schedules.length) {
+                $('<p/>', { class: 'description', text: 'Aucune planification active pour le moment.' }).appendTo($list);
+                return;
+            }
+
+            schedules.forEach(function(schedule, index) {
+                if (!schedule || typeof schedule !== 'object') {
+                    return;
+                }
+                const scheduleId = schedule.id || 'schedule_' + (index + 1);
+                const label = schedule.label || ('Planification #' + (index + 1));
+                const recurrence = schedule.recurrence || 'disabled';
+                const recurrenceLabel = recurrenceLabels[recurrence] || recurrence || '—';
+                const info = nextRuns && typeof nextRuns === 'object' ? nextRuns[scheduleId] : null;
+                const nextRun = info && typeof info === 'object' ? info : defaultNextRunSummary;
+
+                const $card = $('<article/>', {
+                    class: 'bjlg-schedule-overview-card',
+                    'data-schedule-id': scheduleId,
+                    'data-recurrence': recurrence
+                });
+
+                const $header = $('<header/>', { class: 'bjlg-schedule-overview-card__header' }).appendTo($card);
+                $('<h4/>', { class: 'bjlg-schedule-overview-card__title', text: label }).appendTo($header);
+
+                const $frequency = $('<p/>', {
+                    class: 'bjlg-schedule-overview-frequency',
+                    text: 'Fréquence : ' + recurrenceLabel
+                }).appendTo($header);
+                $frequency.attr('data-prefix', 'Fréquence : ');
+
+                const $nextRun = $('<p/>', { class: 'bjlg-schedule-overview-next-run' }).appendTo($header);
+                $('<strong/>').text('Prochaine exécution :').appendTo($nextRun);
+                $('<span/>', {
+                    class: 'bjlg-next-run-value',
+                    text: nextRun.next_run_formatted || 'Non planifié'
+                }).appendTo($nextRun);
+                const $relative = $('<span/>', { class: 'bjlg-next-run-relative' }).appendTo($nextRun);
+                if (nextRun.next_run_relative) {
+                    $relative.text('(' + nextRun.next_run_relative + ')');
+                } else {
+                    $relative.hide();
+                }
+
+                const $summary = $('<div/>', { class: 'bjlg-schedule-overview-card__summary' }).appendTo($card);
+                renderScheduleBadgeGroups($summary, buildSummaryGroupsFromData(schedule));
+
+                $list.append($card);
+            });
+        }
+
+        function updateOverviewFromNextRuns(nextRuns) {
+            if (!nextRuns || typeof nextRuns !== 'object') {
+                return;
+            }
+            const $overview = $('#bjlg-schedule-overview');
+            if (!$overview.length) {
+                return;
+            }
+
+            Object.keys(nextRuns).forEach(function(scheduleId) {
+                const info = nextRuns[scheduleId];
+                if (!info || typeof info !== 'object') {
+                    return;
+                }
+                const $card = $overview.find('[data-schedule-id="' + scheduleId + '"]');
+                if (!$card.length) {
+                    return;
+                }
+
+                const recurrence = info.recurrence || 'disabled';
+                const recurrenceLabel = recurrenceLabels[recurrence] || recurrence || '—';
+                $card.attr('data-recurrence', recurrence);
+
+                const $frequency = $card.find('.bjlg-schedule-overview-frequency');
+                if ($frequency.length) {
+                    const prefix = ($frequency.data('prefix') || 'Fréquence : ').toString();
+                    $frequency.text(prefix + recurrenceLabel);
+                }
+
+                const $nextRunValue = $card.find('.bjlg-next-run-value');
+                if ($nextRunValue.length) {
+                    $nextRunValue.text(info.next_run_formatted || 'Non planifié');
+                }
+
+                const $relative = $card.find('.bjlg-next-run-relative');
+                if ($relative.length) {
+                    if (info.next_run_relative) {
+                        $relative.text('(' + info.next_run_relative + ')').show();
+                    } else {
+                        $relative.text('').hide();
+                    }
+                }
+            });
+        }
+
+        function collectSchedulesForRequest() {
+            const schedules = [];
+            scheduleItems().each(function() {
+                schedules.push(collectScheduleData($(this), false));
+            });
+            return schedules;
+        }
+
+        // Initialisation des planifications existantes
+        scheduleItems().each(function(index) {
+            const $item = $(this);
+            const scheduleId = ($item.find('[data-field="id"]').val() || '').toString();
+            const nextRun = scheduleId && initialNextRuns[scheduleId] ? initialNextRuns[scheduleId] : defaultNextRunSummary;
+            populateScheduleItem($item, collectScheduleData($item, true), nextRun, index);
         });
 
-        updateNextRunDisplay(($nextRunDisplay.text() || '').replace(/^.*?:\s*/, ''));
-        updateScheduleSummary();
+        // Gestion des événements de champ
+        $scheduleForm.on('change', '.bjlg-schedule-item [data-field="recurrence"]', function() {
+            const $item = $(this).closest('.bjlg-schedule-item');
+            toggleScheduleRows($item);
+            updateScheduleSummaryForItem($item);
+        });
 
+        $scheduleForm.on('change', '.bjlg-schedule-item [data-field="components"], .bjlg-schedule-item [data-field="encrypt"], .bjlg-schedule-item [data-field="incremental"], .bjlg-schedule-item [data-field="day"], .bjlg-schedule-item [data-field="time"], .bjlg-schedule-item [data-field="post_checks"], .bjlg-schedule-item [data-field="secondary_destinations"]', function() {
+            updateScheduleSummaryForItem($(this).closest('.bjlg-schedule-item'));
+        });
+
+        $scheduleForm.on('input', '.bjlg-schedule-item [data-field="label"], .bjlg-schedule-item textarea[data-field]', function() {
+            updateScheduleSummaryForItem($(this).closest('.bjlg-schedule-item'));
+        });
+
+        // Ajout d'une planification
+        $scheduleForm.on('click', '.bjlg-add-schedule', function(event) {
+            event.preventDefault();
+            resetScheduleFeedback();
+            const $item = cloneTemplate();
+            const prefix = 'new_' + (++newScheduleCounter);
+            assignFieldPrefix($item, prefix);
+            setScheduleId($item, '');
+            populateScheduleItem($item, defaultScheduleData, defaultNextRunSummary, scheduleItems().length);
+            $item.insertBefore($template);
+            renderScheduleFeedback('info', 'Nouvelle planification ajoutée. Enregistrez pour la synchroniser.', []);
+        });
+
+        // Suppression d'une planification
+        $scheduleForm.on('click', '.bjlg-remove-schedule', function(event) {
+            event.preventDefault();
+            resetScheduleFeedback();
+            const $item = $(this).closest('.bjlg-schedule-item');
+            if ($item.hasClass('bjlg-schedule-item--template')) {
+                return;
+            }
+            if (scheduleItems().length <= 1) {
+                renderScheduleFeedback('error', 'Vous devez conserver au moins une planification active.', []);
+                return;
+            }
+            $item.slideUp(150, function() {
+                $(this).remove();
+            });
+        });
+
+        // Exécution manuelle d'une planification
+        $scheduleForm.on('click', '.bjlg-run-schedule-now', function(event) {
+            event.preventDefault();
+            resetScheduleFeedback();
+            const $button = $(this);
+            const $item = $button.closest('.bjlg-schedule-item');
+            const scheduleId = ($item.find('[data-field="id"]').val() || '').toString();
+            if (!scheduleId) {
+                renderScheduleFeedback('error', 'Enregistrez cette planification avant de l\'exécuter.', []);
+                return;
+            }
+
+            $button.prop('disabled', true);
+
+            $.ajax({
+                url: bjlg_ajax.ajax_url,
+                method: 'POST',
+                data: {
+                    action: 'bjlg_run_scheduled_now',
+                    nonce: bjlg_ajax.nonce,
+                    schedule_id: scheduleId
+                }
+            }).done(function(response) {
+                if (response && response.success) {
+                    const data = (response && response.data) || {};
+                    renderScheduleFeedback('success', typeof data.message === 'string' ? data.message : 'Sauvegarde planifiée lancée.', []);
+                } else {
+                    const data = response && response.data ? response.data : response;
+                    const message = data && typeof data.message === 'string' ? data.message : 'Impossible d\'exécuter la planification.';
+                    const details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
+                    renderScheduleFeedback('error', message, details);
+                }
+            }).fail(function(jqXHR) {
+                let message = 'Erreur de communication avec le serveur.';
+                let details = [];
+                if (jqXHR && jqXHR.responseJSON) {
+                    const data = jqXHR.responseJSON.data || jqXHR.responseJSON;
+                    if (data && typeof data.message === 'string') {
+                        message = data.message;
+                    }
+                    details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
+                }
+                renderScheduleFeedback('error', message, details);
+            }).always(function() {
+                $button.prop('disabled', false);
+                updateRunButtonState($item);
+            });
+        });
+
+        // Soumission du formulaire
         $scheduleForm.on('submit', function(event) {
             event.preventDefault();
-
             resetScheduleFeedback();
 
-            const $submitButton = $scheduleForm.find('button[type="submit"]').first();
-            $submitButton.prop('disabled', true);
+            const schedules = collectSchedulesForRequest();
+            if (!schedules.length) {
+                renderScheduleFeedback('error', 'Aucune planification valide fournie.', []);
+                return;
+            }
 
             const payload = {
                 action: 'bjlg_save_schedule_settings',
-                nonce: bjlg_ajax.nonce
+                nonce: bjlg_ajax.nonce,
+                schedules: JSON.stringify(schedules)
             };
 
-            const recurrenceField = $scheduleForm.find('[name="recurrence"]');
-            if (recurrenceField.length) {
-                payload.recurrence = (recurrenceField.val() || '').toString();
-            }
-
-            const dayField = $scheduleForm.find('[name="day"]');
-            if (dayField.length) {
-                payload.day = (dayField.val() || '').toString();
-            }
-
-            const timeField = $scheduleForm.find('[name="time"]');
-            if (timeField.length) {
-                payload.time = (timeField.val() || '').toString();
-            }
-
-            const componentValues = [];
-            $scheduleForm.find('input[name="components[]"]').each(function() {
-                const $input = $(this);
-                const value = ($input.val() || '').toString();
-                if ($input.is(':checked') && value) {
-                    componentValues.push(value);
-                }
-            });
-            payload.components = componentValues;
-
-            ['encrypt', 'incremental'].forEach(function(fieldName) {
-                const $field = $scheduleForm.find('[name="' + fieldName + '"]');
-                if (!$field.length) {
-                    return;
-                }
-                payload[fieldName] = $field.is(':checked') ? 'true' : 'false';
-            });
-
-            payload.include_patterns = ($scheduleForm.find('[name="include_patterns"]').val() || '').toString();
-            payload.exclude_patterns = ($scheduleForm.find('[name="exclude_patterns"]').val() || '').toString();
-
-            const postCheckValues = [];
-            $scheduleForm.find('input[name="post_checks[]"]:checked').each(function() {
-                const value = ($(this).val() || '').toString();
-                if (value) {
-                    postCheckValues.push(value);
-                }
-            });
-            payload.post_checks = postCheckValues;
-
-            const destinationValues = [];
-            $scheduleForm.find('input[name="secondary_destinations[]"]:checked').each(function() {
-                const value = ($(this).val() || '').toString();
-                if (value) {
-                    destinationValues.push(value);
-                }
-            });
-            payload.secondary_destinations = destinationValues;
+            const $submitButton = $scheduleForm.find('button[type="submit"]').first();
+            $submitButton.prop('disabled', true);
 
             $.ajax({
                 url: bjlg_ajax.ajax_url,
                 method: 'POST',
                 data: payload
-            })
-                .done(function(response) {
-                    const data = response && typeof response === 'object' ? response.data || {} : {};
+            }).done(function(response) {
+                const data = response && typeof response === 'object' ? response.data || {} : {};
 
-                    if (response && response.success) {
-                        const message = data && typeof data.message === 'string'
-                            ? data.message
-                            : 'Planification enregistrée.';
-                        renderScheduleFeedback('success', message);
-                        if (data && Object.prototype.hasOwnProperty.call(data, 'next_run')) {
-                            updateNextRunDisplay(data.next_run);
-                        }
-                        updateScheduleSummary();
-                        return;
+                if (response && response.success) {
+                    const schedulesData = Array.isArray(data.schedules) ? data.schedules : [];
+                    const nextRuns = data.next_runs && typeof data.next_runs === 'object' ? data.next_runs : {};
+
+                    renderScheduleFeedback('success', typeof data.message === 'string' ? data.message : 'Planifications enregistrées !', []);
+
+                    rebuildScheduleItems(schedulesData, nextRuns);
+                    rebuildOverview(schedulesData, nextRuns);
+
+                    $scheduleForm.attr('data-next-runs', JSON.stringify(nextRuns));
+                    $('#bjlg-schedule-overview').attr('data-next-runs', JSON.stringify(nextRuns));
+                    return;
+                }
+
+                const payloadData = Object.keys(data).length ? data : (response && response.data) || response;
+                const message = payloadData && typeof payloadData.message === 'string'
+                    ? payloadData.message
+                    : 'Impossible d\'enregistrer les planifications.';
+                const details = normalizeErrorList(payloadData && (payloadData.errors || payloadData.validation_errors || payloadData.field_errors));
+                renderScheduleFeedback('error', message, details);
+                if (payloadData && payloadData.next_runs) {
+                    updateOverviewFromNextRuns(payloadData.next_runs);
+                }
+            }).fail(function(jqXHR) {
+                let message = 'Erreur de communication avec le serveur.';
+                let details = [];
+
+                if (jqXHR && jqXHR.responseJSON) {
+                    const data = jqXHR.responseJSON.data || jqXHR.responseJSON;
+                    if (data && typeof data.message === 'string') {
+                        message = data.message;
                     }
+                    details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
+                }
 
-                    const payloadData = data && Object.keys(data).length ? data : (response && response.data) || response;
-                    const message = payloadData && typeof payloadData.message === 'string'
-                        ? payloadData.message
-                        : 'Impossible d\'enregistrer la planification.';
-                    const details = payloadData
-                        ? normalizeErrorList(payloadData.errors || payloadData.validation_errors || payloadData.field_errors)
-                        : [];
-
-                    renderScheduleFeedback('error', message, details);
-
-                    if (payloadData && Object.prototype.hasOwnProperty.call(payloadData, 'next_run')) {
-                        updateNextRunDisplay(payloadData.next_run);
-                    }
-                })
-                .fail(function(jqXHR) {
-                    let message = 'Erreur de communication avec le serveur.';
-                    let details = [];
-
-                    if (jqXHR && jqXHR.responseJSON) {
-                        const errorData = jqXHR.responseJSON.data || jqXHR.responseJSON;
-                        if (errorData && typeof errorData.message === 'string') {
-                            message = errorData.message;
-                        }
-                        details = normalizeErrorList(
-                            (errorData && (errorData.errors || errorData.validation_errors || errorData.field_errors)) || []
-                        );
-                    } else if (jqXHR && typeof jqXHR.responseText === 'string') {
-                        try {
-                            const parsed = JSON.parse(jqXHR.responseText);
-                            if (parsed && typeof parsed === 'object') {
-                                const errorData = parsed.data || parsed;
-                                if (errorData && typeof errorData.message === 'string') {
-                                    message = errorData.message;
-                                }
-                                details = normalizeErrorList(
-                                    (errorData && (errorData.errors || errorData.validation_errors || errorData.field_errors)) || []
-                                );
-                            }
-                        } catch (error) {
-                            // Ignore JSON parse errors and keep the default message.
-                        }
-                    }
-
-                    renderScheduleFeedback('error', message, details);
-                })
-                .always(function() {
-                    $submitButton.prop('disabled', false);
-                });
+                renderScheduleFeedback('error', message, details);
+            }).always(function() {
+                $submitButton.prop('disabled', false);
+            });
         });
-    }
+    })();
 
     // --- LISTE DES SAUVEGARDES VIA L'API REST ---
     (function setupBackupListUI() {
