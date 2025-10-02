@@ -1,5 +1,174 @@
 jQuery(document).ready(function($) {
 
+    // --- DASHBOARD OVERVIEW ---
+    (function setupDashboardOverview() {
+        const $overview = $('.bjlg-dashboard-overview');
+        if (!$overview.length) {
+            return;
+        }
+
+        const parseJSON = function(raw) {
+            if (typeof raw !== 'string' || raw.trim() === '') {
+                return null;
+            }
+            try {
+                return JSON.parse(raw);
+            } catch (error) {
+                return null;
+            }
+        };
+
+        const formatNumber = function(value) {
+            const numeric = typeof value === 'number' ? value : parseFloat(value);
+            if (!Number.isFinite(numeric)) {
+                return value || '0';
+            }
+            return numeric.toLocaleString(undefined);
+        };
+
+        const setField = function(field, value, fallback) {
+            const $field = $overview.find('[data-field="' + field + '"]');
+            if (!$field.length) {
+                return;
+            }
+            const resolved = value === undefined || value === null || value === '' ? (fallback || '') : value;
+            $field.text(resolved);
+        };
+
+        const state = {
+            metrics: parseJSON($overview.attr('data-bjlg-dashboard')) || {}
+        };
+
+        const updateSummary = function(summary) {
+            summary = summary || {};
+            setField('history_total_actions', formatNumber(summary.history_total_actions || 0));
+            setField('history_successful_backups', formatNumber(summary.history_successful_backups || 0));
+            setField('history_last_backup', summary.history_last_backup || '');
+            setField('history_last_backup_relative', summary.history_last_backup_relative || '');
+            setField('scheduler_next_run', summary.scheduler_next_run || '');
+            setField('scheduler_next_run_relative', summary.scheduler_next_run_relative || '');
+            setField('scheduler_active_count', formatNumber(summary.scheduler_active_count || 0));
+            setField('scheduler_success_rate', summary.scheduler_success_rate || '0%');
+            setField('storage_total_size_human', summary.storage_total_size_human || '0');
+            setField('storage_backup_count', formatNumber(summary.storage_backup_count || 0));
+        };
+
+        const updateAlerts = function(alerts) {
+            const $container = $overview.find('[data-role="alerts"]');
+            if (!$container.length) {
+                return;
+            }
+
+            $container.empty();
+
+            if (!Array.isArray(alerts) || !alerts.length) {
+                return;
+            }
+
+            alerts.forEach(function(alert) {
+                const type = (alert.type || 'info').toLowerCase();
+                const $alert = $('<div/>', {
+                    'class': 'bjlg-alert bjlg-alert--' + type
+                });
+
+                const $content = $('<div/>', { 'class': 'bjlg-alert__content' });
+                if (alert.title) {
+                    $('<strong/>', { 'class': 'bjlg-alert__title', text: alert.title }).appendTo($content);
+                }
+                if (alert.message) {
+                    $('<p/>', { 'class': 'bjlg-alert__message', text: alert.message }).appendTo($content);
+                }
+                $alert.append($content);
+
+                if (alert.action && alert.action.url && alert.action.label) {
+                    $('<a/>', {
+                        'class': 'bjlg-alert__action button button-secondary',
+                        'href': alert.action.url,
+                        'text': alert.action.label
+                    }).appendTo($alert);
+                }
+
+                $container.append($alert);
+            });
+        };
+
+        const updateOnboarding = function(resources) {
+            const $container = $overview.find('[data-role="onboarding"]');
+            if (!$container.length) {
+                return;
+            }
+
+            const $list = $container.find('.bjlg-onboarding__list');
+            if (!$list.length) {
+                return;
+            }
+
+            $list.empty();
+
+            if (!Array.isArray(resources) || !resources.length) {
+                $container.addClass('bjlg-hidden');
+                return;
+            }
+
+            $container.removeClass('bjlg-hidden');
+
+            resources.forEach(function(resource) {
+                const $item = $('<li/>', { 'class': 'bjlg-onboarding__item' });
+                const $content = $('<div/>', { 'class': 'bjlg-onboarding__content' }).appendTo($item);
+
+                if (resource.title) {
+                    $('<strong/>', { 'class': 'bjlg-onboarding__label', text: resource.title }).appendTo($content);
+                }
+
+                if (resource.description) {
+                    $('<p/>', { 'class': 'bjlg-onboarding__description', text: resource.description }).appendTo($content);
+                }
+
+                if (resource.command) {
+                    $('<code/>', {
+                        'class': 'bjlg-onboarding__command',
+                        'data-command': resource.command,
+                        text: resource.command
+                    }).appendTo($content);
+                }
+
+                if (resource.url) {
+                    $('<a/>', {
+                        'class': 'bjlg-onboarding__action button button-secondary',
+                        'href': resource.url,
+                        'text': resource.action_label || 'Ouvrir',
+                        'target': '_blank',
+                        'rel': 'noopener noreferrer'
+                    }).appendTo($item);
+                }
+
+                $list.append($item);
+            });
+        };
+
+        updateSummary(state.metrics.summary || {});
+        updateAlerts(state.metrics.alerts || []);
+        updateOnboarding(state.metrics.onboarding || []);
+
+        window.bjlgDashboard = window.bjlgDashboard || {};
+        window.bjlgDashboard.updateMetrics = function(nextMetrics) {
+            if (!nextMetrics || typeof nextMetrics !== 'object') {
+                return;
+            }
+
+            state.metrics = $.extend(true, {}, state.metrics, nextMetrics);
+            updateSummary(state.metrics.summary || {});
+            updateAlerts(state.metrics.alerts || []);
+            updateOnboarding(state.metrics.onboarding || []);
+
+            try {
+                $overview.attr('data-bjlg-dashboard', JSON.stringify(state.metrics));
+            } catch (error) {
+                // Ignored
+            }
+        };
+    })();
+
     // --- GESTIONNAIRE DE PLANIFICATION ---
     (function setupScheduleManager() {
         const $scheduleForm = $('#bjlg-schedule-form');

@@ -11,9 +11,11 @@ if (!defined('ABSPATH')) {
 class BJLG_Admin {
 
     private $destinations = [];
+    private $advanced_admin;
 
     public function __construct() {
         $this->load_destinations();
+        $this->advanced_admin = class_exists(BJLG_Admin_Advanced::class) ? new BJLG_Admin_Advanced() : null;
         add_action('admin_menu', [$this, 'create_admin_page']);
         add_filter('bjlg_admin_tabs', [$this, 'get_default_tabs']);
     }
@@ -79,10 +81,12 @@ class BJLG_Admin {
         $page_url = admin_url('admin.php?page=backup-jlg');
         
         $tabs = apply_filters('bjlg_admin_tabs', []);
+        $metrics = $this->advanced_admin ? $this->advanced_admin->get_dashboard_metrics() : [];
+
         ?>
         <div class="wrap bjlg-wrap">
             <h1>
-                <span class="dashicons dashicons-database-export"></span> 
+                <span class="dashicons dashicons-database-export"></span>
                 <?php echo esc_html(get_admin_page_title()); ?>
                 <span class="bjlg-version">v<?php echo esc_html(BJLG_VERSION); ?></span>
             </h1>
@@ -97,6 +101,7 @@ class BJLG_Admin {
             </nav>
 
             <div class="bjlg-tab-content">
+                <?php $this->render_dashboard_overview($metrics); ?>
                 <?php
                 switch ($active_tab) {
                     case 'history':
@@ -124,6 +129,115 @@ class BJLG_Admin {
                 ?>
             </div>
         </div>
+        <?php
+    }
+
+    /**
+     * Affiche l'encart de synthèse des métriques et l'onboarding.
+     */
+    private function render_dashboard_overview(array $metrics) {
+        $summary = $metrics['summary'] ?? [];
+        $alerts = $metrics['alerts'] ?? [];
+        $onboarding = $metrics['onboarding'] ?? [];
+        $data_attr = !empty($metrics) ? wp_json_encode($metrics) : '';
+
+        ?>
+        <section class="bjlg-dashboard-overview" <?php echo $data_attr ? 'data-bjlg-dashboard="' . esc_attr($data_attr) . '"' : ''; ?>>
+            <header class="bjlg-dashboard-overview__header">
+                <h2><?php esc_html_e('Vue d’ensemble', 'backup-jlg'); ?></h2>
+                <?php if (!empty($metrics['generated_at'])): ?>
+                    <span class="bjlg-dashboard-overview__timestamp">
+                        <?php echo esc_html(sprintf(__('Actualisé à %s', 'backup-jlg'), $metrics['generated_at'])); ?>
+                    </span>
+                <?php endif; ?>
+            </header>
+
+            <div class="bjlg-alerts" data-role="alerts">
+                <?php foreach ($alerts as $alert): ?>
+                    <div class="bjlg-alert bjlg-alert--<?php echo esc_attr($alert['type'] ?? 'info'); ?>">
+                        <div class="bjlg-alert__content">
+                            <strong class="bjlg-alert__title"><?php echo esc_html($alert['title'] ?? ''); ?></strong>
+                            <?php if (!empty($alert['message'])): ?>
+                                <p class="bjlg-alert__message"><?php echo esc_html($alert['message']); ?></p>
+                            <?php endif; ?>
+                        </div>
+                        <?php if (!empty($alert['action']['label']) && !empty($alert['action']['url'])): ?>
+                            <a class="bjlg-alert__action button button-secondary" href="<?php echo esc_url($alert['action']['url']); ?>">
+                                <?php echo esc_html($alert['action']['label']); ?>
+                            </a>
+                        <?php endif; ?>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+
+            <div class="bjlg-cards-grid">
+                <article class="bjlg-card bjlg-card--stat" data-metric="history">
+                    <span class="bjlg-card__kicker"><?php esc_html_e('Activité 30 jours', 'backup-jlg'); ?></span>
+                    <h3 class="bjlg-card__title"><?php esc_html_e('Actions enregistrées', 'backup-jlg'); ?></h3>
+                    <div class="bjlg-card__value" data-field="history_total_actions"><?php echo esc_html(number_format_i18n($summary['history_total_actions'] ?? 0)); ?></div>
+                    <p class="bjlg-card__meta">
+                        <span data-field="history_successful_backups"><?php echo esc_html(number_format_i18n($summary['history_successful_backups'] ?? 0)); ?></span>
+                        <?php esc_html_e(' sauvegardes réussies', 'backup-jlg'); ?>
+                    </p>
+                </article>
+
+                <article class="bjlg-card bjlg-card--stat" data-metric="last-backup">
+                    <span class="bjlg-card__kicker"><?php esc_html_e('Dernière sauvegarde', 'backup-jlg'); ?></span>
+                    <h3 class="bjlg-card__title"><?php esc_html_e('Statut récent', 'backup-jlg'); ?></h3>
+                    <div class="bjlg-card__value" data-field="history_last_backup"><?php echo esc_html($summary['history_last_backup'] ?? __('Aucune sauvegarde effectuée', 'backup-jlg')); ?></div>
+                    <p class="bjlg-card__meta" data-field="history_last_backup_relative">
+                        <?php echo esc_html($summary['history_last_backup_relative'] ?? ''); ?>
+                    </p>
+                </article>
+
+                <article class="bjlg-card bjlg-card--stat" data-metric="scheduler">
+                    <span class="bjlg-card__kicker"><?php esc_html_e('Planification', 'backup-jlg'); ?></span>
+                    <h3 class="bjlg-card__title"><?php esc_html_e('Prochaine exécution', 'backup-jlg'); ?></h3>
+                    <div class="bjlg-card__value" data-field="scheduler_next_run"><?php echo esc_html($summary['scheduler_next_run'] ?? __('Non planifié', 'backup-jlg')); ?></div>
+                    <p class="bjlg-card__meta" data-field="scheduler_next_run_relative"><?php echo esc_html($summary['scheduler_next_run_relative'] ?? ''); ?></p>
+                    <p class="bjlg-card__footnote">
+                        <?php esc_html_e('Planifications actives :', 'backup-jlg'); ?>
+                        <span data-field="scheduler_active_count"><?php echo esc_html(number_format_i18n($summary['scheduler_active_count'] ?? 0)); ?></span>
+                        • <?php esc_html_e('Taux de succès :', 'backup-jlg'); ?>
+                        <span data-field="scheduler_success_rate"><?php echo esc_html($summary['scheduler_success_rate'] ?? '0%'); ?></span>
+                    </p>
+                </article>
+
+                <article class="bjlg-card bjlg-card--stat" data-metric="storage">
+                    <span class="bjlg-card__kicker"><?php esc_html_e('Stockage', 'backup-jlg'); ?></span>
+                    <h3 class="bjlg-card__title"><?php esc_html_e('Espace utilisé', 'backup-jlg'); ?></h3>
+                    <div class="bjlg-card__value" data-field="storage_total_size_human"><?php echo esc_html($summary['storage_total_size_human'] ?? size_format(0)); ?></div>
+                    <p class="bjlg-card__meta">
+                        <?php esc_html_e('Fichiers archivés :', 'backup-jlg'); ?>
+                        <span data-field="storage_backup_count"><?php echo esc_html(number_format_i18n($summary['storage_backup_count'] ?? 0)); ?></span>
+                    </p>
+                </article>
+            </div>
+
+            <div class="bjlg-onboarding" data-role="onboarding">
+                <h3 class="bjlg-onboarding__title"><?php esc_html_e('Bien démarrer', 'backup-jlg'); ?></h3>
+                <ul class="bjlg-onboarding__list">
+                    <?php foreach ($onboarding as $resource): ?>
+                        <li class="bjlg-onboarding__item">
+                            <div class="bjlg-onboarding__content">
+                                <strong class="bjlg-onboarding__label"><?php echo esc_html($resource['title']); ?></strong>
+                                <?php if (!empty($resource['description'])): ?>
+                                    <p class="bjlg-onboarding__description"><?php echo esc_html($resource['description']); ?></p>
+                                <?php endif; ?>
+                                <?php if (!empty($resource['command'])): ?>
+                                    <code class="bjlg-onboarding__command" data-command="<?php echo esc_attr($resource['command']); ?>"><?php echo esc_html($resource['command']); ?></code>
+                                <?php endif; ?>
+                            </div>
+                            <?php if (!empty($resource['url'])): ?>
+                                <a class="bjlg-onboarding__action button button-secondary" href="<?php echo esc_url($resource['url']); ?>" target="_blank" rel="noopener noreferrer">
+                                    <?php echo esc_html($resource['action_label'] ?? __('Ouvrir', 'backup-jlg')); ?>
+                                </a>
+                            <?php endif; ?>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+        </section>
         <?php
     }
 
