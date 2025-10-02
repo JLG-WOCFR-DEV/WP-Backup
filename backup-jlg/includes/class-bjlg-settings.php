@@ -864,8 +864,16 @@ class BJLG_Settings {
         ];
 
         if (is_array($checks)) {
-            foreach ($checks as $check) {
-                $key = sanitize_key((string) $check);
+            foreach ($checks as $maybe_key => $value) {
+                if (is_string($maybe_key)) {
+                    $key = sanitize_key($maybe_key);
+                    if (array_key_exists($key, $normalized)) {
+                        $normalized[$key] = (bool) $value;
+                    }
+                    continue;
+                }
+
+                $key = sanitize_key((string) $value);
                 if (array_key_exists($key, $normalized)) {
                     $normalized[$key] = true;
                 }

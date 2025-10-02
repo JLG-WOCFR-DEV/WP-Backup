@@ -284,7 +284,15 @@ final class BJLG_RestoreSecurityTest extends TestCase
                 file_put_contents($filepath, 'SQL-DUMP');
             }
 
-            public function add_folder_to_zip(&$zip, $folder, $zip_path, $exclude = [], $incremental = false, $modified_files = [])
+            public function add_folder_to_zip(
+                &$zip,
+                $folder,
+                $zip_path,
+                $exclude = [],
+                $incremental = false,
+                $modified_files = [],
+                array $include = []
+            )
             {
                 if ($zip instanceof \ZipArchive) {
                     $zip->addFromString(rtrim($zip_path, '/') . '/placeholder.txt', 'placeholder');
