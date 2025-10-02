@@ -31,6 +31,30 @@ if (!function_exists('esc_url')) {
     }
 }
 
+if (!function_exists('esc_textarea')) {
+    function esc_textarea($text) {
+        return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+if (!function_exists('wp_parse_args')) {
+    function wp_parse_args($args, $defaults = []) {
+        if (is_object($args)) {
+            $args = get_object_vars($args);
+        }
+
+        if (!is_array($args)) {
+            $args = [];
+        }
+
+        if (!is_array($defaults)) {
+            $defaults = [];
+        }
+
+        return array_merge($defaults, $args);
+    }
+}
+
 if (!defined('WP_CONTENT_DIR')) {
     $wp_content_dir = sys_get_temp_dir() . '/bjlg-wp-content';
     if (!is_dir($wp_content_dir)) {
