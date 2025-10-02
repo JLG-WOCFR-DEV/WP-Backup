@@ -157,16 +157,22 @@ final class BJLG_SchedulerTest extends TestCase
     {
         $_POST = [
             'nonce' => 'test-nonce',
-            'recurrence' => 'daily',
-            'day' => 'tuesday',
-            'time' => '10:15',
-            'components' => ['db', 'plugins'],
-            'encrypt' => 'true',
-            'incremental' => 'true',
-            'include_patterns' => "wp-content/uploads/*\ncustom/*",
-            'exclude_patterns' => "*/cache/*\n*.tmp",
-            'post_checks' => ['checksum'],
-            'secondary_destinations' => ['google_drive', 'aws_s3'],
+            'schedules' => [
+                [
+                    'id' => '',
+                    'label' => 'Sauvegarde quotidienne',
+                    'recurrence' => 'daily',
+                    'day' => 'tuesday',
+                    'time' => '10:15',
+                    'components' => ['db', 'plugins'],
+                    'encrypt' => 'true',
+                    'incremental' => 'true',
+                    'include_patterns' => "wp-content/uploads/*\ncustom/*",
+                    'exclude_patterns' => "*/cache/*\n*.tmp",
+                    'post_checks' => ['checksum'],
+                    'secondary_destinations' => ['google_drive', 'aws_s3'],
+                ],
+            ],
         ];
 
         $scheduler = BJLG\BJLG_Scheduler::instance();
@@ -177,23 +183,42 @@ final class BJLG_SchedulerTest extends TestCase
         } catch (BJLG_Test_JSON_Response $response) {
             $this->assertIsArray($response->data);
             $this->assertArrayHasKey('message', $response->data);
-            $this->assertArrayHasKey('next_run', $response->data);
-            $this->assertNotEmpty($response->data['next_run']);
+            $this->assertArrayHasKey('schedules', $response->data);
+            $this->assertIsArray($response->data['schedules']);
+            $this->assertCount(1, $response->data['schedules']);
+            $saved_schedule = $response->data['schedules'][0];
+            $this->assertSame('daily', $saved_schedule['recurrence']);
+            $this->assertSame('tuesday', $saved_schedule['day']);
+            $this->assertSame('10:15', $saved_schedule['time']);
+            $this->assertNotEmpty($saved_schedule['id']);
+            $this->assertArrayHasKey('next_runs', $response->data);
+            $this->assertIsArray($response->data['next_runs']);
+            $this->assertArrayHasKey($saved_schedule['id'], $response->data['next_runs']);
+            $next_run_entry = $response->data['next_runs'][$saved_schedule['id']];
+            $this->assertArrayHasKey('next_run', $next_run_entry);
         }
 
-        $settings = get_option('bjlg_schedule_settings');
+        $collection = get_option('bjlg_schedule_settings');
 
-        $this->assertSame('daily', $settings['recurrence']);
-        $this->assertSame('tuesday', $settings['day']);
-        $this->assertSame('10:15', $settings['time']);
-        $this->assertSame(['db', 'plugins'], $settings['components']);
-        $this->assertTrue($settings['encrypt']);
-        $this->assertTrue($settings['incremental']);
-        $this->assertSame(['wp-content/uploads/*', 'custom/*'], $settings['include_patterns']);
-        $this->assertSame(['*/cache/*', '*.tmp'], $settings['exclude_patterns']);
-        $this->assertTrue($settings['post_checks']['checksum']);
-        $this->assertFalse($settings['post_checks']['dry_run']);
-        $this->assertSame(['google_drive', 'aws_s3'], $settings['secondary_destinations']);
+        $this->assertIsArray($collection);
+        $this->assertSame(2, $collection['version']);
+        $this->assertIsArray($collection['schedules']);
+        $this->assertCount(1, $collection['schedules']);
+
+        $stored_schedule = $collection['schedules'][0];
+        $this->assertSame('daily', $stored_schedule['recurrence']);
+        $this->assertSame('tuesday', $stored_schedule['day']);
+        $this->assertSame('10:15', $stored_schedule['time']);
+        $this->assertSame(['db', 'plugins'], $stored_schedule['components']);
+        $this->assertTrue($stored_schedule['encrypt']);
+        $this->assertTrue($stored_schedule['incremental']);
+        $this->assertSame(['wp-content/uploads/*', 'custom/*'], $stored_schedule['include_patterns']);
+        $this->assertSame(['*/cache/*', '*.tmp'], $stored_schedule['exclude_patterns']);
+        $this->assertSame(['google_drive', 'aws_s3'], $stored_schedule['secondary_destinations']);
+        $this->assertSame(
+            ['checksum' => true, 'dry_run' => false],
+            $stored_schedule['post_checks']
+        );
 
         $this->assertSame(['wp-content/uploads/*', 'custom/*'], get_option('bjlg_backup_include_patterns'));
         $this->assertSame(['*/cache/*', '*.tmp'], get_option('bjlg_backup_exclude_patterns'));
@@ -208,9 +233,11 @@ final class BJLG_SchedulerTest extends TestCase
             $GLOBALS['bjlg_test_scheduled_events']['recurring']
         );
 
-        $event = $GLOBALS['bjlg_test_scheduled_events']['recurring'][BJLG\BJLG_Scheduler::SCHEDULE_HOOK];
-
+        $events = $GLOBALS['bjlg_test_scheduled_events']['recurring'][BJLG\BJLG_Scheduler::SCHEDULE_HOOK];
+        $this->assertNotEmpty($events);
+        $event = reset($events);
         $this->assertSame('daily', $event['recurrence']);
+        $this->assertSame([$stored_schedule['id']], $event['args']);
         $this->assertIsInt($event['timestamp']);
         $this->assertGreaterThan(0, $event['timestamp']);
     }

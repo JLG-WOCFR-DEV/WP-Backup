@@ -2560,6 +2560,7 @@ namespace {
             $payload = [
                 'cleanup' => ['by_number' => '15', 'by_age' => '-20'],
                 'schedule' => [
+                    'label' => 'Sauvegarde hebdo',
                     'recurrence' => 'WEEKLY',
                     'day' => 'Friday',
                     'time' => ' 05:30 ',
@@ -2631,14 +2632,21 @@ namespace {
                 'by_age' => 0,
             ], get_option('bjlg_cleanup_settings'));
 
-            $this->assertSame([
-                'recurrence' => 'weekly',
-                'day' => 'friday',
-                'time' => '05:30',
-                'components' => ['db', 'plugins'],
-                'encrypt' => true,
-                'incremental' => false,
-            ], get_option('bjlg_schedule_settings'));
+            $schedule_collection = get_option('bjlg_schedule_settings');
+            $this->assertIsArray($schedule_collection);
+            $this->assertSame(2, $schedule_collection['version']);
+            $this->assertIsArray($schedule_collection['schedules']);
+            $this->assertCount(1, $schedule_collection['schedules']);
+            $stored_schedule = $schedule_collection['schedules'][0];
+            $this->assertSame('Sauvegarde hebdo', $stored_schedule['label']);
+            $this->assertSame('weekly', $stored_schedule['recurrence']);
+            $this->assertSame('friday', $stored_schedule['day']);
+            $this->assertSame('05:30', $stored_schedule['time']);
+            $this->assertSame(['db', 'plugins'], $stored_schedule['components']);
+            $this->assertTrue($stored_schedule['encrypt']);
+            $this->assertFalse($stored_schedule['incremental']);
+            $this->assertSame([], $stored_schedule['include_patterns']);
+            $this->assertSame([], $stored_schedule['exclude_patterns']);
 
             $this->assertSame([
                 'enabled' => true,
@@ -2692,12 +2700,23 @@ namespace {
             $api = new BJLG\BJLG_REST_API();
 
             $original_schedule = [
-                'recurrence' => 'weekly',
-                'day' => 'monday',
-                'time' => '01:00',
-                'components' => ['db', 'plugins'],
-                'encrypt' => false,
-                'incremental' => false,
+                'version' => 2,
+                'schedules' => [
+                    [
+                        'id' => 'bjlg_schedule_existing',
+                        'label' => 'Planification existante',
+                        'recurrence' => 'weekly',
+                        'day' => 'monday',
+                        'time' => '01:00',
+                        'components' => ['db', 'plugins'],
+                        'encrypt' => false,
+                        'incremental' => false,
+                        'include_patterns' => [],
+                        'exclude_patterns' => [],
+                        'post_checks' => ['checksum' => true, 'dry_run' => false],
+                        'secondary_destinations' => [],
+                    ],
+                ],
             ];
             $GLOBALS['bjlg_test_options']['bjlg_schedule_settings'] = $original_schedule;
 

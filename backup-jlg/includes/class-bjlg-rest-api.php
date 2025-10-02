@@ -1565,83 +1565,63 @@ class BJLG_REST_API {
             );
         }
 
+        if (!class_exists(BJLG_Settings::class)) {
+            return new WP_Error(
+                'settings_sanitizer_unavailable',
+                __('The schedule sanitizer is not available.', 'backup-jlg'),
+                ['status' => 500]
+            );
+        }
+
+        $entries = [];
+
+        if (isset($value['schedules']) && is_array($value['schedules'])) {
+            $entries = array_values($value['schedules']);
+        } else {
+            $entries = [$value];
+        }
+
+        if (empty($entries)) {
+            return new WP_Error(
+                'invalid_schedule_settings',
+                __('No schedule entries were provided.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
         $required_keys = ['recurrence', 'day', 'time', 'components', 'encrypt', 'incremental'];
 
-        foreach ($required_keys as $required_key) {
-            if (!array_key_exists($required_key, $value)) {
+        foreach ($entries as $entry) {
+            if (!is_array($entry)) {
                 return new WP_Error(
                     'invalid_schedule_settings',
-                    sprintf(__('Missing schedule setting "%s".', 'backup-jlg'), $required_key),
+                    __('Each schedule entry must be a JSON object.', 'backup-jlg'),
                     ['status' => 400]
                 );
             }
+
+            foreach ($required_keys as $required_key) {
+                if (!array_key_exists($required_key, $entry)) {
+                    return new WP_Error(
+                        'invalid_schedule_settings',
+                        sprintf(__('Missing schedule setting "%s".', 'backup-jlg'), $required_key),
+                        ['status' => 400]
+                    );
+                }
+            }
         }
 
-        $recurrence = sanitize_key((string) $value['recurrence']);
-        $valid_recurrences = ['disabled', 'hourly', 'twice_daily', 'daily', 'weekly', 'monthly'];
+        $collection = BJLG_Settings::sanitize_schedule_collection(['schedules' => $entries]);
 
-        if (!in_array($recurrence, $valid_recurrences, true)) {
+        if (empty($collection['schedules'])) {
             return new WP_Error(
                 'invalid_schedule_settings',
-                __('Invalid schedule recurrence value.', 'backup-jlg'),
+                __('No valid schedule entry could be created from the payload.', 'backup-jlg'),
                 ['status' => 400]
             );
         }
 
-        $day = sanitize_key((string) $value['day']);
-        $valid_days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-
-        if (!in_array($day, $valid_days, true)) {
-            return new WP_Error(
-                'invalid_schedule_settings',
-                __('Invalid schedule day value.', 'backup-jlg'),
-                ['status' => 400]
-            );
-        }
-
-        $time = sanitize_text_field((string) $value['time']);
-
-        if (!preg_match('/^([0-1]?\d|2[0-3]):([0-5]\d)$/', $time)) {
-            return new WP_Error(
-                'invalid_schedule_settings',
-                __('Invalid schedule time format. Expected HH:MM.', 'backup-jlg'),
-                ['status' => 400]
-            );
-        }
-
-        $components = $this->sanitize_components_list($value['components']);
-
-        if (is_wp_error($components)) {
-            return $components;
-        }
-
-        if (empty($components)) {
-            return new WP_Error(
-                'invalid_schedule_settings',
-                __('At least one valid component must be provided for the schedule.', 'backup-jlg'),
-                ['status' => 400]
-            );
-        }
-
-        $encrypt = $this->interpret_boolean($value['encrypt']);
-        $incremental = $this->interpret_boolean($value['incremental']);
-
-        if ($encrypt === null || $incremental === null) {
-            return new WP_Error(
-                'invalid_schedule_settings',
-                __('Schedule boolean settings must be true or false.', 'backup-jlg'),
-                ['status' => 400]
-            );
-        }
-
-        return [
-            'recurrence' => $recurrence,
-            'day' => $day,
-            'time' => $time,
-            'components' => $components,
-            'encrypt' => $encrypt,
-            'incremental' => $incremental,
-        ];
+        return $collection;
     }
 
     private function interpret_boolean($value) {
@@ -2232,23 +2212,55 @@ class BJLG_REST_API {
      * Endpoint : Obtenir les planifications
      */
     public function get_schedules($request) {
-        $schedule = get_option('bjlg_schedule_settings', []);
+        $stored = get_option('bjlg_schedule_settings', []);
+        $collection = BJLG_Settings::sanitize_schedule_collection($stored);
+        $schedules = $collection['schedules'];
 
-        if (!is_array($schedule)) {
-            $schedule = [];
+        $next_runs = [];
+
+        if (class_exists(BJLG_Scheduler::class)) {
+            $scheduler = BJLG_Scheduler::instance();
+            if ($scheduler && method_exists($scheduler, 'get_next_runs_summary')) {
+                $next_runs = $scheduler->get_next_runs_summary($schedules);
+            }
         }
 
-        $schedule = wp_parse_args($schedule, [
-            'recurrence' => 'disabled',
-        ]);
+        if (empty($next_runs)) {
+            foreach ($schedules as $schedule) {
+                if (!is_array($schedule) || empty($schedule['id'])) {
+                    continue;
+                }
 
-        $recurrence = $schedule['recurrence'];
-        $next_run = wp_next_scheduled(BJLG_Scheduler::SCHEDULE_HOOK);
+                $schedule_id = $schedule['id'];
+                $next_runs[$schedule_id] = [
+                    'id' => $schedule_id,
+                    'label' => $schedule['label'] ?? $schedule_id,
+                    'recurrence' => $schedule['recurrence'] ?? 'disabled',
+                    'enabled' => ($schedule['recurrence'] ?? 'disabled') !== 'disabled',
+                    'next_run' => null,
+                    'next_run_formatted' => 'Non planifié',
+                    'next_run_relative' => null,
+                ];
+            }
+        }
+
+        $enabled = false;
+
+        foreach ($schedules as $schedule) {
+            if (!is_array($schedule)) {
+                continue;
+            }
+            if (($schedule['recurrence'] ?? 'disabled') !== 'disabled') {
+                $enabled = true;
+                break;
+            }
+        }
 
         return rest_ensure_response([
-            'current_schedule' => $schedule,
-            'next_run' => $next_run ? date('c', $next_run) : null,
-            'enabled' => $recurrence !== 'disabled'
+            'version' => $collection['version'] ?? null,
+            'schedules' => $schedules,
+            'next_runs' => $next_runs,
+            'enabled' => $enabled,
         ]);
     }
     
@@ -2266,13 +2278,26 @@ class BJLG_REST_API {
             );
         }
 
-        $validated_schedule = $this->validate_schedule_settings($params);
+        $validated_collection = $this->validate_schedule_settings($params);
 
-        if (is_wp_error($validated_schedule)) {
-            return $validated_schedule;
+        if (is_wp_error($validated_collection)) {
+            return $validated_collection;
         }
 
-        update_option('bjlg_schedule_settings', $validated_schedule);
+        $existing_collection = BJLG_Settings::sanitize_schedule_collection(
+            get_option('bjlg_schedule_settings', [])
+        );
+
+        $merged_schedules = array_merge(
+            $existing_collection['schedules'],
+            $validated_collection['schedules']
+        );
+
+        $final_collection = BJLG_Settings::sanitize_schedule_collection([
+            'schedules' => $merged_schedules,
+        ]);
+
+        update_option('bjlg_schedule_settings', $final_collection);
 
         // Réinitialiser la planification sans multiplier les hooks
         $scheduler = BJLG_Scheduler::instance();
@@ -2280,7 +2305,8 @@ class BJLG_REST_API {
 
         return rest_ensure_response([
             'success' => true,
-            'message' => 'Schedule created successfully'
+            'message' => 'Schedule created successfully',
+            'schedules' => $final_collection['schedules'],
         ]);
     }
     

@@ -559,7 +559,7 @@ class BJLG_Scheduler {
         return $schedules[0];
     }
 
-    private function get_next_runs_summary(array $schedules): array {
+    public function get_next_runs_summary(array $schedules): array {
         $summary = [];
         $now = current_time('timestamp');
 
