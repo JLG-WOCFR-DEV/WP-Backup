@@ -642,6 +642,81 @@ class BJLG_Admin {
         $destination_choices = $this->get_destination_choices();
         $wl_settings = get_option('bjlg_whitelabel_settings', ['plugin_name' => '', 'hide_from_non_admins' => false]);
         $webhook_key = class_exists(BJLG_Webhooks::class) ? BJLG_Webhooks::get_webhook_key() : '';
+
+        $notification_defaults = [
+            'enabled' => false,
+            'email_recipients' => '',
+            'events' => [
+                'backup_complete' => true,
+                'backup_failed' => true,
+                'cleanup_complete' => false,
+                'storage_warning' => true,
+            ],
+            'channels' => [
+                'email' => ['enabled' => false],
+                'slack' => ['enabled' => false, 'webhook_url' => ''],
+                'discord' => ['enabled' => false, 'webhook_url' => ''],
+            ],
+        ];
+
+        $notification_settings = get_option('bjlg_notification_settings', []);
+        if (!is_array($notification_settings)) {
+            $notification_settings = [];
+        }
+        $notification_settings = wp_parse_args($notification_settings, $notification_defaults);
+        $notification_settings['events'] = isset($notification_settings['events']) && is_array($notification_settings['events'])
+            ? wp_parse_args($notification_settings['events'], $notification_defaults['events'])
+            : $notification_defaults['events'];
+        $notification_settings['channels'] = isset($notification_settings['channels']) && is_array($notification_settings['channels'])
+            ? wp_parse_args($notification_settings['channels'], $notification_defaults['channels'])
+            : $notification_defaults['channels'];
+
+        foreach ($notification_defaults['channels'] as $channel_key => $channel_defaults) {
+            if (!isset($notification_settings['channels'][$channel_key]) || !is_array($notification_settings['channels'][$channel_key])) {
+                $notification_settings['channels'][$channel_key] = $channel_defaults;
+            } else {
+                $notification_settings['channels'][$channel_key] = wp_parse_args($notification_settings['channels'][$channel_key], $channel_defaults);
+            }
+        }
+
+        $notification_recipients_display = '';
+        if (!empty($notification_settings['email_recipients'])) {
+            $emails = preg_split('/[,;\r\n]+/', (string) $notification_settings['email_recipients']);
+            if (is_array($emails)) {
+                $emails = array_filter(array_map('trim', $emails));
+                $notification_recipients_display = implode("\n", $emails);
+            }
+        }
+
+        $performance_defaults = [
+            'multi_threading' => false,
+            'max_workers' => 2,
+            'chunk_size' => 50,
+            'compression_level' => 6,
+        ];
+        $performance_settings = get_option('bjlg_performance_settings', []);
+        if (!is_array($performance_settings)) {
+            $performance_settings = [];
+        }
+        $performance_settings = wp_parse_args($performance_settings, $performance_defaults);
+
+        $webhook_defaults = [
+            'enabled' => false,
+            'urls' => [
+                'backup_complete' => '',
+                'backup_failed' => '',
+                'cleanup_complete' => '',
+            ],
+            'secret' => '',
+        ];
+        $webhook_settings = get_option('bjlg_webhook_settings', []);
+        if (!is_array($webhook_settings)) {
+            $webhook_settings = [];
+        }
+        $webhook_settings = wp_parse_args($webhook_settings, $webhook_defaults);
+        $webhook_settings['urls'] = isset($webhook_settings['urls']) && is_array($webhook_settings['urls'])
+            ? wp_parse_args($webhook_settings['urls'], $webhook_defaults['urls'])
+            : $webhook_defaults['urls'];
         ?>
         <div class="bjlg-section">
             <h2>Configuration du Plugin</h2>
@@ -807,8 +882,195 @@ class BJLG_Admin {
                         </td>
                     </tr>
                 </table>
-                
+
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les Réglages</button></p>
+            </form>
+
+            <h3><span class="dashicons dashicons-megaphone"></span> Notifications</h3>
+            <form class="bjlg-settings-form" data-success-message="Notifications mises à jour." data-error-message="Impossible de sauvegarder les notifications.">
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">Notifications automatiques</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <label>
+                                    <input type="checkbox" name="notifications_enabled" <?php checked(!empty($notification_settings['enabled'])); ?>>
+                                    Activer l'envoi automatique des notifications
+                                </label>
+                                <p class="description">Recevez des alertes lorsqu'une action importante est exécutée.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Destinataires e-mail</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <textarea name="email_recipients" rows="3" class="large-text code" placeholder="admin@example.com&#10;contact@example.com"><?php echo esc_textarea($notification_recipients_display); ?></textarea>
+                                <p class="description">Une adresse par ligne ou séparée par une virgule. Obligatoire si le canal e-mail est activé.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Événements surveillés</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <fieldset>
+                                    <label><input type="checkbox" name="notify_backup_complete" <?php checked(!empty($notification_settings['events']['backup_complete'])); ?>> Sauvegarde terminée</label><br>
+                                    <label><input type="checkbox" name="notify_backup_failed" <?php checked(!empty($notification_settings['events']['backup_failed'])); ?>> Échec de sauvegarde</label><br>
+                                    <label><input type="checkbox" name="notify_cleanup_complete" <?php checked(!empty($notification_settings['events']['cleanup_complete'])); ?>> Nettoyage finalisé</label><br>
+                                    <label><input type="checkbox" name="notify_storage_warning" <?php checked(!empty($notification_settings['events']['storage_warning'])); ?>> Alerte de stockage</label>
+                                </fieldset>
+                                <p class="description">Choisissez quels événements déclenchent un envoi de notification.</p>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+
+                <p class="submit"><button type="submit" class="button button-primary">Enregistrer les notifications</button></p>
+            </form>
+
+            <h3><span class="dashicons dashicons-admin-site-alt3"></span> Canaux</h3>
+            <form class="bjlg-settings-form" data-success-message="Canaux mis à jour." data-error-message="Impossible de mettre à jour les canaux.">
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">Canaux disponibles</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <fieldset>
+                                    <label><input type="checkbox" name="channel_email" <?php checked(!empty($notification_settings['channels']['email']['enabled'])); ?>> E-mail</label><br>
+                                    <label><input type="checkbox" name="channel_slack" <?php checked(!empty($notification_settings['channels']['slack']['enabled'])); ?>> Slack</label><br>
+                                    <label><input type="checkbox" name="channel_discord" <?php checked(!empty($notification_settings['channels']['discord']['enabled'])); ?>> Discord</label>
+                                </fieldset>
+                                <p class="description">Activez les canaux qui doivent recevoir vos notifications.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Webhook Slack</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <input type="url" name="slack_webhook_url" class="regular-text" value="<?php echo esc_attr($notification_settings['channels']['slack']['webhook_url']); ?>" placeholder="https://hooks.slack.com/...">
+                                <p class="description">URL du webhook entrant Slack. Obligatoire si le canal Slack est activé.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Webhook Discord</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <input type="url" name="discord_webhook_url" class="regular-text" value="<?php echo esc_attr($notification_settings['channels']['discord']['webhook_url']); ?>" placeholder="https://discord.com/api/webhooks/...">
+                                <p class="description">URL du webhook Discord. Obligatoire si le canal Discord est activé.</p>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+
+                <h4>Webhooks personnalisés</h4>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">Activation</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <label><input type="checkbox" name="webhook_enabled" <?php checked(!empty($webhook_settings['enabled'])); ?>> Activer les webhooks personnalisés</label>
+                                <p class="description">Déclenche des requêtes HTTP sortantes vers vos intégrations.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Sauvegarde terminée</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <input type="url" name="webhook_backup_complete" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['backup_complete']); ?>" placeholder="https://exemple.com/webhooks/backup-success">
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Sauvegarde échouée</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <input type="url" name="webhook_backup_failed" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['backup_failed']); ?>" placeholder="https://exemple.com/webhooks/backup-failed">
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Nettoyage terminé</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <input type="url" name="webhook_cleanup_complete" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['cleanup_complete']); ?>" placeholder="https://exemple.com/webhooks/cleanup">
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Clé secrète</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <input type="text" name="webhook_secret" class="regular-text" value="<?php echo esc_attr($webhook_settings['secret']); ?>" placeholder="signature partagée">
+                                <p class="description">Optionnel : transmis dans l'entête <code>X-BJLG-Webhook-Secret</code>.</p>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+
+                <p class="submit"><button type="submit" class="button button-primary">Enregistrer les canaux</button></p>
+            </form>
+
+            <h3><span class="dashicons dashicons-performance"></span> Performance</h3>
+            <form class="bjlg-settings-form" data-success-message="Paramètres de performance sauvegardés." data-error-message="Impossible de sauvegarder la configuration de performance.">
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">Traitement parallèle</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <label><input type="checkbox" name="multi_threading" <?php checked(!empty($performance_settings['multi_threading'])); ?>> Activer le multi-threading</label>
+                                <p class="description">Permet de répartir certaines opérations sur plusieurs travailleurs.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Travailleurs maximum</th>
+                        <td>
+                            <div class="bjlg-form-field-group">
+                                <div class="bjlg-form-field-control">
+                                    <input type="number" name="max_workers" class="small-text" value="<?php echo esc_attr($performance_settings['max_workers']); ?>" min="1" max="20">
+                                </div>
+                                <div class="bjlg-form-field-actions">
+                                    <span class="bjlg-form-field-unit">processus</span>
+                                </div>
+                            </div>
+                            <p class="description">Limite la charge sur votre hébergement.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Taille des blocs</th>
+                        <td>
+                            <div class="bjlg-form-field-group">
+                                <div class="bjlg-form-field-control">
+                                    <input type="number" name="chunk_size" class="small-text" value="<?php echo esc_attr($performance_settings['chunk_size']); ?>" min="1" max="500">
+                                </div>
+                                <div class="bjlg-form-field-actions">
+                                    <span class="bjlg-form-field-unit">Mo</span>
+                                </div>
+                            </div>
+                            <p class="description">Ajustez la taille des blocs traités pour optimiser le débit.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Niveau de compression</th>
+                        <td>
+                            <div class="bjlg-form-field-group">
+                                <div class="bjlg-form-field-control">
+                                    <input type="number" name="compression_level" class="small-text" value="<?php echo esc_attr($performance_settings['compression_level']); ?>" min="0" max="9">
+                                </div>
+                                <div class="bjlg-form-field-actions">
+                                    <span class="bjlg-form-field-unit">0-9</span>
+                                </div>
+                            </div>
+                            <p class="description">0 = aucune compression, 9 = compression maximale (plus lent).</p>
+                        </td>
+                    </tr>
+                </table>
+
+                <p class="submit"><button type="submit" class="button button-primary">Enregistrer les performances</button></p>
             </form>
         </div>
         <?php
