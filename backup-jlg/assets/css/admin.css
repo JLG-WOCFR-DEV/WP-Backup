@@ -91,7 +91,9 @@
     width: 100%;
     max-width: 100%;
     overflow-y: scroll;
+    overflow-x: auto;
     white-space: pre-wrap;
+    word-break: break-word;
     border-radius: 4px;
     border: 1px solid #ccd0d4;
 }
@@ -145,6 +147,82 @@
     font-weight: bold;
     border-radius: 4px;
     transition: width 0.4s ease;
+}
+
+.bjlg-form-field-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+
+.bjlg-form-field-control {
+    flex: 1 1 260px;
+    min-width: 0;
+}
+
+.bjlg-form-field-control > input[type="text"],
+.bjlg-form-field-control > input[type="password"],
+.bjlg-form-field-control > input[type="number"],
+.bjlg-form-field-control > input[type="time"],
+.bjlg-form-field-control > input[type="url"],
+.bjlg-form-field-control > input[type="email"],
+.bjlg-form-field-control > textarea,
+.bjlg-form-field-control > select {
+    width: 100%;
+    max-width: 100%;
+}
+
+.bjlg-form-field-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.bjlg-form-field-unit {
+    display: inline-flex;
+    align-items: center;
+    font-size: 14px;
+}
+
+.bjlg-field-control {
+    display: block;
+}
+
+.bjlg-backup-toolbar {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.bjlg-backup-toolbar .alignleft.actions,
+.bjlg-backup-toolbar .alignright {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.bjlg-backup-toolbar .alignright {
+    justify-content: flex-end;
+}
+
+.bjlg-backup-toolbar select {
+    min-width: 200px;
+}
+
+.bjlg-wrap pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+.bjlg-wrap pre code {
+    display: block;
+    overflow-wrap: anywhere;
 }
 
 @media screen and (max-width: 782px) {
@@ -257,5 +335,102 @@
 
     .bjlg-responsive-table .bjlg-card-actions .button .dashicons {
         margin-right: 6px;
+    }
+
+    .bjlg-wrap .form-table,
+    .bjlg-wrap .form-table tbody,
+    .bjlg-wrap .form-table tr,
+    .bjlg-wrap .form-table th,
+    .bjlg-wrap .form-table td {
+        display: block;
+        width: 100%;
+    }
+
+    .bjlg-wrap .form-table {
+        border-spacing: 0;
+    }
+
+    .bjlg-wrap .form-table tr {
+        padding: 16px 0;
+        border-top: 1px solid #dcdcde;
+    }
+
+    .bjlg-wrap .form-table tbody tr:first-child {
+        border-top: 0;
+        padding-top: 0;
+    }
+
+    .bjlg-wrap .form-table th {
+        padding: 0 0 8px;
+        font-size: 14px;
+        text-align: left;
+    }
+
+    .bjlg-wrap .form-table td {
+        padding: 0;
+    }
+
+    .bjlg-field-control {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .bjlg-field-control fieldset {
+        margin: 0;
+    }
+
+    .bjlg-field-control label {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+    }
+
+    .bjlg-field-control label input[type="checkbox"],
+    .bjlg-field-control label input[type="radio"] {
+        margin-top: 3px;
+    }
+
+    .bjlg-form-field-group {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .bjlg-form-field-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .bjlg-form-field-actions .button {
+        flex: 1 1 100%;
+        justify-content: center;
+        min-height: 44px;
+    }
+
+    .bjlg-backup-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .bjlg-backup-toolbar .alignleft.actions,
+    .bjlg-backup-toolbar .alignright {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .bjlg-backup-toolbar .alignright {
+        text-align: left;
+    }
+
+    .bjlg-backup-toolbar select,
+    .bjlg-backup-toolbar button {
+        flex: 1 1 100%;
+        min-width: 0;
+    }
+
+    .bjlg-wrap .button,
+    .bjlg-wrap .button-primary,
+    .bjlg-wrap .button-secondary {
+        min-height: 44px;
     }
 }
