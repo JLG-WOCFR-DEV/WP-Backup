@@ -152,76 +152,87 @@ class BJLG_Admin {
                         <tr>
                             <th scope="row">Contenu de la sauvegarde</th>
                             <td>
-                                <fieldset>
-                                    <label><input type="checkbox" name="backup_components[]" value="db" checked> <strong>Base de données</strong> <span class="description">Toutes les tables WordPress</span></label><br>
-                                    <label><input type="checkbox" name="backup_components[]" value="plugins" checked> Extensions (<code>/wp-content/plugins</code>)</label><br>
-                                    <label><input type="checkbox" name="backup_components[]" value="themes" checked> Thèmes (<code>/wp-content/themes</code>)</label><br>
-                                    <label><input type="checkbox" name="backup_components[]" value="uploads" checked> Médias (<code>/wp-content/uploads</code>)</label>
-                                </fieldset>
+                                <div class="bjlg-field-control">
+                                    <fieldset>
+                                        <label><input type="checkbox" name="backup_components[]" value="db" checked> <strong>Base de données</strong> <span class="description">Toutes les tables WordPress</span></label><br>
+                                        <label><input type="checkbox" name="backup_components[]" value="plugins" checked> Extensions (<code>/wp-content/plugins</code>)</label><br>
+                                        <label><input type="checkbox" name="backup_components[]" value="themes" checked> Thèmes (<code>/wp-content/themes</code>)</label><br>
+                                        <label><input type="checkbox" name="backup_components[]" value="uploads" checked> Médias (<code>/wp-content/uploads</code>)</label>
+                                    </fieldset>
+                                </div>
                             </td>
                         </tr>
                         <tr>
                             <th scope="row">Options</th>
                             <td>
-                                <fieldset>
-                                    <label>
-                                        <input type="checkbox" name="encrypt_backup" value="1">
-                                        Chiffrer la sauvegarde (AES-256)
-                                    </label>
-                                    <p class="description">
-                                        Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
-                                    </p>
-                                    <br>
-                                    <label>
-                                        <input type="checkbox" name="incremental_backup" value="1">
-                                        Sauvegarde incrémentale
-                                    </label>
-                                    <p class="description">
-                                        Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
-                                    </p>
-                                </fieldset>
+                                <div class="bjlg-field-control">
+                                    <fieldset>
+                                        <label>
+                                            <input type="checkbox" name="encrypt_backup" value="1">
+                                            Chiffrer la sauvegarde (AES-256)
+                                        </label>
+                                        <p class="description">
+                                            Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
+                                        </p>
+                                        <br>
+                                        <label>
+                                            <input type="checkbox" name="incremental_backup" value="1">
+                                            Sauvegarde incrémentale
+                                        </label>
+                                        <p class="description">
+                                            Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
+                                        </p>
+                                    </fieldset>
+                                </div>
                             </td>
                         </tr>
                         <tr>
                             <th scope="row">Inclusions personnalisées</th>
                             <td>
-                                <textarea name="include_patterns" rows="4" class="large-text code" placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"><?php echo $include_text; ?></textarea>
-                                <p class="description">Un motif par ligne. Laissez vide pour inclure tous les fichiers autorisés.</p>
+                                <div class="bjlg-field-control">
+                                    <textarea name="include_patterns" rows="4" class="large-text code" placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"><?php echo $include_text; ?></textarea>
+                                    <p class="description">Un motif par ligne. Laissez vide pour inclure tous les fichiers autorisés.</p>
+                                </div>
                             </td>
                         </tr>
                         <tr>
                             <th scope="row">Exclusions</th>
                             <td>
-                                <textarea name="exclude_patterns" rows="4" class="large-text code" placeholder="*/cache/*&#10;*.log"><?php echo $exclude_text; ?></textarea>
-                                <p class="description">Ajoutez des motifs pour ignorer certains fichiers ou répertoires. Les exclusions globales s'appliquent également.</p>
+                                <div class="bjlg-field-control">
+                                    <textarea name="exclude_patterns" rows="4" class="large-text code" placeholder="*/cache/*&#10;*.log"><?php echo $exclude_text; ?></textarea>
+                                    <p class="description">Ajoutez des motifs pour ignorer certains fichiers ou répertoires. Les exclusions globales s'appliquent également.</p>
+                                </div>
                             </td>
                         </tr>
                         <tr>
                             <th scope="row">Vérifications post-sauvegarde</th>
                             <td>
-                                <fieldset>
-                                    <label>
-                                        <input type="checkbox" name="post_checks[]" value="checksum" <?php checked(!empty($post_checks['checksum'])); ?>> Vérifier l'intégrité (SHA-256)
-                                    </label>
-                                    <p class="description">Calcule un hachage du fichier pour détecter les corruptions.</p>
-                                    <label>
-                                        <input type="checkbox" name="post_checks[]" value="dry_run" <?php checked(!empty($post_checks['dry_run'])); ?>> Test de restauration à blanc
-                                    </label>
-                                    <p class="description">Ouvre l'archive pour valider qu'elle est exploitable (non exécuté sur les fichiers chiffrés).</p>
-                                </fieldset>
+                                <div class="bjlg-field-control">
+                                    <fieldset>
+                                        <label>
+                                            <input type="checkbox" name="post_checks[]" value="checksum" <?php checked(!empty($post_checks['checksum'])); ?>> Vérifier l'intégrité (SHA-256)
+                                        </label>
+                                        <p class="description">Calcule un hachage du fichier pour détecter les corruptions.</p>
+                                        <label>
+                                            <input type="checkbox" name="post_checks[]" value="dry_run" <?php checked(!empty($post_checks['dry_run'])); ?>> Test de restauration à blanc
+                                        </label>
+                                        <p class="description">Ouvre l'archive pour valider qu'elle est exploitable (non exécuté sur les fichiers chiffrés).</p>
+                                    </fieldset>
+                                </div>
                             </td>
                         </tr>
                         <tr>
                             <th scope="row">Destinations secondaires</th>
                             <td>
-                                <fieldset>
-                                    <?php if (!empty($destination_choices)): ?>
-                                        <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
-                                            <label style="display:block; margin-bottom:4px;">
-                                                <input type="checkbox"
-                                                       name="secondary_destinations[]"
-                                                       value="<?php echo esc_attr($destination_id); ?>"
-                                                       <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>>
+                                <div class="bjlg-field-control">
+                                    <fieldset>
+                                        <?php if (!empty($destination_choices)): ?>
+                                            <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
+                                                <label style="display:block; margin-bottom:4px;">
+                                                    <input type="checkbox"
+                                                           name="secondary_destinations[]"
+                                                           value="<?php echo esc_attr($destination_id); ?>"
+                                                           <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>>
                                                 <?php echo esc_html($destination_label); ?>
                                             </label>
                                         <?php endforeach; ?>
@@ -229,7 +240,8 @@ class BJLG_Admin {
                                         <p class="description">Aucune destination distante n'est encore configurée.</p>
                                     <?php endif; ?>
                                     <p class="description">Les destinations sélectionnées recevront la sauvegarde dans l'ordre indiqué. En cas d'échec, la suivante est tentée automatiquement.</p>
-                                </fieldset>
+                                    </fieldset>
+                                </div>
                             </td>
                         </tr>
                     </tbody>
@@ -346,31 +358,39 @@ class BJLG_Admin {
                         <tr>
                             <th scope="row"><label for="bjlg-restore-file-input">Fichier de sauvegarde</label></th>
                             <td>
-                                <input type="file" id="bjlg-restore-file-input" name="restore_file" accept=".zip,.zip.enc" required>
-                                <p class="description">Formats acceptés : .zip, .zip.enc (chiffré)</p>
+                                <div class="bjlg-field-control">
+                                    <input type="file" id="bjlg-restore-file-input" name="restore_file" accept=".zip,.zip.enc" required>
+                                    <p class="description">Formats acceptés : .zip, .zip.enc (chiffré)</p>
+                                </div>
                             </td>
                         </tr>
                         <tr>
                             <th scope="row"><label for="bjlg-restore-password">Mot de passe</label></th>
                             <td>
-                                <input type="password"
-                                       id="bjlg-restore-password"
-                                       name="password"
-                                       class="regular-text"
-                                       autocomplete="current-password"
-                                       aria-describedby="bjlg-restore-password-help"
-                                       placeholder="Requis pour les archives .zip.enc">
-                                <p class="description"
-                                   id="bjlg-restore-password-help"
-                                   data-default-text="<?php echo esc_attr('Requis pour restaurer les sauvegardes chiffrées (.zip.enc). Laissez vide pour les archives non chiffrées.'); ?>"
-                                   data-encrypted-text="<?php echo esc_attr('Mot de passe obligatoire : renseignez-le pour déchiffrer l\'archive (.zip.enc).'); ?>">
-                                    Requis pour restaurer les sauvegardes chiffrées (<code>.zip.enc</code>). Laissez vide pour les archives non chiffrées.
-                                </p>
+                                <div class="bjlg-field-control">
+                                    <input type="password"
+                                           id="bjlg-restore-password"
+                                           name="password"
+                                           class="regular-text"
+                                           autocomplete="current-password"
+                                           aria-describedby="bjlg-restore-password-help"
+                                           placeholder="Requis pour les archives .zip.enc">
+                                    <p class="description"
+                                       id="bjlg-restore-password-help"
+                                       data-default-text="<?php echo esc_attr('Requis pour restaurer les sauvegardes chiffrées (.zip.enc). Laissez vide pour les archives non chiffrées.'); ?>"
+                                       data-encrypted-text="<?php echo esc_attr('Mot de passe obligatoire : renseignez-le pour déchiffrer l\'archive (.zip.enc).'); ?>">
+                                        Requis pour restaurer les sauvegardes chiffrées (<code>.zip.enc</code>). Laissez vide pour les archives non chiffrées.
+                                    </p>
+                                </div>
                             </td>
                         </tr>
                         <tr>
                             <th scope="row">Options</th>
-                            <td><label><input type="checkbox" name="create_backup_before_restore" value="1" checked> Créer une sauvegarde de sécurité avant la restauration</label></td>
+                            <td>
+                                <div class="bjlg-field-control">
+                                    <label><input type="checkbox" name="create_backup_before_restore" value="1" checked> Créer une sauvegarde de sécurité avant la restauration</label>
+                                </div>
+                            </td>
                         </tr>
                     </tbody>
                 </table>
@@ -566,168 +586,188 @@ class BJLG_Admin {
                     <tr>
                         <th scope="row">Fréquence</th>
                         <td>
-                            <select name="recurrence" id="bjlg-schedule-recurrence">
+                            <div class="bjlg-field-control">
+                                <select name="recurrence" id="bjlg-schedule-recurrence">
                                 <option value="disabled" <?php selected($schedule_settings['recurrence'], 'disabled'); ?>>Désactivée</option>
                                 <option value="hourly" <?php selected($schedule_settings['recurrence'], 'hourly'); ?>>Toutes les heures</option>
                                 <option value="daily" <?php selected($schedule_settings['recurrence'], 'daily'); ?>>Journalière</option>
                                 <option value="weekly" <?php selected($schedule_settings['recurrence'], 'weekly'); ?>>Hebdomadaire</option>
                                 <option value="monthly" <?php selected($schedule_settings['recurrence'], 'monthly'); ?>>Mensuelle</option>
-                            </select>
+                                </select>
+                            </div>
                         </td>
                     </tr>
                     <tr class="bjlg-schedule-weekly-options" <?php echo ($schedule_settings['recurrence'] !== 'weekly') ? 'style="display:none;"' : ''; ?>>
                         <th scope="row">Jour de la semaine</th>
                         <td>
-                            <select name="day" id="bjlg-schedule-day">
+                            <div class="bjlg-field-control">
+                                <select name="day" id="bjlg-schedule-day">
                                 <?php $days = ['monday' => 'Lundi', 'tuesday' => 'Mardi', 'wednesday' => 'Mercredi', 'thursday' => 'Jeudi', 'friday' => 'Vendredi', 'saturday' => 'Samedi', 'sunday' => 'Dimanche'];
                                 foreach ($days as $day_key => $day_name): ?>
                                     <option value="<?php echo $day_key; ?>" <?php selected(isset($schedule_settings['day']) ? $schedule_settings['day'] : 'sunday', $day_key); ?>><?php echo $day_name; ?></option>
                                 <?php endforeach; ?>
-                            </select>
+                                </select>
+                            </div>
                         </td>
                     </tr>
                     <tr class="bjlg-schedule-time-options" <?php echo ($schedule_settings['recurrence'] === 'disabled') ? 'style="display:none;"' : ''; ?>>
                         <th scope="row">Heure</th>
                         <td>
-                            <input type="time" name="time" id="bjlg-schedule-time" value="<?php echo esc_attr(isset($schedule_settings['time']) ? $schedule_settings['time'] : '23:59'); ?>">
-                            <p class="description">Heure locale du serveur</p>
+                            <div class="bjlg-field-control">
+                                <input type="time" name="time" id="bjlg-schedule-time" value="<?php echo esc_attr(isset($schedule_settings['time']) ? $schedule_settings['time'] : '23:59'); ?>">
+                                <p class="description">Heure locale du serveur</p>
+                            </div>
                         </td>
                     </tr>
                     <tr>
                         <th scope="row">Composants</th>
                         <td>
-                            <fieldset>
-                                <legend class="screen-reader-text">Composants inclus dans la sauvegarde planifiée</legend>
-                                <?php foreach ($components_labels as $component_key => $component_label): ?>
-                                    <label style="display:block; margin-bottom:4px;">
-                                        <input type="checkbox"
-                                               name="components[]"
-                                               value="<?php echo esc_attr($component_key); ?>"
-                                               <?php checked(in_array($component_key, $selected_components, true)); ?>>
-                                        <?php if ($component_key === 'db'): ?>
-                                            <strong><?php echo esc_html($component_label); ?></strong>
-                                            <span class="description">Toutes les tables WordPress</span>
-                                        <?php else: ?>
-                                            <?php
-                                            switch ($component_key) {
-                                                case 'plugins':
-                                                    $path = '/wp-content/plugins';
-                                                    break;
-                                                case 'themes':
-                                                    $path = '/wp-content/themes';
-                                                    break;
-                                                case 'uploads':
-                                                    $path = '/wp-content/uploads';
-                                                    break;
-                                                default:
-                                                    $path = '';
-                                            }
-                                            ?>
-                                            <?php echo esc_html($component_label); ?>
-                                            <?php if ($path !== ''): ?><span class="description">(<code><?php echo esc_html($path); ?></code>)</span><?php endif; ?>
-                                        <?php endif; ?>
-                                    </label>
-                                <?php endforeach; ?>
-                            </fieldset>
+                            <div class="bjlg-field-control">
+                                <fieldset>
+                                    <legend class="screen-reader-text">Composants inclus dans la sauvegarde planifiée</legend>
+                                    <?php foreach ($components_labels as $component_key => $component_label): ?>
+                                        <label style="display:block; margin-bottom:4px;">
+                                            <input type="checkbox"
+                                                   name="components[]"
+                                                   value="<?php echo esc_attr($component_key); ?>"
+                                                   <?php checked(in_array($component_key, $selected_components, true)); ?>>
+                                            <?php if ($component_key === 'db'): ?>
+                                                <strong><?php echo esc_html($component_label); ?></strong>
+                                                <span class="description">Toutes les tables WordPress</span>
+                                            <?php else: ?>
+                                                <?php
+                                                switch ($component_key) {
+                                                    case 'plugins':
+                                                        $path = '/wp-content/plugins';
+                                                        break;
+                                                    case 'themes':
+                                                        $path = '/wp-content/themes';
+                                                        break;
+                                                    case 'uploads':
+                                                        $path = '/wp-content/uploads';
+                                                        break;
+                                                    default:
+                                                        $path = '';
+                                                }
+                                                ?>
+                                                <?php echo esc_html($component_label); ?>
+                                                <?php if ($path !== ''): ?><span class="description">(<code><?php echo esc_html($path); ?></code>)</span><?php endif; ?>
+                                            <?php endif; ?>
+                                        </label>
+                                    <?php endforeach; ?>
+                                </fieldset>
+                            </div>
                         </td>
                     </tr>
                     <tr>
                         <th scope="row">Options</th>
                         <td>
-                            <fieldset>
-                                <legend class="screen-reader-text">Options supplémentaires de la sauvegarde planifiée</legend>
-                                <label class="bjlg-switch" style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-                                    <input type="checkbox"
-                                           id="bjlg-schedule-encrypt"
-                                           name="encrypt"
-                                           value="1"
-                                           role="switch"
-                                           aria-checked="<?php echo $encrypt_enabled ? 'true' : 'false'; ?>"
-                                           <?php checked($encrypt_enabled); ?>>
-                                    <span class="bjlg-switch-label"><strong>Chiffrer la sauvegarde (AES-256)</strong></span>
-                                </label>
-                                <p class="description" style="margin-top:-4px; margin-bottom:10px;">
-                                    Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
-                                </p>
-                                <label class="bjlg-switch" style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-                                    <input type="checkbox"
-                                           id="bjlg-schedule-incremental"
-                                           name="incremental"
-                                           value="1"
-                                           role="switch"
-                                           aria-checked="<?php echo $incremental_enabled ? 'true' : 'false'; ?>"
-                                           <?php checked($incremental_enabled); ?>>
-                                    <span class="bjlg-switch-label"><strong>Sauvegarde incrémentale</strong></span>
-                                </label>
-                                <p class="description" style="margin-top:-4px;">
-                                    Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
-                                </p>
-                            </fieldset>
+                            <div class="bjlg-field-control">
+                                <fieldset>
+                                    <legend class="screen-reader-text">Options supplémentaires de la sauvegarde planifiée</legend>
+                                    <label class="bjlg-switch" style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                                        <input type="checkbox"
+                                               id="bjlg-schedule-encrypt"
+                                               name="encrypt"
+                                               value="1"
+                                               role="switch"
+                                               aria-checked="<?php echo $encrypt_enabled ? 'true' : 'false'; ?>"
+                                               <?php checked($encrypt_enabled); ?>>
+                                        <span class="bjlg-switch-label"><strong>Chiffrer la sauvegarde (AES-256)</strong></span>
+                                    </label>
+                                    <p class="description" style="margin-top:-4px; margin-bottom:10px;">
+                                        Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
+                                    </p>
+                                    <label class="bjlg-switch" style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                                        <input type="checkbox"
+                                               id="bjlg-schedule-incremental"
+                                               name="incremental"
+                                               value="1"
+                                               role="switch"
+                                               aria-checked="<?php echo $incremental_enabled ? 'true' : 'false'; ?>"
+                                               <?php checked($incremental_enabled); ?>>
+                                        <span class="bjlg-switch-label"><strong>Sauvegarde incrémentale</strong></span>
+                                    </label>
+                                    <p class="description" style="margin-top:-4px;">
+                                        Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
+                                    </p>
+                                </fieldset>
+                            </div>
                         </td>
                     </tr>
                     <tr>
                         <th scope="row">Inclusions personnalisées</th>
                         <td>
-                            <textarea name="include_patterns" rows="3" class="large-text code" placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"><?php echo $schedule_include_text; ?></textarea>
-                            <p class="description">Motifs appliqués à chaque exécution planifiée. Laissez vide pour inclure tout le contenu sélectionné.</p>
+                            <div class="bjlg-field-control">
+                                <textarea name="include_patterns" rows="3" class="large-text code" placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"><?php echo $schedule_include_text; ?></textarea>
+                                <p class="description">Motifs appliqués à chaque exécution planifiée. Laissez vide pour inclure tout le contenu sélectionné.</p>
+                            </div>
                         </td>
                     </tr>
                     <tr>
                         <th scope="row">Exclusions</th>
                         <td>
-                            <textarea name="exclude_patterns" rows="3" class="large-text code" placeholder="*/cache/*&#10;*.log"><?php echo $schedule_exclude_text; ?></textarea>
-                            <p class="description">Ajoutez des motifs supplémentaires pour ignorer des dossiers ou fichiers lors des sauvegardes planifiées.</p>
+                            <div class="bjlg-field-control">
+                                <textarea name="exclude_patterns" rows="3" class="large-text code" placeholder="*/cache/*&#10;*.log"><?php echo $schedule_exclude_text; ?></textarea>
+                                <p class="description">Ajoutez des motifs supplémentaires pour ignorer des dossiers ou fichiers lors des sauvegardes planifiées.</p>
+                            </div>
                         </td>
                     </tr>
                     <tr>
                         <th scope="row">Vérifications post-sauvegarde</th>
                         <td>
-                            <fieldset>
-                                <label>
-                                    <input type="checkbox" name="post_checks[]" value="checksum" <?php checked(!empty($schedule_post_checks['checksum'])); ?>> Vérifier l'intégrité (SHA-256)
-                                </label>
-                                <p class="description">Calcule un hachage de l'archive pour garantir son intégrité.</p>
-                                <label>
-                                    <input type="checkbox" name="post_checks[]" value="dry_run" <?php checked(!empty($schedule_post_checks['dry_run'])); ?>> Test de restauration à blanc
-                                </label>
-                                <p class="description">Ouvre l'archive après sa création pour valider une restauration (ignoré si l'archive est chiffrée).</p>
-                            </fieldset>
+                            <div class="bjlg-field-control">
+                                <fieldset>
+                                    <label>
+                                        <input type="checkbox" name="post_checks[]" value="checksum" <?php checked(!empty($schedule_post_checks['checksum'])); ?>> Vérifier l'intégrité (SHA-256)
+                                    </label>
+                                    <p class="description">Calcule un hachage de l'archive pour garantir son intégrité.</p>
+                                    <label>
+                                        <input type="checkbox" name="post_checks[]" value="dry_run" <?php checked(!empty($schedule_post_checks['dry_run'])); ?>> Test de restauration à blanc
+                                    </label>
+                                    <p class="description">Ouvre l'archive après sa création pour valider une restauration (ignoré si l'archive est chiffrée).</p>
+                                </fieldset>
+                            </div>
                         </td>
                     </tr>
                     <tr>
                         <th scope="row">Destinations secondaires</th>
                         <td>
-                            <fieldset>
-                                <?php if (!empty($destination_choices)): ?>
-                                    <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
-                                        <label style="display:block; margin-bottom:4px;">
-                                            <input type="checkbox"
-                                                   name="secondary_destinations[]"
-                                                   value="<?php echo esc_attr($destination_id); ?>"
-                                                   <?php checked(in_array($destination_id, $schedule_secondary_destinations, true)); ?>>
-                                            <?php echo esc_html($destination_label); ?>
-                                        </label>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <p class="description">Aucune destination distante n'est disponible pour le moment.</p>
-                                <?php endif; ?>
-                                <p class="description">Si l'envoi vers la première destination échoue, les suivantes sont tentées automatiquement.</p>
-                            </fieldset>
+                            <div class="bjlg-field-control">
+                                <fieldset>
+                                    <?php if (!empty($destination_choices)): ?>
+                                        <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
+                                            <label style="display:block; margin-bottom:4px;">
+                                                <input type="checkbox"
+                                                       name="secondary_destinations[]"
+                                                       value="<?php echo esc_attr($destination_id); ?>"
+                                                       <?php checked(in_array($destination_id, $schedule_secondary_destinations, true)); ?>>
+                                                <?php echo esc_html($destination_label); ?>
+                                            </label>
+                                        <?php endforeach; ?>
+                                    <?php else: ?>
+                                        <p class="description">Aucune destination distante n'est disponible pour le moment.</p>
+                                    <?php endif; ?>
+                                    <p class="description">Si l'envoi vers la première destination échoue, les suivantes sont tentées automatiquement.</p>
+                                </fieldset>
+                            </div>
                         </td>
                     </tr>
                     <tr>
                         <th scope="row">Résumé</th>
                         <td>
-                            <div id="bjlg-schedule-summary" class="bjlg-schedule-summary" aria-live="polite">
-                                <?php echo $this->get_schedule_summary_markup(
-                                    $selected_components,
-                                    $encrypt_enabled,
-                                    $incremental_enabled,
-                                    $schedule_post_checks,
-                                    $schedule_secondary_destinations,
-                                    $schedule_include_patterns,
-                                    $schedule_exclude_patterns
-                                ); ?>
+                            <div class="bjlg-field-control">
+                                <div id="bjlg-schedule-summary" class="bjlg-schedule-summary" aria-live="polite">
+                                    <?php echo $this->get_schedule_summary_markup(
+                                        $selected_components,
+                                        $encrypt_enabled,
+                                        $incremental_enabled,
+                                        $schedule_post_checks,
+                                        $schedule_secondary_destinations,
+                                        $schedule_include_patterns,
+                                        $schedule_exclude_patterns
+                                    ); ?>
+                                </div>
                             </div>
                         </td>
                     </tr>
@@ -739,17 +779,25 @@ class BJLG_Admin {
             <p>Utilisez ce point de terminaison pour déclencher une sauvegarde à distance en toute sécurité :</p>
             <div class="bjlg-webhook-url" style="margin-bottom: 10px;">
                 <label for="bjlg-webhook-endpoint" style="display:block; font-weight:600;">Point de terminaison</label>
-                <div>
-                    <input type="text" id="bjlg-webhook-endpoint" readonly value="<?php echo esc_url(BJLG_Webhooks::get_webhook_endpoint()); ?>" class="regular-text code" style="width: 70%;">
-                    <button class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-endpoint">Copier l'URL</button>
+                <div class="bjlg-form-field-group">
+                    <div class="bjlg-form-field-control">
+                        <input type="text" id="bjlg-webhook-endpoint" readonly value="<?php echo esc_url(BJLG_Webhooks::get_webhook_endpoint()); ?>" class="regular-text code">
+                    </div>
+                    <div class="bjlg-form-field-actions">
+                        <button class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-endpoint">Copier l'URL</button>
+                    </div>
                 </div>
             </div>
             <div class="bjlg-webhook-url" style="margin-bottom: 10px;">
                 <label for="bjlg-webhook-key" style="display:block; font-weight:600;">Clé secrète</label>
-                <div>
-                    <input type="text" id="bjlg-webhook-key" readonly value="<?php echo esc_attr($webhook_key); ?>" class="regular-text code" style="width: 70%;">
-                    <button class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-key">Copier la clé</button>
-                    <button class="button" id="bjlg-regenerate-webhook">Régénérer</button>
+                <div class="bjlg-form-field-group">
+                    <div class="bjlg-form-field-control">
+                        <input type="text" id="bjlg-webhook-key" readonly value="<?php echo esc_attr($webhook_key); ?>" class="regular-text code">
+                    </div>
+                    <div class="bjlg-form-field-actions">
+                        <button class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-key">Copier la clé</button>
+                        <button class="button" id="bjlg-regenerate-webhook">Régénérer</button>
+                    </div>
                 </div>
             </div>
             <p class="description">Envoyez une requête <strong>POST</strong> à l'URL ci-dessus en ajoutant l'en-tête <code><?php echo esc_html(BJLG_Webhooks::WEBHOOK_HEADER); ?></code> (ou <code>Authorization: Bearer &lt;clé&gt;</code>) contenant votre clé.</p>
@@ -763,15 +811,33 @@ class BJLG_Admin {
                     <tr>
                         <th scope="row">Conserver par nombre</th>
                         <td>
-                            <input name="by_number" type="number" class="small-text" value="<?php echo esc_attr(isset($cleanup_settings['by_number']) ? $cleanup_settings['by_number'] : 3); ?>" min="0"> sauvegardes
-                            <p class="description">0 = illimité</p>
+                            <div class="bjlg-field-control">
+                                <div class="bjlg-form-field-group">
+                                    <div class="bjlg-form-field-control">
+                                        <input name="by_number" type="number" class="small-text" value="<?php echo esc_attr(isset($cleanup_settings['by_number']) ? $cleanup_settings['by_number'] : 3); ?>" min="0">
+                                    </div>
+                                    <div class="bjlg-form-field-actions">
+                                        <span class="bjlg-form-field-unit">sauvegardes</span>
+                                    </div>
+                                </div>
+                                <p class="description">0 = illimité</p>
+                            </div>
                         </td>
                     </tr>
                     <tr>
                         <th scope="row">Conserver par ancienneté</th>
                         <td>
-                            <input name="by_age" type="number" class="small-text" value="<?php echo esc_attr(isset($cleanup_settings['by_age']) ? $cleanup_settings['by_age'] : 0); ?>" min="0"> jours
-                            <p class="description">0 = illimité</p>
+                            <div class="bjlg-field-control">
+                                <div class="bjlg-form-field-group">
+                                    <div class="bjlg-form-field-control">
+                                        <input name="by_age" type="number" class="small-text" value="<?php echo esc_attr(isset($cleanup_settings['by_age']) ? $cleanup_settings['by_age'] : 0); ?>" min="0">
+                                    </div>
+                                    <div class="bjlg-form-field-actions">
+                                        <span class="bjlg-form-field-unit">jours</span>
+                                    </div>
+                                </div>
+                                <p class="description">0 = illimité</p>
+                            </div>
                         </td>
                     </tr>
                 </table>
@@ -781,13 +847,19 @@ class BJLG_Admin {
                     <tr>
                         <th scope="row">Nom du plugin</th>
                         <td>
-                            <input type="text" name="plugin_name" value="<?php echo esc_attr(isset($wl_settings['plugin_name']) ? $wl_settings['plugin_name'] : ''); ?>" class="regular-text" placeholder="Backup - JLG">
-                            <p class="description">Laissez vide pour utiliser le nom par défaut</p>
+                            <div class="bjlg-field-control">
+                                <input type="text" name="plugin_name" value="<?php echo esc_attr(isset($wl_settings['plugin_name']) ? $wl_settings['plugin_name'] : ''); ?>" class="regular-text" placeholder="Backup - JLG">
+                                <p class="description">Laissez vide pour utiliser le nom par défaut</p>
+                            </div>
                         </td>
                     </tr>
                     <tr>
                         <th scope="row">Visibilité</th>
-                        <td><label><input type="checkbox" name="hide_from_non_admins" <?php checked(isset($wl_settings['hide_from_non_admins']) && $wl_settings['hide_from_non_admins']); ?>> Cacher le plugin pour les non-administrateurs</label></td>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <label><input type="checkbox" name="hide_from_non_admins" <?php checked(isset($wl_settings['hide_from_non_admins']) && $wl_settings['hide_from_non_admins']); ?>> Cacher le plugin pour les non-administrateurs</label>
+                            </div>
+                        </td>
                     </tr>
                 </table>
                 
@@ -859,12 +931,18 @@ class BJLG_Admin {
             <form id="bjlg-create-api-key" class="bjlg-inline-form">
                 <h3>Créer une nouvelle clé</h3>
                 <p class="description">Donnez un nom à la clé pour identifier l'intégration correspondante.</p>
-                <label for="bjlg-api-key-label" class="screen-reader-text">Nom de la clé API</label>
-                <input type="text" id="bjlg-api-key-label" name="label" class="regular-text"
-                       placeholder="Ex. : CRM Marketing" autocomplete="off" />
-                <button type="submit" class="button button-primary">
-                    <span class="dashicons dashicons-plus"></span> Générer une clé API
-                </button>
+                <div class="bjlg-form-field-group">
+                    <div class="bjlg-form-field-control">
+                        <label for="bjlg-api-key-label" class="screen-reader-text">Nom de la clé API</label>
+                        <input type="text" id="bjlg-api-key-label" name="label" class="regular-text"
+                               placeholder="Ex. : CRM Marketing" autocomplete="off" />
+                    </div>
+                    <div class="bjlg-form-field-actions">
+                        <button type="submit" class="button button-primary">
+                            <span class="dashicons dashicons-plus"></span> Générer une clé API
+                        </button>
+                    </div>
+                </div>
             </form>
 
             <p class="description bjlg-api-keys-empty"<?php echo $has_keys ? ' style="display:none;"' : ''; ?>>
