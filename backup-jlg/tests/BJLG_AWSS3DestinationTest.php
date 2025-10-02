@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 use BJLG\BJLG_AWS_S3;
+use Exception;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/destinations/interface-bjlg-destination.php';
@@ -222,6 +223,65 @@ final class BJLG_AWSS3DestinationTest extends TestCase
         $this->assertSame('arn:aws:kms:eu-west-3:123:key/abc', $headers['x-amz-server-side-encryption-aws-kms-key-id']);
 
         unlink($file);
+    }
+
+    public function test_upload_file_accepts_array_of_paths(): void
+    {
+        $destination = $this->createDestination();
+
+        update_option('bjlg_s3_settings', [
+            'access_key' => 'AKID',
+            'secret_key' => 'SECRET',
+            'region' => 'us-east-1',
+            'bucket' => 'array-bucket',
+            'enabled' => true,
+        ]);
+
+        $file = tempnam(sys_get_temp_dir(), 'bjlg');
+        self::assertNotFalse($file);
+        file_put_contents($file, 'archive');
+
+        try {
+            $destination->upload_file([$file], 'task-array');
+        } finally {
+            if (is_string($file) && file_exists($file)) {
+                unlink($file);
+            }
+        }
+
+        $this->assertCount(1, $this->requests);
+    }
+
+    public function test_upload_file_array_reports_all_errors(): void
+    {
+        $destination = $this->createDestination();
+
+        update_option('bjlg_s3_settings', [
+            'access_key' => 'AKID',
+            'secret_key' => 'SECRET',
+            'region' => 'us-east-1',
+            'bucket' => 'array-bucket',
+            'enabled' => true,
+        ]);
+
+        $file = tempnam(sys_get_temp_dir(), 'bjlg');
+        self::assertNotFalse($file);
+        file_put_contents($file, 'archive');
+        $missing = $file . '.missing';
+
+        try {
+            $destination->upload_file([$file, $missing], 'task-errors');
+            $this->fail('Une exception aurait dû être levée pour les erreurs multiples.');
+        } catch (Exception $exception) {
+            $this->assertStringContainsString('Erreurs Amazon S3', $exception->getMessage());
+            $this->assertStringContainsString('introuvable', $exception->getMessage());
+        } finally {
+            if (is_string($file) && file_exists($file)) {
+                unlink($file);
+            }
+        }
+
+        $this->assertCount(1, $this->requests, 'Le premier fichier aurait dû être envoyé malgré les erreurs suivantes.');
     }
 
     private function createDestination(?callable $handler = null): BJLG_AWS_S3

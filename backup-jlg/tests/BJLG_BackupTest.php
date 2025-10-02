@@ -1,7 +1,15 @@
 <?php
 declare(strict_types=1);
 
+use BJLG\BJLG_Destination_Interface;
+use Exception;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
+use ReflectionProperty;
+use ZipArchive;
+
+require_once __DIR__ . '/../includes/class-bjlg-backup.php';
+require_once __DIR__ . '/../includes/destinations/interface-bjlg-destination.php';
 
 final class BJLG_BackupTest extends TestCase
 {
@@ -142,5 +150,200 @@ final class BJLG_BackupTest extends TestCase
 
         $this->assertArrayNotHasKey('bjlg_backup_task_lock', $GLOBALS['bjlg_test_transients']);
         unset($GLOBALS['bjlg_test_transients'][$task_id]);
+    }
+
+    public function test_resolve_include_patterns_normalizes_plain_paths(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $previous = get_option('bjlg_backup_include_patterns');
+        update_option('bjlg_backup_include_patterns', ['wp-content/uploads/images', 'uploads/media/*']);
+
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'resolve_include_patterns');
+        $method->setAccessible(true);
+
+        try {
+            $patterns = $method->invoke($backup, []);
+        } finally {
+            update_option('bjlg_backup_include_patterns', $previous);
+        }
+
+        $this->assertSame(['*wp-content/uploads/images*', 'uploads/media/*'], $patterns);
+    }
+
+    public function test_should_include_file_supports_relative_patterns(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'should_include_file');
+        $method->setAccessible(true);
+
+        $directory = WP_CONTENT_DIR . '/uploads/custom';
+        if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
+            $this->fail('Impossible de créer le répertoire de test.');
+        }
+
+        $file = $directory . '/file.txt';
+        file_put_contents($file, 'content');
+
+        try {
+            $this->assertTrue($method->invoke($backup, $file, ['wp-content/uploads/*']));
+            $this->assertTrue($method->invoke($backup, $file, ['uploads/custom/*']));
+            $this->assertFalse($method->invoke($backup, $file, ['wp-content/themes/*']));
+        } finally {
+            @unlink($file);
+            @rmdir($directory);
+            @rmdir(dirname($directory));
+        }
+    }
+
+    public function test_perform_post_backup_checks_returns_checksum_and_dry_run_status(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $zip_path = tempnam(sys_get_temp_dir(), 'bjlg-checks');
+        $this->assertIsString($zip_path);
+        $zip_path .= '.zip';
+
+        $zip = new ZipArchive();
+        $this->assertTrue($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE));
+        $zip->addFromString('file.txt', 'example');
+        $zip->close();
+
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'perform_post_backup_checks');
+        $method->setAccessible(true);
+
+        try {
+            $results = $method->invoke($backup, $zip_path, ['checksum' => true, 'dry_run' => true], false);
+            $this->assertSame(hash_file('sha256', $zip_path), $results['checksum']);
+            $this->assertSame('sha256', $results['checksum_algorithm']);
+            $this->assertSame('passed', $results['dry_run']);
+
+            $encryptedResults = $method->invoke($backup, $zip_path, ['checksum' => true, 'dry_run' => true], true);
+            $this->assertSame('skipped', $encryptedResults['dry_run']);
+        } finally {
+            @unlink($zip_path);
+        }
+    }
+
+    public function test_dispatch_to_destinations_records_failures_and_successes(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'dispatch_to_destinations');
+        $method->setAccessible(true);
+
+        $file = tempnam(sys_get_temp_dir(), 'bjlg-dispatch');
+        $this->assertIsString($file);
+        file_put_contents($file, 'payload');
+
+        $primary = new class implements BJLG_Destination_Interface {
+            public int $uploads = 0;
+
+            public function get_id()
+            {
+                return 'primary';
+            }
+
+            public function get_name()
+            {
+                return 'Primaire';
+            }
+
+            public function is_connected()
+            {
+                return true;
+            }
+
+            public function disconnect(): void
+            {
+            }
+
+            public function render_settings(): void
+            {
+            }
+
+            public function upload_file($filepath, $task_id)
+            {
+                $this->uploads++;
+                throw new Exception('API indisponible');
+            }
+        };
+
+        $secondary = new class implements BJLG_Destination_Interface {
+            public array $uploads = [];
+
+            public function get_id()
+            {
+                return 'secondary';
+            }
+
+            public function get_name()
+            {
+                return 'Secours';
+            }
+
+            public function is_connected()
+            {
+                return true;
+            }
+
+            public function disconnect(): void
+            {
+            }
+
+            public function render_settings(): void
+            {
+            }
+
+            public function upload_file($filepath, $task_id)
+            {
+                $this->uploads[] = [$filepath, $task_id];
+            }
+        };
+
+        add_filter('bjlg_backup_instantiate_destination', static function ($provided, $destination_id) use ($primary, $secondary) {
+            if ($destination_id === 'primary') {
+                return $primary;
+            }
+
+            if ($destination_id === 'secondary') {
+                return $secondary;
+            }
+
+            return $provided;
+        }, 10, 2);
+
+        try {
+            $results = $method->invoke($backup, $file, ['primary', 'secondary'], 'task-99');
+        } finally {
+            unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_backup_instantiate_destination']);
+            @unlink($file);
+        }
+
+        $this->assertSame(['secondary'], $results['success']);
+        $this->assertArrayHasKey('primary', $results['failures']);
+        $this->assertSame('API indisponible', $results['failures']['primary']);
+        $this->assertSame(1, $primary->uploads);
+        $this->assertCount(1, $secondary->uploads);
+        $this->assertSame('task-99', $secondary->uploads[0][1]);
+    }
+
+    public function test_resolve_destination_queue_uses_saved_options(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $previous = get_option('bjlg_backup_secondary_destinations');
+        update_option('bjlg_backup_secondary_destinations', ['google_drive', 'aws_s3']);
+
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'resolve_destination_queue');
+        $method->setAccessible(true);
+
+        try {
+            $queue = $method->invoke($backup, []);
+        } finally {
+            update_option('bjlg_backup_secondary_destinations', $previous);
+        }
+
+        $this->assertSame(['google_drive', 'aws_s3'], $queue);
     }
 }

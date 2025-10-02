@@ -266,14 +266,81 @@ jQuery(document).ready(function($) {
                 ['bjlg-badge-incremental']
             ));
 
+            const includeRaw = ($scheduleForm.find('[name="include_patterns"]').val() || '').toString();
+            const includeLines = includeRaw
+                .split(/\r?\n/)
+                .map(function(line) { return line.trim(); })
+                .filter(function(line) { return line !== ''; });
+            const includeBadges = [];
+            if (includeLines.length) {
+                includeBadges.push(createScheduleBadge(
+                    includeLines.length + ' motif(s)',
+                    '#0ea5e9',
+                    ['bjlg-badge-include']
+                ));
+            } else {
+                includeBadges.push(createScheduleBadge('Tout le contenu', '#10b981', ['bjlg-badge-include']));
+            }
+
+            const excludeRaw = ($scheduleForm.find('[name="exclude_patterns"]').val() || '').toString();
+            const excludeLines = excludeRaw
+                .split(/\r?\n/)
+                .map(function(line) { return line.trim(); })
+                .filter(function(line) { return line !== ''; });
+            const excludeBadges = [];
+            if (excludeLines.length) {
+                excludeBadges.push(createScheduleBadge(
+                    excludeLines.length + ' exclusion(s)',
+                    '#f97316',
+                    ['bjlg-badge-exclude']
+                ));
+            } else {
+                excludeBadges.push(createScheduleBadge('Aucune', '#4b5563', ['bjlg-badge-exclude']));
+            }
+
+            const postChecks = [];
+            $scheduleForm.find('input[name="post_checks[]"]:checked').each(function() {
+                const value = ($(this).val() || '').toString();
+                if (value) {
+                    postChecks.push(value);
+                }
+            });
+            const controlBadges = [];
+            if (postChecks.indexOf('checksum') !== -1) {
+                controlBadges.push(createScheduleBadge('Checksum', '#2563eb', ['bjlg-badge-checksum']));
+            }
+            if (postChecks.indexOf('dry_run') !== -1) {
+                controlBadges.push(createScheduleBadge('Test restauration', '#7c3aed', ['bjlg-badge-restore']));
+            }
+            if (!controlBadges.length) {
+                controlBadges.push(createScheduleBadge('Aucun contrôle', '#4b5563', ['bjlg-badge-control']));
+            }
+
+            const destinationBadges = [];
+            $scheduleForm.find('input[name="secondary_destinations[]"]:checked').each(function() {
+                const $checkbox = $(this);
+                const labelText = ($checkbox.closest('label').text() || '').trim().replace(/\s+/g, ' ');
+                const display = labelText !== '' ? labelText : ($checkbox.val() || '').toString();
+                destinationBadges.push(createScheduleBadge(display, '#0ea5e9', ['bjlg-badge-destination']));
+            });
+            if (!destinationBadges.length) {
+                destinationBadges.push(createScheduleBadge('Stockage local', '#4b5563', ['bjlg-badge-destination']));
+            }
+
             const fragment = $(document.createDocumentFragment());
             fragment.append(wrapScheduleBadgeGroup('Composants', componentBadges));
             fragment.append(wrapScheduleBadgeGroup('Options', optionBadges));
+            fragment.append(wrapScheduleBadgeGroup('Inclusions', includeBadges));
+            fragment.append(wrapScheduleBadgeGroup('Exclusions', excludeBadges));
+            fragment.append(wrapScheduleBadgeGroup('Contrôles', controlBadges));
+            fragment.append(wrapScheduleBadgeGroup('Destinations', destinationBadges));
 
             $summary.empty().append(fragment);
         }
 
         $scheduleForm.on('change', 'input[name="components[]"], [name="encrypt"], [name="incremental"]', updateScheduleSummary);
+        $scheduleForm.on('input', 'textarea[name="include_patterns"], textarea[name="exclude_patterns"]', updateScheduleSummary);
+        $scheduleForm.on('change', 'input[name="post_checks[]"], input[name="secondary_destinations[]"]', updateScheduleSummary);
         $scheduleForm.on('change', '[role="switch"]', function() {
             const $input = $(this);
             $input.attr('aria-checked', $input.is(':checked') ? 'true' : 'false');
@@ -327,6 +394,27 @@ jQuery(document).ready(function($) {
                 }
                 payload[fieldName] = $field.is(':checked') ? 'true' : 'false';
             });
+
+            payload.include_patterns = ($scheduleForm.find('[name="include_patterns"]').val() || '').toString();
+            payload.exclude_patterns = ($scheduleForm.find('[name="exclude_patterns"]').val() || '').toString();
+
+            const postCheckValues = [];
+            $scheduleForm.find('input[name="post_checks[]"]:checked').each(function() {
+                const value = ($(this).val() || '').toString();
+                if (value) {
+                    postCheckValues.push(value);
+                }
+            });
+            payload.post_checks = postCheckValues;
+
+            const destinationValues = [];
+            $scheduleForm.find('input[name="secondary_destinations[]"]:checked').each(function() {
+                const value = ($(this).val() || '').toString();
+                if (value) {
+                    destinationValues.push(value);
+                }
+            });
+            payload.secondary_destinations = destinationValues;
 
             $.ajax({
                 url: bjlg_ajax.ajax_url,
@@ -952,6 +1040,16 @@ jQuery(document).ready(function($) {
 
         const encrypt = $form.find('input[name="encrypt_backup"]').is(':checked');
         const incremental = $form.find('input[name="incremental_backup"]').is(':checked');
+        const includePatterns = ($form.find('textarea[name="include_patterns"]').val() || '').toString();
+        const excludePatterns = ($form.find('textarea[name="exclude_patterns"]').val() || '').toString();
+        const postChecks = [];
+        $form.find('input[name="post_checks[]"]:checked').each(function() {
+            postChecks.push($(this).val());
+        });
+        const secondaryDestinations = [];
+        $form.find('input[name="secondary_destinations[]"]:checked').each(function() {
+            secondaryDestinations.push($(this).val());
+        });
 
         if (components.length === 0) {
             alert('Veuillez sélectionner au moins un composant à sauvegarder.');
@@ -970,7 +1068,11 @@ jQuery(document).ready(function($) {
             nonce: bjlg_ajax.nonce,
             components: components,
             encrypt: encrypt,
-            incremental: incremental
+            incremental: incremental,
+            include_patterns: includePatterns,
+            exclude_patterns: excludePatterns,
+            post_checks: postChecks,
+            secondary_destinations: secondaryDestinations
         };
         let debugReport = "--- 1. REQUÊTE DE LANCEMENT ---\nDonnées envoyées:\n" + JSON.stringify(data, null, 2);
         if ($debugOutput.length) $debugOutput.text(debugReport);

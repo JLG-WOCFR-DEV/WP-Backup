@@ -152,6 +152,16 @@ class BJLG_Scheduler {
 
         $encrypt = $this->sanitize_boolean($posted['encrypt'] ?? false);
         $incremental = $this->sanitize_boolean($posted['incremental'] ?? false);
+        $include_patterns = BJLG_Settings::sanitize_pattern_list($posted['include_patterns'] ?? []);
+        $exclude_patterns = BJLG_Settings::sanitize_pattern_list($posted['exclude_patterns'] ?? []);
+        $post_checks = BJLG_Settings::sanitize_post_checks(
+            $posted['post_checks'] ?? [],
+            BJLG_Settings::get_default_backup_post_checks()
+        );
+        $secondary_destinations = BJLG_Settings::sanitize_destination_list(
+            $posted['secondary_destinations'] ?? [],
+            BJLG_Settings::get_known_destination_ids()
+        );
 
         $schedule_settings = [
             'recurrence' => $recurrence,
@@ -160,9 +170,19 @@ class BJLG_Scheduler {
             'components' => $components,
             'encrypt' => $encrypt,
             'incremental' => $incremental,
+            'include_patterns' => $include_patterns,
+            'exclude_patterns' => $exclude_patterns,
+            'post_checks' => $post_checks,
+            'secondary_destinations' => $secondary_destinations,
         ];
 
         update_option('bjlg_schedule_settings', $schedule_settings);
+        BJLG_Settings::get_instance()->update_backup_filters(
+            $include_patterns,
+            $exclude_patterns,
+            $secondary_destinations,
+            $post_checks
+        );
         BJLG_Debug::log("Réglages de planification enregistrés : " . print_r($schedule_settings, true));
 
         // Mettre à jour la planification
@@ -366,7 +386,11 @@ class BJLG_Scheduler {
             'encrypt' => $settings['encrypt'],
             'incremental' => $settings['incremental'],
             'source' => 'manual_scheduled',
-            'start_time' => time()
+            'start_time' => time(),
+            'include_patterns' => $settings['include_patterns'],
+            'exclude_patterns' => $settings['exclude_patterns'],
+            'post_checks' => $settings['post_checks'],
+            'secondary_destinations' => $settings['secondary_destinations'],
         ];
 
         $transient_set = set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
@@ -422,7 +446,11 @@ class BJLG_Scheduler {
             'encrypt' => $settings['encrypt'],
             'incremental' => $settings['incremental'],
             'source' => 'scheduled',
-            'start_time' => time()
+            'start_time' => time(),
+            'include_patterns' => $settings['include_patterns'],
+            'exclude_patterns' => $settings['exclude_patterns'],
+            'post_checks' => $settings['post_checks'],
+            'secondary_destinations' => $settings['secondary_destinations'],
         ];
 
         $transient_set = set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
@@ -579,6 +607,17 @@ class BJLG_Scheduler {
             $components = $defaults['components'];
         }
 
+        $include_patterns = BJLG_Settings::sanitize_pattern_list($settings['include_patterns'] ?? []);
+        $exclude_patterns = BJLG_Settings::sanitize_pattern_list($settings['exclude_patterns'] ?? []);
+        $post_checks = BJLG_Settings::sanitize_post_checks(
+            $settings['post_checks'] ?? [],
+            BJLG_Settings::get_default_backup_post_checks()
+        );
+        $secondary_destinations = BJLG_Settings::sanitize_destination_list(
+            $settings['secondary_destinations'] ?? [],
+            BJLG_Settings::get_known_destination_ids()
+        );
+
         return [
             'recurrence' => $recurrence,
             'day' => $day,
@@ -586,6 +625,10 @@ class BJLG_Scheduler {
             'components' => $components,
             'encrypt' => $this->sanitize_boolean($settings['encrypt']),
             'incremental' => $this->sanitize_boolean($settings['incremental']),
+            'include_patterns' => $include_patterns,
+            'exclude_patterns' => $exclude_patterns,
+            'post_checks' => $post_checks,
+            'secondary_destinations' => $secondary_destinations,
         ];
     }
 
@@ -597,6 +640,10 @@ class BJLG_Scheduler {
             'components' => ['db', 'plugins', 'themes', 'uploads'],
             'encrypt' => false,
             'incremental' => false,
+            'include_patterns' => [],
+            'exclude_patterns' => [],
+            'post_checks' => BJLG_Settings::get_default_backup_post_checks(),
+            'secondary_destinations' => [],
         ];
     }
 
