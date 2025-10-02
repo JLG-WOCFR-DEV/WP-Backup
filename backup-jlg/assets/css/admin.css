@@ -70,6 +70,128 @@
     align-items: flex-end;
 }
 
+/* Utilitaires génériques
+--------------------------------------------- */
+
+.bjlg-hidden {
+    display: none;
+}
+
+.bjlg-label-block {
+    display: block;
+}
+
+.bjlg-mb-4 {
+    margin-bottom: 4px;
+}
+
+.bjlg-mb-6 {
+    margin-bottom: 6px;
+}
+
+.bjlg-mb-10 {
+    margin-bottom: 10px;
+}
+
+.bjlg-description-offset {
+    margin-top: -4px;
+}
+
+/* Planification des sauvegardes
+--------------------------------------------- */
+
+.bjlg-schedule-overview {
+    margin: 15px 0;
+    padding: 12px;
+    border: 1px solid #e5e7eb;
+    background: #f8fafc;
+    border-radius: 6px;
+}
+
+.bjlg-schedule-overview-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+
+.bjlg-schedule-overview-frequency {
+    color: #1f2937;
+    font-weight: 600;
+}
+
+.bjlg-switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bjlg-badge-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.bjlg-badge-group-title {
+    margin-right: 4px;
+}
+
+.bjlg-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.8em;
+    font-weight: 600;
+    color: #ffffff;
+    margin-right: 4px;
+    margin-top: 2px;
+}
+
+.bjlg-badge-bg-indigo {
+    background-color: #6366f1;
+}
+
+.bjlg-badge-bg-amber {
+    background-color: #f59e0b;
+}
+
+.bjlg-badge-bg-emerald {
+    background-color: #10b981;
+}
+
+.bjlg-badge-bg-blue {
+    background-color: #3b82f6;
+}
+
+.bjlg-badge-bg-purple {
+    background-color: #7c3aed;
+}
+
+.bjlg-badge-bg-slate {
+    background-color: #4b5563;
+}
+
+.bjlg-badge-bg-sky {
+    background-color: #0ea5e9;
+}
+
+.bjlg-badge-bg-orange {
+    background-color: #f97316;
+}
+
+.bjlg-badge-bg-cobalt {
+    background-color: #2563eb;
+}
+
+.bjlg-badge-bg-gray {
+    background-color: #6b7280;
+}
+
 /* Navigation par onglets
 --------------------------------------------- */
 

@@ -355,11 +355,9 @@ class BJLG_Admin {
                 class="bjlg-schedule-overview"
                 aria-live="polite"
                 data-recurrence="<?php echo esc_attr($current_recurrence); ?>"
-                style="margin:15px 0; padding:12px; border:1px solid #e5e7eb; background:#f8fafc; border-radius:6px;"
             >
                 <div
                     class="bjlg-schedule-overview-header"
-                    style="display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;"
                 >
                     <span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span>
                     <strong>Sauvegardes planifiées</strong>
@@ -367,7 +365,6 @@ class BJLG_Admin {
                         id="bjlg-schedule-overview-frequency"
                         class="bjlg-schedule-overview-frequency"
                         data-prefix="Fréquence : "
-                        style="font-weight:600; color:#1f2937;"
                     >
                         Fréquence : <?php echo esc_html($current_recurrence_label); ?>
                     </span>
@@ -616,6 +613,21 @@ class BJLG_Admin {
             
             <h3><span class="dashicons dashicons-calendar-alt"></span> Planification des Sauvegardes</h3>
             <form id="bjlg-schedule-form">
+                <?php
+                $weekly_row_hidden = $schedule_settings['recurrence'] !== 'weekly';
+                $weekly_row_classes = 'bjlg-schedule-weekly-options';
+                if ($weekly_row_hidden) {
+                    $weekly_row_classes .= ' bjlg-hidden';
+                }
+                $weekly_row_aria = $weekly_row_hidden ? 'true' : 'false';
+
+                $time_row_hidden = $schedule_settings['recurrence'] === 'disabled';
+                $time_row_classes = 'bjlg-schedule-time-options';
+                if ($time_row_hidden) {
+                    $time_row_classes .= ' bjlg-hidden';
+                }
+                $time_row_aria = $time_row_hidden ? 'true' : 'false';
+                ?>
                 <table class="form-table">
                     <tr>
                         <th scope="row">Fréquence</th>
@@ -631,7 +643,7 @@ class BJLG_Admin {
                             </div>
                         </td>
                     </tr>
-                    <tr class="bjlg-schedule-weekly-options" <?php echo ($schedule_settings['recurrence'] !== 'weekly') ? 'style="display:none;"' : ''; ?>>
+                    <tr class="<?php echo esc_attr($weekly_row_classes); ?>" aria-hidden="<?php echo esc_attr($weekly_row_aria); ?>">
                         <th scope="row">Jour de la semaine</th>
                         <td>
                             <div class="bjlg-field-control">
@@ -644,7 +656,7 @@ class BJLG_Admin {
                             </div>
                         </td>
                     </tr>
-                    <tr class="bjlg-schedule-time-options" <?php echo ($schedule_settings['recurrence'] === 'disabled') ? 'style="display:none;"' : ''; ?>>
+                    <tr class="<?php echo esc_attr($time_row_classes); ?>" aria-hidden="<?php echo esc_attr($time_row_aria); ?>">
                         <th scope="row">Heure</th>
                         <td>
                             <div class="bjlg-field-control">
@@ -660,7 +672,7 @@ class BJLG_Admin {
                                 <fieldset>
                                     <legend class="screen-reader-text">Composants inclus dans la sauvegarde planifiée</legend>
                                     <?php foreach ($components_labels as $component_key => $component_label): ?>
-                                        <label style="display:block; margin-bottom:4px;">
+                                        <label class="bjlg-label-block bjlg-mb-4">
                                             <input type="checkbox"
                                                    name="components[]"
                                                    value="<?php echo esc_attr($component_key); ?>"
@@ -699,7 +711,7 @@ class BJLG_Admin {
                             <div class="bjlg-field-control">
                                 <fieldset>
                                     <legend class="screen-reader-text">Options supplémentaires de la sauvegarde planifiée</legend>
-                                    <label class="bjlg-switch" style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                                    <label class="bjlg-switch bjlg-mb-6">
                                         <input type="checkbox"
                                                id="bjlg-schedule-encrypt"
                                                name="encrypt"
@@ -709,10 +721,10 @@ class BJLG_Admin {
                                                <?php checked($encrypt_enabled); ?>>
                                         <span class="bjlg-switch-label"><strong>Chiffrer la sauvegarde (AES-256)</strong></span>
                                     </label>
-                                    <p class="description" style="margin-top:-4px; margin-bottom:10px;">
+                                    <p class="description bjlg-description-offset bjlg-mb-10">
                                         Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
                                     </p>
-                                    <label class="bjlg-switch" style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                                    <label class="bjlg-switch bjlg-mb-6">
                                         <input type="checkbox"
                                                id="bjlg-schedule-incremental"
                                                name="incremental"
@@ -722,7 +734,7 @@ class BJLG_Admin {
                                                <?php checked($incremental_enabled); ?>>
                                         <span class="bjlg-switch-label"><strong>Sauvegarde incrémentale</strong></span>
                                     </label>
-                                    <p class="description" style="margin-top:-4px;">
+                                    <p class="description bjlg-description-offset">
                                         Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
                                     </p>
                                 </fieldset>
@@ -771,7 +783,7 @@ class BJLG_Admin {
                                 <fieldset>
                                     <?php if (!empty($destination_choices)): ?>
                                         <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
-                                            <label style="display:block; margin-bottom:4px;">
+                                            <label class="bjlg-label-block bjlg-mb-4">
                                                 <input type="checkbox"
                                                        name="secondary_destinations[]"
                                                        value="<?php echo esc_attr($destination_id); ?>"
@@ -1131,10 +1143,10 @@ class BJLG_Admin {
         array $exclude_patterns = []
     ) {
         $component_config = [
-            'db' => ['label' => 'Base de données', 'color' => '#6366f1'],
-            'plugins' => ['label' => 'Extensions', 'color' => '#f59e0b'],
-            'themes' => ['label' => 'Thèmes', 'color' => '#10b981'],
-            'uploads' => ['label' => 'Médias', 'color' => '#3b82f6'],
+            'db' => ['label' => 'Base de données', 'color_class' => 'bjlg-badge-bg-indigo'],
+            'plugins' => ['label' => 'Extensions', 'color_class' => 'bjlg-badge-bg-amber'],
+            'themes' => ['label' => 'Thèmes', 'color_class' => 'bjlg-badge-bg-emerald'],
+            'uploads' => ['label' => 'Médias', 'color_class' => 'bjlg-badge-bg-blue'],
         ];
 
         $component_badges = [];
@@ -1142,8 +1154,8 @@ class BJLG_Admin {
             if (isset($component_config[$component])) {
                 $component_badges[] = $this->format_schedule_badge(
                     $component_config[$component]['label'],
-                    $component_config[$component]['color'],
-                    'bjlg-badge-component'
+                    $component_config[$component]['color_class'],
+                    'bjlg-badge-component bjlg-badge-component-' . $component
                 );
             }
         }
@@ -1155,13 +1167,13 @@ class BJLG_Admin {
         $option_badges = [];
         $option_badges[] = $this->format_schedule_badge(
             $encrypt ? 'Chiffrée' : 'Non chiffrée',
-            $encrypt ? '#7c3aed' : '#4b5563',
-            'bjlg-badge-encrypted'
+            $encrypt ? 'bjlg-badge-bg-purple' : 'bjlg-badge-bg-slate',
+            'bjlg-badge-encrypted ' . ($encrypt ? 'bjlg-badge-state-on' : 'bjlg-badge-state-off')
         );
         $option_badges[] = $this->format_schedule_badge(
             $incremental ? 'Incrémentale' : 'Complète',
-            $incremental ? '#2563eb' : '#6b7280',
-            'bjlg-badge-incremental'
+            $incremental ? 'bjlg-badge-bg-cobalt' : 'bjlg-badge-bg-gray',
+            'bjlg-badge-incremental ' . ($incremental ? 'bjlg-badge-state-on' : 'bjlg-badge-state-off')
         );
 
         $include_badges = [];
@@ -1171,11 +1183,11 @@ class BJLG_Admin {
         if ($include_count > 0) {
             $include_badges[] = $this->format_schedule_badge(
                 sprintf('%d motif(s)', $include_count),
-                '#0ea5e9',
-                'bjlg-badge-include'
+                'bjlg-badge-bg-sky',
+                'bjlg-badge-include bjlg-badge-include-count'
             );
         } else {
-            $include_badges[] = $this->format_schedule_badge('Tout le contenu', '#10b981', 'bjlg-badge-include');
+            $include_badges[] = $this->format_schedule_badge('Tout le contenu', 'bjlg-badge-bg-emerald', 'bjlg-badge-include bjlg-badge-include-all');
         }
 
         $exclude_badges = [];
@@ -1185,11 +1197,11 @@ class BJLG_Admin {
         if ($exclude_count > 0) {
             $exclude_badges[] = $this->format_schedule_badge(
                 sprintf('%d exclusion(s)', $exclude_count),
-                '#f97316',
-                'bjlg-badge-exclude'
+                'bjlg-badge-bg-orange',
+                'bjlg-badge-exclude bjlg-badge-exclude-count'
             );
         } else {
-            $exclude_badges[] = $this->format_schedule_badge('Aucune', '#4b5563', 'bjlg-badge-exclude');
+            $exclude_badges[] = $this->format_schedule_badge('Aucune', 'bjlg-badge-bg-slate', 'bjlg-badge-exclude bjlg-badge-exclude-none');
         }
 
         $control_badges = [];
@@ -1197,23 +1209,23 @@ class BJLG_Admin {
         $dry_run_enabled = !empty($post_checks['dry_run']);
 
         if ($checksum_enabled) {
-            $control_badges[] = $this->format_schedule_badge('Checksum', '#2563eb', 'bjlg-badge-checksum');
+            $control_badges[] = $this->format_schedule_badge('Checksum', 'bjlg-badge-bg-cobalt', 'bjlg-badge-checksum');
         }
         if ($dry_run_enabled) {
-            $control_badges[] = $this->format_schedule_badge('Test restauration', '#7c3aed', 'bjlg-badge-restore');
+            $control_badges[] = $this->format_schedule_badge('Test restauration', 'bjlg-badge-bg-purple', 'bjlg-badge-restore');
         }
         if (empty($control_badges)) {
-            $control_badges[] = $this->format_schedule_badge('Aucun contrôle', '#4b5563', 'bjlg-badge-control');
+            $control_badges[] = $this->format_schedule_badge('Aucun contrôle', 'bjlg-badge-bg-slate', 'bjlg-badge-control');
         }
 
         $destination_badges = [];
         $available_destinations = $this->get_destination_choices();
         foreach ($destinations as $destination_id) {
             $label = $available_destinations[$destination_id] ?? ucfirst(str_replace('_', ' ', (string) $destination_id));
-            $destination_badges[] = $this->format_schedule_badge($label, '#0ea5e9', 'bjlg-badge-destination');
+            $destination_badges[] = $this->format_schedule_badge($label, 'bjlg-badge-bg-sky', 'bjlg-badge-destination');
         }
         if (empty($destination_badges)) {
-            $destination_badges[] = $this->format_schedule_badge('Stockage local', '#4b5563', 'bjlg-badge-destination');
+            $destination_badges[] = $this->format_schedule_badge('Stockage local', 'bjlg-badge-bg-slate', 'bjlg-badge-destination');
         }
 
         return $this->wrap_schedule_badge_group('Composants', $component_badges)
@@ -1225,49 +1237,30 @@ class BJLG_Admin {
     }
 
     private function wrap_schedule_badge_group($title, array $badges) {
-        $style = 'display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-bottom:6px;';
-        $title_style = 'margin-right:4px;';
-
         return sprintf(
-            '<div class="bjlg-badge-group" style="%s"><strong style="%s">%s :</strong>%s</div>',
-            esc_attr($style),
-            esc_attr($title_style),
+            '<div class="bjlg-badge-group"><strong class="bjlg-badge-group-title">%s :</strong>%s</div>',
             esc_html($title),
             implode('', $badges)
         );
     }
 
-    private function format_schedule_badge($label, $color, $extra_class = '') {
-        $color = $this->normalize_badge_color($color);
-        $style = sprintf(
-            'display:inline-flex;align-items:center;justify-content:center;border-radius:4px;padding:2px 6px;font-size:0.8em;font-weight:600;color:#ffffff;background-color:%s;margin-right:4px;margin-top:2px;',
-            $color
-        );
+    private function format_schedule_badge($label, $color_class, $extra_class = '') {
+        $classes = ['bjlg-badge'];
 
-        $class_attr = 'bjlg-badge';
+        if (is_string($color_class) && $color_class !== '') {
+            $classes[] = $color_class;
+        } else {
+            $classes[] = 'bjlg-badge-bg-slate';
+        }
+
         if (!empty($extra_class)) {
-            $class_attr .= ' ' . $extra_class;
+            $classes[] = $extra_class;
         }
 
         return sprintf(
-            '<span class="%s" style="%s">%s</span>',
-            esc_attr($class_attr),
-            esc_attr($style),
+            '<span class="%s">%s</span>',
+            esc_attr(implode(' ', $classes)),
             esc_html($label)
         );
-    }
-
-    private function normalize_badge_color($color) {
-        if (!is_string($color)) {
-            return '#4b5563';
-        }
-
-        $color = trim($color);
-
-        if (!preg_match('/^#[0-9a-fA-F]{6}$/', $color)) {
-            return '#4b5563';
-        }
-
-        return strtolower($color);
     }
 }
