@@ -134,6 +134,24 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
     }
 
     public function upload_file($filepath, $task_id) {
+        if (is_array($filepath)) {
+            $errors = [];
+
+            foreach ($filepath as $single_path) {
+                try {
+                    $this->upload_file($single_path, $task_id);
+                } catch (Exception $exception) {
+                    $errors[] = $exception->getMessage();
+                }
+            }
+
+            if (!empty($errors)) {
+                throw new Exception('Erreurs Amazon S3 : ' . implode(' | ', $errors));
+            }
+
+            return;
+        }
+
         if (!is_readable($filepath)) {
             throw new Exception('Fichier de sauvegarde introuvable : ' . $filepath);
         }
@@ -168,7 +186,14 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
             }
         }
 
-        $this->perform_request('PUT', $object_key, $contents, $headers, $settings);
+        $this->log(sprintf('Envoi de "%s" vers Amazon S3 (%s).', basename($filepath), $object_key));
+
+        try {
+            $this->perform_request('PUT', $object_key, $contents, $headers, $settings);
+        } catch (Exception $exception) {
+            $this->log('ERREUR S3 : ' . $exception->getMessage());
+            throw $exception;
+        }
 
         $this->log(sprintf('Sauvegarde "%s" envoyée sur Amazon S3 (%s).', basename($filepath), $object_key));
     }

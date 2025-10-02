@@ -175,6 +175,23 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
     }
 
     public function upload_file($filepath, $task_id) {
+        if (is_array($filepath)) {
+            $errors = [];
+            foreach ($filepath as $single_path) {
+                try {
+                    $this->upload_file($single_path, $task_id);
+                } catch (Exception $exception) {
+                    $errors[] = $exception->getMessage();
+                }
+            }
+
+            if (!empty($errors)) {
+                throw new Exception('Erreurs Google Drive : ' . implode(' | ', $errors));
+            }
+
+            return;
+        }
+
         if (!$this->sdk_available) {
             throw new Exception('Le SDK Google n\'est pas disponible.');
         }
@@ -220,6 +237,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         $chunk_size = (int) ceil($chunk_size / $minimum_chunk_size) * $minimum_chunk_size;
 
         $client->setDefer(true);
+        BJLG_Debug::log(sprintf('Envoi de %s vers Google Drive.', basename($filepath)));
 
         $uploaded_file = null;
         $bytes_uploaded = 0;
@@ -267,6 +285,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
                 }
             }
         } catch (\Throwable $exception) {
+            BJLG_Debug::log('ERREUR Google Drive : ' . $exception->getMessage());
             throw new Exception('Erreur lors de l\'envoi vers Google Drive : ' . $exception->getMessage(), 0, $exception);
         } finally {
             if (is_resource($handle)) {
@@ -274,10 +293,6 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             }
 
             $client->setDefer(false);
-        }
-
-        if (!$uploaded_file) {
-            throw new Exception('La réponse de Google Drive ne contient pas d\'identifiant de fichier.');
         }
 
         if (!$uploaded_file || !$uploaded_file->getId()) {
@@ -290,9 +305,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             throw new Exception('Le fichier envoyé sur Google Drive est corrompu (taille inattendue).');
         }
 
-        if (class_exists(BJLG_Debug::class)) {
-            BJLG_Debug::log(sprintf('Sauvegarde "%s" envoyée sur Google Drive (ID: %s).', basename($filepath), $uploaded_file->getId()));
-        }
+        BJLG_Debug::log(sprintf('Sauvegarde "%s" envoyée sur Google Drive (ID: %s).', basename($filepath), $uploaded_file->getId()));
     }
 
     /**

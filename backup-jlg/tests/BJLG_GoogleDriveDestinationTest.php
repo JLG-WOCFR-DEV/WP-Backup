@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 use BJLG\BJLG_Google_Drive;
+use Exception;
 use Google\Service\Drive\DriveFile;
 use PHPUnit\Framework\TestCase;
 
@@ -243,6 +244,80 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $this->assertGreaterThan(1, count($upload->chunks));
         $this->assertLessThan($large_size, max($upload->chunks));
         $this->assertSame($large_size, array_sum($upload->chunks));
+    }
+
+    public function test_upload_file_accepts_array_of_filepaths(): void
+    {
+        $client = new FakeGoogleClient();
+        $drive_files = new FakeDriveFiles();
+        $media_factory = new FakeMediaUploadFactory();
+
+        $destination = $this->createDestination($client, new FakeDriveService($drive_files), $media_factory);
+
+        update_option('bjlg_gdrive_settings', [
+            'client_id' => 'client-id',
+            'client_secret' => 'client-secret',
+            'folder_id' => 'folder',
+            'enabled' => true,
+        ]);
+
+        update_option('bjlg_gdrive_token', [
+            'access_token' => 'token',
+            'refresh_token' => 'refresh-token',
+            'created' => time(),
+            'expires_in' => 3600,
+        ]);
+
+        $file = tempnam(sys_get_temp_dir(), 'bjlg');
+        file_put_contents($file, 'archive');
+
+        try {
+            $destination->upload_file([$file], 'task-array');
+        } finally {
+            @unlink($file);
+        }
+
+        $this->assertCount(1, $drive_files->createdRequests);
+    }
+
+    public function test_upload_file_array_aggregates_errors(): void
+    {
+        $client = new FakeGoogleClient();
+        $drive_files = new FakeDriveFiles();
+        $media_factory = new FakeMediaUploadFactory();
+
+        $destination = $this->createDestination($client, new FakeDriveService($drive_files), $media_factory);
+
+        update_option('bjlg_gdrive_settings', [
+            'client_id' => 'client-id',
+            'client_secret' => 'client-secret',
+            'folder_id' => '',
+            'enabled' => true,
+        ]);
+
+        update_option('bjlg_gdrive_token', [
+            'access_token' => 'token',
+            'refresh_token' => 'refresh-token',
+            'created' => time(),
+            'expires_in' => 3600,
+        ]);
+
+        $file = tempnam(sys_get_temp_dir(), 'bjlg');
+        file_put_contents($file, 'content');
+
+        $missing = $file . '.missing';
+
+        try {
+            $destination->upload_file([$file, $missing], 'task-errors');
+            $this->fail('Une exception aurait dû être levée pour les envois multiples.');
+        } catch (Exception $exception) {
+            $this->assertStringContainsString('Erreurs Google Drive', $exception->getMessage());
+            $this->assertStringContainsString('introuvable', $exception->getMessage());
+        } finally {
+            @unlink($file);
+        }
+
+        $this->assertCount(1, $drive_files->createdRequests, 'Le premier fichier aurait dû être envoyé avant l\'échec.');
     }
 
     private function createDestination(FakeGoogleClient $client, FakeDriveService $drive_service, FakeMediaUploadFactory $media_factory): BJLG_Google_Drive

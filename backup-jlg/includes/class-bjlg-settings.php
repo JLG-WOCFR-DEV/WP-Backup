@@ -69,6 +69,16 @@ class BJLG_Settings {
         ]
     ];
 
+    private $default_backup_preferences = [
+        'include_patterns' => [],
+        'exclude_patterns' => [],
+        'post_checks' => [
+            'checksum' => true,
+            'dry_run' => false,
+        ],
+        'secondary_destinations' => [],
+    ];
+
     public function __construct() {
         if (self::$instance instanceof self) {
             return;
@@ -108,6 +118,8 @@ class BJLG_Settings {
                 update_option($option_name, $defaults);
             }
         }
+
+        $this->init_backup_preferences_defaults();
     }
 
     /**
@@ -171,6 +183,35 @@ class BJLG_Settings {
                 update_option('bjlg_encryption_settings', $encryption_settings);
                 $saved_settings['encryption'] = $encryption_settings;
                 BJLG_Debug::log("Réglages de chiffrement sauvegardés.");
+            }
+
+            $filters_submitted = array_key_exists('include_patterns', $_POST)
+                || array_key_exists('exclude_patterns', $_POST)
+                || array_key_exists('secondary_destinations', $_POST)
+                || array_key_exists('post_checks', $_POST);
+
+            if ($filters_submitted) {
+                $includes = self::sanitize_pattern_list($_POST['include_patterns'] ?? []);
+                $excludes = self::sanitize_pattern_list($_POST['exclude_patterns'] ?? []);
+                $destinations = self::sanitize_destination_list(
+                    $_POST['secondary_destinations'] ?? [],
+                    self::get_known_destination_ids()
+                );
+                $post_checks = self::sanitize_post_checks(
+                    $_POST['post_checks'] ?? [],
+                    self::get_default_backup_post_checks()
+                );
+
+                $this->update_backup_filters($includes, $excludes, $destinations, $post_checks);
+
+                $saved_settings['backup_preferences'] = [
+                    'include_patterns' => $includes,
+                    'exclude_patterns' => $excludes,
+                    'secondary_destinations' => $destinations,
+                    'post_checks' => $post_checks,
+                ];
+
+                BJLG_Debug::log('Réglages de filtres de sauvegarde mis à jour.');
             }
 
             // --- Réglages Google Drive ---
@@ -732,6 +773,145 @@ class BJLG_Settings {
         }
 
         return $this->sanitize_imported_option($option_map[$section], $value);
+    }
+
+    private function init_backup_preferences_defaults() {
+        $defaults = $this->default_backup_preferences;
+
+        if (get_option('bjlg_backup_include_patterns', null) === null) {
+            update_option('bjlg_backup_include_patterns', $defaults['include_patterns']);
+        }
+
+        if (get_option('bjlg_backup_exclude_patterns', null) === null) {
+            update_option('bjlg_backup_exclude_patterns', $defaults['exclude_patterns']);
+        }
+
+        if (get_option('bjlg_backup_secondary_destinations', null) === null) {
+            update_option('bjlg_backup_secondary_destinations', $defaults['secondary_destinations']);
+        }
+
+        if (get_option('bjlg_backup_post_checks', null) === null) {
+            update_option('bjlg_backup_post_checks', $defaults['post_checks']);
+        }
+    }
+
+    public function update_backup_filters(array $includes, array $excludes, array $destinations, array $post_checks) {
+        $includes = self::sanitize_pattern_list($includes);
+        $excludes = self::sanitize_pattern_list($excludes);
+        $destinations = self::sanitize_destination_list($destinations, self::get_known_destination_ids());
+        $post_checks = self::sanitize_post_checks($post_checks, self::get_default_backup_post_checks());
+
+        update_option('bjlg_backup_include_patterns', $includes);
+        update_option('bjlg_backup_exclude_patterns', $excludes);
+        update_option('bjlg_backup_secondary_destinations', $destinations);
+        update_option('bjlg_backup_post_checks', $post_checks);
+    }
+
+    public static function sanitize_pattern_list($patterns) {
+        if (is_string($patterns)) {
+            $patterns = preg_split('/[\r\n,]+/', $patterns) ?: [];
+        }
+
+        if (!is_array($patterns)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($patterns as $pattern) {
+            if (!is_string($pattern)) {
+                continue;
+            }
+
+            $trimmed = trim($pattern);
+            if ($trimmed === '') {
+                continue;
+            }
+
+            $normalized[] = str_replace('\\', '/', $trimmed);
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
+    public static function sanitize_destination_list($destinations, array $allowed_ids) {
+        if (!is_array($destinations)) {
+            $destinations = [$destinations];
+        }
+
+        $allowed = array_map('strval', $allowed_ids);
+        $normalized = [];
+
+        foreach ($destinations as $destination) {
+            if (!is_scalar($destination)) {
+                continue;
+            }
+
+            $slug = sanitize_key((string) $destination);
+            if ($slug === '' || !in_array($slug, $allowed, true)) {
+                continue;
+            }
+
+            $normalized[$slug] = true;
+        }
+
+        return array_keys($normalized);
+    }
+
+    public static function sanitize_post_checks($checks, array $defaults) {
+        $normalized = [
+            'checksum' => false,
+            'dry_run' => false,
+        ];
+
+        if (is_array($checks)) {
+            foreach ($checks as $check) {
+                $key = sanitize_key((string) $check);
+                if (array_key_exists($key, $normalized)) {
+                    $normalized[$key] = true;
+                }
+            }
+        }
+
+        foreach ($defaults as $key => $value) {
+            if (!array_key_exists($key, $normalized)) {
+                $normalized[$key] = (bool) $value;
+            }
+        }
+
+        return $normalized;
+    }
+
+    public static function get_default_backup_post_checks() {
+        return [
+            'checksum' => true,
+            'dry_run' => false,
+        ];
+    }
+
+    public static function get_known_destination_ids() {
+        $destinations = ['google_drive', 'aws_s3'];
+
+        /** @var array<int, string> $filtered */
+        $filtered = apply_filters('bjlg_known_destination_ids', $destinations);
+        if (is_array($filtered) && !empty($filtered)) {
+            $sanitized = [];
+            foreach ($filtered as $destination) {
+                if (!is_scalar($destination)) {
+                    continue;
+                }
+
+                $slug = sanitize_key((string) $destination);
+                if ($slug !== '') {
+                    $sanitized[$slug] = true;
+                }
+            }
+
+            if (!empty($sanitized)) {
+                return array_keys($sanitized);
+            }
+        }
+
+        return $destinations;
     }
 
     /**

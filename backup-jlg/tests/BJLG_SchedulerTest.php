@@ -163,6 +163,10 @@ final class BJLG_SchedulerTest extends TestCase
             'components' => ['db', 'plugins'],
             'encrypt' => 'true',
             'incremental' => 'true',
+            'include_patterns' => "wp-content/uploads/*\ncustom/*",
+            'exclude_patterns' => "*/cache/*\n*.tmp",
+            'post_checks' => ['checksum'],
+            'secondary_destinations' => ['google_drive', 'aws_s3'],
         ];
 
         $scheduler = BJLG\BJLG_Scheduler::instance();
@@ -185,6 +189,19 @@ final class BJLG_SchedulerTest extends TestCase
         $this->assertSame(['db', 'plugins'], $settings['components']);
         $this->assertTrue($settings['encrypt']);
         $this->assertTrue($settings['incremental']);
+        $this->assertSame(['wp-content/uploads/*', 'custom/*'], $settings['include_patterns']);
+        $this->assertSame(['*/cache/*', '*.tmp'], $settings['exclude_patterns']);
+        $this->assertTrue($settings['post_checks']['checksum']);
+        $this->assertFalse($settings['post_checks']['dry_run']);
+        $this->assertSame(['google_drive', 'aws_s3'], $settings['secondary_destinations']);
+
+        $this->assertSame(['wp-content/uploads/*', 'custom/*'], get_option('bjlg_backup_include_patterns'));
+        $this->assertSame(['*/cache/*', '*.tmp'], get_option('bjlg_backup_exclude_patterns'));
+        $this->assertSame(['google_drive', 'aws_s3'], get_option('bjlg_backup_secondary_destinations'));
+        $this->assertSame(
+            ['checksum' => true, 'dry_run' => false],
+            get_option('bjlg_backup_post_checks')
+        );
 
         $this->assertArrayHasKey(
             BJLG\BJLG_Scheduler::SCHEDULE_HOOK,

@@ -571,7 +571,23 @@ class BJLG_Backup {
 
         $encrypt = $this->get_boolean_request_value('encrypt', 'encrypt_backup');
         $incremental = $this->get_boolean_request_value('incremental', 'incremental_backup');
-        
+        $include_patterns = BJLG_Settings::sanitize_pattern_list($_POST['include_patterns'] ?? []);
+        $exclude_patterns = BJLG_Settings::sanitize_pattern_list($_POST['exclude_patterns'] ?? []);
+        $post_checks = BJLG_Settings::sanitize_post_checks(
+            $_POST['post_checks'] ?? [],
+            BJLG_Settings::get_default_backup_post_checks()
+        );
+        $secondary_destinations = BJLG_Settings::sanitize_destination_list(
+            $_POST['secondary_destinations'] ?? [],
+            BJLG_Settings::get_known_destination_ids()
+        );
+        BJLG_Settings::get_instance()->update_backup_filters(
+            $include_patterns,
+            $exclude_patterns,
+            $secondary_destinations,
+            $post_checks
+        );
+
         if (empty($components)) {
             wp_send_json_error(['message' => 'Aucun composant sélectionné.']);
         }
@@ -588,7 +604,11 @@ class BJLG_Backup {
             'encrypt' => $encrypt,
             'incremental' => $incremental,
             'source' => 'manual',
-            'start_time' => time()
+            'start_time' => time(),
+            'include_patterns' => $include_patterns,
+            'exclude_patterns' => $exclude_patterns,
+            'post_checks' => $post_checks,
+            'secondary_destinations' => $secondary_destinations,
         ];
 
         if (!self::reserve_task_slot($task_id)) {
@@ -759,6 +779,17 @@ class BJLG_Backup {
             $task_data['components'] = $components;
             self::save_task_state($task_id, $task_data);
 
+            $include_patterns = $this->resolve_include_patterns($task_data);
+            $exclude_overrides = $this->resolve_exclude_patterns($task_data);
+            $post_checks = $this->resolve_post_checks($task_data);
+            $destination_queue = $this->resolve_destination_queue($task_data);
+
+            $task_data['include_patterns'] = $include_patterns;
+            $task_data['exclude_patterns'] = $exclude_overrides;
+            $task_data['post_checks'] = $post_checks;
+            $task_data['secondary_destinations'] = $destination_queue;
+            self::save_task_state($task_id, $task_data);
+
             if (empty($components)) {
                 BJLG_Debug::log("ERREUR: Aucun composant valide pour la tâche $task_id.");
                 BJLG_History::log('backup_created', 'failure', 'Aucun composant valide pour la sauvegarde.');
@@ -832,14 +863,14 @@ class BJLG_Backup {
                         $this->backup_database($zip, $task_data['incremental']);
                         break;
                     case 'plugins':
-                        $this->backup_directory($zip, WP_PLUGIN_DIR, 'wp-content/plugins/', $task_data['incremental'], $incremental_handler);
+                        $this->backup_directory($zip, WP_PLUGIN_DIR, 'wp-content/plugins/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
                         break;
                     case 'themes':
-                        $this->backup_directory($zip, get_theme_root(), 'wp-content/themes/', $task_data['incremental'], $incremental_handler);
+                        $this->backup_directory($zip, get_theme_root(), 'wp-content/themes/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
                         break;
                     case 'uploads':
                         $upload_dir = wp_get_upload_dir();
-                        $this->backup_directory($zip, $upload_dir['basedir'], 'wp-content/uploads/', $task_data['incremental'], $incremental_handler);
+                        $this->backup_directory($zip, $upload_dir['basedir'], 'wp-content/uploads/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
                         break;
                 }
 
@@ -904,6 +935,9 @@ class BJLG_Backup {
 
             $effective_encryption = (bool) $task_data['encrypt'];
 
+            $check_results = $this->perform_post_backup_checks($backup_filepath, $post_checks, $effective_encryption);
+            $destination_results = $this->dispatch_to_destinations($backup_filepath, $destination_queue, $task_id);
+
             // Calculer les statistiques
             $file_size = filesize($backup_filepath);
             $duration = time() - $task_data['start_time'];
@@ -929,6 +963,13 @@ class BJLG_Backup {
                 'timestamp' => $completion_timestamp,
             ];
 
+            if (!empty($check_results['checksum'])) {
+                $manifest_details['checksum'] = $check_results['checksum'];
+                $manifest_details['checksum_algorithm'] = $check_results['checksum_algorithm'];
+            }
+            $manifest_details['post_checks'] = $check_results;
+            $manifest_details['destinations'] = $destination_queue;
+
             // Notification de succès
             do_action('bjlg_backup_complete', $backup_filename, $manifest_details);
 
@@ -947,6 +988,9 @@ class BJLG_Backup {
             $success_message = 'Sauvegarde terminée avec succès !';
             if ($requested_encryption && !$effective_encryption) {
                 $success_message .= ' (Chiffrement non appliqué.)';
+            }
+            if (!empty($destination_results['failures'])) {
+                $success_message .= ' (Envois distants partiels)';
             }
 
             $this->update_task_progress($task_id, 100, 'complete', $success_message);
@@ -1066,7 +1110,8 @@ class BJLG_Backup {
             'plugins_active' => get_option('active_plugins'),
             'multisite' => is_multisite(),
             'file_count' => 0,
-            'checksum' => ''
+            'checksum' => '',
+            'checksum_algorithm' => '',
         ];
     }
 
@@ -1262,7 +1307,15 @@ class BJLG_Backup {
     /**
      * Sauvegarde un répertoire
      */
-    private function backup_directory(&$zip, $source_dir, $zip_path, $incremental = false, $incremental_handler = null) {
+    private function backup_directory(
+        &$zip,
+        $source_dir,
+        $zip_path,
+        $incremental = false,
+        $incremental_handler = null,
+        array $include_patterns = [],
+        array $exclude_overrides = []
+    ) {
         if (!is_dir($source_dir)) {
             BJLG_Debug::log("Répertoire introuvable : $source_dir");
             return;
@@ -1270,8 +1323,8 @@ class BJLG_Backup {
 
         BJLG_Debug::log("Sauvegarde du répertoire : " . basename($source_dir));
 
-        $exclude_patterns = $this->get_exclude_patterns($source_dir, $zip_path);
-        
+        $exclude_patterns = $this->get_exclude_patterns($source_dir, $zip_path, $exclude_overrides);
+
         // Pour l'incrémental, obtenir la liste des fichiers modifiés
         $modified_files = [];
         if ($incremental) {
@@ -1284,15 +1337,26 @@ class BJLG_Backup {
             }
 
             $modified_files = $incremental_handler->get_modified_files($source_dir);
-            
+
             if (empty($modified_files)) {
                 BJLG_Debug::log("Aucun fichier modifié dans : " . basename($source_dir));
                 return;
             }
+
+            if (!empty($include_patterns)) {
+                $modified_files = array_values(array_filter($modified_files, function ($file) use ($include_patterns) {
+                    return $this->should_include_file($file, $include_patterns);
+                }));
+
+                if (empty($modified_files)) {
+                    BJLG_Debug::log("Aucun fichier modifié correspondant aux inclusions dans : " . basename($source_dir));
+                    return;
+                }
+            }
         }
-        
+
         try {
-            $this->add_folder_to_zip($zip, $source_dir, $zip_path, $exclude_patterns, $incremental, $modified_files);
+            $this->add_folder_to_zip($zip, $source_dir, $zip_path, $exclude_patterns, $incremental, $modified_files, $include_patterns);
         } catch (Exception $exception) {
             $message = sprintf(
                 "Impossible d'ajouter le répertoire \"%s\" à l'archive : %s",
@@ -1312,7 +1376,7 @@ class BJLG_Backup {
      * @param string $zip_path
      * @return array<int, string>
      */
-    private function get_exclude_patterns($source_dir, $zip_path) {
+    private function get_exclude_patterns($source_dir, $zip_path, array $additional_patterns = []) {
         $default_patterns = [
             '*/cache/*',
             '*/node_modules/*',
@@ -1327,7 +1391,8 @@ class BJLG_Backup {
             $option_patterns = $this->normalize_exclude_patterns($stored_patterns);
         }
 
-        $exclude_patterns = array_merge($default_patterns, $option_patterns);
+        $additional = BJLG_Settings::sanitize_pattern_list($additional_patterns);
+        $exclude_patterns = array_merge($default_patterns, $option_patterns, $additional);
         $exclude_patterns = array_values(array_filter(array_unique($exclude_patterns), 'strlen'));
 
         if (function_exists('apply_filters')) {
@@ -1348,35 +1413,24 @@ class BJLG_Backup {
      * @return array<int, string>
      */
     private function normalize_exclude_patterns($patterns) {
-        if (is_string($patterns)) {
-            $patterns = preg_split('/[\r\n,]+/', $patterns) ?: [];
-        }
-
-        if (!is_array($patterns)) {
-            return [];
-        }
-
-        $normalized = [];
-        foreach ($patterns as $pattern) {
-            if (!is_string($pattern)) {
-                continue;
-            }
-
-            $trimmed = trim($pattern);
-            if ($trimmed !== '') {
-                $normalized[] = $trimmed;
-            }
-        }
-
-        return $normalized;
+        return BJLG_Settings::sanitize_pattern_list($patterns);
     }
 
     /**
      * Ajoute récursivement un dossier au ZIP
      *
+     * @param array<int, string> $include Motifs d'inclusion supplémentaires
      * @throws Exception Si le dossier ne peut pas être ouvert.
      */
-    public function add_folder_to_zip(&$zip, $folder, $zip_path, $exclude = [], $incremental = false, $modified_files = []) {
+    public function add_folder_to_zip(
+        &$zip,
+        $folder,
+        $zip_path,
+        $exclude = [],
+        $incremental = false,
+        $modified_files = [],
+        array $include = []
+    ) {
         if (!is_dir($folder)) {
             $message = "Impossible d'ouvrir le répertoire : $folder";
             BJLG_Debug::log($message);
@@ -1434,13 +1488,17 @@ class BJLG_Backup {
 
                 if (is_dir($file_path)) {
                     // Récursion pour les sous-dossiers
-                    $this->add_folder_to_zip($zip, $file_path, $relative_path . '/', $exclude, $incremental, $modified_files);
+                    $this->add_folder_to_zip($zip, $file_path, $relative_path . '/', $exclude, $incremental, $modified_files, $include);
                 } else {
                     // Pour l'incrémental, vérifier si le fichier est dans la liste des modifiés
                     if ($incremental && !empty($modified_files)) {
                         if (!in_array($normalized_file_path, $modified_files, true)) {
                             continue;
                         }
+                    }
+
+                    if (!$this->should_include_file($normalized_file_path, $include)) {
+                        continue;
                     }
 
                     // Ajouter le fichier
@@ -1520,6 +1578,221 @@ class BJLG_Backup {
         }
 
         $this->temporary_files = [];
+    }
+
+    private function resolve_include_patterns(array $task_data) {
+        $raw_patterns = [];
+
+        if (isset($task_data['include_patterns']) && is_array($task_data['include_patterns'])) {
+            $raw_patterns = $task_data['include_patterns'];
+        } elseif (function_exists('get_option')) {
+            $raw_patterns = get_option('bjlg_backup_include_patterns', []);
+        }
+
+        $sanitized = BJLG_Settings::sanitize_pattern_list($raw_patterns);
+        $normalized = [];
+
+        foreach ($sanitized as $pattern) {
+            $clean_pattern = $this->normalize_path($pattern);
+            if (strpos($clean_pattern, '*') === false && strpos($clean_pattern, '?') === false) {
+                $trimmed = trim($clean_pattern, '*');
+                $clean_pattern = '*' . ltrim($trimmed, '/');
+                if (substr($clean_pattern, -1) !== '*') {
+                    $clean_pattern .= '*';
+                }
+            }
+
+            $normalized[$clean_pattern] = true;
+        }
+
+        return array_keys($normalized);
+    }
+
+    private function resolve_exclude_patterns(array $task_data) {
+        $raw_patterns = [];
+
+        if (isset($task_data['exclude_patterns']) && is_array($task_data['exclude_patterns'])) {
+            $raw_patterns = $task_data['exclude_patterns'];
+        } elseif (function_exists('get_option')) {
+            $raw_patterns = get_option('bjlg_backup_exclude_patterns', []);
+        }
+
+        return BJLG_Settings::sanitize_pattern_list($raw_patterns);
+    }
+
+    private function resolve_post_checks(array $task_data) {
+        $raw = [];
+
+        if (isset($task_data['post_checks']) && is_array($task_data['post_checks'])) {
+            $raw = $task_data['post_checks'];
+        } elseif (function_exists('get_option')) {
+            $raw = get_option('bjlg_backup_post_checks', BJLG_Settings::get_default_backup_post_checks());
+        }
+
+        return BJLG_Settings::sanitize_post_checks($raw, BJLG_Settings::get_default_backup_post_checks());
+    }
+
+    private function resolve_destination_queue(array $task_data) {
+        $raw = [];
+
+        if (isset($task_data['secondary_destinations']) && is_array($task_data['secondary_destinations'])) {
+            $raw = $task_data['secondary_destinations'];
+        } elseif (function_exists('get_option')) {
+            $raw = get_option('bjlg_backup_secondary_destinations', []);
+        }
+
+        return BJLG_Settings::sanitize_destination_list($raw, BJLG_Settings::get_known_destination_ids());
+    }
+
+    private function should_include_file($path, array $include_patterns) {
+        if (empty($include_patterns)) {
+            return true;
+        }
+
+        $normalized_path = $this->normalize_path($path);
+        if ($normalized_path === '') {
+            return false;
+        }
+
+        $candidates = [$normalized_path];
+
+        if (defined('ABSPATH')) {
+            $root = $this->normalize_path(ABSPATH);
+            if ($root !== '' && strpos($normalized_path, $root) === 0) {
+                $relative = ltrim(substr($normalized_path, strlen($root)), '/');
+                if ($relative !== '') {
+                    $candidates[] = $relative;
+                }
+            }
+        }
+
+        if (defined('WP_CONTENT_DIR')) {
+            $content_dir = $this->normalize_path(WP_CONTENT_DIR);
+            if ($content_dir !== '' && strpos($normalized_path, $content_dir) === 0) {
+                $relative_content = ltrim(substr($normalized_path, strlen($content_dir)), '/');
+                if ($relative_content !== '') {
+                    $candidates[] = 'wp-content/' . $relative_content;
+                    $candidates[] = $relative_content;
+                }
+            }
+        }
+
+        foreach ($include_patterns as $pattern) {
+            $pattern = $this->normalize_path($pattern);
+            foreach ($candidates as $candidate) {
+                if ($this->path_matches_pattern($pattern, $candidate)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private function perform_post_backup_checks($filepath, array $post_checks, $encrypted) {
+        $results = [
+            'checksum' => '',
+            'checksum_algorithm' => '',
+            'dry_run' => 'disabled',
+        ];
+
+        if (!is_readable($filepath)) {
+            throw new Exception('Le fichier de sauvegarde est introuvable pour les vérifications.');
+        }
+
+        if (!empty($post_checks['checksum'])) {
+            $hash = @hash_file('sha256', $filepath);
+            if ($hash === false) {
+                throw new Exception('Impossible de calculer le hash SHA-256 de la sauvegarde.');
+            }
+
+            BJLG_Debug::log('Checksum de la sauvegarde : ' . $hash);
+            $results['checksum'] = $hash;
+            $results['checksum_algorithm'] = 'sha256';
+        }
+
+        if (!empty($post_checks['dry_run'])) {
+            if ($encrypted) {
+                BJLG_Debug::log('Vérification de restauration ignorée pour une archive chiffrée.');
+                $results['dry_run'] = 'skipped';
+            } else {
+                $zip = $this->create_zip_archive();
+                $open_result = $zip->open($filepath);
+                if ($open_result !== true) {
+                    throw new Exception('La vérification de restauration a échoué : archive invalide.');
+                }
+
+                if ($zip->numFiles < 1) {
+                    $zip->close();
+                    throw new Exception('La vérification de restauration a échoué : archive vide.');
+                }
+
+                $zip->close();
+                BJLG_Debug::log('Vérification de restauration réussie pour ' . basename($filepath));
+                $results['dry_run'] = 'passed';
+            }
+        }
+
+        return $results;
+    }
+
+    private function dispatch_to_destinations($filepath, array $destinations, $task_id) {
+        $results = [
+            'success' => [],
+            'failures' => [],
+        ];
+
+        if (empty($destinations)) {
+            return $results;
+        }
+
+        foreach ($destinations as $destination_id) {
+            $destination = $this->instantiate_destination($destination_id);
+
+            if (!$destination instanceof BJLG_Destination_Interface) {
+                $message = sprintf('Destination "%s" indisponible.', $destination_id);
+                BJLG_Debug::log($message);
+                BJLG_History::log('backup_upload', 'failure', $message);
+                $results['failures'][$destination_id] = $message;
+                continue;
+            }
+
+            try {
+                $destination->upload_file($filepath, $task_id);
+                $results['success'][] = $destination_id;
+                BJLG_Debug::log(sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
+                BJLG_History::log('backup_upload', 'success', sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
+            } catch (Exception $exception) {
+                $error_message = sprintf('Envoi vers %s échoué : %s', $destination->get_name(), $exception->getMessage());
+                BJLG_Debug::log('ERREUR : ' . $error_message);
+                BJLG_History::log('backup_upload', 'failure', $error_message);
+                $results['failures'][$destination_id] = $exception->getMessage();
+            }
+        }
+
+        return $results;
+    }
+
+    private function instantiate_destination($destination_id) {
+        $provided = apply_filters('bjlg_backup_instantiate_destination', null, $destination_id);
+        if ($provided instanceof BJLG_Destination_Interface) {
+            return $provided;
+        }
+
+        switch ($destination_id) {
+            case 'google_drive':
+                if (class_exists(BJLG_Google_Drive::class)) {
+                    return new BJLG_Google_Drive();
+                }
+                break;
+            case 'aws_s3':
+                if (class_exists(BJLG_AWS_S3::class)) {
+                    return new BJLG_AWS_S3();
+                }
+                break;
+        }
+
+        return null;
     }
 
     /**

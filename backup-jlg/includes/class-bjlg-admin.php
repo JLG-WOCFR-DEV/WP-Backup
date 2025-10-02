@@ -128,6 +128,20 @@ class BJLG_Admin {
      * Section : Création de sauvegarde
      */
     private function render_backup_creation_section() {
+        $include_patterns = get_option('bjlg_backup_include_patterns', []);
+        $exclude_patterns = get_option('bjlg_backup_exclude_patterns', []);
+        $post_checks = get_option('bjlg_backup_post_checks', ['checksum' => true, 'dry_run' => false]);
+        if (!is_array($post_checks)) {
+            $post_checks = ['checksum' => true, 'dry_run' => false];
+        }
+        $secondary_destinations = get_option('bjlg_backup_secondary_destinations', []);
+        if (!is_array($secondary_destinations)) {
+            $secondary_destinations = [];
+        }
+
+        $include_text = esc_textarea(implode("\n", array_map('strval', (array) $include_patterns)));
+        $exclude_text = esc_textarea(implode("\n", array_map('strval', (array) $exclude_patterns)));
+        $destination_choices = $this->get_destination_choices();
         ?>
         <div class="bjlg-section">
             <h2>Créer une sauvegarde</h2>
@@ -165,6 +179,56 @@ class BJLG_Admin {
                                     <p class="description">
                                         Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
                                     </p>
+                                </fieldset>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Inclusions personnalisées</th>
+                            <td>
+                                <textarea name="include_patterns" rows="4" class="large-text code" placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"><?php echo $include_text; ?></textarea>
+                                <p class="description">Un motif par ligne. Laissez vide pour inclure tous les fichiers autorisés.</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Exclusions</th>
+                            <td>
+                                <textarea name="exclude_patterns" rows="4" class="large-text code" placeholder="*/cache/*&#10;*.log"><?php echo $exclude_text; ?></textarea>
+                                <p class="description">Ajoutez des motifs pour ignorer certains fichiers ou répertoires. Les exclusions globales s'appliquent également.</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Vérifications post-sauvegarde</th>
+                            <td>
+                                <fieldset>
+                                    <label>
+                                        <input type="checkbox" name="post_checks[]" value="checksum" <?php checked(!empty($post_checks['checksum'])); ?>> Vérifier l'intégrité (SHA-256)
+                                    </label>
+                                    <p class="description">Calcule un hachage du fichier pour détecter les corruptions.</p>
+                                    <label>
+                                        <input type="checkbox" name="post_checks[]" value="dry_run" <?php checked(!empty($post_checks['dry_run'])); ?>> Test de restauration à blanc
+                                    </label>
+                                    <p class="description">Ouvre l'archive pour valider qu'elle est exploitable (non exécuté sur les fichiers chiffrés).</p>
+                                </fieldset>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Destinations secondaires</th>
+                            <td>
+                                <fieldset>
+                                    <?php if (!empty($destination_choices)): ?>
+                                        <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
+                                            <label style="display:block; margin-bottom:4px;">
+                                                <input type="checkbox"
+                                                       name="secondary_destinations[]"
+                                                       value="<?php echo esc_attr($destination_id); ?>"
+                                                       <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>>
+                                                <?php echo esc_html($destination_label); ?>
+                                            </label>
+                                        <?php endforeach; ?>
+                                    <?php else: ?>
+                                        <p class="description">Aucune destination distante n'est encore configurée.</p>
+                                    <?php endif; ?>
+                                    <p class="description">Les destinations sélectionnées recevront la sauvegarde dans l'ordre indiqué. En cas d'échec, la suivante est tentée automatiquement.</p>
                                 </fieldset>
                             </td>
                         </tr>
@@ -461,6 +525,21 @@ class BJLG_Admin {
         ];
         $encrypt_enabled = !empty($schedule_settings['encrypt']);
         $incremental_enabled = !empty($schedule_settings['incremental']);
+        $schedule_include_patterns = isset($schedule_settings['include_patterns']) && is_array($schedule_settings['include_patterns'])
+            ? $schedule_settings['include_patterns']
+            : [];
+        $schedule_exclude_patterns = isset($schedule_settings['exclude_patterns']) && is_array($schedule_settings['exclude_patterns'])
+            ? $schedule_settings['exclude_patterns']
+            : [];
+        $schedule_post_checks = isset($schedule_settings['post_checks']) && is_array($schedule_settings['post_checks'])
+            ? $schedule_settings['post_checks']
+            : ['checksum' => true, 'dry_run' => false];
+        $schedule_secondary_destinations = isset($schedule_settings['secondary_destinations']) && is_array($schedule_settings['secondary_destinations'])
+            ? $schedule_settings['secondary_destinations']
+            : [];
+        $schedule_include_text = esc_textarea(implode("\n", array_map('strval', $schedule_include_patterns)));
+        $schedule_exclude_text = esc_textarea(implode("\n", array_map('strval', $schedule_exclude_patterns)));
+        $destination_choices = $this->get_destination_choices();
         $wl_settings = get_option('bjlg_whitelabel_settings', ['plugin_name' => '', 'hide_from_non_admins' => false]);
         $webhook_key = class_exists(BJLG_Webhooks::class) ? BJLG_Webhooks::get_webhook_key() : '';
         ?>
@@ -587,10 +666,68 @@ class BJLG_Admin {
                         </td>
                     </tr>
                     <tr>
+                        <th scope="row">Inclusions personnalisées</th>
+                        <td>
+                            <textarea name="include_patterns" rows="3" class="large-text code" placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"><?php echo $schedule_include_text; ?></textarea>
+                            <p class="description">Motifs appliqués à chaque exécution planifiée. Laissez vide pour inclure tout le contenu sélectionné.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Exclusions</th>
+                        <td>
+                            <textarea name="exclude_patterns" rows="3" class="large-text code" placeholder="*/cache/*&#10;*.log"><?php echo $schedule_exclude_text; ?></textarea>
+                            <p class="description">Ajoutez des motifs supplémentaires pour ignorer des dossiers ou fichiers lors des sauvegardes planifiées.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Vérifications post-sauvegarde</th>
+                        <td>
+                            <fieldset>
+                                <label>
+                                    <input type="checkbox" name="post_checks[]" value="checksum" <?php checked(!empty($schedule_post_checks['checksum'])); ?>> Vérifier l'intégrité (SHA-256)
+                                </label>
+                                <p class="description">Calcule un hachage de l'archive pour garantir son intégrité.</p>
+                                <label>
+                                    <input type="checkbox" name="post_checks[]" value="dry_run" <?php checked(!empty($schedule_post_checks['dry_run'])); ?>> Test de restauration à blanc
+                                </label>
+                                <p class="description">Ouvre l'archive après sa création pour valider une restauration (ignoré si l'archive est chiffrée).</p>
+                            </fieldset>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Destinations secondaires</th>
+                        <td>
+                            <fieldset>
+                                <?php if (!empty($destination_choices)): ?>
+                                    <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
+                                        <label style="display:block; margin-bottom:4px;">
+                                            <input type="checkbox"
+                                                   name="secondary_destinations[]"
+                                                   value="<?php echo esc_attr($destination_id); ?>"
+                                                   <?php checked(in_array($destination_id, $schedule_secondary_destinations, true)); ?>>
+                                            <?php echo esc_html($destination_label); ?>
+                                        </label>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <p class="description">Aucune destination distante n'est disponible pour le moment.</p>
+                                <?php endif; ?>
+                                <p class="description">Si l'envoi vers la première destination échoue, les suivantes sont tentées automatiquement.</p>
+                            </fieldset>
+                        </td>
+                    </tr>
+                    <tr>
                         <th scope="row">Résumé</th>
                         <td>
                             <div id="bjlg-schedule-summary" class="bjlg-schedule-summary" aria-live="polite">
-                                <?php echo $this->get_schedule_summary_markup($selected_components, $encrypt_enabled, $incremental_enabled); ?>
+                                <?php echo $this->get_schedule_summary_markup(
+                                    $selected_components,
+                                    $encrypt_enabled,
+                                    $incremental_enabled,
+                                    $schedule_post_checks,
+                                    $schedule_secondary_destinations,
+                                    $schedule_include_patterns,
+                                    $schedule_exclude_patterns
+                                ); ?>
                             </div>
                         </td>
                     </tr>
@@ -781,7 +918,56 @@ class BJLG_Admin {
         <?php
     }
 
-    private function get_schedule_summary_markup(array $components, $encrypt, $incremental) {
+    private function get_destination_choices() {
+        $choices = [];
+
+        if (!empty($this->destinations)) {
+            foreach ($this->destinations as $id => $destination) {
+                if (is_object($destination) && method_exists($destination, 'get_name')) {
+                    $choices[$id] = $destination->get_name();
+                }
+            }
+        }
+
+        if (empty($choices)) {
+            $choices = [
+                'google_drive' => 'Google Drive',
+                'aws_s3' => 'Amazon S3',
+            ];
+        }
+
+        /** @var array<string, string>|false $filtered */
+        $filtered = apply_filters('bjlg_admin_destination_choices', $choices, $this->destinations);
+        if (is_array($filtered) && !empty($filtered)) {
+            $normalized = [];
+            foreach ($filtered as $key => $label) {
+                if (!is_scalar($key)) {
+                    continue;
+                }
+                $slug = sanitize_key((string) $key);
+                if ($slug === '') {
+                    continue;
+                }
+                $normalized[$slug] = (string) $label;
+            }
+
+            if (!empty($normalized)) {
+                return $normalized;
+            }
+        }
+
+        return $choices;
+    }
+
+    private function get_schedule_summary_markup(
+        array $components,
+        $encrypt,
+        $incremental,
+        array $post_checks = [],
+        array $destinations = [],
+        array $include_patterns = [],
+        array $exclude_patterns = []
+    ) {
         $component_config = [
             'db' => ['label' => 'Base de données', 'color' => '#6366f1'],
             'plugins' => ['label' => 'Extensions', 'color' => '#f59e0b'],
@@ -816,8 +1002,64 @@ class BJLG_Admin {
             'bjlg-badge-incremental'
         );
 
+        $include_badges = [];
+        $include_count = count(array_filter($include_patterns, static function ($value) {
+            return is_string($value) && trim($value) !== '';
+        }));
+        if ($include_count > 0) {
+            $include_badges[] = $this->format_schedule_badge(
+                sprintf('%d motif(s)', $include_count),
+                '#0ea5e9',
+                'bjlg-badge-include'
+            );
+        } else {
+            $include_badges[] = $this->format_schedule_badge('Tout le contenu', '#10b981', 'bjlg-badge-include');
+        }
+
+        $exclude_badges = [];
+        $exclude_count = count(array_filter($exclude_patterns, static function ($value) {
+            return is_string($value) && trim($value) !== '';
+        }));
+        if ($exclude_count > 0) {
+            $exclude_badges[] = $this->format_schedule_badge(
+                sprintf('%d exclusion(s)', $exclude_count),
+                '#f97316',
+                'bjlg-badge-exclude'
+            );
+        } else {
+            $exclude_badges[] = $this->format_schedule_badge('Aucune', '#4b5563', 'bjlg-badge-exclude');
+        }
+
+        $control_badges = [];
+        $checksum_enabled = !empty($post_checks['checksum']);
+        $dry_run_enabled = !empty($post_checks['dry_run']);
+
+        if ($checksum_enabled) {
+            $control_badges[] = $this->format_schedule_badge('Checksum', '#2563eb', 'bjlg-badge-checksum');
+        }
+        if ($dry_run_enabled) {
+            $control_badges[] = $this->format_schedule_badge('Test restauration', '#7c3aed', 'bjlg-badge-restore');
+        }
+        if (empty($control_badges)) {
+            $control_badges[] = $this->format_schedule_badge('Aucun contrôle', '#4b5563', 'bjlg-badge-control');
+        }
+
+        $destination_badges = [];
+        $available_destinations = $this->get_destination_choices();
+        foreach ($destinations as $destination_id) {
+            $label = $available_destinations[$destination_id] ?? ucfirst(str_replace('_', ' ', (string) $destination_id));
+            $destination_badges[] = $this->format_schedule_badge($label, '#0ea5e9', 'bjlg-badge-destination');
+        }
+        if (empty($destination_badges)) {
+            $destination_badges[] = $this->format_schedule_badge('Stockage local', '#4b5563', 'bjlg-badge-destination');
+        }
+
         return $this->wrap_schedule_badge_group('Composants', $component_badges)
-            . $this->wrap_schedule_badge_group('Options', $option_badges);
+            . $this->wrap_schedule_badge_group('Options', $option_badges)
+            . $this->wrap_schedule_badge_group('Inclusions', $include_badges)
+            . $this->wrap_schedule_badge_group('Exclusions', $exclude_badges)
+            . $this->wrap_schedule_badge_group('Contrôles', $control_badges)
+            . $this->wrap_schedule_badge_group('Destinations', $destination_badges);
     }
 
     private function wrap_schedule_badge_group($title, array $badges) {
