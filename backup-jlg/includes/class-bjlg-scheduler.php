@@ -80,14 +80,10 @@ class BJLG_Scheduler {
      * Vérifie et met à jour la planification si nécessaire
      */
     public function check_schedule() {
-        $settings = get_option('bjlg_schedule_settings', [
-            'recurrence' => 'disabled',
-            'day' => 'sunday',
-            'time' => '23:59'
-        ]);
-        
+        $settings = $this->get_schedule_settings();
+
         $current_schedule = wp_get_schedule(self::SCHEDULE_HOOK);
-        
+
         // Si la planification doit être désactivée
         if ($settings['recurrence'] === 'disabled') {
             if ($current_schedule) {
@@ -112,34 +108,63 @@ class BJLG_Scheduler {
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
 
+        $posted = wp_unslash($_POST);
+
+        $recurrence = isset($posted['recurrence']) ? sanitize_key($posted['recurrence']) : 'disabled';
+        if (!in_array($recurrence, $this->get_valid_recurrences(), true)) {
+            wp_send_json_error([
+                'message' => 'Impossible d\'enregistrer la planification.',
+                'errors' => ['Fréquence invalide.']
+            ]);
+        }
+
+        $day = isset($posted['day']) ? sanitize_key($posted['day']) : 'sunday';
+        if (!in_array($day, $this->get_valid_days(), true)) {
+            wp_send_json_error([
+                'message' => 'Impossible d\'enregistrer la planification.',
+                'errors' => ['Jour invalide.']
+            ]);
+        }
+
+        $time = isset($posted['time']) ? sanitize_text_field($posted['time']) : '23:59';
+        if (!preg_match('/^([0-1]?\d|2[0-3]):([0-5]\d)$/', $time)) {
+            wp_send_json_error([
+                'message' => 'Impossible d\'enregistrer la planification.',
+                'errors' => ['Format d\'heure invalide.']
+            ]);
+        }
+
+        $components_value = isset($posted['components']) ? $posted['components'] : [];
+        $components = $this->sanitize_components($components_value);
+        if (is_wp_error($components)) {
+            wp_send_json_error([
+                'message' => 'Impossible d\'enregistrer la planification.',
+                'errors' => [$components->get_error_message()]
+            ]);
+        }
+
+        if (empty($components)) {
+            wp_send_json_error([
+                'message' => 'Impossible d\'enregistrer la planification.',
+                'errors' => ['Veuillez sélectionner au moins un composant valide.']
+            ]);
+        }
+
+        $encrypt = $this->sanitize_boolean($posted['encrypt'] ?? false);
+        $incremental = $this->sanitize_boolean($posted['incremental'] ?? false);
+
         $schedule_settings = [
-            'recurrence' => isset($_POST['recurrence']) ? sanitize_key($_POST['recurrence']) : 'disabled',
-            'day'        => isset($_POST['day']) ? sanitize_key($_POST['day']) : 'sunday',
-            'time'       => isset($_POST['time']) ? sanitize_text_field($_POST['time']) : '23:59',
-            'components' => isset($_POST['components']) ? array_map('sanitize_text_field', $_POST['components']) : ['db', 'plugins', 'themes', 'uploads'],
-            'encrypt'    => isset($_POST['encrypt']) && $_POST['encrypt'] === 'true',
-            'incremental' => isset($_POST['incremental']) && $_POST['incremental'] === 'true'
+            'recurrence' => $recurrence,
+            'day' => $day,
+            'time' => $time,
+            'components' => $components,
+            'encrypt' => $encrypt,
+            'incremental' => $incremental,
         ];
-        
-        // Valider les paramètres
-        $valid_recurrences = ['disabled', 'hourly', 'twice_daily', 'daily', 'weekly', 'monthly'];
-        if (!in_array($schedule_settings['recurrence'], $valid_recurrences)) {
-            wp_send_json_error(['message' => 'Fréquence invalide.']);
-        }
-        
-        $valid_days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-        if (!in_array($schedule_settings['day'], $valid_days)) {
-            wp_send_json_error(['message' => 'Jour invalide.']);
-        }
-        
-        // Valider l'heure (format HH:MM)
-        if (!preg_match('/^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/', $schedule_settings['time'])) {
-            wp_send_json_error(['message' => 'Format d\'heure invalide.']);
-        }
-        
+
         update_option('bjlg_schedule_settings', $schedule_settings);
         BJLG_Debug::log("Réglages de planification enregistrés : " . print_r($schedule_settings, true));
-        
+
         // Mettre à jour la planification
         $this->update_schedule($schedule_settings);
         
@@ -291,8 +316,8 @@ class BJLG_Scheduler {
         }
         
         $next_run = wp_next_scheduled(self::SCHEDULE_HOOK);
-        $settings = get_option('bjlg_schedule_settings', []);
-        
+        $settings = $this->get_schedule_settings();
+
         $response = [
             'enabled' => $settings['recurrence'] !== 'disabled',
             'recurrence' => $settings['recurrence'],
@@ -329,17 +354,17 @@ class BJLG_Scheduler {
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
         
-        $settings = get_option('bjlg_schedule_settings', []);
-        
+        $settings = $this->get_schedule_settings();
+
         // Créer une tâche de sauvegarde avec les paramètres planifiés
         $task_id = 'bjlg_backup_' . md5(uniqid('manual_scheduled', true));
         $task_data = [
             'progress' => 5,
             'status' => 'pending',
             'status_text' => 'Initialisation (manuelle)...',
-            'components' => $settings['components'] ?? ['db', 'plugins', 'themes', 'uploads'],
-            'encrypt' => $settings['encrypt'] ?? false,
-            'incremental' => $settings['incremental'] ?? false,
+            'components' => $settings['components'],
+            'encrypt' => $settings['encrypt'],
+            'incremental' => $settings['incremental'],
             'source' => 'manual_scheduled',
             'start_time' => time()
         ];
@@ -384,12 +409,8 @@ class BJLG_Scheduler {
      * Déclenche l'exécution automatique d'une sauvegarde planifiée.
      */
     public function run_scheduled_backup() {
-        $settings = get_option('bjlg_schedule_settings', []);
-
-        $components = $settings['components'] ?? ['db', 'plugins', 'themes', 'uploads'];
-        if (empty($components) || !is_array($components)) {
-            $components = ['db', 'plugins', 'themes', 'uploads'];
-        }
+        $settings = $this->get_schedule_settings();
+        $components = $settings['components'];
 
         $task_id = 'bjlg_backup_' . md5(uniqid('scheduled', true));
 
@@ -398,8 +419,8 @@ class BJLG_Scheduler {
             'status' => 'pending',
             'status_text' => 'Initialisation (planifiée)...',
             'components' => $components,
-            'encrypt' => $settings['encrypt'] ?? false,
-            'incremental' => $settings['incremental'] ?? false,
+            'encrypt' => $settings['encrypt'],
+            'incremental' => $settings['incremental'],
             'source' => 'scheduled',
             'start_time' => time()
         ];
@@ -450,8 +471,8 @@ class BJLG_Scheduler {
      * Vérifie si une sauvegarde planifiée est en retard
      */
     public function is_schedule_overdue() {
-        $settings = get_option('bjlg_schedule_settings', []);
-        
+        $settings = $this->get_schedule_settings();
+
         if ($settings['recurrence'] === 'disabled') {
             return false;
         }
@@ -476,7 +497,7 @@ class BJLG_Scheduler {
     public function get_schedule_stats() {
         global $wpdb;
         $table_name = $wpdb->prefix . 'bjlg_history';
-        
+
         $stats = [
             'total_scheduled' => 0,
             'successful' => 0,
@@ -519,7 +540,121 @@ class BJLG_Scheduler {
         if ($last_run) {
             $stats['last_run'] = $last_run['timestamp'];
         }
-        
+
         return $stats;
+    }
+
+    public function get_schedule_settings() {
+        $stored = get_option('bjlg_schedule_settings', []);
+
+        return $this->normalize_schedule_settings($stored);
+    }
+
+    private function normalize_schedule_settings($settings) {
+        $defaults = $this->get_default_schedule_settings();
+
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+
+        $settings = wp_parse_args($settings, $defaults);
+
+        $recurrence = sanitize_key($settings['recurrence']);
+        if (!in_array($recurrence, $this->get_valid_recurrences(), true)) {
+            $recurrence = $defaults['recurrence'];
+        }
+
+        $day = sanitize_key($settings['day']);
+        if (!in_array($day, $this->get_valid_days(), true)) {
+            $day = $defaults['day'];
+        }
+
+        $time = sanitize_text_field($settings['time']);
+        if (!preg_match('/^([0-1]?\d|2[0-3]):([0-5]\d)$/', $time)) {
+            $time = $defaults['time'];
+        }
+
+        $components = $this->sanitize_components($settings['components']);
+        if (is_wp_error($components) || empty($components)) {
+            $components = $defaults['components'];
+        }
+
+        return [
+            'recurrence' => $recurrence,
+            'day' => $day,
+            'time' => $time,
+            'components' => $components,
+            'encrypt' => $this->sanitize_boolean($settings['encrypt']),
+            'incremental' => $this->sanitize_boolean($settings['incremental']),
+        ];
+    }
+
+    private function get_default_schedule_settings() {
+        return [
+            'recurrence' => 'disabled',
+            'day' => 'sunday',
+            'time' => '23:59',
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'encrypt' => false,
+            'incremental' => false,
+        ];
+    }
+
+    private function get_valid_recurrences() {
+        return ['disabled', 'hourly', 'twice_daily', 'daily', 'weekly', 'monthly'];
+    }
+
+    private function get_valid_days() {
+        return ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    }
+
+    private function sanitize_components($components) {
+        $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+        $components = (array) $components;
+        $sanitized = [];
+
+        foreach ($components as $component) {
+            if (!is_scalar($component)) {
+                continue;
+            }
+
+            $component = (string) $component;
+
+            if (preg_match('#[\\/]#', $component)) {
+                return new \WP_Error('invalid_component_format', 'Format de composant invalide.');
+            }
+
+            $component = sanitize_key($component);
+
+            if (in_array($component, $allowed_components, true) && !in_array($component, $sanitized, true)) {
+                $sanitized[] = $component;
+            }
+        }
+
+        return array_values($sanitized);
+    }
+
+    private function sanitize_boolean($value) {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value === 1;
+        }
+
+        if (is_string($value)) {
+            $normalized = strtolower(trim($value));
+
+            if (in_array($normalized, ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+
+            if (in_array($normalized, ['0', 'false', 'no', 'off', ''], true)) {
+                return false;
+            }
+        }
+
+        return false;
     }
 }
