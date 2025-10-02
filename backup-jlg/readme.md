@@ -107,6 +107,10 @@ faites confiance à ces en-têtes que si le proxy supprime systématiquement tou
 valeur fournie par le client. Dans le cas contraire, l'adresse IP pourrait être
 falsifiée et contourner le limiteur de taux.
 
+### 5. Vérifier la connexion Google Drive
+
+Une fois l'autorisation OAuth terminée, rendez-vous dans **Backup JLG → Réglages → Google Drive** et cliquez sur le bouton **Tester la connexion**. Le plugin enverra une requête légère pour valider le Client ID, le Client Secret et le dossier cible, affichera immédiatement le résultat et mémorisera la date du dernier test. Utilisez ce bouton après chaque changement d'identifiants pour confirmer que l'accès Drive est fonctionnel.
+
 ## 🎯 Utilisation
 
 ### Interface Web

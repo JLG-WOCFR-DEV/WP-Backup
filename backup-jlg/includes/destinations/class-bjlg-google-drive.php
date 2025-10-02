@@ -5,6 +5,7 @@ use Exception;
 use Google\Client as Google_Client;
 use Google\Service\Drive as Google_Service_Drive;
 use Google\Service\Drive\DriveFile as Google_Service_DriveFile;
+use Google\Service\Exception as Google_Service_Exception;
 use Google_Http_MediaFileUpload;
 
 if (!defined('ABSPATH')) {
@@ -29,6 +30,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
 
     private const OPTION_SETTINGS = 'bjlg_gdrive_settings';
     private const OPTION_TOKEN = 'bjlg_gdrive_token';
+    private const OPTION_STATUS = 'bjlg_gdrive_status';
     private const OPTION_STATE = 'bjlg_gdrive_state';
     private const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -71,6 +73,10 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
 
         add_action('admin_init', [$this, 'handle_oauth_callback']);
         add_action('admin_post_bjlg_gdrive_disconnect', [$this, 'handle_disconnect_request']);
+
+        if (function_exists('add_action')) {
+            add_action('wp_ajax_bjlg_test_gdrive_connection', [$this, 'handle_test_connection']);
+        }
     }
 
     public function get_id() {
@@ -90,8 +96,10 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
     public function disconnect() {
         if (function_exists('delete_option')) {
             delete_option(self::OPTION_TOKEN);
+            delete_option(self::OPTION_STATUS);
         } else {
             update_option(self::OPTION_TOKEN, []);
+            update_option(self::OPTION_STATUS, []);
         }
     }
 
@@ -105,6 +113,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         }
 
         $settings = $this->get_settings();
+        $status = $this->get_status();
         $is_connected = $this->is_connected();
 
         echo "<p class='description'>Transférez automatiquement vos sauvegardes vers un dossier Google Drive dédié.</p>";
@@ -116,6 +125,32 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         $enabled_attr = $settings['enabled'] ? " checked='checked'" : '';
         echo "<tr><th scope='row'>Activer Google Drive</th><td><label><input type='checkbox' name='gdrive_enabled' value='true'{$enabled_attr}> Activer l'envoi automatique vers Google Drive.</label></td></tr>";
         echo "</table>";
+
+        echo "<div class='notice bjlg-gdrive-test-feedback' role='status' aria-live='polite' style='display:none;'></div>";
+        echo "<p class='bjlg-gdrive-test-actions'><button type='button' class='button bjlg-gdrive-test-connection'>Tester la connexion</button> <span class='spinner bjlg-gdrive-test-spinner' style='float:none;margin:0 0 0 8px;display:none;'></span></p>";
+
+        $last_test_style = '';
+        $last_test_classes = 'description bjlg-gdrive-last-test';
+        $last_test_content = '';
+
+        if ($status['last_result'] === 'success' && $status['tested_at'] > 0) {
+            $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
+            $last_test_content = "<span class='dashicons dashicons-yes'></span> Dernier test réussi le {$tested_at}.";
+            if ($status['message'] !== '') {
+                $last_test_content .= ' ' . esc_html($status['message']);
+            }
+        } elseif ($status['last_result'] === 'error' && $status['tested_at'] > 0) {
+            $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
+            $last_test_content = "<span class='dashicons dashicons-warning'></span> Dernier test échoué le {$tested_at}.";
+            if ($status['message'] !== '') {
+                $last_test_content .= ' ' . esc_html($status['message']);
+            }
+            $last_test_style = " style='color:#b32d2e;'";
+        } else {
+            $last_test_style = " style='display:none;'";
+        }
+
+        echo "<p class='{$last_test_classes}'{$last_test_style}>{$last_test_content}</p>";
 
         if (!$settings['enabled']) {
             echo "<p class='description'>Enregistrez vos identifiants puis activez Google Drive pour poursuivre la connexion.</p>";
@@ -257,6 +292,155 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
 
         if (class_exists(BJLG_Debug::class)) {
             BJLG_Debug::log(sprintf('Sauvegarde "%s" envoyée sur Google Drive (ID: %s).', basename($filepath), $uploaded_file->getId()));
+        }
+    }
+
+    /**
+     * Teste la connexion à Google Drive.
+     *
+     * @param array<string, string>|null $settings
+     * @return array{message:string,tested_at:int,folder_id:string,folder_name:string}
+     * @throws Exception
+     */
+    public function test_connection(?array $settings = null) {
+        if (!$this->sdk_available) {
+            throw new Exception('Le SDK Google n\'est pas disponible.');
+        }
+
+        $settings = $settings ? $this->merge_settings($settings) : $this->get_settings();
+
+        if ($settings['client_id'] === '' || $settings['client_secret'] === '') {
+            throw new Exception('Renseignez le Client ID et le Client Secret Google.');
+        }
+
+        $client = $this->build_client();
+        $client->setClientId($settings['client_id']);
+        $client->setClientSecret($settings['client_secret']);
+        $client->setRedirectUri($this->get_redirect_uri());
+        $client->setAccessType('offline');
+        $client->setPrompt('consent');
+        $client->setScopes([self::SCOPE]);
+
+        $token = $this->get_stored_token();
+        if (empty($token)) {
+            throw new Exception('Aucun token OAuth Google Drive n\'a été trouvé. Lancez la procédure de connexion pour autoriser l\'application.');
+        }
+
+        $client->setAccessToken($token);
+
+        if ($client->isAccessTokenExpired()) {
+            $refresh_token = $client->getRefreshToken();
+            if (!$refresh_token) {
+                throw new Exception('Le token d\'accès Google Drive est expiré et aucun refresh token n\'est disponible. Reconnectez votre compte.');
+            }
+
+            $new_token = $client->fetchAccessTokenWithRefreshToken($refresh_token);
+            if (isset($new_token['error'])) {
+                throw new Exception('Impossible de rafraîchir le token Google Drive : ' . $new_token['error']);
+            }
+
+            if (!isset($new_token['refresh_token']) && isset($token['refresh_token'])) {
+                $new_token['refresh_token'] = $token['refresh_token'];
+            }
+
+            $this->store_token($new_token);
+            $client->setAccessToken($new_token);
+        }
+
+        try {
+            $drive_service = call_user_func($this->drive_factory, $client);
+        } catch (\Throwable $throwable) {
+            throw new Exception('Impossible d\'initialiser le client Google Drive : ' . $throwable->getMessage(), 0, $throwable);
+        }
+
+        $folder_id = $settings['folder_id'] !== '' ? $settings['folder_id'] : 'root';
+
+        try {
+            $metadata = $drive_service->files->get($folder_id, [
+                'fields' => 'id,name,mimeType',
+                'supportsAllDrives' => true,
+            ]);
+        } catch (Google_Service_Exception $service_exception) {
+            $message = $this->extract_google_error_message($service_exception);
+            throw new Exception('Google Drive a renvoyé une erreur : ' . $message, 0, $service_exception);
+        } catch (\Throwable $throwable) {
+            throw new Exception('Erreur lors de la communication avec Google Drive : ' . $throwable->getMessage(), 0, $throwable);
+        }
+
+        if (!$metadata || !$metadata->getId()) {
+            throw new Exception('La réponse de Google Drive ne contient pas les métadonnées attendues.');
+        }
+
+        $folder_name = $metadata->getName();
+        if ($folder_name === null || $folder_name === '') {
+            $folder_name = $folder_id === 'root' ? 'Dossier racine' : $metadata->getId();
+        }
+
+        $status_message = sprintf('Dossier "%s" (%s) accessible.', $folder_name, $metadata->getId());
+        $tested_at = time();
+
+        $this->store_status([
+            'last_result' => 'success',
+            'tested_at' => $tested_at,
+            'message' => $status_message,
+        ]);
+
+        return [
+            'message' => $status_message,
+            'tested_at' => $tested_at,
+            'folder_id' => $metadata->getId(),
+            'folder_name' => $folder_name,
+        ];
+    }
+
+    /**
+     * Gère la requête AJAX de test de connexion.
+     */
+    public function handle_test_connection() {
+        if (!$this->sdk_available) {
+            wp_send_json_error(['message' => 'Le SDK Google n\'est pas disponible.'], 500);
+        }
+
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $settings = [
+            'client_id' => isset($_POST['gdrive_client_id']) ? sanitize_text_field(wp_unslash($_POST['gdrive_client_id'])) : '',
+            'client_secret' => isset($_POST['gdrive_client_secret']) ? sanitize_text_field(wp_unslash($_POST['gdrive_client_secret'])) : '',
+            'folder_id' => isset($_POST['gdrive_folder_id']) ? sanitize_text_field(wp_unslash($_POST['gdrive_folder_id'])) : '',
+        ];
+
+        try {
+            $result = $this->test_connection($settings);
+            $response = [
+                'message' => $result['message'],
+                'status_message' => $result['message'],
+                'tested_at' => $result['tested_at'],
+                'tested_at_formatted' => gmdate('d/m/Y H:i:s', $result['tested_at']),
+                'folder_id' => $result['folder_id'],
+                'folder_name' => $result['folder_name'],
+            ];
+
+            wp_send_json_success($response);
+        } catch (Exception $exception) {
+            $tested_at = time();
+            $this->store_status([
+                'last_result' => 'error',
+                'tested_at' => $tested_at,
+                'message' => $exception->getMessage(),
+            ]);
+
+            $response = [
+                'message' => $exception->getMessage(),
+                'status_message' => $exception->getMessage(),
+                'tested_at' => $tested_at,
+                'tested_at_formatted' => gmdate('d/m/Y H:i:s', $tested_at),
+            ];
+
+            wp_send_json_error($response);
         }
     }
 
@@ -415,19 +599,36 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      * @return array{client_id:string,client_secret:string,folder_id:string,enabled:bool}
      */
     private function get_settings() {
-        $defaults = [
+        $settings = get_option(self::OPTION_SETTINGS, []);
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+
+        return $this->merge_settings($settings);
+    }
+
+    /**
+     * Fusionne les réglages fournis avec les valeurs par défaut.
+     *
+     * @param array<string, mixed> $settings
+     * @return array{client_id:string,client_secret:string,folder_id:string,enabled:bool}
+     */
+    private function merge_settings(array $settings) {
+        return array_merge($this->get_default_settings(), $settings);
+    }
+
+    /**
+     * Retourne les réglages par défaut pour Google Drive.
+     *
+     * @return array{client_id:string,client_secret:string,folder_id:string,enabled:bool}
+     */
+    private function get_default_settings() {
+        return [
             'client_id' => '',
             'client_secret' => '',
             'folder_id' => '',
             'enabled' => false,
         ];
-
-        $settings = get_option(self::OPTION_SETTINGS, $defaults);
-        if (!is_array($settings)) {
-            $settings = [];
-        }
-
-        return array_merge($defaults, $settings);
     }
 
     /**
@@ -449,5 +650,56 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      */
     private function store_token(array $token) {
         update_option(self::OPTION_TOKEN, $token);
+    }
+
+    /**
+     * Récupère le statut des derniers tests de connexion.
+     *
+     * @return array{last_result:?string,tested_at:int,message:string}
+     */
+    private function get_status() {
+        $defaults = [
+            'last_result' => null,
+            'tested_at' => 0,
+            'message' => '',
+        ];
+
+        $status = get_option(self::OPTION_STATUS, $defaults);
+        if (!is_array($status)) {
+            $status = [];
+        }
+
+        return array_merge($defaults, $status);
+    }
+
+    /**
+     * Mémorise le statut d'un test de connexion.
+     *
+     * @param array{last_result:?string,tested_at:int,message:string} $status
+     * @return void
+     */
+    private function store_status(array $status) {
+        $current = $this->get_status();
+        update_option(self::OPTION_STATUS, array_merge($current, $status));
+    }
+
+    /**
+     * Extrait un message pertinent d'une exception Google.
+     *
+     * @param Google_Service_Exception $exception
+     * @return string
+     */
+    private function extract_google_error_message(Google_Service_Exception $exception) {
+        $errors = $exception->getErrors();
+        if (is_array($errors) && isset($errors[0]['message']) && $errors[0]['message'] !== '') {
+            return $errors[0]['message'];
+        }
+
+        $message = $exception->getMessage();
+        if ($message) {
+            return $message;
+        }
+
+        return 'Erreur inconnue retournée par Google Drive.';
     }
 }
