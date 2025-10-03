@@ -767,77 +767,311 @@ class BJLG_Admin {
     private function render_restore_section() {
         ?>
         <div class="bjlg-section">
-            <h2>Restaurer depuis un fichier</h2>
-            <p>Si vous avez un fichier de sauvegarde sur votre ordinateur, vous pouvez le téléverser ici pour lancer une restauration.</p>
-            <form id="bjlg-restore-form" method="post" enctype="multipart/form-data">
-                <table class="form-table">
-                    <tbody>
-                        <tr>
-                            <th scope="row"><label for="bjlg-restore-file-input">Fichier de sauvegarde</label></th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <input type="file" id="bjlg-restore-file-input" name="restore_file" accept=".zip,.zip.enc" required>
-                                    <p class="description">Formats acceptés : .zip, .zip.enc (chiffré)</p>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row"><label for="bjlg-restore-password">Mot de passe</label></th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <input type="password"
-                                           id="bjlg-restore-password"
-                                           name="password"
-                                           class="regular-text"
-                                           autocomplete="current-password"
-                                           aria-describedby="bjlg-restore-password-help"
-                                           placeholder="Requis pour les archives .zip.enc">
-                                    <p class="description"
-                                       id="bjlg-restore-password-help"
-                                       data-default-text="<?php echo esc_attr('Requis pour restaurer les sauvegardes chiffrées (.zip.enc). Laissez vide pour les archives non chiffrées.'); ?>"
-                                       data-encrypted-text="<?php echo esc_attr('Mot de passe obligatoire : renseignez-le pour déchiffrer l\'archive (.zip.enc).'); ?>">
-                                        Requis pour restaurer les sauvegardes chiffrées (<code>.zip.enc</code>). Laissez vide pour les archives non chiffrées.
-                                    </p>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Options</th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <label><input type="checkbox" name="create_backup_before_restore" value="1" checked> Créer une sauvegarde de sécurité avant la restauration</label>
-                                </div>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-                <div id="bjlg-restore-errors" class="notice notice-error" style="display: none;" role="alert"></div>
-                <p class="submit">
-                    <button type="submit" class="button button-primary"><span class="dashicons dashicons-upload" aria-hidden="true"></span> Téléverser et Restaurer</button>
-                </p>
-            </form>
-            <div id="bjlg-restore-status" style="display: none;">
-                <h3>Statut de la restauration</h3>
-                <div class="bjlg-progress-bar"><div
-                        class="bjlg-progress-bar-inner"
-                        id="bjlg-restore-progress-bar"
-                        role="progressbar"
-                        aria-valuemin="0"
-                        aria-valuemax="100"
-                        aria-valuenow="0"
-                        aria-valuetext="0%"
-                        aria-live="off"
-                        aria-atomic="true"
-                        aria-busy="false">0%</div></div>
-                <p id="bjlg-restore-status-text"
-                   role="status"
-                   aria-live="polite"
-                   aria-atomic="true"
-                   aria-busy="false">Préparation...</p>
-            </div>
-            <div id="bjlg-restore-debug-wrapper" style="display: none;">
-                <h3><span class="dashicons dashicons-info" aria-hidden="true"></span> Détails techniques</h3>
-                <pre id="bjlg-restore-ajax-debug" class="bjlg-log-textarea"></pre>
+            <h2>Restauration &amp; clonage</h2>
+            <p>Choisissez la méthode qui convient à votre scénario : téléverser un fichier, relancer une sauvegarde existante ou préparer un environnement de test.</p>
+
+            <nav class="nav-tab-wrapper bjlg-subtab-nav" role="tablist" aria-label="Méthodes de restauration">
+                <button type="button"
+                        class="nav-tab nav-tab-active"
+                        id="bjlg-restore-tab-button-upload"
+                        role="tab"
+                        aria-controls="bjlg-restore-tab-upload"
+                        aria-selected="true"
+                        data-tab-target="bjlg-restore-tab-upload">
+                    Depuis un fichier
+                </button>
+                <button type="button"
+                        class="nav-tab"
+                        id="bjlg-restore-tab-button-history"
+                        role="tab"
+                        aria-controls="bjlg-restore-tab-history"
+                        aria-selected="false"
+                        data-tab-target="bjlg-restore-tab-history">
+                    Depuis l&rsquo;historique
+                </button>
+                <button type="button"
+                        class="nav-tab"
+                        id="bjlg-restore-tab-button-staging"
+                        role="tab"
+                        aria-controls="bjlg-restore-tab-staging"
+                        aria-selected="false"
+                        data-tab-target="bjlg-restore-tab-staging">
+                    Vers un environnement de test
+                </button>
+            </nav>
+
+            <div class="bjlg-restore-tabs">
+                <section id="bjlg-restore-tab-upload"
+                         class="bjlg-restore-tab is-active"
+                         role="tabpanel"
+                         aria-labelledby="bjlg-restore-tab-button-upload">
+                    <h3 class="screen-reader-text">Téléverser une sauvegarde</h3>
+                    <p>Si vous disposez d&rsquo;un fichier de sauvegarde local, téléversez-le pour lancer une restauration immédiate.</p>
+                    <form id="bjlg-restore-form" method="post" enctype="multipart/form-data">
+                        <table class="form-table">
+                            <tbody>
+                                <tr>
+                                    <th scope="row"><label for="bjlg-restore-file-input">Fichier de sauvegarde</label></th>
+                                    <td>
+                                        <div class="bjlg-field-control">
+                                            <input type="file" id="bjlg-restore-file-input" name="restore_file" accept=".zip,.zip.enc" required>
+                                            <p class="description">Formats acceptés : <code>.zip</code>, <code>.zip.enc</code> (chiffré)</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row"><label for="bjlg-restore-password">Mot de passe</label></th>
+                                    <td>
+                                        <div class="bjlg-field-control">
+                                            <input type="password"
+                                                   id="bjlg-restore-password"
+                                                   name="password"
+                                                   class="regular-text"
+                                                   autocomplete="current-password"
+                                                   aria-describedby="bjlg-restore-password-help"
+                                                   placeholder="Requis pour les archives .zip.enc">
+                                            <p class="description"
+                                               id="bjlg-restore-password-help"
+                                               data-default-text="<?php echo esc_attr('Requis pour restaurer les sauvegardes chiffrées (.zip.enc). Laissez vide pour les archives non chiffrées.'); ?>"
+                                               data-encrypted-text="<?php echo esc_attr('Mot de passe obligatoire : renseignez-le pour déchiffrer l\'archive (.zip.enc).'); ?>">
+                                                Requis pour restaurer les sauvegardes chiffrées (<code>.zip.enc</code>). Laissez vide pour les archives non chiffrées.
+                                            </p>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">Options</th>
+                                    <td>
+                                        <div class="bjlg-field-control">
+                                            <label><input type="checkbox" name="create_backup_before_restore" value="1" checked> Créer une sauvegarde de sécurité avant la restauration</label>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div id="bjlg-restore-errors" class="notice notice-error" style="display:none;" role="alert"></div>
+                        <p class="submit">
+                            <button type="submit" class="button button-primary"><span class="dashicons dashicons-upload" aria-hidden="true"></span> Téléverser et restaurer</button>
+                        </p>
+                    </form>
+                    <div id="bjlg-restore-status" class="bjlg-restore-status" style="display:none;">
+                        <h3>Statut de la restauration</h3>
+                        <div class="bjlg-progress-bar"><div
+                                class="bjlg-progress-bar-inner"
+                                id="bjlg-restore-progress-bar"
+                                role="progressbar"
+                                aria-valuemin="0"
+                                aria-valuemax="100"
+                                aria-valuenow="0"
+                                aria-valuetext="0%"
+                                aria-live="off"
+                                aria-atomic="true"
+                                aria-busy="false">0%</div></div>
+                        <p id="bjlg-restore-status-text"
+                           role="status"
+                           aria-live="polite"
+                           aria-atomic="true"
+                           aria-busy="false">Préparation...</p>
+                    </div>
+                    <div id="bjlg-restore-debug-wrapper" style="display:none;">
+                        <h3><span class="dashicons dashicons-info" aria-hidden="true"></span> Détails techniques</h3>
+                        <pre id="bjlg-restore-ajax-debug" class="bjlg-log-textarea"></pre>
+                    </div>
+                </section>
+
+                <section id="bjlg-restore-tab-history"
+                         class="bjlg-restore-tab"
+                         role="tabpanel"
+                         aria-labelledby="bjlg-restore-tab-button-history"
+                         hidden>
+                    <h3 class="screen-reader-text">Restaurer depuis l&rsquo;historique</h3>
+                    <p>Sélectionnez une sauvegarde déjà stockée sur le serveur pour relancer une restauration sans téléverser de fichier.</p>
+                    <form id="bjlg-restore-history-form" method="post">
+                        <table class="form-table">
+                            <tbody>
+                                <tr>
+                                    <th scope="row"><label for="bjlg-history-backup-select">Sauvegarde disponible</label></th>
+                                    <td>
+                                        <div class="bjlg-field-control">
+                                            <select id="bjlg-history-backup-select" name="history_backup" required data-placeholder="Sélectionnez une sauvegarde…">
+                                                <option value="">Sélectionnez une sauvegarde…</option>
+                                            </select>
+                                            <button type="button" class="button button-secondary" id="bjlg-history-refresh-button">
+                                                <span class="dashicons dashicons-update" aria-hidden="true"></span> Actualiser
+                                            </button>
+                                            <p class="description">Les archives listées proviennent du stockage local (<code>wp-content/uploads/bjlg-backups</code>).</p>
+                                        </div>
+                                        <div class="bjlg-backup-meta" id="bjlg-history-backup-meta" data-empty-text="Aucune sauvegarde sélectionnée." aria-live="polite"></div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row"><label for="bjlg-history-password">Mot de passe</label></th>
+                                    <td>
+                                        <div class="bjlg-field-control">
+                                            <input type="password"
+                                                   id="bjlg-history-password"
+                                                   name="password"
+                                                   class="regular-text"
+                                                   autocomplete="current-password"
+                                                   aria-describedby="bjlg-history-password-help"
+                                                   placeholder="Requis pour les archives chiffrées">
+                                            <p class="description"
+                                               id="bjlg-history-password-help"
+                                               data-default-text="<?php echo esc_attr('Requis uniquement pour les sauvegardes chiffrées.'); ?>"
+                                               data-encrypted-text="<?php echo esc_attr('Mot de passe obligatoire : cette sauvegarde est chiffrée (.zip.enc).'); ?>">
+                                                Requis uniquement pour les sauvegardes chiffrées.
+                                            </p>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">Composants à restaurer</th>
+                                    <td>
+                                        <fieldset>
+                                            <legend class="screen-reader-text">Composants à restaurer</legend>
+                                            <label><input type="checkbox" name="restore_components[]" value="db" checked> Base de données</label><br>
+                                            <label><input type="checkbox" name="restore_components[]" value="plugins" checked> Extensions</label><br>
+                                            <label><input type="checkbox" name="restore_components[]" value="themes" checked> Thèmes</label><br>
+                                            <label><input type="checkbox" name="restore_components[]" value="uploads" checked> Médias &amp; uploads</label>
+                                            <p class="description">Décochez les éléments que vous ne souhaitez pas restaurer. Les éléments indisponibles seront automatiquement désactivés.</p>
+                                        </fieldset>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">Options</th>
+                                    <td>
+                                        <label><input type="checkbox" name="create_backup_before_restore" value="1" checked> Créer une sauvegarde de sécurité avant la restauration</label>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div id="bjlg-restore-history-errors" class="notice notice-error" style="display:none;" role="alert"></div>
+                        <p class="submit">
+                            <button type="submit" class="button button-primary"><span class="dashicons dashicons-backup" aria-hidden="true"></span> Lancer la restauration</button>
+                        </p>
+                    </form>
+                    <div id="bjlg-restore-history-status" class="bjlg-restore-status" style="display:none;">
+                        <h3>Suivi de la restauration</h3>
+                        <div class="bjlg-progress-bar"><div
+                                class="bjlg-progress-bar-inner"
+                                id="bjlg-restore-history-progress-bar"
+                                role="progressbar"
+                                aria-valuemin="0"
+                                aria-valuemax="100"
+                                aria-valuenow="0"
+                                aria-valuetext="0%"
+                                aria-live="off"
+                                aria-atomic="true"
+                                aria-busy="false">0%</div></div>
+                        <p id="bjlg-restore-history-status-text"
+                           role="status"
+                           aria-live="polite"
+                           aria-atomic="true"
+                           aria-busy="false">En attente d&rsquo;une sélection…</p>
+                    </div>
+                    <div id="bjlg-restore-history-debug-wrapper" style="display:none;">
+                        <h3><span class="dashicons dashicons-info" aria-hidden="true"></span> Détails techniques</h3>
+                        <pre id="bjlg-restore-history-debug" class="bjlg-log-textarea"></pre>
+                    </div>
+                </section>
+
+                <section id="bjlg-restore-tab-staging"
+                         class="bjlg-restore-tab"
+                         role="tabpanel"
+                         aria-labelledby="bjlg-restore-tab-button-staging"
+                         hidden>
+                    <h3 class="screen-reader-text">Cloner vers un environnement de test</h3>
+                    <p>Préparez un environnement de test basé sur une sauvegarde existante. L&rsquo;archive sera extraite dans un sous-dossier dédié (<code>bjlg-staging/&lt;sous-domaine&gt;</code>).</p>
+                    <form id="bjlg-staging-clone-form" method="post">
+                        <table class="form-table">
+                            <tbody>
+                                <tr>
+                                    <th scope="row"><label for="bjlg-staging-backup-select">Sauvegarde source</label></th>
+                                    <td>
+                                        <div class="bjlg-field-control">
+                                            <select id="bjlg-staging-backup-select" name="staging_backup" required data-placeholder="Sélectionnez une sauvegarde…">
+                                                <option value="">Sélectionnez une sauvegarde…</option>
+                                            </select>
+                                            <button type="button" class="button button-secondary" id="bjlg-staging-refresh-button">
+                                                <span class="dashicons dashicons-update" aria-hidden="true"></span> Actualiser
+                                            </button>
+                                            <p class="description">Les archives sont clonées depuis le stockage local. Les sauvegardes chiffrées nécessitent un mot de passe.</p>
+                                        </div>
+                                        <div class="bjlg-backup-meta" id="bjlg-staging-backup-meta" data-empty-text="Aucune sauvegarde sélectionnée." aria-live="polite"></div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row"><label for="bjlg-staging-subdomain">Sous-domaine / identifiant</label></th>
+                                    <td>
+                                        <div class="bjlg-field-control">
+                                            <input type="text"
+                                                   id="bjlg-staging-subdomain"
+                                                   name="staging_subdomain"
+                                                   class="regular-text"
+                                                   required
+                                                   pattern="[a-z0-9-]+"
+                                                   placeholder="ex : preprod">
+                                            <p class="description">Ce nom servira à créer le répertoire <code>bjlg-staging/&lt;nom&gt;</code> et à suggérer l&rsquo;URL <code><?php echo esc_html(home_url()); ?></code> avec le sous-domaine renseigné.</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row"><label for="bjlg-staging-password">Mot de passe</label></th>
+                                    <td>
+                                        <div class="bjlg-field-control">
+                                            <input type="password"
+                                                   id="bjlg-staging-password"
+                                                   name="password"
+                                                   class="regular-text"
+                                                   autocomplete="current-password"
+                                                   aria-describedby="bjlg-staging-password-help"
+                                                   placeholder="Requis pour les archives chiffrées">
+                                            <p class="description"
+                                               id="bjlg-staging-password-help"
+                                               data-default-text="<?php echo esc_attr('Requis uniquement pour les sauvegardes chiffrées.'); ?>"
+                                               data-encrypted-text="<?php echo esc_attr('Mot de passe obligatoire : cette sauvegarde est chiffrée (.zip.enc).'); ?>">
+                                                Requis uniquement pour les sauvegardes chiffrées.
+                                            </p>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">Options</th>
+                                    <td>
+                                        <label><input type="checkbox" name="staging_overwrite" value="1"> Remplacer l&rsquo;environnement s&rsquo;il existe déjà</label>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div id="bjlg-staging-errors" class="notice notice-error" style="display:none;" role="alert"></div>
+                        <p class="submit">
+                            <button type="submit" class="button button-primary"><span class="dashicons dashicons-migrate" aria-hidden="true"></span> Cloner la sauvegarde</button>
+                        </p>
+                    </form>
+                    <div id="bjlg-staging-status" class="bjlg-restore-status" style="display:none;">
+                        <h3>Progression du clonage</h3>
+                        <div class="bjlg-progress-bar"><div
+                                class="bjlg-progress-bar-inner"
+                                id="bjlg-staging-progress-bar"
+                                role="progressbar"
+                                aria-valuemin="0"
+                                aria-valuemax="100"
+                                aria-valuenow="0"
+                                aria-valuetext="0%"
+                                aria-live="off"
+                                aria-atomic="true"
+                                aria-busy="false">0%</div></div>
+                        <p id="bjlg-staging-status-text"
+                           role="status"
+                           aria-live="polite"
+                           aria-atomic="true"
+                           aria-busy="false">En attente de démarrage…</p>
+                    </div>
+                    <div id="bjlg-staging-debug-wrapper" style="display:none;">
+                        <h3><span class="dashicons dashicons-info" aria-hidden="true"></span> Détails techniques</h3>
+                        <pre id="bjlg-staging-debug" class="bjlg-log-textarea"></pre>
+                    </div>
+                </section>
             </div>
         </div>
         <?php

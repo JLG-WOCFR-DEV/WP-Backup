@@ -1,5 +1,703 @@
 jQuery(document).ready(function($) {
 
+    const bjlgRestSettings = (typeof bjlg_ajax === 'object' && bjlg_ajax) ? bjlg_ajax : {};
+    const bjlgBackupsEndpoint = typeof bjlgRestSettings.rest_backups === 'string' && bjlgRestSettings.rest_backups
+        ? bjlgRestSettings.rest_backups
+        : '';
+
+    function bjlgFormatBytes(bytes) {
+        const value = Number(bytes);
+        if (!Number.isFinite(value) || value < 0) {
+            return '—';
+        }
+
+        const units = ['o', 'Ko', 'Mo', 'Go', 'To', 'Po'];
+        let index = 0;
+        let result = value;
+
+        while (result >= 1024 && index < units.length - 1) {
+            result /= 1024;
+            index += 1;
+        }
+
+        const display = result >= 10 ? Math.round(result) : Math.round(result * 10) / 10;
+        return `${display} ${units[index]}`;
+    }
+
+    function bjlgFormatDate(isoString) {
+        if (typeof isoString !== 'string' || isoString.trim() === '') {
+            return '—';
+        }
+
+        const date = new Date(isoString);
+        if (Number.isNaN(date.getTime())) {
+            return isoString;
+        }
+
+        try {
+            return new Intl.DateTimeFormat(undefined, {
+                dateStyle: 'medium',
+                timeStyle: 'short'
+            }).format(date);
+        } catch (error) {
+            return date.toLocaleString();
+        }
+    }
+
+    function bjlgExtractValidationErrors(payload) {
+        if (!payload || typeof payload !== 'object') {
+            return null;
+        }
+
+        if (payload.errors && typeof payload.errors === 'object') {
+            return payload.errors;
+        }
+
+        if (payload.validation_errors && typeof payload.validation_errors === 'object') {
+            return payload.validation_errors;
+        }
+
+        if (payload.field_errors && typeof payload.field_errors === 'object') {
+            return payload.field_errors;
+        }
+
+        return null;
+    }
+
+    function bjlgParseValidationErrors(rawErrors) {
+        const result = {
+            general: [],
+            fields: {}
+        };
+
+        if (!rawErrors) {
+            return result;
+        }
+
+        const collectMessages = function(target, value) {
+            if (Array.isArray(value)) {
+                value.forEach(function(item) { collectMessages(target, item); });
+                return;
+            }
+
+            if (!value) {
+                return;
+            }
+
+            if (typeof value === 'string') {
+                const trimmed = value.trim();
+                if (trimmed !== '') {
+                    target.push(trimmed);
+                }
+                return;
+            }
+
+            if (typeof value === 'object' && typeof value.message === 'string') {
+                const trimmed = value.message.trim();
+                if (trimmed !== '') {
+                    target.push(trimmed);
+                }
+            }
+        };
+
+        if (typeof rawErrors === 'string' || Array.isArray(rawErrors)) {
+            collectMessages(result.general, rawErrors);
+            return result;
+        }
+
+        if (typeof rawErrors === 'object') {
+            $.each(rawErrors, function(key, value) {
+                if (key === undefined || key === null) {
+                    collectMessages(result.general, value);
+                    return;
+                }
+
+                const normalizedKey = String(key);
+                const generalKeys = ['', '_', '_general', '_global', '*', 'general', 'messages'];
+
+                if (generalKeys.indexOf(normalizedKey) !== -1 || !Number.isNaN(Number(normalizedKey))) {
+                    collectMessages(result.general, value);
+                    return;
+                }
+
+                const messages = [];
+                collectMessages(messages, value);
+
+                if (messages.length) {
+                    result.fields[normalizedKey] = messages;
+                }
+            });
+        }
+
+        return result;
+    }
+
+    function bjlgClearFormErrors($form, $errorNotice, errorFieldClass) {
+        if ($errorNotice && $errorNotice.length) {
+            $errorNotice.hide().empty();
+        }
+
+        if ($form && $form.length) {
+            if (errorFieldClass) {
+                $form.find('.' + errorFieldClass)
+                    .removeClass(errorFieldClass)
+                    .removeAttr('aria-invalid');
+            }
+            $form.find('.bjlg-field-error').remove();
+        }
+    }
+
+    function bjlgDisplayFormErrors($form, $errorNotice, message, rawErrors, errorFieldClass) {
+        const parsed = bjlgParseValidationErrors(rawErrors);
+        const summaryItems = [];
+        const seen = new Set();
+
+        const appendSummary = function(text) {
+            if (typeof text !== 'string') {
+                return;
+            }
+
+            const trimmed = text.trim();
+            if (trimmed === '' || seen.has(trimmed)) {
+                return;
+            }
+
+            seen.add(trimmed);
+            summaryItems.push(trimmed);
+        };
+
+        if ($errorNotice && $errorNotice.length) {
+            $errorNotice.empty();
+
+            if (typeof message === 'string' && message.trim() !== '') {
+                $('<p/>').text(message).appendTo($errorNotice);
+            }
+
+            parsed.general.forEach(appendSummary);
+
+            $.each(parsed.fields, function(field, messages) {
+                messages.forEach(appendSummary);
+            });
+
+            if (summaryItems.length) {
+                const $list = $('<ul/>');
+                summaryItems.forEach(function(item) {
+                    $('<li/>').text(item).appendTo($list);
+                });
+                $errorNotice.append($list);
+            }
+
+            if ($errorNotice.children().length) {
+                $errorNotice.show();
+            }
+        }
+
+        if ($form && $form.length && errorFieldClass) {
+            $.each(parsed.fields, function(fieldName, messages) {
+                const $field = $form.find('[name="' + fieldName + '"]');
+                if (!$field.length) {
+                    return;
+                }
+
+                $field.addClass(errorFieldClass).attr('aria-invalid', 'true');
+
+                if (!messages || !messages.length) {
+                    return;
+                }
+
+                const text = messages[0];
+                if (typeof text !== 'string') {
+                    return;
+                }
+
+                $('<p class="bjlg-field-error description" style="color:#b32d2e; margin-top:4px;"></p>')
+                    .text(text)
+                    .insertAfter($field.last());
+            });
+        }
+    }
+
+    function bjlgCreateDebugLogger($output) {
+        let log = '';
+
+        return {
+            reset: function() {
+                log = '';
+                if ($output && $output.length) {
+                    $output.text('');
+                }
+            },
+            append: function(message, payload) {
+                if (!$output || !$output.length) {
+                    return;
+                }
+
+                if (log.length) {
+                    log += "\n\n";
+                }
+
+                log += String(message || '');
+
+                if (typeof payload !== 'undefined') {
+                    log += "\n";
+                    if (typeof payload === 'string') {
+                        log += payload;
+                    } else {
+                        try {
+                            log += JSON.stringify(payload, null, 2);
+                        } catch (error) {
+                            log += String(payload);
+                        }
+                    }
+                }
+
+                $output.text(log);
+            }
+        };
+    }
+
+    function bjlgUpdateProgressBar($progressBar, progressValue) {
+        if (!$progressBar || !$progressBar.length) {
+            return null;
+        }
+
+        if (Number.isFinite(progressValue)) {
+            const clamped = Math.max(0, Math.min(100, progressValue));
+            const isInteger = Number.isInteger(clamped);
+            const display = isInteger ? String(clamped) : clamped.toFixed(1).replace(/\.0$/, '');
+            const percentText = display + '%';
+
+            $progressBar
+                .css('width', percentText)
+                .text(percentText)
+                .attr('aria-valuenow', String(clamped))
+                .attr('aria-valuetext', percentText);
+
+            return clamped;
+        }
+
+        if (typeof progressValue === 'string' && progressValue.trim() !== '') {
+            const textValue = progressValue.trim();
+            $progressBar
+                .text(textValue)
+                .removeAttr('aria-valuenow')
+                .attr('aria-valuetext', textValue);
+        }
+
+        return null;
+    }
+
+    function bjlgSetBusyState($statusText, $progressBar, isBusy) {
+        const busyValue = isBusy ? 'true' : 'false';
+        if ($statusText && $statusText.length) {
+            $statusText.attr('aria-busy', busyValue);
+        }
+        if ($progressBar && $progressBar.length) {
+            $progressBar.attr('aria-busy', busyValue);
+        }
+    }
+
+    function bjlgCreateTaskContext(config) {
+        const context = {
+            $form: config.$form,
+            $errorNotice: config.$errorNotice,
+            errorFieldClass: config.errorFieldClass || 'bjlg-input-error',
+            $statusWrapper: config.$statusWrapper,
+            $statusText: config.$statusText,
+            $progressBar: config.$progressBar,
+            $debugWrapper: config.$debugWrapper,
+            $debugOutput: config.$debugOutput
+        };
+
+        const logger = bjlgCreateDebugLogger(context.$debugOutput);
+
+        context.showStatus = function() {
+            if (context.$statusWrapper && context.$statusWrapper.length) {
+                context.$statusWrapper.show();
+            }
+        };
+
+        context.showDebug = function() {
+            if (context.$debugWrapper && context.$debugWrapper.length) {
+                context.$debugWrapper.show();
+            }
+        };
+
+        context.resetDebug = function() {
+            logger.reset();
+        };
+
+        context.appendDebug = function(message, payload) {
+            logger.append(message, payload);
+        };
+
+        context.setBusy = function(isBusy) {
+            bjlgSetBusyState(context.$statusText, context.$progressBar, isBusy);
+        };
+
+        context.updateProgress = function(progressValue) {
+            return bjlgUpdateProgressBar(context.$progressBar, progressValue);
+        };
+
+        context.setStatus = function(message) {
+            if (context.$statusText && context.$statusText.length) {
+                context.$statusText.text(typeof message === 'string' ? message : '');
+            }
+        };
+
+        context.clearErrors = function() {
+            bjlgClearFormErrors(context.$form, context.$errorNotice, context.errorFieldClass);
+        };
+
+        context.displayErrors = function(message, rawErrors) {
+            bjlgDisplayFormErrors(context.$form, context.$errorNotice, message, rawErrors, context.errorFieldClass);
+        };
+
+        return context;
+    }
+
+    function bjlgPollAjaxTask(options) {
+        const context = options.context;
+        const pollAction = options.pollAction;
+        const debugLabel = options.debugLabel || 'Mise à jour';
+        const intervalMs = options.interval || 3000;
+        const $submit = options.$submit;
+        const onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : null;
+        const onError = typeof options.onError === 'function' ? options.onError : null;
+
+        const interval = setInterval(function() {
+            $.ajax({
+                url: bjlg_ajax.ajax_url,
+                type: 'POST',
+                data: {
+                    action: pollAction,
+                    nonce: bjlg_ajax.nonce,
+                    task_id: options.taskId
+                }
+            }).done(function(response) {
+                context.appendDebug(debugLabel, response);
+
+                if (response.success && response.data) {
+                    const data = response.data;
+
+                    if (data.status_text) {
+                        context.setStatus(data.status_text);
+                    }
+
+                    context.setBusy(true);
+                    const progressValue = Number.parseFloat(data.progress);
+                    context.updateProgress(progressValue);
+
+                    if (data.status === 'error') {
+                        clearInterval(interval);
+                        context.setBusy(false);
+                        if ($submit && $submit.length) {
+                            $submit.prop('disabled', false);
+                        }
+                        const message = data.status_text || 'La tâche a échoué.';
+                        if (onError) {
+                            onError(message, data);
+                        }
+                    } else if (data.status === 'complete' || (Number.isFinite(progressValue) && progressValue >= 100)) {
+                        clearInterval(interval);
+                        context.setBusy(false);
+                        context.updateProgress(100);
+                        if ($submit && $submit.length) {
+                            $submit.prop('disabled', false);
+                        }
+                        if (onSuccess) {
+                            onSuccess(data);
+                        }
+                    }
+                } else {
+                    clearInterval(interval);
+                    context.setBusy(false);
+                    if ($submit && $submit.length) {
+                        $submit.prop('disabled', false);
+                    }
+                    const message = response && response.data && response.data.message
+                        ? response.data.message
+                        : 'Tâche introuvable.';
+                    if (onError) {
+                        onError(message, response ? response.data : null);
+                    }
+                }
+            }).fail(function(xhr) {
+                context.appendDebug('Erreur de communication (suivi)', {
+                    status: xhr ? xhr.status : 'inconnu',
+                    responseText: xhr ? xhr.responseText : 'Aucune réponse'
+                });
+                clearInterval(interval);
+                context.setBusy(false);
+                if ($submit && $submit.length) {
+                    $submit.prop('disabled', false);
+                }
+                const message = 'Erreur de communication lors du suivi de la tâche.';
+                if (onError) {
+                    onError(message, null);
+                }
+            });
+        }, intervalMs);
+    }
+
+    function bjlgStartTask(options) {
+        const context = options.context;
+        const requestData = options.requestData || {};
+        const $submit = options.$submit;
+        const startStatusText = options.startStatusText || 'Initialisation en cours...';
+        const debugHeader = options.debugHeader || '--- TÂCHE ---';
+        const pollAction = options.pollAction;
+        const pollDebugLabel = options.pollDebugLabel || 'Mise à jour';
+
+        context.setBusy(true);
+        context.setStatus(startStatusText);
+
+        const sanitizedRequestData = Object.assign({}, requestData);
+        if (Object.prototype.hasOwnProperty.call(sanitizedRequestData, 'password') && sanitizedRequestData.password) {
+            sanitizedRequestData.password = '***';
+        }
+
+        context.appendDebug(debugHeader, sanitizedRequestData);
+
+        $.ajax({
+            url: bjlg_ajax.ajax_url,
+            type: 'POST',
+            data: requestData
+        }).done(function(response) {
+            context.appendDebug('Réponse du serveur', response);
+
+            if (response.success && response.data && response.data.task_id) {
+                bjlgPollAjaxTask({
+                    context: context,
+                    taskId: response.data.task_id,
+                    pollAction: pollAction,
+                    debugLabel: pollDebugLabel,
+                    $submit: $submit,
+                    onSuccess: options.onSuccess,
+                    onError: function(message, data) {
+                        if (typeof options.onError === 'function') {
+                            options.onError(message, data);
+                        } else {
+                            context.displayErrors(message, bjlgExtractValidationErrors(data));
+                            context.setStatus('❌ ' + message);
+                        }
+                    }
+                });
+            } else {
+                const payload = response && response.data ? response.data : {};
+                const message = payload && payload.message
+                    ? payload.message
+                    : (options.defaultErrorMessage || 'Impossible de démarrer la tâche.');
+
+                if (typeof options.onError === 'function') {
+                    options.onError(message, payload);
+                } else {
+                    context.displayErrors(message, bjlgExtractValidationErrors(payload));
+                    context.setStatus('❌ ' + message);
+                }
+
+                context.setBusy(false);
+                if ($submit && $submit.length) {
+                    $submit.prop('disabled', false);
+                }
+            }
+        }).fail(function(xhr) {
+            context.appendDebug('Erreur de communication', {
+                status: xhr ? xhr.status : 'inconnu',
+                responseText: xhr ? xhr.responseText : 'Aucune réponse'
+            });
+
+            const message = options.communicationError || 'Erreur de communication avec le serveur.';
+
+            if (typeof options.onError === 'function') {
+                options.onError(message, null);
+            } else {
+                context.displayErrors(message);
+                context.setStatus('❌ ' + message);
+            }
+
+            context.setBusy(false);
+            if ($submit && $submit.length) {
+                $submit.prop('disabled', false);
+            }
+        });
+    }
+
+    const bjlgBackupCatalog = {
+        list: [],
+        map: new Map(),
+        pending: null
+    };
+
+    function bjlgPopulateBackupSelect($select, backups, options) {
+        if (!$select || !$select.length) {
+            return;
+        }
+
+        const previousValue = $select.val();
+        const placeholder = $select.data('placeholder') || 'Sélectionnez une sauvegarde…';
+        const excludePreRestore = options && options.excludePreRestore;
+
+        $select.empty();
+        $select.append($('<option/>', { value: '', text: placeholder }));
+
+        backups.forEach(function(backup) {
+            if (!backup || !backup.filename) {
+                return;
+            }
+
+            if (excludePreRestore && backup.type === 'pre-restore') {
+                return;
+            }
+
+            const parts = [backup.filename];
+            if (backup.created_at) {
+                parts.push('— ' + bjlgFormatDate(backup.created_at));
+            }
+
+            const $option = $('<option/>', {
+                value: backup.filename,
+                text: parts.join(' ')
+            });
+
+            if (backup.is_encrypted) {
+                $option.attr('data-encrypted', '1');
+            }
+
+            if (backup.created_at) {
+                $option.attr('data-created-at', backup.created_at);
+            }
+
+            $select.append($option);
+        });
+
+        if (previousValue && bjlgBackupCatalog.map.has(previousValue)) {
+            $select.val(previousValue);
+        }
+    }
+
+    function bjlgUpdateBackupMeta($container, backup) {
+        if (!$container || !$container.length) {
+            return;
+        }
+
+        const emptyText = $container.data('emptyText') || 'Aucune sauvegarde sélectionnée.';
+        $container.empty();
+
+        if (!backup) {
+            $('<p/>', { class: 'description', text: emptyText }).appendTo($container);
+            return;
+        }
+
+        const $list = $('<dl/>', { class: 'bjlg-backup-meta__list' });
+        const addItem = function(label, value) {
+            $('<dt/>', { text: label }).appendTo($list);
+            $('<dd/>', { text: value }).appendTo($list);
+        };
+
+        addItem('Fichier', backup.filename);
+
+        if (backup.created_at) {
+            addItem('Date', bjlgFormatDate(backup.created_at));
+        }
+
+        if (Number.isFinite(backup.size)) {
+            addItem('Taille', bjlgFormatBytes(backup.size));
+        } else if (backup.size_formatted) {
+            addItem('Taille', backup.size_formatted);
+        }
+
+        if (Array.isArray(backup.components) && backup.components.length) {
+            addItem('Composants', backup.components.join(', '));
+        }
+
+        addItem('Statut', backup.is_encrypted ? 'Chiffré' : 'Standard');
+
+        $container.append($list);
+    }
+
+    function bjlgUpdateComponentAvailability($form, backup) {
+        if (!$form || !$form.length) {
+            return;
+        }
+
+        const availableComponents = Array.isArray(backup && backup.components)
+            ? new Set(backup.components.map(function(component) {
+                return String(component).toLowerCase();
+            }))
+            : null;
+
+        const hasManifest = availableComponents instanceof Set && availableComponents.size > 0;
+
+        $form.find('input[name="restore_components[]"]').each(function() {
+            const $checkbox = $(this);
+            const value = ($checkbox.val() || '').toLowerCase();
+
+            if (!value) {
+                return;
+            }
+
+            if (!hasManifest) {
+                $checkbox.prop('disabled', false);
+                return;
+            }
+
+            if (availableComponents.has(value)) {
+                $checkbox.prop('disabled', false);
+            } else {
+                $checkbox.prop('checked', false).prop('disabled', true);
+            }
+        });
+    }
+
+    function bjlgLoadBackupCatalog(forceRefresh) {
+        if (!bjlgBackupsEndpoint) {
+            return $.Deferred().reject(new Error('endpoint_missing')).promise();
+        }
+
+        if (!forceRefresh && bjlgBackupCatalog.list.length) {
+            return $.Deferred().resolve(bjlgBackupCatalog.list).promise();
+        }
+
+        if (bjlgBackupCatalog.pending) {
+            return bjlgBackupCatalog.pending;
+        }
+
+        const request = $.ajax({
+            url: bjlgBackupsEndpoint,
+            method: 'GET',
+            dataType: 'json',
+            beforeSend: function(xhr) {
+                if (bjlgRestSettings.rest_nonce) {
+                    xhr.setRequestHeader('X-WP-Nonce', bjlgRestSettings.rest_nonce);
+                }
+            }
+        }).then(function(response) {
+            const backups = response && Array.isArray(response.backups) ? response.backups : [];
+            bjlgBackupCatalog.list = backups;
+            bjlgBackupCatalog.map = new Map();
+            backups.forEach(function(item) {
+                if (item && item.filename) {
+                    bjlgBackupCatalog.map.set(item.filename, item);
+                }
+            });
+            return backups;
+        }).always(function() {
+            bjlgBackupCatalog.pending = null;
+        });
+
+        bjlgBackupCatalog.pending = request;
+        return request;
+    }
+
+    function bjlgGetBackupMetadata(filename) {
+        if (!filename) {
+            return null;
+        }
+
+        return bjlgBackupCatalog.map.get(filename) || null;
+    }
+
     // --- DASHBOARD OVERVIEW ---
     (function setupDashboardOverview() {
         const $overview = $('.bjlg-dashboard-overview');
@@ -2443,8 +3141,6 @@ jQuery(document).ready(function($) {
         requestBackups();
     })();
 
-    // La navigation par onglets est gérée par PHP via rechargement de page.
-
     // --- GESTIONNAIRE DE SAUVEGARDE ASYNCHRONE ---
     $('#bjlg-backup-creation-form').on('submit', function(e) {
         e.preventDefault();
@@ -2615,525 +3311,576 @@ jQuery(document).ready(function($) {
         }
     });
     
-    // --- GESTIONNAIRE DE RESTAURATION ASYNCHRONE ---
-    $('#bjlg-restore-form').on('submit', function(e) {
-        e.preventDefault();
+    // --- RESTAURATION & CLONAGE ---
+    (function setupRestoreInterfaces() {
+        setupSubTabs();
+        setupUploadRestoreForm();
+        setupHistoryRestoreForm();
+        setupStagingCloneForm();
 
-        const $form = $(this);
-        const $button = $form.find('button[type="submit"]');
-        const $statusWrapper = $('#bjlg-restore-status');
-        const $statusText = $('#bjlg-restore-status-text');
-        const $progressBar = $('#bjlg-restore-progress-bar');
-        const $debugWrapper = $('#bjlg-restore-debug-wrapper');
-        const $debugOutput = $('#bjlg-restore-ajax-debug');
-        const fileInput = document.getElementById('bjlg-restore-file-input');
-        const passwordInput = document.getElementById('bjlg-restore-password');
-        const passwordHelp = document.getElementById('bjlg-restore-password-help');
-        const passwordHelpDefaultText = passwordHelp
-            ? (passwordHelp.getAttribute('data-default-text') || passwordHelp.textContent.trim())
-            : '';
-        const passwordHelpEncryptedText = passwordHelp
-            ? (passwordHelp.getAttribute('data-encrypted-text') || passwordHelpDefaultText)
-            : '';
-        const $errorNotice = $('#bjlg-restore-errors');
-        const errorFieldClass = 'bjlg-input-error';
-
-        function setRestoreBusyState(isBusy) {
-            const busyValue = isBusy ? 'true' : 'false';
-            $statusText.attr('aria-busy', busyValue);
-            $progressBar.attr('aria-busy', busyValue);
-        }
-
-        function updateRestoreProgress(progressValue) {
-            if (Number.isFinite(progressValue)) {
-                const clamped = Math.max(0, Math.min(100, progressValue));
-                const displayValue = Number.isInteger(clamped)
-                    ? String(clamped)
-                    : clamped.toFixed(1).replace(/\.0$/, '');
-                const percentText = displayValue + '%';
-                $progressBar
-                    .css('width', percentText)
-                    .text(percentText)
-                    .attr('aria-valuenow', String(clamped))
-                    .attr('aria-valuetext', percentText);
-                return clamped;
-            }
-
-            if (typeof progressValue === 'string' && progressValue.trim() !== '') {
-                const textValue = progressValue.trim();
-                $progressBar
-                    .text(textValue)
-                    .removeAttr('aria-valuenow')
-                    .attr('aria-valuetext', textValue);
-            }
-
-            return null;
-        }
-
-        function setRestoreStatusText(message) {
-            const textValue = typeof message === 'string' ? message.trim() : '';
-            $statusText.text(textValue === '' ? '' : textValue);
-        }
-
-        function applyPasswordHelpText(text) {
-            if (!passwordHelp) {
+        function setupSubTabs() {
+            const $nav = $('.bjlg-subtab-nav');
+            if (!$nav.length) {
                 return;
             }
 
-            const resolved = typeof text === 'string' && text.trim() !== ''
-                ? text.trim()
-                : passwordHelpDefaultText;
+            const $tabs = $nav.find('.nav-tab');
+            const $panels = $('.bjlg-restore-tab');
 
-            passwordHelp.textContent = resolved;
+            $tabs.on('click', function(event) {
+                event.preventDefault();
+
+                const $tab = $(this);
+                const targetId = $tab.data('tabTarget');
+                if (!targetId) {
+                    return;
+                }
+
+                const $target = $('#' + targetId);
+                if (!$target.length) {
+                    return;
+                }
+
+                $tabs.removeClass('nav-tab-active').attr('aria-selected', 'false');
+                $tab.addClass('nav-tab-active').attr('aria-selected', 'true');
+
+                $panels.each(function() {
+                    const $panel = $(this);
+                    if ($panel.attr('id') === targetId) {
+                        $panel.addClass('is-active').removeAttr('hidden');
+                    } else {
+                        $panel.removeClass('is-active').attr('hidden', 'hidden');
+                    }
+                });
+            });
         }
 
-        function updatePasswordRequirement() {
-            if (!passwordInput) {
+        function setupUploadRestoreForm() {
+            const $form = $('#bjlg-restore-form');
+            if (!$form.length) {
                 return;
             }
 
-            let requiresPassword = false;
+            const context = bjlgCreateTaskContext({
+                $form: $form,
+                $errorNotice: $('#bjlg-restore-errors'),
+                $statusWrapper: $('#bjlg-restore-status'),
+                $statusText: $('#bjlg-restore-status-text'),
+                $progressBar: $('#bjlg-restore-progress-bar'),
+                $debugWrapper: $('#bjlg-restore-debug-wrapper'),
+                $debugOutput: $('#bjlg-restore-ajax-debug')
+            });
 
-            if (fileInput && fileInput.files && fileInput.files.length > 0) {
+            const fileInput = document.getElementById('bjlg-restore-file-input');
+            const $passwordInput = $('#bjlg-restore-password');
+            const $passwordHelp = $('#bjlg-restore-password-help');
+            const passwordDefaultText = $passwordHelp.length ? ($passwordHelp.attr('data-default-text') || $passwordHelp.text()) : '';
+            const passwordEncryptedText = $passwordHelp.length ? ($passwordHelp.attr('data-encrypted-text') || passwordDefaultText) : '';
+
+            function setPasswordRequirement(requiresPassword) {
+                if (!$passwordInput.length) {
+                    return;
+                }
+
+                if (requiresPassword) {
+                    $passwordInput.attr('required', 'required').attr('aria-required', 'true');
+                    if ($passwordHelp.length) {
+                        $passwordHelp.text(passwordEncryptedText);
+                    }
+                } else {
+                    $passwordInput.removeAttr('required').removeAttr('aria-required');
+                    if ($passwordHelp.length) {
+                        $passwordHelp.text(passwordDefaultText);
+                    }
+                }
+            }
+
+            function updatePasswordRequirement() {
+                if (!fileInput || !fileInput.files || !fileInput.files.length) {
+                    setPasswordRequirement(false);
+                    return;
+                }
+
                 const filename = fileInput.files[0].name || '';
-                requiresPassword = /\.zip\.enc$/i.test(filename.trim());
+                setPasswordRequirement(/\.zip\.enc$/i.test(filename));
             }
 
-            if (requiresPassword) {
-                passwordInput.setAttribute('required', 'required');
-                passwordInput.setAttribute('aria-required', 'true');
-                applyPasswordHelpText(passwordHelpEncryptedText);
-            } else {
-                passwordInput.removeAttribute('required');
-                passwordInput.removeAttribute('aria-required');
-                applyPasswordHelpText(passwordHelpDefaultText);
-            }
-        }
-
-        if (fileInput) {
-            fileInput.addEventListener('change', updatePasswordRequirement);
-        }
-
-        if (passwordInput) {
-            passwordInput.addEventListener('input', function() {
-                $(this)
-                    .removeClass(errorFieldClass)
-                    .removeAttr('aria-invalid');
-                $(this).nextAll('.bjlg-field-error').remove();
-            });
-        }
-
-        updatePasswordRequirement();
-
-        function getValidationErrors(payload) {
-            if (!payload || typeof payload !== 'object') {
-                return null;
+            if (fileInput) {
+                fileInput.addEventListener('change', function() {
+                    updatePasswordRequirement();
+                    context.clearErrors();
+                });
             }
 
-            if (payload.errors && typeof payload.errors === 'object') {
-                return payload.errors;
+            if ($passwordInput.length) {
+                $passwordInput.on('input', function() {
+                    $(this).removeClass(context.errorFieldClass).removeAttr('aria-invalid');
+                    $(this).nextAll('.bjlg-field-error').remove();
+                });
             }
 
-            if (payload.validation_errors && typeof payload.validation_errors === 'object') {
-                return payload.validation_errors;
-            }
+            updatePasswordRequirement();
 
-            if (payload.field_errors && typeof payload.field_errors === 'object') {
-                return payload.field_errors;
-            }
+            $form.on('submit', function(event) {
+                event.preventDefault();
+                context.clearErrors();
 
-            return null;
-        }
-
-        function parseErrors(rawErrors) {
-            const result = {
-                general: [],
-                fields: {}
-            };
-
-            if (!rawErrors) {
-                return result;
-            }
-
-            const collectMessages = function(target, value) {
-                if (Array.isArray(value)) {
-                    value.forEach(function(item) {
-                        collectMessages(target, item);
+                if (!fileInput || !fileInput.files || !fileInput.files.length) {
+                    context.displayErrors('Veuillez sélectionner un fichier de sauvegarde.', {
+                        restore_file: ['Choisissez un fichier à téléverser.']
                     });
                     return;
                 }
 
-                if (!value) {
-                    return;
-                }
+                const file = fileInput.files[0];
+                const requiresPassword = /\.zip\.enc$/i.test(file.name || '');
+                const passwordValue = $passwordInput.length ? $passwordInput.val().trim() : '';
 
-                if (typeof value === 'string') {
-                    const trimmed = value.trim();
-                    if (trimmed !== '') {
-                        target.push(trimmed);
-                    }
-                    return;
-                }
-
-                if (typeof value === 'object' && typeof value.message === 'string') {
-                    const trimmed = value.message.trim();
-                    if (trimmed !== '') {
-                        target.push(trimmed);
-                    }
-                }
-            };
-
-            if (typeof rawErrors === 'string' || Array.isArray(rawErrors)) {
-                collectMessages(result.general, rawErrors);
-                return result;
-            }
-
-            if (typeof rawErrors === 'object') {
-                $.each(rawErrors, function(key, value) {
-                    if (key === undefined || key === null) {
-                        collectMessages(result.general, value);
-                        return;
-                    }
-
-                    const normalizedKey = String(key);
-                    const generalKeys = ['', '_', '_general', '_global', '*', 'general', 'messages'];
-
-                    if (generalKeys.indexOf(normalizedKey) !== -1 || !Number.isNaN(Number(normalizedKey))) {
-                        collectMessages(result.general, value);
-                        return;
-                    }
-
-                    const messages = [];
-                    collectMessages(messages, value);
-
-                    if (messages.length) {
-                        result.fields[normalizedKey] = messages;
-                    }
-                });
-            }
-
-            return result;
-        }
-
-        function clearRestoreErrors() {
-            if ($errorNotice.length) {
-                $errorNotice.hide().empty();
-            }
-
-            $form.find('.bjlg-field-error').remove();
-            $form.find('.' + errorFieldClass)
-                .removeClass(errorFieldClass)
-                .removeAttr('aria-invalid');
-        }
-
-        function displayRestoreErrors(message, rawErrors) {
-            const parsed = parseErrors(rawErrors);
-            const summaryItems = [];
-            const seenMessages = new Set();
-
-            const appendSummary = function(text) {
-                if (!text || typeof text !== 'string') {
-                    return;
-                }
-
-                const trimmed = text.trim();
-                if (trimmed === '' || seenMessages.has(trimmed)) {
-                    return;
-                }
-
-                seenMessages.add(trimmed);
-                summaryItems.push(trimmed);
-            };
-
-            if ($errorNotice.length) {
-                $errorNotice.empty();
-
-                if (message && message.trim() !== '') {
-                    $('<p/>').text(message).appendTo($errorNotice);
-                }
-
-                parsed.general.forEach(appendSummary);
-
-                $.each(parsed.fields, function(field, messages) {
-                    messages.forEach(appendSummary);
-                });
-
-                if (summaryItems.length) {
-                    const $list = $('<ul/>');
-                    summaryItems.forEach(function(item) {
-                        $('<li/>').text(item).appendTo($list);
+                if (requiresPassword && passwordValue === '') {
+                    context.displayErrors('Un mot de passe est requis pour cette sauvegarde chiffrée.', {
+                        password: ['Renseignez le mot de passe associé à l’archive.']
                     });
-                    $errorNotice.append($list);
-                }
-
-                if ($errorNotice.children().length) {
-                    $errorNotice.show();
-                }
-            }
-
-            $.each(parsed.fields, function(fieldName, messages) {
-                const $field = $form.find('[name="' + fieldName + '"]');
-                if (!$field.length) {
                     return;
                 }
 
-                $field.addClass(errorFieldClass).attr('aria-invalid', 'true');
+                const createRestorePoint = $form.find('input[name="create_backup_before_restore"]').is(':checked');
+                const $submit = $form.find('button[type="submit"]');
 
-                if (!messages || !messages.length) {
-                    return;
-                }
+                $submit.prop('disabled', true);
+                context.showStatus();
+                context.showDebug();
+                context.resetDebug();
+                context.updateProgress(0);
+                context.setStatus('Téléversement en cours...');
+                context.setBusy(true);
 
-                const messageText = messages[0];
-                if (!messageText || typeof messageText !== 'string') {
-                    return;
-                }
+                const formData = new FormData();
+                formData.append('action', 'bjlg_upload_restore_file');
+                formData.append('nonce', bjlg_ajax.nonce);
+                formData.append('restore_file', file);
 
-                $('<p class="bjlg-field-error description" style="color:#b32d2e; margin-top:4px;"></p>')
-                    .text(messageText)
-                    .insertAfter($field.last());
-            });
-        }
-
-        clearRestoreErrors();
-
-        let restoreDebugReport = '';
-        const appendRestoreDebug = function(message, payload) {
-            if (!$debugOutput.length) {
-                return;
-            }
-
-            if (restoreDebugReport.length) {
-                restoreDebugReport += "\n\n";
-            }
-
-            restoreDebugReport += message;
-
-            if (typeof payload !== 'undefined') {
-                restoreDebugReport += "\n";
-                if (typeof payload === 'string') {
-                    restoreDebugReport += payload;
-                } else {
-                    try {
-                        restoreDebugReport += JSON.stringify(payload, null, 2);
-                    } catch (error) {
-                        restoreDebugReport += String(payload);
-                    }
-                }
-            }
-
-            $debugOutput.text(restoreDebugReport);
-        };
-
-        if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
-            alert('Veuillez sélectionner un fichier de sauvegarde à téléverser.');
-            return;
-        }
-
-        const createRestorePoint = $form
-            .find('input[name="create_backup_before_restore"]')
-            .is(':checked');
-
-        $button.prop('disabled', true);
-        $statusWrapper.show();
-        setRestoreBusyState(true);
-        setRestoreStatusText('Téléversement du fichier en cours...');
-        updateRestoreProgress(0);
-        if ($debugWrapper.length) {
-            $debugWrapper.show();
-        }
-        if ($debugOutput.length) {
-            restoreDebugReport = '';
-            $debugOutput.text('');
-        }
-
-        const formData = new FormData();
-        formData.append('action', 'bjlg_upload_restore_file');
-        formData.append('nonce', bjlg_ajax.nonce);
-        formData.append('restore_file', fileInput.files[0]);
-
-        if ($debugOutput.length) {
-            appendRestoreDebug(
-                '--- 1. TÉLÉVERSEMENT DU FICHIER ---\nRequête envoyée (métadonnées)',
-                {
-                    filename: fileInput.files[0].name,
-                    size: fileInput.files[0].size,
-                    type: fileInput.files[0].type || 'inconnu',
+                context.appendDebug('--- TÉLÉVERSEMENT DU FICHIER ---
+Métadonnées', {
+                    filename: file.name,
+                    size: file.size,
+                    type: file.type || 'inconnu',
                     create_backup_before_restore: createRestorePoint
-                }
-            );
-        }
+                });
 
-        $.ajax({
-            url: bjlg_ajax.ajax_url,
-            type: 'POST',
-            data: formData,
-            contentType: false,
-            processData: false
-        })
-        .done(function(response) {
-            appendRestoreDebug('Réponse du serveur (téléversement)', response);
-            if (response.success && response.data && response.data.filename) {
-                setRestoreStatusText('Fichier téléversé. Préparation de la restauration...');
-                runRestore(response.data.filename, createRestorePoint);
-            } else {
-                const payload = response && response.data ? response.data : {};
-                const message = payload && payload.message
-                    ? payload.message
-                    : 'Réponse invalide du serveur.';
-                displayRestoreErrors(message, getValidationErrors(payload));
-                setRestoreBusyState(false);
-                setRestoreStatusText('❌ ' + message);
-                $button.prop('disabled', false);
-            }
-        })
-        .fail(function(xhr) {
-            appendRestoreDebug(
-                'Erreur de communication (téléversement)',
-                {
-                    status: xhr ? xhr.status : 'inconnu',
-                    responseText: xhr ? xhr.responseText : 'Aucune réponse',
-                    message: xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
-                        ? xhr.responseJSON.data.message
-                        : undefined
-                }
-            );
-            let errorMessage = 'Erreur de communication lors du téléversement.';
-            if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
-                errorMessage += ' ' + xhr.responseJSON.data.message;
-            }
-            const errors = xhr && xhr.responseJSON ? getValidationErrors(xhr.responseJSON.data) : null;
-            displayRestoreErrors(errorMessage, errors);
-            setRestoreBusyState(false);
-            setRestoreStatusText('❌ ' + errorMessage);
-            $button.prop('disabled', false);
-        });
-
-        function runRestore(filename, createRestorePointChecked) {
-            const requestData = {
-                action: 'bjlg_run_restore',
-                nonce: bjlg_ajax.nonce,
-                filename: filename,
-                create_backup_before_restore: createRestorePointChecked ? 1 : 0,
-                password: passwordInput ? passwordInput.value : ''
-            };
-
-            setRestoreBusyState(true);
-            setRestoreStatusText('Initialisation de la restauration...');
-            appendRestoreDebug('--- 2. DÉMARRAGE DE LA RESTAURATION ---\nRequête envoyée', requestData);
-
-            $.ajax({
-                url: bjlg_ajax.ajax_url,
-                type: 'POST',
-                data: requestData
-            })
-            .done(function(response) {
-                appendRestoreDebug('Réponse du serveur (démarrage restauration)', response);
-                if (response.success && response.data && response.data.task_id) {
-                    pollRestoreProgress(response.data.task_id);
-                } else {
-                    const payload = response && response.data ? response.data : {};
-                    const message = payload && payload.message
-                        ? payload.message
-                        : 'Impossible de démarrer la restauration.';
-                    displayRestoreErrors(message, getValidationErrors(payload));
-                    setRestoreBusyState(false);
-                    setRestoreStatusText('❌ ' + message);
-                    $button.prop('disabled', false);
-                }
-            })
-            .fail(function(xhr) {
-                appendRestoreDebug(
-                    'Erreur de communication (démarrage restauration)',
-                    {
-                        status: xhr ? xhr.status : 'inconnu',
-                        responseText: xhr ? xhr.responseText : 'Aucune réponse',
-                        message: xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message
-                            ? xhr.responseJSON.data.message
-                            : undefined
-                    }
-                );
-                let errorMessage = 'Erreur de communication lors du démarrage de la restauration.';
-                if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
-                    errorMessage += ' ' + xhr.responseJSON.data.message;
-                }
-                const errors = xhr && xhr.responseJSON ? getValidationErrors(xhr.responseJSON.data) : null;
-                displayRestoreErrors(errorMessage, errors);
-                setRestoreBusyState(false);
-                setRestoreStatusText('❌ ' + errorMessage);
-                $button.prop('disabled', false);
-            });
-        }
-
-        function pollRestoreProgress(taskId) {
-            appendRestoreDebug('--- 3. SUIVI DE LA RESTAURATION ---\nRequête envoyée', {
-                action: 'bjlg_check_restore_progress',
-                nonce: '***',
-                task_id: taskId
-            });
-            const interval = setInterval(function() {
                 $.ajax({
                     url: bjlg_ajax.ajax_url,
                     type: 'POST',
-                    data: {
-                        action: 'bjlg_check_restore_progress',
-                        nonce: bjlg_ajax.nonce,
-                        task_id: taskId
-                    }
-                })
-                .done(function(response) {
-                    appendRestoreDebug('Mise à jour progression', response);
-                    if (response.success && response.data) {
-                        const data = response.data;
+                    data: formData,
+                    contentType: false,
+                    processData: false
+                }).done(function(response) {
+                    context.appendDebug('Réponse du serveur (téléversement)', response);
 
-                        if (data.status_text) {
-                            setRestoreStatusText(data.status_text);
-                        }
+                    if (response.success && response.data && response.data.filename) {
+                        const requestData = {
+                            action: 'bjlg_run_restore',
+                            nonce: bjlg_ajax.nonce,
+                            filename: response.data.filename,
+                            create_backup_before_restore: createRestorePoint ? 1 : 0,
+                            password: $passwordInput.length ? $passwordInput.val() : ''
+                        };
 
-                        setRestoreBusyState(true);
+                        context.updateProgress(5);
+                        context.setStatus('Initialisation de la restauration...');
 
-                        const progressValue = Number.parseFloat(data.progress);
-                        updateRestoreProgress(progressValue);
-
-                        if (data.status === 'error') {
-                            clearInterval(interval);
-                            const message = data.status_text || 'La restauration a échoué.';
-                            displayRestoreErrors(message, getValidationErrors(data));
-                            setRestoreBusyState(false);
-                            setRestoreStatusText('❌ ' + message);
-                            $button.prop('disabled', false);
-                        } else if (data.status === 'complete' || (Number.isFinite(progressValue) && progressValue >= 100)) {
-                            clearInterval(interval);
-                            setRestoreBusyState(false);
-                            updateRestoreProgress(100);
-                            setRestoreStatusText('✔️ Restauration terminée ! La page va se recharger.');
-                            setTimeout(() => window.location.reload(), 3000);
-                        }
+                        bjlgStartTask({
+                            context: context,
+                            requestData: requestData,
+                            debugHeader: '--- DÉMARRAGE DE LA RESTAURATION ---',
+                            startStatusText: 'Initialisation de la restauration...',
+                            pollAction: 'bjlg_check_restore_progress',
+                            pollDebugLabel: 'Suivi restauration (téléversement)',
+                            $submit: $submit,
+                            onSuccess: function() {
+                                context.setStatus('✔️ Restauration terminée ! La page va se recharger.');
+                                setTimeout(() => window.location.reload(), 3000);
+                            },
+                            onError: function(message, data) {
+                                context.displayErrors(message, bjlgExtractValidationErrors(data));
+                                context.setStatus('❌ ' + message);
+                            }
+                        });
                     } else {
-                        clearInterval(interval);
-                        const message = response && response.data && response.data.message
-                            ? response.data.message
-                            : 'Tâche de restauration introuvable.';
-                        setRestoreBusyState(false);
-                        setRestoreStatusText('❌ ' + message);
-                        $button.prop('disabled', false);
+                        const payload = response && response.data ? response.data : {};
+                        const message = payload && payload.message ? payload.message : 'Impossible de téléverser le fichier.';
+                        context.displayErrors(message, bjlgExtractValidationErrors(payload));
+                        context.setStatus('❌ ' + message);
+                        context.setBusy(false);
+                        $submit.prop('disabled', false);
                     }
-                })
-                .fail(function(xhr) {
-                    appendRestoreDebug(
-                        'Erreur de communication (suivi restauration)',
-                        {
-                            status: xhr ? xhr.status : 'inconnu',
-                            responseText: xhr ? xhr.responseText : 'Aucune réponse'
-                        }
-                    );
-                    clearInterval(interval);
-                    setRestoreBusyState(false);
-                    setRestoreStatusText('❌ Erreur de communication lors du suivi de la restauration.');
-                    $button.prop('disabled', false);
+                }).fail(function(xhr) {
+                    context.appendDebug('Erreur de communication (téléversement)', {
+                        status: xhr ? xhr.status : 'inconnu',
+                        responseText: xhr ? xhr.responseText : 'Aucune réponse'
+                    });
+                    const message = 'Erreur de communication lors du téléversement.';
+                    context.displayErrors(message);
+                    context.setStatus('❌ ' + message);
+                    context.setBusy(false);
+                    $submit.prop('disabled', false);
                 });
-            }, 3000);
+            });
         }
-    });
+
+        function setupHistoryRestoreForm() {
+            const $form = $('#bjlg-restore-history-form');
+            if (!$form.length) {
+                return;
+            }
+
+            const context = bjlgCreateTaskContext({
+                $form: $form,
+                $errorNotice: $('#bjlg-restore-history-errors'),
+                $statusWrapper: $('#bjlg-restore-history-status'),
+                $statusText: $('#bjlg-restore-history-status-text'),
+                $progressBar: $('#bjlg-restore-history-progress-bar'),
+                $debugWrapper: $('#bjlg-restore-history-debug-wrapper'),
+                $debugOutput: $('#bjlg-restore-history-debug')
+            });
+
+            const $select = $('#bjlg-history-backup-select');
+            const $meta = $('#bjlg-history-backup-meta');
+            const $refreshButton = $('#bjlg-history-refresh-button');
+            const $passwordInput = $('#bjlg-history-password');
+            const $passwordHelp = $('#bjlg-history-password-help');
+            const $componentInputs = $form.find('input[name="restore_components[]"]');
+            const $submit = $form.find('button[type="submit"]');
+            const passwordDefaultText = $passwordHelp.length ? ($passwordHelp.attr('data-default-text') || $passwordHelp.text()) : '';
+            const passwordEncryptedText = $passwordHelp.length ? ($passwordHelp.attr('data-encrypted-text') || passwordDefaultText) : '';
+
+            function setPasswordRequirement(requiresPassword) {
+                if (!$passwordInput.length) {
+                    return;
+                }
+
+                if (requiresPassword) {
+                    $passwordInput.attr('required', 'required').attr('aria-required', 'true');
+                    if ($passwordHelp.length) {
+                        $passwordHelp.text(passwordEncryptedText);
+                    }
+                } else {
+                    $passwordInput.removeAttr('required').removeAttr('aria-required');
+                    if ($passwordHelp.length) {
+                        $passwordHelp.text(passwordDefaultText);
+                    }
+                }
+            }
+
+            function refreshMetadata() {
+                const selected = $select.val();
+                const metadata = bjlgGetBackupMetadata(selected);
+                bjlgUpdateBackupMeta($meta, metadata);
+                bjlgUpdateComponentAvailability($form, metadata);
+                setPasswordRequirement(!!(metadata && metadata.is_encrypted));
+            }
+
+            function toggleAvailability(hasBackups) {
+                const disabled = !hasBackups;
+                $select.prop('disabled', disabled);
+                $submit.prop('disabled', disabled);
+                if (disabled) {
+                    setPasswordRequirement(false);
+                }
+            }
+
+            function loadBackups(forceRefresh) {
+                bjlgLoadBackupCatalog(!!forceRefresh).done(function(backups) {
+                    bjlgPopulateBackupSelect($select, backups, {});
+                    refreshMetadata();
+                    toggleAvailability(Array.isArray(backups) && backups.length > 0);
+                }).fail(function(xhr) {
+                    bjlgPopulateBackupSelect($select, [], {});
+                    toggleAvailability(false);
+                    const message = xhr && xhr.responseJSON && xhr.responseJSON.message
+                        ? xhr.responseJSON.message
+                        : 'Impossible de charger les sauvegardes disponibles.';
+                    bjlgUpdateBackupMeta($meta, null);
+                    $('<p/>', { class: 'description', text: message }).appendTo($meta.empty());
+                });
+            }
+
+            if ($passwordInput.length) {
+                $passwordInput.on('input', function() {
+                    $(this).removeClass(context.errorFieldClass).removeAttr('aria-invalid');
+                    $(this).nextAll('.bjlg-field-error').remove();
+                });
+            }
+
+            if ($componentInputs.length) {
+                $componentInputs.on('change', function() {
+                    // placeholder to allow future validation if needed
+                });
+            }
+
+            if ($refreshButton.length) {
+                $refreshButton.on('click', function(event) {
+                    event.preventDefault();
+                    loadBackups(true);
+                });
+            }
+
+            $select.on('change', refreshMetadata);
+
+            loadBackups(false);
+
+            $form.on('submit', function(event) {
+                event.preventDefault();
+                context.clearErrors();
+
+                const selected = $select.val();
+                if (!selected) {
+                    context.displayErrors('Veuillez choisir une sauvegarde à restaurer.', {
+                        history_backup: ['Sélectionnez une sauvegarde avant de lancer la restauration.']
+                    });
+                    return;
+                }
+
+                const metadata = bjlgGetBackupMetadata(selected);
+                const requiresPassword = metadata && metadata.is_encrypted;
+                const passwordValue = $passwordInput.length ? $passwordInput.val().trim() : '';
+
+                if (requiresPassword && passwordValue === '') {
+                    context.displayErrors('Un mot de passe est requis pour cette sauvegarde chiffrée.', {
+                        password: ['Renseignez le mot de passe pour restaurer cette archive chiffrée.']
+                    });
+                    return;
+                }
+
+                const components = [];
+                $componentInputs.each(function() {
+                    if (this.checked && !this.disabled) {
+                        components.push($(this).val());
+                    }
+                });
+
+                if (components.length === 0) {
+                    context.displayErrors('Sélectionnez au moins un composant à restaurer.', {
+                        'restore_components[]': ['Choisissez au moins un composant.']
+                    });
+                    return;
+                }
+
+                const createRestorePoint = $form.find('input[name="create_backup_before_restore"]').is(':checked');
+                const requestData = {
+                    action: 'bjlg_run_restore',
+                    nonce: bjlg_ajax.nonce,
+                    filename: selected,
+                    create_backup_before_restore: createRestorePoint ? 1 : 0,
+                    password: $passwordInput.length ? $passwordInput.val() : '',
+                    components: components
+                };
+
+                $submit.prop('disabled', true);
+                context.showStatus();
+                context.showDebug();
+                context.resetDebug();
+                context.updateProgress(0);
+
+                bjlgStartTask({
+                    context: context,
+                    requestData: requestData,
+                    debugHeader: '--- DÉMARRAGE DE LA RESTAURATION (HISTORIQUE) ---',
+                    startStatusText: 'Initialisation de la restauration...',
+                    pollAction: 'bjlg_check_restore_progress',
+                    pollDebugLabel: 'Suivi restauration (historique)',
+                    $submit: $submit,
+                    onSuccess: function() {
+                        context.setStatus('✔️ Restauration terminée ! La page va se recharger.');
+                        setTimeout(() => window.location.reload(), 3000);
+                    },
+                    onError: function(message, data) {
+                        context.displayErrors(message, bjlgExtractValidationErrors(data));
+                        context.setStatus('❌ ' + message);
+                    }
+                });
+            });
+        }
+
+        function setupStagingCloneForm() {
+            const $form = $('#bjlg-staging-clone-form');
+            if (!$form.length) {
+                return;
+            }
+
+            const context = bjlgCreateTaskContext({
+                $form: $form,
+                $errorNotice: $('#bjlg-staging-errors'),
+                $statusWrapper: $('#bjlg-staging-status'),
+                $statusText: $('#bjlg-staging-status-text'),
+                $progressBar: $('#bjlg-staging-progress-bar'),
+                $debugWrapper: $('#bjlg-staging-debug-wrapper'),
+                $debugOutput: $('#bjlg-staging-debug')
+            });
+
+            const $select = $('#bjlg-staging-backup-select');
+            const $meta = $('#bjlg-staging-backup-meta');
+            const $refreshButton = $('#bjlg-staging-refresh-button');
+            const $subdomainInput = $('#bjlg-staging-subdomain');
+            const $passwordInput = $('#bjlg-staging-password');
+            const $passwordHelp = $('#bjlg-staging-password-help');
+            const $overwrite = $form.find('input[name="staging_overwrite"]');
+            const $submit = $form.find('button[type="submit"]');
+            const passwordDefaultText = $passwordHelp.length ? ($passwordHelp.attr('data-default-text') || $passwordHelp.text()) : '';
+            const passwordEncryptedText = $passwordHelp.length ? ($passwordHelp.attr('data-encrypted-text') || passwordDefaultText) : '';
+
+            function setPasswordRequirement(requiresPassword) {
+                if (!$passwordInput.length) {
+                    return;
+                }
+
+                if (requiresPassword) {
+                    $passwordInput.attr('required', 'required').attr('aria-required', 'true');
+                    if ($passwordHelp.length) {
+                        $passwordHelp.text(passwordEncryptedText);
+                    }
+                } else {
+                    $passwordInput.removeAttr('required').removeAttr('aria-required');
+                    if ($passwordHelp.length) {
+                        $passwordHelp.text(passwordDefaultText);
+                    }
+                }
+            }
+
+            function refreshMetadata() {
+                const selected = $select.val();
+                const metadata = bjlgGetBackupMetadata(selected);
+                bjlgUpdateBackupMeta($meta, metadata);
+                setPasswordRequirement(!!(metadata && metadata.is_encrypted));
+            }
+
+            function toggleAvailability(hasBackups) {
+                const disabled = !hasBackups;
+                $select.prop('disabled', disabled);
+                $submit.prop('disabled', disabled);
+                if (disabled) {
+                    setPasswordRequirement(false);
+                }
+            }
+
+            function loadBackups(forceRefresh) {
+                bjlgLoadBackupCatalog(!!forceRefresh).done(function(backups) {
+                    bjlgPopulateBackupSelect($select, backups, {});
+                    refreshMetadata();
+                    toggleAvailability(Array.isArray(backups) && backups.length > 0);
+                }).fail(function(xhr) {
+                    bjlgPopulateBackupSelect($select, [], {});
+                    toggleAvailability(false);
+                    const message = xhr && xhr.responseJSON && xhr.responseJSON.message
+                        ? xhr.responseJSON.message
+                        : 'Impossible de charger les sauvegardes disponibles.';
+                    bjlgUpdateBackupMeta($meta, null);
+                    $('<p/>', { class: 'description', text: message }).appendTo($meta.empty());
+                });
+            }
+
+            if ($passwordInput.length) {
+                $passwordInput.on('input', function() {
+                    $(this).removeClass(context.errorFieldClass).removeAttr('aria-invalid');
+                    $(this).nextAll('.bjlg-field-error').remove();
+                });
+            }
+
+            if ($subdomainInput.length) {
+                $subdomainInput.on('input', function() {
+                    $(this).removeClass(context.errorFieldClass).removeAttr('aria-invalid');
+                    $(this).nextAll('.bjlg-field-error').remove();
+                });
+            }
+
+            if ($refreshButton.length) {
+                $refreshButton.on('click', function(event) {
+                    event.preventDefault();
+                    loadBackups(true);
+                });
+            }
+
+            $select.on('change', refreshMetadata);
+
+            loadBackups(false);
+
+            $form.on('submit', function(event) {
+                event.preventDefault();
+                context.clearErrors();
+
+                const selected = $select.val();
+                if (!selected) {
+                    context.displayErrors('Veuillez sélectionner une sauvegarde à cloner.', {
+                        staging_backup: ['Choisissez une sauvegarde.']
+                    });
+                    return;
+                }
+
+                const subdomain = ($subdomainInput.val() || '').toString().trim();
+                if (subdomain === '') {
+                    context.displayErrors('Renseignez un identifiant pour l’environnement de test.', {
+                        staging_subdomain: ['Ce champ est obligatoire.']
+                    });
+                    return;
+                }
+
+                const validSubdomain = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(subdomain);
+                if (!validSubdomain) {
+                    context.displayErrors('Le sous-domaine fourni est invalide.', {
+                        staging_subdomain: ['Utilisez uniquement des lettres minuscules, chiffres ou tirets (sans tiret en début/fin).']
+                    });
+                    return;
+                }
+
+                const metadata = bjlgGetBackupMetadata(selected);
+                const requiresPassword = metadata && metadata.is_encrypted;
+                const passwordValue = $passwordInput.length ? $passwordInput.val().trim() : '';
+
+                if (requiresPassword && passwordValue === '') {
+                    context.displayErrors('Un mot de passe est requis pour cette sauvegarde chiffrée.', {
+                        password: ['Renseignez le mot de passe pour cloner cette archive chiffrée.']
+                    });
+                    return;
+                }
+
+                const requestData = {
+                    action: 'bjlg_clone_backup_to_staging',
+                    nonce: bjlg_ajax.nonce,
+                    filename: selected,
+                    subdomain: subdomain,
+                    overwrite: $overwrite.is(':checked') ? 1 : 0,
+                    password: $passwordInput.length ? $passwordInput.val() : ''
+                };
+
+                $submit.prop('disabled', true);
+                context.showStatus();
+                context.showDebug();
+                context.resetDebug();
+                context.updateProgress(0);
+
+                bjlgStartTask({
+                    context: context,
+                    requestData: requestData,
+                    debugHeader: '--- DÉMARRAGE CLONAGE STAGING ---',
+                    startStatusText: 'Initialisation du clonage...',
+                    pollAction: 'bjlg_check_clone_to_staging_progress',
+                    pollDebugLabel: 'Suivi clonage staging',
+                    $submit: $submit,
+                    onSuccess: function(data) {
+                        if (data && data.status_text) {
+                            context.setStatus(data.status_text);
+                        } else {
+                            context.setStatus('✔️ Clonage terminé !');
+                        }
+                        context.updateProgress(100);
+                    },
+                    onError: function(message, data) {
+                        context.displayErrors(message, bjlgExtractValidationErrors(data));
+                        context.setStatus('❌ ' + message);
+                    }
+                });
+            });
+        }
+    })();
 
     // --- TEST DE CONNEXION GOOGLE DRIVE ---
     $(document).on('click', '.bjlg-gdrive-test-connection', function(e) {

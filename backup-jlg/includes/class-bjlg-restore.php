@@ -43,6 +43,9 @@ class BJLG_Restore {
         add_action('wp_ajax_bjlg_upload_restore_file', [$this, 'handle_upload_restore_file']);
         add_action('wp_ajax_bjlg_check_restore_progress', [$this, 'handle_check_restore_progress']);
         add_action('bjlg_run_restore_task', [$this, 'run_restore_task'], 10, 1);
+        add_action('wp_ajax_bjlg_clone_backup_to_staging', [$this, 'handle_clone_backup_to_staging']);
+        add_action('wp_ajax_bjlg_check_clone_to_staging_progress', [$this, 'handle_check_clone_to_staging_progress']);
+        add_action('bjlg_run_clone_to_staging_task', [$this, 'run_clone_to_staging_task'], 10, 1);
     }
 
     /**
@@ -658,6 +661,197 @@ class BJLG_Restore {
     }
 
     /**
+     * Initialise un clonage de sauvegarde vers un environnement de test.
+     */
+    public function handle_clone_backup_to_staging() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $raw_filename = isset($_POST['filename']) ? wp_unslash($_POST['filename']) : wp_unslash($_POST['staging_backup'] ?? '');
+        $raw_subdomain = isset($_POST['subdomain']) ? wp_unslash($_POST['subdomain']) : wp_unslash($_POST['staging_subdomain'] ?? '');
+        $overwrite = !empty($_POST['overwrite']) || !empty($_POST['staging_overwrite']);
+
+        $filename = basename(sanitize_file_name((string) $raw_filename));
+        if ($filename === '') {
+            wp_send_json_error([
+                'message' => 'Nom de sauvegarde manquant.',
+                'validation_errors' => [
+                    'filename' => ['Veuillez choisir une archive à cloner.'],
+                ],
+            ], 400);
+        }
+
+        $resolved_path = BJLG_Backup_Path_Resolver::resolve($filename);
+        if (is_wp_error($resolved_path)) {
+            $status = 400;
+            $error_message = 'Fichier de sauvegarde introuvable.';
+
+            if ($resolved_path->get_error_code() === 'backup_not_found') {
+                $status = 404;
+            }
+
+            if ($resolved_path->get_error_message()) {
+                $error_message = $resolved_path->get_error_message();
+            }
+
+            wp_send_json_error([
+                'message' => $error_message,
+            ], $status);
+        }
+
+        $subdomain = $this->sanitize_staging_identifier($raw_subdomain);
+        if ($subdomain === '') {
+            wp_send_json_error([
+                'message' => 'Identifiant de staging invalide.',
+                'validation_errors' => [
+                    'staging_subdomain' => ['Utilisez uniquement des lettres minuscules, chiffres et tirets.'],
+                ],
+            ], 400);
+        }
+
+        $staging_root = $this->get_staging_root_directory();
+        if ($staging_root === null) {
+            wp_send_json_error([
+                'message' => 'Impossible de déterminer le répertoire de staging.',
+            ], 500);
+        }
+
+        if (!wp_mkdir_p($staging_root)) {
+            wp_send_json_error([
+                'message' => 'Impossible de préparer le répertoire de staging.',
+                'details' => [
+                    'directory' => $staging_root,
+                ],
+            ], 500);
+        }
+
+        $is_writable = function_exists('wp_is_writable') ? wp_is_writable($staging_root) : is_writable($staging_root);
+        if (!$is_writable) {
+            wp_send_json_error([
+                'message' => 'Le répertoire de staging n’est pas accessible en écriture.',
+                'details' => [
+                    'directory' => $staging_root,
+                ],
+            ], 500);
+        }
+
+        $target_directory = trailingslashit($staging_root . $subdomain);
+        if (strpos($target_directory, $staging_root) !== 0) {
+            wp_send_json_error([
+                'message' => 'Chemin de staging invalide.',
+            ], 400);
+        }
+
+        if (file_exists($target_directory) && !$overwrite) {
+            wp_send_json_error([
+                'message' => 'Un environnement avec cet identifiant existe déjà.',
+                'validation_errors' => [
+                    'staging_subdomain' => ['Un clonage est déjà présent pour ce nom. Activez le remplacement pour continuer.'],
+                ],
+            ], 409);
+        }
+
+        $is_encrypted = substr($filename, -4) === '.enc';
+        $password_raw = isset($_POST['password']) ? (string) wp_unslash($_POST['password']) : '';
+        $password = $password_raw !== '' ? $password_raw : null;
+
+        if ($is_encrypted && ($password === null || $password === '')) {
+            wp_send_json_error([
+                'message' => 'Un mot de passe est requis pour cloner cette sauvegarde chiffrée.',
+                'validation_errors' => [
+                    'password' => ['Renseignez le mot de passe associé à l’archive (.zip.enc).'],
+                ],
+            ], 400);
+        }
+
+        try {
+            $encrypted_password = self::encrypt_password_for_transient($password);
+        } catch (Throwable $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('ERREUR: Échec du chiffrement du mot de passe de clonage : ' . $exception->getMessage(), 'error');
+            }
+
+            wp_send_json_error([
+                'message' => 'Impossible de sécuriser le mot de passe fourni.',
+            ], 500);
+        }
+
+        $task_id = 'bjlg_clone_' . md5(uniqid('', true));
+        $task_ttl = BJLG_Backup::get_task_ttl();
+
+        $task_data = [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => 'Initialisation du clonage...',
+            'filepath' => $resolved_path,
+            'filename' => $filename,
+            'is_encrypted' => $is_encrypted,
+            'password_encrypted' => $encrypted_password,
+            'subdomain' => $subdomain,
+            'staging_root' => $staging_root,
+            'target_directory' => $target_directory,
+            'overwrite' => (bool) $overwrite,
+            'staging_url' => $this->build_staging_url($subdomain),
+        ];
+
+        $persisted = set_transient($task_id, $task_data, $task_ttl);
+        if ($persisted === false) {
+            wp_send_json_error([
+                'message' => 'Impossible d’initialiser la tâche de clonage.',
+            ], 500);
+        }
+
+        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_clone_to_staging_task', ['task_id' => $task_id]);
+        if ($scheduled === false || is_wp_error($scheduled)) {
+            delete_transient($task_id);
+
+            $details = is_wp_error($scheduled) ? $scheduled->get_error_message() : null;
+            if (class_exists(BJLG_Debug::class)) {
+                $message = "ERREUR : Impossible de planifier la tâche de clonage {$task_id}.";
+                if (!empty($details)) {
+                    $message .= ' Détails : ' . $details;
+                }
+                BJLG_Debug::log($message, 'error');
+            }
+
+            wp_send_json_error([
+                'message' => 'Planification impossible. Réessayez plus tard.',
+                'details' => $details,
+            ], 500);
+        }
+
+        wp_send_json_success([
+            'task_id' => $task_id,
+            'message' => 'Clonage initialisé.',
+            'staging_url' => $task_data['staging_url'],
+            'target_directory' => $target_directory,
+        ]);
+    }
+
+    /**
+     * Vérifie la progression d’un clonage de sauvegarde.
+     */
+    public function handle_check_clone_to_staging_progress() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée.']);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $task_id = sanitize_key($_POST['task_id']);
+        $progress_data = get_transient($task_id);
+
+        if ($progress_data === false) {
+            wp_send_json_error(['message' => 'Tâche non trouvée.']);
+        }
+
+        wp_send_json_success($progress_data);
+    }
+
+    /**
      * Exécute la tâche de restauration en arrière-plan
      */
     public function run_restore_task($task_id) {
@@ -1000,6 +1194,299 @@ class BJLG_Restore {
                 }
             }
         }
+    }
+
+    /**
+     * Exécute la tâche de clonage vers un environnement de test.
+     */
+    public function run_clone_to_staging_task($task_id) {
+        $task_data = get_transient($task_id);
+        if (!$task_data) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log("ERREUR: Tâche de clonage $task_id introuvable.", 'error');
+            }
+            return;
+        }
+
+        $ttl = BJLG_Backup::get_task_ttl();
+        $current_status = $task_data;
+        $filepath = $task_data['filepath'] ?? '';
+        $target_directory = isset($task_data['target_directory']) ? trailingslashit($task_data['target_directory']) : '';
+        $staging_root = isset($task_data['staging_root']) ? trailingslashit($task_data['staging_root']) : '';
+        $overwrite = !empty($task_data['overwrite']);
+        $staging_url = $task_data['staging_url'] ?? '';
+        $decrypted_path = null;
+
+        try {
+            set_time_limit(0);
+            @ini_set('memory_limit', '256M');
+
+            $current_status = $this->update_clone_task_status($task_id, $current_status, [
+                'status' => 'running',
+                'progress' => 5,
+                'status_text' => 'Préparation de l’environnement de test...'
+            ], $ttl);
+
+            if ($staging_root === '' || $target_directory === '') {
+                throw new Exception('Répertoire de destination invalide.');
+            }
+
+            if (!wp_mkdir_p($staging_root)) {
+                throw new Exception('Impossible de préparer le répertoire principal.');
+            }
+
+            $is_writable = function_exists('wp_is_writable') ? wp_is_writable($staging_root) : is_writable($staging_root);
+            if (!$is_writable) {
+                throw new Exception('Le répertoire de staging n’est pas accessible en écriture.');
+            }
+
+            if (file_exists($target_directory)) {
+                if ($overwrite) {
+                    $this->delete_directory_recursive($target_directory);
+                } else {
+                    throw new Exception('Un environnement existe déjà pour ce nom.');
+                }
+            }
+
+            if (!wp_mkdir_p($target_directory)) {
+                throw new Exception('Impossible de créer le répertoire cible.');
+            }
+
+            $current_status = $this->update_clone_task_status($task_id, $current_status, [
+                'progress' => 20,
+                'status_text' => 'Validation du fichier de sauvegarde...'
+            ], $ttl);
+
+            if ($filepath === '' || !file_exists($filepath)) {
+                throw new Exception("Le fichier de sauvegarde n'a pas été trouvé.");
+            }
+
+            $working_file = $filepath;
+
+            if (substr($filepath, -4) === '.enc') {
+                $current_status = $this->update_clone_task_status($task_id, $current_status, [
+                    'progress' => 35,
+                    'status_text' => 'Déchiffrement de l’archive...'
+                ], $ttl);
+
+                $encryption = $this->get_encryption_handler();
+                if (!($encryption instanceof BJLG_Encryption)) {
+                    throw new Exception('Module de chiffrement indisponible.');
+                }
+
+                $password = null;
+                if (!empty($task_data['password_encrypted'])) {
+                    $password = $this->decrypt_password_from_transient($task_data['password_encrypted']);
+                }
+
+                if ($password === null || $password === '') {
+                    throw new Exception('Mot de passe requis pour cette archive chiffrée.');
+                }
+
+                $decrypted_path = $encryption->decrypt_backup_file($filepath, $password);
+                $working_file = $decrypted_path;
+            }
+
+            $current_status = $this->update_clone_task_status($task_id, $current_status, [
+                'progress' => 50,
+                'status_text' => 'Copie de l’archive source...'
+            ], $ttl);
+
+            $copied = @copy($filepath, $target_directory . basename($filepath));
+            if (!$copied) {
+                $current_status = $this->update_clone_task_status($task_id, $current_status, [
+                    'status_text' => 'Copie de l’archive impossible, poursuite de l’extraction directe...'
+                ], $ttl);
+            }
+
+            $current_status = $this->update_clone_task_status($task_id, $current_status, [
+                'progress' => 70,
+                'status_text' => 'Extraction des fichiers...'
+            ], $ttl);
+
+            $zip = new ZipArchive();
+            if ($zip->open($working_file) !== true) {
+                throw new Exception("Impossible d'ouvrir l'archive de sauvegarde.");
+            }
+
+            if (!$zip->extractTo($target_directory)) {
+                $zip->close();
+                throw new Exception("Impossible d'extraire l'archive de sauvegarde.");
+            }
+
+            $zip->close();
+
+            $current_status = $this->update_clone_task_status($task_id, $current_status, [
+                'progress' => 90,
+                'status_text' => 'Finalisation du clonage...'
+            ], $ttl);
+
+            $summary_path = $target_directory . 'bjlg-staging.json';
+            $summary_payload = [
+                'source_filename' => basename($filepath),
+                'cloned_at' => current_time('mysql'),
+                'target_directory' => $target_directory,
+                'staging_url' => $staging_url,
+            ];
+            @file_put_contents($summary_path, wp_json_encode($summary_payload, JSON_PRETTY_PRINT));
+
+            $final_message = '✔️ Clonage terminé !';
+            if (!empty($staging_url)) {
+                $final_message .= ' Accédez à ' . $staging_url;
+            }
+
+            $current_status = $this->update_clone_task_status($task_id, $current_status, [
+                'progress' => 100,
+                'status' => 'complete',
+                'status_text' => $final_message,
+                'result' => [
+                    'target_directory' => $target_directory,
+                    'staging_url' => $staging_url,
+                    'source_filename' => basename($filepath),
+                ],
+            ], $ttl);
+        } catch (Throwable $exception) {
+            $message = $exception->getMessage();
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('ERREUR: Échec du clonage vers le staging : ' . $message, 'error');
+            }
+
+            $current_status = $this->update_clone_task_status($task_id, $current_status, [
+                'status' => 'error',
+                'status_text' => '❌ ' . $message,
+            ], $ttl);
+        } finally {
+            if ($decrypted_path && file_exists($decrypted_path)) {
+                @unlink($decrypted_path);
+            }
+        }
+    }
+
+    /**
+     * Nettoie et normalise l’identifiant du staging.
+     */
+    private function sanitize_staging_identifier($value): string
+    {
+        $value = strtolower((string) $value);
+        $value = preg_replace('/[^a-z0-9-]/', '', $value ?? '');
+        $value = trim((string) $value, '-');
+
+        if ($value === '') {
+            return '';
+        }
+
+        if (strlen($value) > 63) {
+            $value = substr($value, 0, 63);
+            $value = rtrim($value, '-');
+        }
+
+        return $value;
+    }
+
+    /**
+     * Retourne le répertoire racine des environnements de test.
+     */
+    private function get_staging_root_directory(): ?string
+    {
+        if (!function_exists('wp_upload_dir')) {
+            return null;
+        }
+
+        $uploads = wp_upload_dir();
+        if (!empty($uploads['error'])) {
+            return null;
+        }
+
+        $basedir = $uploads['basedir'] ?? '';
+        if ($basedir === '') {
+            return null;
+        }
+
+        return trailingslashit($basedir) . 'bjlg-staging/';
+    }
+
+    /**
+     * Supprime récursivement un répertoire sans suivre les liens symboliques.
+     */
+    private function delete_directory_recursive($directory): void
+    {
+        if ($directory === '' || !file_exists($directory)) {
+            return;
+        }
+
+        if (is_file($directory) || is_link($directory)) {
+            @unlink($directory);
+            return;
+        }
+
+        $items = @scandir($directory);
+        if ($items === false) {
+            @rmdir($directory);
+            return;
+        }
+
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+
+            $path = $directory . DIRECTORY_SEPARATOR . $item;
+
+            if (is_dir($path) && !is_link($path)) {
+                $this->delete_directory_recursive($path);
+            } else {
+                @unlink($path);
+            }
+        }
+
+        @rmdir($directory);
+    }
+
+    /**
+     * Met à jour le statut d’une tâche de clonage.
+     */
+    private function update_clone_task_status($task_id, array $current_status, array $updates, ?int $ttl = null): array
+    {
+        $new_status = array_merge($current_status, $updates);
+        $effective_ttl = $ttl ?? BJLG_Backup::get_task_ttl();
+        set_transient($task_id, $new_status, $effective_ttl);
+        return $new_status;
+    }
+
+    /**
+     * Construit l’URL suggérée pour l’environnement de test.
+     */
+    private function build_staging_url(string $subdomain): string
+    {
+        if ($subdomain === '') {
+            return '';
+        }
+
+        if (!function_exists('home_url')) {
+            return '';
+        }
+
+        $home = home_url('/');
+        $parsed = wp_parse_url($home);
+
+        if (!is_array($parsed) || empty($parsed['host'])) {
+            return '';
+        }
+
+        $scheme = $parsed['scheme'] ?? 'https';
+        $host = $parsed['host'];
+        $port = isset($parsed['port']) ? ':' . $parsed['port'] : '';
+        $path = isset($parsed['path']) ? rtrim($parsed['path'], '/') : '';
+
+        if ($path === '') {
+            $path = '/';
+        } else {
+            $path .= '/';
+        }
+
+        $full_host = $subdomain . '.' . $host;
+
+        return sprintf('%s://%s%s%s', $scheme, $full_host, $port, $path);
     }
 
     /**
