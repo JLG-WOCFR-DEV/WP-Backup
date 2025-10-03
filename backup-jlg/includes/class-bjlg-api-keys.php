@@ -74,7 +74,7 @@ class BJLG_API_Keys {
                 'key' => self::hash_secret($secret),
                 'created_at' => $timestamp,
                 'last_rotated_at' => $timestamp,
-                'display_secret' => $secret,
+                'display_secret' => self::sanitize_secret($secret),
             ],
             $user_meta
         );
@@ -143,7 +143,7 @@ class BJLG_API_Keys {
         }
 
         $new_secret = self::generate_secret();
-        $keys[$key_id]['display_secret'] = $new_secret;
+        $keys[$key_id]['display_secret'] = self::sanitize_secret($new_secret);
         $keys[$key_id]['key'] = self::hash_secret($new_secret);
         unset($keys[$key_id]['secret']);
         $keys[$key_id]['last_rotated_at'] = time();
@@ -219,7 +219,7 @@ class BJLG_API_Keys {
                 continue;
             }
 
-            $normalized = self::normalize_record($record);
+            $normalized = self::normalize_record($record, true);
 
             if ($normalized === null) {
                 continue;
@@ -258,18 +258,12 @@ class BJLG_API_Keys {
         }
 
         $display_secret = '';
-        $is_hidden = false;
-
-        if (isset($record['display_secret']) && is_string($record['display_secret']) && $record['display_secret'] !== '') {
-            $display_secret = $record['display_secret'];
-        } elseif (isset($record['secret']) && is_string($record['secret']) && $record['secret'] !== '') {
-            $display_secret = $record['secret'];
+        if (isset($record['display_secret']) && is_string($record['display_secret'])) {
+            $display_secret = self::sanitize_secret($record['display_secret']);
         }
 
-        if ($display_secret === '') {
-            $display_secret = __('Clé masquée', 'backup-jlg');
-            $is_hidden = true;
-        }
+        $masked_secret = __('Clé masquée', 'backup-jlg');
+        $is_hidden = ($display_secret === '');
 
         $user_meta = self::extract_user_metadata($record);
 
@@ -278,6 +272,7 @@ class BJLG_API_Keys {
                 'id' => (string) $record['id'],
                 'label' => $label,
                 'display_secret' => $display_secret,
+                'masked_secret' => $masked_secret,
                 'is_secret_hidden' => $is_hidden,
                 'created_at' => $created_at,
                 'last_rotated_at' => $rotated_at,
@@ -294,10 +289,11 @@ class BJLG_API_Keys {
      * Normalise un enregistrement brut issu de la base de données.
      *
      * @param array<string, mixed> $record
+     * @param bool $for_storage Indique si l'enregistrement doit être préparé pour la persistance.
      *
      * @return array<string, mixed>|null
      */
-    private static function normalize_record(array $record) {
+    private static function normalize_record(array $record, $for_storage = false) {
         if (!isset($record['id']) && isset($record['key'])) {
             $record['id'] = $record['key'];
         }
@@ -320,10 +316,12 @@ class BJLG_API_Keys {
         }
 
         $plain_secret = '';
-        if (isset($record['secret'])) {
-            $plain_secret = self::sanitize_secret($record['secret']);
-        } elseif (isset($record['display_secret']) && is_string($record['display_secret'])) {
+        $has_display_secret_field = false;
+        if (isset($record['display_secret']) && is_string($record['display_secret'])) {
             $plain_secret = self::sanitize_secret($record['display_secret']);
+            $has_display_secret_field = ($plain_secret !== '');
+        } elseif (isset($record['secret'])) {
+            $plain_secret = self::sanitize_secret($record['secret']);
         }
 
         if ($hashed_key === '' && $plain_secret !== '') {
@@ -364,7 +362,7 @@ class BJLG_API_Keys {
             $user_meta['user_id'] = 0;
         }
 
-        return array_merge(
+        $normalized = array_merge(
             [
                 'id' => $identifier,
                 'label' => $label,
@@ -374,6 +372,12 @@ class BJLG_API_Keys {
             ],
             $user_meta
         );
+
+        if (!$for_storage && $has_display_secret_field && $plain_secret !== '') {
+            $normalized['display_secret'] = $plain_secret;
+        }
+
+        return $normalized;
     }
 
     /**

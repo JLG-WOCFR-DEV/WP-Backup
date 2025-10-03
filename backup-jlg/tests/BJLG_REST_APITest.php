@@ -1077,8 +1077,10 @@ namespace {
             $this->assertArrayHasKey('key', $response->data);
             $this->assertIsArray($response->data['key']);
             $this->assertArrayHasKey('display_secret', $response->data['key']);
+            $this->assertArrayHasKey('masked_secret', $response->data['key']);
             $this->assertArrayHasKey('is_secret_hidden', $response->data['key']);
             $this->assertFalse($response->data['key']['is_secret_hidden']);
+            $this->assertSame('Clé masquée', $response->data['key']['masked_secret']);
             $plain_secret = (string) $response->data['key']['display_secret'];
         }
 
@@ -1101,6 +1103,10 @@ namespace {
         $this->assertArrayHasKey('key', $sanitized[0]);
         $this->assertTrue(wp_check_password($plain_secret, $sanitized[0]['key']));
         $this->assertSame($user->ID, $sanitized[0]['user_id']);
+        $this->assertArrayHasKey('user_login', $sanitized[0]);
+        $this->assertArrayHasKey('user_email', $sanitized[0]);
+        $this->assertArrayNotHasKey('display_secret', $sanitized[0]);
+        $this->assertArrayNotHasKey('masked_secret', $sanitized[0]);
 
         update_option(BJLG\BJLG_API_Keys::OPTION_NAME, $sanitized);
 

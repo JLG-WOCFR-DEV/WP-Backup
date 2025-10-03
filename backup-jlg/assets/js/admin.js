@@ -2868,7 +2868,11 @@ jQuery(document).ready(function($) {
             const displaySecret = key && typeof key.display_secret === 'string'
                 ? key.display_secret
                 : '';
-            const isSecretHidden = !!(key && (key.is_secret_hidden || key.secret_hidden));
+            const maskedSecret = key && typeof key.masked_secret === 'string' && key.masked_secret.trim() !== ''
+                ? key.masked_secret
+                : 'Clé masquée';
+            const isSecretHidden = displaySecret === '' || !!(key && (key.is_secret_hidden || key.secret_hidden));
+            const secretValue = displaySecret !== '' ? displaySecret : maskedSecret;
             const createdAt = key && typeof key.created_at !== 'undefined' ? key.created_at : '';
             const createdHuman = key && key.created_at_human ? key.created_at_human : '';
             const createdIso = key && key.created_at_iso ? key.created_at_iso : '';
@@ -2901,8 +2905,8 @@ jQuery(document).ready(function($) {
 
             $('<code/>', {
                 'class': secretClasses.join(' '),
-                'aria-label': 'Clé API',
-                text: displaySecret
+                'aria-label': isSecretHidden ? 'Clé API masquée' : 'Clé API',
+                text: secretValue
             }).appendTo($secretCell);
 
             if (isSecretHidden) {

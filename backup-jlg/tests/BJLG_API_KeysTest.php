@@ -50,9 +50,11 @@ final class BJLG_API_KeysTest extends TestCase
             $createdKey = $response->data['key'];
             $this->assertArrayHasKey('id', $createdKey);
             $this->assertArrayHasKey('display_secret', $createdKey);
+            $this->assertArrayHasKey('masked_secret', $createdKey);
             $this->assertArrayHasKey('is_secret_hidden', $createdKey);
             $this->assertFalse($createdKey['is_secret_hidden']);
             $this->assertNotEmpty($createdKey['display_secret']);
+            $this->assertSame('Clé masquée', $createdKey['masked_secret']);
             $this->assertSame('Intégration Test', $createdKey['label']);
         }
 
@@ -67,6 +69,8 @@ final class BJLG_API_KeysTest extends TestCase
         $this->assertSame(1, $record['user_id']);
         $this->assertSame('admin', $record['user_login']);
         $this->assertSame('admin@example.com', $record['user_email']);
+        $this->assertArrayNotHasKey('display_secret', $record);
+        $this->assertArrayNotHasKey('masked_secret', $record);
     }
 
     public function test_handle_create_key_requires_capability(): void
@@ -157,6 +161,7 @@ final class BJLG_API_KeysTest extends TestCase
             $rotated = $response->data['key'];
             $this->assertSame($keyId, $rotated['id']);
             $this->assertArrayHasKey('display_secret', $rotated);
+            $this->assertArrayHasKey('masked_secret', $rotated);
             $this->assertArrayHasKey('is_secret_hidden', $rotated);
             $this->assertFalse($rotated['is_secret_hidden']);
             $this->assertNotSame('ANCIENSECRET', $rotated['display_secret']);
