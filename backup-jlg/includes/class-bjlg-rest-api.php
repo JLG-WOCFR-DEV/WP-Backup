@@ -1449,9 +1449,17 @@ class BJLG_REST_API {
         foreach ($params as $key => $value) {
             switch ($key) {
                 case 'cleanup':
-                    $validated_value = $this->validate_cleanup_settings($value);
+                    $validated_value = $this->validate_cleanup_legacy_settings($value);
                     if (!is_wp_error($validated_value)) {
-                        $validated_value = $this->sanitize_setting_section($key, $validated_value);
+                        $validated_value = $this->sanitize_setting_section('cleanup_policies', $validated_value);
+                        $key = 'cleanup_policies';
+                    }
+                    break;
+                case 'cleanup_policies':
+                    $validated_value = $this->validate_cleanup_policies($value);
+                    if (!is_wp_error($validated_value)) {
+                        $validated_value = $this->sanitize_setting_section('cleanup_policies', $validated_value);
+                        $key = 'cleanup_policies';
                     }
                     break;
                 case 'schedule':
@@ -1548,7 +1556,7 @@ class BJLG_REST_API {
         return $this->settings_manager;
     }
 
-    private function validate_cleanup_settings($value) {
+    private function validate_cleanup_legacy_settings($value) {
         if (!is_array($value)) {
             return new WP_Error(
                 'invalid_cleanup_settings',
@@ -1557,18 +1565,8 @@ class BJLG_REST_API {
             );
         }
 
-        foreach (['by_number', 'by_age'] as $required_key) {
-            if (!array_key_exists($required_key, $value)) {
-                return new WP_Error(
-                    'invalid_cleanup_settings',
-                    sprintf(__('Missing cleanup setting "%s".', 'backup-jlg'), $required_key),
-                    ['status' => 400]
-                );
-            }
-        }
-
-        $by_number = filter_var($value['by_number'], FILTER_VALIDATE_INT);
-        $by_age = filter_var($value['by_age'], FILTER_VALIDATE_INT);
+        $by_number = isset($value['by_number']) ? filter_var($value['by_number'], FILTER_VALIDATE_INT) : false;
+        $by_age = isset($value['by_age']) ? filter_var($value['by_age'], FILTER_VALIDATE_INT) : false;
 
         if ($by_number === false || $by_age === false) {
             return new WP_Error(
@@ -1578,10 +1576,58 @@ class BJLG_REST_API {
             );
         }
 
-        return [
-            'by_number' => $by_number,
-            'by_age' => $by_age,
+        if (!class_exists(BJLG_Settings::class)) {
+            return [
+                [
+                    'id' => 'policy_1',
+                    'label' => '',
+                    'scope' => 'global',
+                    'value' => '*',
+                    'retain_number' => max(0, (int) $by_number),
+                    'retain_age' => max(0, (int) $by_age),
+                ],
+            ];
+        }
+
+        $legacy = [
+            'by_number' => max(0, (int) $by_number),
+            'by_age' => max(0, (int) $by_age),
         ];
+
+        return BJLG_Settings::convert_legacy_cleanup_to_policies($legacy);
+    }
+
+    private function validate_cleanup_policies($value) {
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            if (is_array($decoded)) {
+                $value = $decoded;
+            }
+        }
+
+        if (!is_array($value)) {
+            return new WP_Error(
+                'invalid_cleanup_settings',
+                __('Cleanup policies must be provided as an array.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        if (!class_exists(BJLG_Settings::class)) {
+            return $value;
+        }
+
+        $policies = BJLG_Settings::sanitize_cleanup_policies($value);
+
+        if (empty($policies)) {
+            return new WP_Error(
+                'invalid_cleanup_settings',
+                __('At least one cleanup policy is required.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        return $policies;
     }
 
     private function validate_schedule_settings($value) {
@@ -2186,8 +2232,15 @@ class BJLG_REST_API {
      * Endpoint : Obtenir les paramètres
      */
     public function get_settings($request) {
+        $cleanup_policies = class_exists(BJLG_Settings::class)
+            ? BJLG_Settings::get_cleanup_policies()
+            : [];
+
         $settings = [
-            'cleanup' => get_option('bjlg_cleanup_settings', []),
+            'cleanup' => class_exists(BJLG_Settings::class)
+                ? BJLG_Settings::convert_policies_to_legacy($cleanup_policies)
+                : [],
+            'cleanup_policies' => $cleanup_policies,
             'schedule' => get_option('bjlg_schedule_settings', []),
             'encryption' => get_option('bjlg_encryption_settings', []),
             'notifications' => get_option('bjlg_notification_settings', []),
@@ -2219,6 +2272,7 @@ class BJLG_REST_API {
         }
 
         $option_name_map = [
+            'cleanup_policies' => 'bjlg_cleanup_policies',
             'notifications' => 'bjlg_notification_settings',
             'webhooks' => 'bjlg_webhook_settings',
         ];
@@ -2226,6 +2280,10 @@ class BJLG_REST_API {
         foreach ($validated_settings as $key => $value) {
             $option_name = $option_name_map[$key] ?? 'bjlg_' . $key . '_settings';
             update_option($option_name, $value);
+
+            if ($key === 'cleanup_policies' && class_exists(BJLG_Settings::class)) {
+                update_option('bjlg_cleanup_settings', BJLG_Settings::convert_policies_to_legacy($value));
+            }
         }
 
         BJLG_History::log('settings_updated', 'success', 'Settings updated via API');

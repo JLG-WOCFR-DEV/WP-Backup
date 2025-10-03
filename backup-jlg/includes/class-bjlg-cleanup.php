@@ -187,12 +187,10 @@ class BJLG_Cleanup {
      * @return int Le nombre de fichiers supprimés.
      */
     private function cleanup_backups() {
-        $settings = get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
-        $retain_by_number = intval($settings['by_number']);
-        $retain_by_age_days = intval($settings['by_age']);
+        $policies = BJLG_Settings::get_cleanup_policies();
 
-        if ($retain_by_number === 0 && $retain_by_age_days === 0) {
-            BJLG_Debug::log("Nettoyage : Aucune règle de rétention active.");
+        if (empty($policies)) {
+            BJLG_Debug::log("Nettoyage : aucune politique de rétention trouvée.");
             return 0;
         }
 
@@ -202,73 +200,200 @@ class BJLG_Cleanup {
             return 0;
         }
 
-        // Séparer les sauvegardes pré-restauration des sauvegardes normales
-        $pre_restore_backups = [];
-        $normal_backups = [];
-        
+        $records = [];
         foreach ($backups as $backup) {
-            if (strpos(basename($backup), 'pre-restore-backup') !== false) {
-                $pre_restore_backups[] = $backup;
-            } else {
-                $normal_backups[] = $backup;
+            if (!is_file($backup)) {
+                continue;
             }
+
+            $records[] = $this->build_backup_metadata($backup);
         }
 
+        if (empty($records)) {
+            BJLG_Debug::log("Nettoyage : Aucun enregistrement de sauvegarde valide trouvé.");
+            return 0;
+        }
+
+        $buckets = [];
+        foreach ($policies as $policy) {
+            $policy_id = isset($policy['id']) ? (string) $policy['id'] : uniqid('policy_', true);
+            $buckets[$policy_id] = [
+                'policy' => $policy,
+                'matches' => [],
+            ];
+        }
+
+        $fallback_policy_id = null;
+        foreach ($policies as $policy) {
+            if (isset($policy['scope']) && $policy['scope'] === 'global') {
+                $fallback_policy_id = $policy['id'];
+                break;
+            }
+        }
+        if ($fallback_policy_id === null) {
+            $first_policy = reset($policies);
+            $fallback_policy_id = isset($first_policy['id']) ? $first_policy['id'] : 'policy_1';
+        }
+
+        foreach ($records as $record) {
+            $matched_policy_id = null;
+
+            foreach ($policies as $policy) {
+                if ($this->backup_matches_policy($record, $policy)) {
+                    $matched_policy_id = $policy['id'];
+                    break;
+                }
+            }
+
+            if ($matched_policy_id === null) {
+                $matched_policy_id = $fallback_policy_id;
+            }
+
+            if (!isset($buckets[$matched_policy_id])) {
+                $buckets[$matched_policy_id] = [
+                    'policy' => [
+                        'id' => $matched_policy_id,
+                        'scope' => 'global',
+                        'value' => '*',
+                        'label' => '',
+                        'retain_number' => 0,
+                        'retain_age' => 0,
+                    ],
+                    'matches' => [],
+                ];
+            }
+
+            $buckets[$matched_policy_id]['matches'][] = $record;
+        }
+
+        $now = time();
         $files_to_delete = [];
 
-        // Règle 1 : Nettoyage par ancienneté
-        if ($retain_by_age_days > 0) {
-            $age_limit_seconds = $retain_by_age_days * DAY_IN_SECONDS;
-            
-            foreach ($normal_backups as $filepath) {
-                if ((time() - filemtime($filepath)) > $age_limit_seconds) {
-                    $files_to_delete[] = $filepath;
-                    BJLG_Debug::log("Nettoyage par âge : Le fichier '" . basename($filepath) . "' est marqué pour suppression.");
+        foreach ($buckets as $bucket) {
+            $policy = $bucket['policy'];
+            $matches = $bucket['matches'];
+
+            if (empty($matches)) {
+                continue;
+            }
+
+            $policy_label = $this->describe_policy($policy);
+
+            $retain_age_days = isset($policy['retain_age']) ? intval($policy['retain_age']) : 0;
+            if ($retain_age_days > 0) {
+                $age_limit = $now - ($retain_age_days * DAY_IN_SECONDS);
+
+                foreach ($matches as $record) {
+                    if ($record['mtime'] > 0 && $record['mtime'] < $age_limit) {
+                        $path = $record['path'];
+                        if (!isset($files_to_delete[$path])) {
+                            $files_to_delete[$path] = sprintf(
+                                "Règle '%s' : âge > %d jours",
+                                $policy_label,
+                                $retain_age_days
+                            );
+                            BJLG_Debug::log(sprintf(
+                                "Nettoyage par âge (%s) : le fichier '%s' est marqué pour suppression.",
+                                $policy_label,
+                                basename($path)
+                            ));
+                        }
+                    }
+                }
+            }
+
+            $retain_number = isset($policy['retain_number']) ? intval($policy['retain_number']) : 0;
+            $retain_number = max(0, $retain_number);
+
+            $eligible = [];
+            foreach ($matches as $record) {
+                if (!isset($files_to_delete[$record['path']])) {
+                    $eligible[] = $record;
+                }
+            }
+
+            if ($retain_number === 0) {
+                foreach ($eligible as $record) {
+                    $path = $record['path'];
+                    if (!isset($files_to_delete[$path])) {
+                        $files_to_delete[$path] = sprintf(
+                            "Règle '%s' : conserver 0 sauvegarde",
+                            $policy_label
+                        );
+                        BJLG_Debug::log(sprintf(
+                            "Nettoyage par nombre (%s) : le fichier '%s' est marqué pour suppression.",
+                            $policy_label,
+                            basename($path)
+                        ));
+                    }
+                }
+                continue;
+            }
+
+            if (count($eligible) > $retain_number) {
+                usort($eligible, static function ($a, $b) {
+                    return $b['mtime'] <=> $a['mtime'];
+                });
+
+                $to_remove = array_slice($eligible, $retain_number);
+                foreach ($to_remove as $record) {
+                    $path = $record['path'];
+                    if (!isset($files_to_delete[$path])) {
+                        $files_to_delete[$path] = sprintf(
+                            "Règle '%s' : limite de %d sauvegardes",
+                            $policy_label,
+                            $retain_number
+                        );
+                        BJLG_Debug::log(sprintf(
+                            "Nettoyage par nombre (%s) : le fichier '%s' est marqué pour suppression.",
+                            $policy_label,
+                            basename($path)
+                        ));
+                    }
                 }
             }
         }
-        
-        // Règle 2 : Nettoyage par nombre (seulement pour les sauvegardes normales)
-        if ($retain_by_number > 0 && count($normal_backups) > $retain_by_number) {
-            // Trier les fichiers du plus récent au plus ancien
-            usort($normal_backups, function($a, $b) {
-                return filemtime($b) - filemtime($a);
-            });
-            
-            // Obtenir la liste des fichiers à supprimer (tous sauf les X plus récents)
-            $old_files = array_slice($normal_backups, $retain_by_number);
-            foreach ($old_files as $filepath) {
-                $files_to_delete[] = $filepath;
-                BJLG_Debug::log("Nettoyage par nombre : Le fichier '" . basename($filepath) . "' est marqué pour suppression.");
-            }
-        }
-        
-        // Toujours supprimer les sauvegardes pré-restauration de plus de 7 jours
-        foreach ($pre_restore_backups as $filepath) {
-            if ((time() - filemtime($filepath)) > (7 * DAY_IN_SECONDS)) {
-                $files_to_delete[] = $filepath;
-                BJLG_Debug::log("Nettoyage : Suppression de l'ancienne sauvegarde pré-restauration '" . basename($filepath) . "'");
+
+        // Toujours supprimer les sauvegardes pré-restauration de plus de 7 jours.
+        $pre_restore_limit = $now - (7 * DAY_IN_SECONDS);
+        foreach ($records as $record) {
+            if ($record['type'] === 'pre_restore' && $record['mtime'] > 0 && $record['mtime'] < $pre_restore_limit) {
+                $path = $record['path'];
+                if (!isset($files_to_delete[$path])) {
+                    $files_to_delete[$path] = "Suppression automatique des sauvegardes pré-restauration (> 7 jours)";
+                    BJLG_Debug::log(sprintf(
+                        "Nettoyage : Suppression de l'ancienne sauvegarde pré-restauration '%s'.",
+                        basename($path)
+                    ));
+                }
             }
         }
 
-        // Supprimer les fichiers en s'assurant qu'il n'y a pas de doublons
+        if (empty($files_to_delete)) {
+            BJLG_Debug::log("Nettoyage : aucune sauvegarde à supprimer après application des politiques.");
+            return 0;
+        }
+
         $deleted_count = 0;
-        $unique_files_to_delete = array_unique($files_to_delete);
+        foreach ($files_to_delete as $filepath => $reason) {
+            if (!file_exists($filepath)) {
+                continue;
+            }
 
-        foreach ($unique_files_to_delete as $filepath) {
-            if (file_exists($filepath)) {
-                if (unlink($filepath)) {
-                    $deleted_count++;
-                    BJLG_Debug::log("Fichier supprimé : " . basename($filepath));
-                } else {
-                    BJLG_Debug::log("ERREUR de nettoyage : Impossible de supprimer le fichier " . basename($filepath));
-                }
+            if (@unlink($filepath)) {
+                $deleted_count++;
+                BJLG_Debug::log(sprintf(
+                    "Fichier supprimé (%s) : %s",
+                    $reason,
+                    basename($filepath)
+                ));
+            } else {
+                BJLG_Debug::log("ERREUR de nettoyage : Impossible de supprimer le fichier " . basename($filepath));
             }
         }
-        
+
         return $deleted_count;
     }
-    
     /**
      * Nettoie les fichiers temporaires
      */
@@ -357,7 +482,7 @@ class BJLG_Cleanup {
      */
     private function cleanup_transients() {
         global $wpdb;
-        
+
         // Supprimer les transients expirés
         $deleted = $wpdb->query(
             "DELETE FROM {$wpdb->options} 
@@ -385,7 +510,153 @@ class BJLG_Cleanup {
         
         return $deleted;
     }
-    
+
+    private function build_backup_metadata($filepath) {
+        $filename = basename($filepath);
+        $isEncrypted = substr($filename, -4) === '.enc';
+        $baseFilename = $isEncrypted ? substr($filename, 0, -4) : $filename;
+        $manifest = $isEncrypted ? null : $this->load_backup_manifest($filepath);
+
+        $destinations = [];
+        if (is_array($manifest) && isset($manifest['destinations']) && is_array($manifest['destinations'])) {
+            foreach ($manifest['destinations'] as $destination) {
+                if (!is_scalar($destination)) {
+                    continue;
+                }
+                $slug = sanitize_key((string) $destination);
+                if ($slug !== '') {
+                    $destinations[$slug] = true;
+                }
+            }
+        }
+
+        $mtime = @filemtime($filepath);
+        if ($mtime === false) {
+            $mtime = 0;
+        }
+
+        $metadata = [
+            'path' => $filepath,
+            'filename' => $filename,
+            'mtime' => $mtime,
+            'type' => $this->determine_backup_type($manifest, $baseFilename),
+            'is_encrypted' => $isEncrypted,
+            'destinations' => array_keys($destinations),
+        ];
+
+        $metadata['statuses'] = $this->collect_backup_statuses($metadata);
+
+        return $metadata;
+    }
+
+    private function load_backup_manifest($filepath) {
+        if (!class_exists('\\ZipArchive')) {
+            return null;
+        }
+
+        $zip = new \ZipArchive();
+        $opened = @$zip->open($filepath);
+        if ($opened !== true) {
+            return null;
+        }
+
+        $manifestJson = $zip->getFromName('backup-manifest.json');
+        $zip->close();
+
+        if ($manifestJson === false) {
+            return null;
+        }
+
+        $decoded = json_decode($manifestJson, true);
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    private function determine_backup_type($manifest, $filename) {
+        if (is_array($manifest) && isset($manifest['type'])) {
+            $type = (string) $manifest['type'];
+            if ($type === 'pre-restore-backup') {
+                return 'pre_restore';
+            }
+            if ($type === 'incremental') {
+                return 'incremental';
+            }
+            if ($type === 'full') {
+                return 'full';
+            }
+        }
+
+        $lower = strtolower($filename);
+        if (strpos($lower, 'pre-restore') !== false) {
+            return 'pre_restore';
+        }
+        if (strpos($lower, 'incremental') !== false) {
+            return 'incremental';
+        }
+        if (strpos($lower, 'full') !== false) {
+            return 'full';
+        }
+
+        return 'standard';
+    }
+
+    private function collect_backup_statuses(array $metadata) {
+        $statuses = [];
+        $statuses[] = !empty($metadata['is_encrypted']) ? 'encrypted' : 'unencrypted';
+        $statuses[] = !empty($metadata['destinations']) ? 'remote_synced' : 'local_only';
+
+        return array_values(array_unique($statuses));
+    }
+
+    private function backup_matches_policy(array $record, array $policy) {
+        $scope = isset($policy['scope']) ? (string) $policy['scope'] : 'global';
+        $value = isset($policy['value']) ? (string) $policy['value'] : '';
+
+        switch ($scope) {
+            case 'destination':
+                if ($value === 'local' || $value === '') {
+                    return true;
+                }
+                return in_array($value, $record['destinations'], true);
+
+            case 'type':
+                if ($value === 'any' || $value === '') {
+                    return true;
+                }
+                return $record['type'] === $value;
+
+            case 'status':
+                if ($value === 'any' || $value === '') {
+                    return true;
+                }
+                return in_array($value, $record['statuses'], true);
+
+            case 'global':
+            default:
+                return true;
+        }
+    }
+
+    private function describe_policy(array $policy) {
+        $label = isset($policy['label']) ? trim((string) $policy['label']) : '';
+        if ($label !== '') {
+            return $label;
+        }
+
+        $scope = isset($policy['scope']) ? (string) $policy['scope'] : 'global';
+        $value = isset($policy['value']) ? (string) $policy['value'] : '';
+
+        switch ($scope) {
+            case 'destination':
+                return sprintf('destination=%s', $value !== '' ? $value : 'local');
+            case 'type':
+                return sprintf('type=%s', $value !== '' ? $value : 'any');
+            case 'status':
+                return sprintf('statut=%s', $value !== '' ? $value : 'any');
+            default:
+                return 'règle globale';
+        }
+    }
+
     /**
      * Suppression récursive d'un dossier
      */

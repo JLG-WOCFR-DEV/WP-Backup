@@ -17,12 +17,11 @@ class BJLG_Settings {
 
     private const VALID_SCHEDULE_RECURRENCES = ['disabled', 'hourly', 'twice_daily', 'daily', 'weekly', 'monthly'];
     private const VALID_SCHEDULE_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    private const CLEANUP_POLICY_SCOPES = ['global', 'destination', 'type', 'status'];
+    private const CLEANUP_POLICY_TYPES = ['any', 'full', 'incremental', 'standard', 'pre_restore'];
+    private const CLEANUP_POLICY_STATUSES = ['any', 'encrypted', 'unencrypted', 'remote_synced', 'local_only'];
 
     private $default_settings = [
-        'cleanup' => [
-            'by_number' => 3,
-            'by_age' => 0
-        ],
         'whitelabel' => [
             'plugin_name' => '',
             'hide_from_non_admins' => false
@@ -98,6 +97,17 @@ class BJLG_Settings {
         'secondary_destinations' => [],
     ];
 
+    private $default_cleanup_policies = [
+        [
+            'id' => 'policy_1',
+            'label' => 'Règle globale',
+            'scope' => 'global',
+            'value' => '*',
+            'retain_number' => 3,
+            'retain_age' => 0,
+        ],
+    ];
+
     public function __construct() {
         if (self::$instance instanceof self) {
             return;
@@ -138,6 +148,7 @@ class BJLG_Settings {
             }
         }
 
+        $this->init_cleanup_policy_defaults();
         $this->init_backup_preferences_defaults();
     }
 
@@ -154,14 +165,28 @@ class BJLG_Settings {
             $saved_settings = [];
             
             // --- Réglages de la Rétention ---
-            if (isset($_POST['by_number']) || isset($_POST['by_age'])) {
-                $cleanup_settings = [
+            if (isset($_POST['cleanup_policies'])) {
+                $raw_policies = wp_unslash($_POST['cleanup_policies']);
+                $cleanup_policies = self::sanitize_cleanup_policies($raw_policies);
+
+                update_option('bjlg_cleanup_policies', $cleanup_policies);
+                update_option('bjlg_cleanup_settings', self::convert_policies_to_legacy($cleanup_policies));
+
+                $saved_settings['cleanup_policies'] = $cleanup_policies;
+                BJLG_Debug::log("Réglages de nettoyage sauvegardés : " . wp_json_encode($cleanup_policies));
+            } elseif (isset($_POST['by_number']) || isset($_POST['by_age'])) {
+                $legacy_cleanup = [
                     'by_number' => isset($_POST['by_number']) ? max(0, intval(wp_unslash($_POST['by_number']))) : 3,
                     'by_age'    => isset($_POST['by_age']) ? max(0, intval(wp_unslash($_POST['by_age']))) : 0,
                 ];
-                update_option('bjlg_cleanup_settings', $cleanup_settings);
-                $saved_settings['cleanup'] = $cleanup_settings;
-                BJLG_Debug::log("Réglages de nettoyage sauvegardés : " . print_r($cleanup_settings, true));
+
+                $cleanup_policies = self::convert_legacy_cleanup_to_policies($legacy_cleanup);
+
+                update_option('bjlg_cleanup_policies', $cleanup_policies);
+                update_option('bjlg_cleanup_settings', $legacy_cleanup);
+
+                $saved_settings['cleanup_policies'] = $cleanup_policies;
+                BJLG_Debug::log("Réglages de nettoyage sauvegardés (legacy) : " . wp_json_encode($cleanup_policies));
             }
 
             // --- Réglages de la Marque Blanche ---
@@ -539,8 +564,11 @@ class BJLG_Settings {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         
+        $cleanup_policies = self::get_cleanup_policies();
+
         $settings = [
-            'cleanup' => get_option('bjlg_cleanup_settings', $this->default_settings['cleanup']),
+            'cleanup' => self::convert_policies_to_legacy($cleanup_policies),
+            'cleanup_policies' => $cleanup_policies,
             'whitelabel' => get_option('bjlg_whitelabel_settings', $this->default_settings['whitelabel']),
             'encryption' => get_option('bjlg_encryption_settings', $this->default_settings['encryption']),
             'notifications' => get_option('bjlg_notification_settings', $this->default_settings['notifications']),
@@ -572,9 +600,15 @@ class BJLG_Settings {
                 foreach ($this->default_settings as $key => $defaults) {
                     update_option('bjlg_' . $key . '_settings', $defaults);
                 }
+                $this->init_cleanup_policy_defaults();
                 BJLG_History::log('settings_reset', 'info', 'Tous les réglages ont été réinitialisés');
             } else {
-                if (isset($this->default_settings[$section])) {
+                if ($section === 'cleanup' || $section === 'cleanup_policies') {
+                    $policies = self::get_default_cleanup_policies();
+                    update_option('bjlg_cleanup_policies', $policies);
+                    update_option('bjlg_cleanup_settings', self::convert_policies_to_legacy($policies));
+                    BJLG_History::log('settings_reset', 'info', "Réglages 'cleanup' réinitialisés");
+                } elseif (isset($this->default_settings[$section])) {
                     update_option('bjlg_' . $section . '_settings', $this->default_settings[$section]);
                     BJLG_History::log('settings_reset', 'info', "Réglages '$section' réinitialisés");
                 } else {
@@ -602,6 +636,7 @@ class BJLG_Settings {
         
         // Collecter tous les paramètres
         $option_keys = [
+            'bjlg_cleanup_policies',
             'bjlg_cleanup_settings',
             'bjlg_whitelabel_settings',
             'bjlg_encryption_settings',
@@ -694,12 +729,37 @@ class BJLG_Settings {
      */
     private function sanitize_imported_settings(array $settings) {
         $sanitized = [];
+        $legacy_cleanup = null;
+        $has_legacy_cleanup = false;
+        $has_policies = false;
 
         foreach ($settings as $option => $value) {
             $clean_value = $this->sanitize_imported_option($option, $value);
-            if ($clean_value !== null) {
-                $sanitized[$option] = $clean_value;
+            if ($clean_value === null) {
+                continue;
             }
+
+            $sanitized[$option] = $clean_value;
+
+            if ($option === 'bjlg_cleanup_settings') {
+                $legacy_cleanup = $clean_value;
+                $has_legacy_cleanup = true;
+            }
+
+            if ($option === 'bjlg_cleanup_policies') {
+                $has_policies = true;
+            }
+        }
+
+        if ($has_legacy_cleanup && !$has_policies && is_array($legacy_cleanup)) {
+            $sanitized['bjlg_cleanup_policies'] = self::convert_legacy_cleanup_to_policies($legacy_cleanup);
+            $has_policies = true;
+        }
+
+        if ($has_policies) {
+            $policies = $sanitized['bjlg_cleanup_policies'];
+            $sanitized['bjlg_cleanup_policies'] = self::sanitize_cleanup_policies($policies);
+            $sanitized['bjlg_cleanup_settings'] = self::convert_policies_to_legacy($sanitized['bjlg_cleanup_policies']);
         }
 
         return $sanitized;
@@ -714,8 +774,11 @@ class BJLG_Settings {
      */
     private function sanitize_imported_option($option, $value) {
         switch ($option) {
+            case 'bjlg_cleanup_policies':
+                return self::sanitize_cleanup_policies($value);
+
             case 'bjlg_cleanup_settings':
-                $defaults = $this->default_settings['cleanup'];
+                $defaults = self::convert_policies_to_legacy(self::get_default_cleanup_policies());
                 $sanitized = $defaults;
 
                 if (is_array($value)) {
@@ -908,7 +971,8 @@ class BJLG_Settings {
      */
     public function sanitize_settings_section($section, array $value) {
         $option_map = [
-            'cleanup' => 'bjlg_cleanup_settings',
+            'cleanup' => 'bjlg_cleanup_policies',
+            'cleanup_policies' => 'bjlg_cleanup_policies',
             'whitelabel' => 'bjlg_whitelabel_settings',
             'encryption' => 'bjlg_encryption_settings',
             'notifications' => 'bjlg_notification_settings',
@@ -923,6 +987,24 @@ class BJLG_Settings {
         }
 
         return $this->sanitize_imported_option($option_map[$section], $value);
+    }
+
+    private function init_cleanup_policy_defaults() {
+        $policies_option = get_option('bjlg_cleanup_policies', null);
+
+        if ($policies_option === null || $policies_option === false) {
+            $legacy = get_option('bjlg_cleanup_settings', null);
+            if ($legacy !== null && $legacy !== false) {
+                $policies_option = self::convert_legacy_cleanup_to_policies($legacy);
+            } else {
+                $policies_option = self::get_default_cleanup_policies();
+            }
+        }
+
+        $policies = self::sanitize_cleanup_policies($policies_option);
+
+        update_option('bjlg_cleanup_policies', $policies);
+        update_option('bjlg_cleanup_settings', self::convert_policies_to_legacy($policies));
     }
 
     private function init_backup_preferences_defaults() {
@@ -1043,6 +1125,187 @@ class BJLG_Settings {
         return [
             'checksum' => true,
             'dry_run' => false,
+        ];
+    }
+
+    public static function get_default_cleanup_policies(): array {
+        $instance = self::get_instance();
+
+        return array_map(static function ($policy) {
+            return [
+                'id' => $policy['id'],
+                'label' => $policy['label'],
+                'scope' => $policy['scope'],
+                'value' => $policy['value'],
+                'retain_number' => $policy['retain_number'],
+                'retain_age' => $policy['retain_age'],
+            ];
+        }, $instance->default_cleanup_policies);
+    }
+
+    public static function get_cleanup_policies(): array {
+        $raw = get_option('bjlg_cleanup_policies', null);
+
+        if ($raw === null || $raw === false) {
+            $legacy = get_option('bjlg_cleanup_settings', null);
+            if ($legacy !== null && $legacy !== false) {
+                $raw = self::convert_legacy_cleanup_to_policies($legacy);
+            }
+        }
+
+        $policies = self::sanitize_cleanup_policies($raw);
+
+        update_option('bjlg_cleanup_policies', $policies);
+        update_option('bjlg_cleanup_settings', self::convert_policies_to_legacy($policies));
+
+        return $policies;
+    }
+
+    public static function sanitize_cleanup_policies($policies): array {
+        if (is_string($policies)) {
+            $decoded = json_decode($policies, true);
+            if (is_array($decoded)) {
+                $policies = $decoded;
+            }
+        }
+
+        if (!is_array($policies)) {
+            $policies = [];
+        }
+
+        if (isset($policies['policies']) && is_array($policies['policies'])) {
+            $policies = $policies['policies'];
+        }
+
+        $allowed_destinations = array_merge(['local'], self::get_known_destination_ids());
+        $sanitized = [];
+        $seen_ids = [];
+        $index = 0;
+
+        foreach ($policies as $policy) {
+            if (!is_array($policy)) {
+                $index++;
+                continue;
+            }
+
+            $scope = isset($policy['scope']) ? sanitize_key((string) $policy['scope']) : 'global';
+            if (!in_array($scope, self::CLEANUP_POLICY_SCOPES, true)) {
+                $scope = 'global';
+            }
+
+            $value = '';
+            switch ($scope) {
+                case 'destination':
+                    $value = isset($policy['value']) ? sanitize_key((string) $policy['value']) : 'local';
+                    if ($value === '' || !in_array($value, $allowed_destinations, true)) {
+                        $value = 'local';
+                    }
+                    break;
+                case 'type':
+                    $value = isset($policy['value']) ? sanitize_key((string) $policy['value']) : 'any';
+                    if (!in_array($value, self::CLEANUP_POLICY_TYPES, true)) {
+                        $value = 'any';
+                    }
+                    break;
+                case 'status':
+                    $value = isset($policy['value']) ? sanitize_key((string) $policy['value']) : 'any';
+                    if (!in_array($value, self::CLEANUP_POLICY_STATUSES, true)) {
+                        $value = 'any';
+                    }
+                    break;
+                case 'global':
+                default:
+                    $value = '*';
+                    break;
+            }
+
+            $retain_number = isset($policy['retain_number']) ? intval($policy['retain_number']) : 3;
+            $retain_age = isset($policy['retain_age']) ? intval($policy['retain_age']) : 0;
+
+            $retain_number = max(0, $retain_number);
+            $retain_age = max(0, $retain_age);
+
+            $id = isset($policy['id']) ? sanitize_key((string) $policy['id']) : '';
+            if ($id === '' || isset($seen_ids[$id])) {
+                $id = 'policy_' . ($index + 1);
+            }
+            $seen_ids[$id] = true;
+
+            $label = '';
+            if (isset($policy['label']) && is_string($policy['label'])) {
+                $label = sanitize_text_field($policy['label']);
+            }
+
+            $sanitized[] = [
+                'id' => $id,
+                'label' => $label,
+                'scope' => $scope,
+                'value' => $value,
+                'retain_number' => $retain_number,
+                'retain_age' => $retain_age,
+            ];
+
+            $index++;
+        }
+
+        if (empty($sanitized)) {
+            $sanitized = self::get_default_cleanup_policies();
+        }
+
+        $has_global = false;
+        foreach ($sanitized as $policy) {
+            if ($policy['scope'] === 'global') {
+                $has_global = true;
+                break;
+            }
+        }
+
+        if (!$has_global) {
+            $defaults = self::get_default_cleanup_policies();
+            $sanitized[] = $defaults[0];
+        }
+
+        $counter = 1;
+        $normalized = [];
+        foreach ($sanitized as $policy) {
+            $policy['id'] = 'policy_' . $counter;
+            $normalized[] = $policy;
+            $counter++;
+        }
+
+        return $normalized;
+    }
+
+    public static function convert_legacy_cleanup_to_policies($legacy): array {
+        $legacy = is_array($legacy) ? $legacy : [];
+
+        $defaults = self::get_default_cleanup_policies();
+        $policy = $defaults[0];
+
+        if (isset($legacy['by_number'])) {
+            $policy['retain_number'] = max(0, intval($legacy['by_number']));
+        }
+        if (isset($legacy['by_age'])) {
+            $policy['retain_age'] = max(0, intval($legacy['by_age']));
+        }
+
+        return [$policy];
+    }
+
+    public static function convert_policies_to_legacy(array $policies): array {
+        $policies = self::sanitize_cleanup_policies($policies);
+
+        $global_policy = $policies[0];
+        foreach ($policies as $policy) {
+            if ($policy['scope'] === 'global') {
+                $global_policy = $policy;
+                break;
+            }
+        }
+
+        return [
+            'by_number' => $global_policy['retain_number'],
+            'by_age' => $global_policy['retain_age'],
         ];
     }
 

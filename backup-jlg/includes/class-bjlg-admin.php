@@ -934,7 +934,7 @@ class BJLG_Admin {
      * Section : Réglages
      */
     private function render_settings_section() {
-        $cleanup_settings = get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
+        $cleanup_policies = BJLG_Settings::get_cleanup_policies();
         $schedule_collection = $this->get_schedule_settings_for_display();
         $schedules = isset($schedule_collection['schedules']) && is_array($schedule_collection['schedules'])
             ? array_values($schedule_collection['schedules'])
@@ -957,6 +957,57 @@ class BJLG_Admin {
             'next_run_relative' => '',
         ];
         $destination_choices = $this->get_destination_choices();
+        $cleanup_scope_labels = [
+            'global' => 'Règle globale',
+            'destination' => 'Destination',
+            'type' => 'Type de sauvegarde',
+            'status' => 'Statut',
+        ];
+        $cleanup_destination_options = array_merge(['local' => 'Stockage local'], $destination_choices);
+        $cleanup_policy_value_options = [
+            'global' => [
+                ['value' => '*', 'label' => 'Toutes les sauvegardes'],
+            ],
+            'destination' => [],
+            'type' => [
+                ['value' => 'any', 'label' => 'Tous les types'],
+                ['value' => 'full', 'label' => 'Sauvegardes complètes'],
+                ['value' => 'incremental', 'label' => 'Sauvegardes incrémentales'],
+                ['value' => 'standard', 'label' => 'Sauvegardes standards'],
+                ['value' => 'pre_restore', 'label' => 'Sauvegardes pré-restauration'],
+            ],
+            'status' => [
+                ['value' => 'any', 'label' => 'Tous les statuts'],
+                ['value' => 'encrypted', 'label' => 'Sauvegardes chiffrées'],
+                ['value' => 'unencrypted', 'label' => 'Sauvegardes non chiffrées'],
+                ['value' => 'remote_synced', 'label' => 'Sauvegardes envoyées vers une destination distante'],
+                ['value' => 'local_only', 'label' => 'Sauvegardes uniquement locales'],
+            ],
+        ];
+
+        foreach ($cleanup_destination_options as $dest_key => $dest_label) {
+            $cleanup_policy_value_options['destination'][] = [
+                'value' => $dest_key,
+                'label' => $dest_label,
+            ];
+        }
+
+        $default_destination_key = array_key_first($cleanup_destination_options);
+        if ($default_destination_key === null) {
+            $default_destination_key = 'local';
+        }
+
+        $cleanup_policy_template = [
+            'id' => '',
+            'label' => '',
+            'scope' => 'destination',
+            'value' => $default_destination_key,
+            'retain_number' => 3,
+            'retain_age' => 0,
+        ];
+
+        $cleanup_policy_options_attr = esc_attr(wp_json_encode($cleanup_policy_value_options));
+        $cleanup_scope_labels_attr = esc_attr(wp_json_encode($cleanup_scope_labels));
         $wl_settings = get_option('bjlg_whitelabel_settings', ['plugin_name' => '', 'hide_from_non_admins' => false]);
         $webhook_key = class_exists(BJLG_Webhooks::class) ? BJLG_Webhooks::get_webhook_key() : '';
 
@@ -1145,49 +1196,40 @@ class BJLG_Admin {
             <form class="bjlg-settings-form">
                 <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
                 <h3><span class="dashicons dashicons-trash" aria-hidden="true"></span> Rétention des Sauvegardes</h3>
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">Conserver par nombre</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <div class="bjlg-form-field-group">
-                                    <div class="bjlg-form-field-control">
-                                        <input name="by_number" type="number" class="small-text" value="<?php echo esc_attr(isset($cleanup_settings['by_number']) ? $cleanup_settings['by_number'] : 3); ?>" min="0">
-                                    </div>
-                                    <div class="bjlg-form-field-actions">
-                                        <span class="bjlg-form-field-unit">sauvegardes</span>
-                                    </div>
-                                </div>
-                                <p class="description">0 = illimité</p>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="bjlg-cleanup-by-age">Conserver par ancienneté</label></th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <div class="bjlg-form-field-group">
-                                    <div class="bjlg-form-field-control">
-                                        <input
-                                            id="bjlg-cleanup-by-age"
-                                            name="by_age"
-                                            type="number"
-                                            class="small-text"
-                                            value="<?php echo esc_attr(isset($cleanup_settings['by_age']) ? $cleanup_settings['by_age'] : 0); ?>"
-                                            min="0"
-                                            aria-describedby="bjlg-cleanup-by-age-description"
-                                        >
-                                    </div>
-                                    <div class="bjlg-form-field-actions">
-                                        <span class="bjlg-form-field-unit">jours</span>
-                                    </div>
-                                </div>
-                                <p id="bjlg-cleanup-by-age-description" class="description">0 = illimité</p>
-                            </div>
-                        </td>
-                    </tr>
-                </table>
-                
+                <p class="description">Les règles sont évaluées de haut en bas : la première règle correspondante est appliquée.</p>
+                <div
+                    class="bjlg-cleanup-policies"
+                    data-policy-options="<?php echo $cleanup_policy_options_attr; ?>"
+                    data-scope-labels="<?php echo $cleanup_scope_labels_attr; ?>"
+                    data-next-index="<?php echo esc_attr(count($cleanup_policies)); ?>"
+                >
+                    <table class="wp-list-table widefat striped bjlg-cleanup-policy-table">
+                        <thead>
+                        <tr>
+                            <th scope="col">Nom</th>
+                            <th scope="col">Filtre</th>
+                            <th scope="col">Cible</th>
+                            <th scope="col">Rétention</th>
+                            <th scope="col" class="column-actions">Actions</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($cleanup_policies as $policy_index => $policy): ?>
+                            <?php echo $this->render_cleanup_policy_row($policy_index, $policy, $cleanup_scope_labels, $cleanup_policy_value_options); ?>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <p class="bjlg-cleanup-policy-actions">
+                        <button type="button" class="button button-secondary bjlg-add-cleanup-policy">
+                            <span class="dashicons dashicons-plus" aria-hidden="true"></span>
+                            Ajouter une règle
+                        </button>
+                    </p>
+                    <script type="text/html" id="bjlg-cleanup-policy-template">
+                        <?php echo $this->render_cleanup_policy_row('__index__', $cleanup_policy_template, $cleanup_scope_labels, $cleanup_policy_value_options); ?>
+                    </script>
+                </div>
+
                 <h3><span class="dashicons dashicons-admin-appearance" aria-hidden="true"></span> Marque Blanche</h3>
                 <table class="form-table">
                     <tr>
@@ -1568,6 +1610,112 @@ class BJLG_Admin {
             </table>
         </div>
         <?php
+    }
+
+    private function render_cleanup_policy_row($index, array $policy, array $scope_labels, array $value_options) {
+        $row_index = is_numeric($index) ? (int) $index : (string) $index;
+        $index_attribute = is_numeric($row_index) ? (string) $row_index : (string) $row_index;
+        $display_index = is_numeric($row_index) ? (int) $row_index + 1 : null;
+
+        $scope = isset($policy['scope']) ? sanitize_key((string) $policy['scope']) : 'global';
+        if (!isset($value_options[$scope])) {
+            $scope = 'global';
+        }
+
+        $value_list = $value_options[$scope];
+        $value = isset($policy['value']) ? (string) $policy['value'] : ($scope === 'global' ? '*' : '');
+
+        $retain_number = isset($policy['retain_number']) ? max(0, (int) $policy['retain_number']) : 3;
+        $retain_age = isset($policy['retain_age']) ? max(0, (int) $policy['retain_age']) : 0;
+        $label = isset($policy['label']) ? (string) $policy['label'] : '';
+        $id = isset($policy['id']) ? (string) $policy['id'] : '';
+
+        $placeholder = $display_index ? sprintf('Règle #%d', $display_index) : 'Nom de la règle';
+
+        $value_in_list = false;
+        foreach ($value_list as $option) {
+            if ((string) $option['value'] === $value) {
+                $value_in_list = true;
+                break;
+            }
+        }
+
+        if (!$value_in_list && !empty($value_list)) {
+            $value = (string) $value_list[0]['value'];
+        }
+
+        $scope_labels = array_merge($scope_labels, []);
+
+        ob_start();
+        ?>
+        <tr class="bjlg-cleanup-policy-row" data-index="<?php echo esc_attr($index_attribute); ?>">
+            <td class="bjlg-cleanup-policy-label">
+                <input type="hidden" name="cleanup_policies[<?php echo esc_attr($index_attribute); ?>][id]" value="<?php echo esc_attr($id); ?>">
+                <input
+                    type="text"
+                    name="cleanup_policies[<?php echo esc_attr($index_attribute); ?>][label]"
+                    value="<?php echo esc_attr($label); ?>"
+                    class="regular-text"
+                    placeholder="<?php echo esc_attr($placeholder); ?>"
+                >
+            </td>
+            <td class="bjlg-cleanup-policy-scope-cell">
+                <select
+                    name="cleanup_policies[<?php echo esc_attr($index_attribute); ?>][scope]"
+                    class="bjlg-cleanup-policy-scope"
+                >
+                    <?php foreach ($scope_labels as $scope_key => $scope_label): ?>
+                        <option value="<?php echo esc_attr($scope_key); ?>" <?php selected($scope, $scope_key); ?>><?php echo esc_html($scope_label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </td>
+            <td class="bjlg-cleanup-policy-target">
+                <select
+                    name="cleanup_policies[<?php echo esc_attr($index_attribute); ?>][value]"
+                    class="bjlg-cleanup-policy-value"
+                    data-current-scope="<?php echo esc_attr($scope); ?>"
+                >
+                    <?php foreach ($value_list as $option): ?>
+                        <option value="<?php echo esc_attr($option['value']); ?>" <?php selected((string) $option['value'], $value); ?>><?php echo esc_html($option['label']); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </td>
+            <td class="bjlg-cleanup-policy-retention">
+                <div class="bjlg-cleanup-retention-fields">
+                    <label>
+                        <span class="screen-reader-text">Conserver par nombre</span>
+                        <input
+                            type="number"
+                            min="0"
+                            class="small-text"
+                            name="cleanup_policies[<?php echo esc_attr($index_attribute); ?>][retain_number]"
+                            value="<?php echo esc_attr($retain_number); ?>"
+                        >
+                        <span class="bjlg-retention-unit">sauvegardes</span>
+                    </label>
+                    <label>
+                        <span class="screen-reader-text">Conserver par ancienneté</span>
+                        <input
+                            type="number"
+                            min="0"
+                            class="small-text"
+                            name="cleanup_policies[<?php echo esc_attr($index_attribute); ?>][retain_age]"
+                            value="<?php echo esc_attr($retain_age); ?>"
+                        >
+                        <span class="bjlg-retention-unit">jours</span>
+                    </label>
+                </div>
+                <p class="description">0 = illimité</p>
+            </td>
+            <td class="bjlg-cleanup-policy-actions">
+                <button type="button" class="button button-link-delete bjlg-remove-cleanup-policy" aria-label="Supprimer la règle">
+                    Supprimer
+                </button>
+            </td>
+        </tr>
+        <?php
+
+        return ob_get_clean();
     }
 
     private function get_destination_choices() {

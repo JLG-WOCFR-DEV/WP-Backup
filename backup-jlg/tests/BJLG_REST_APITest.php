@@ -2576,6 +2576,11 @@ namespace {
             $_POST = $previous_post;
         }
 
+        $expectedPolicies = \BJLG\BJLG_Settings::convert_legacy_cleanup_to_policies([
+            'by_number' => 5,
+            'by_age' => 9,
+        ]);
+        $this->assertSame($expectedPolicies, get_option('bjlg_cleanup_policies'));
         $this->assertSame([
             'by_number' => 5,
             'by_age' => 9,
@@ -2588,6 +2593,7 @@ namespace {
 
             $original_cleanup = ['by_number' => 3, 'by_age' => 1];
             $GLOBALS['bjlg_test_options']['bjlg_cleanup_settings'] = $original_cleanup;
+            $GLOBALS['bjlg_test_options']['bjlg_cleanup_policies'] = \BJLG\BJLG_Settings::convert_legacy_cleanup_to_policies($original_cleanup);
 
             $request = new class {
                 public function get_json_params()
@@ -2601,6 +2607,10 @@ namespace {
             $this->assertInstanceOf(WP_Error::class, $result);
             $this->assertSame('invalid_payload', $result->get_error_code());
             $this->assertSame($original_cleanup, get_option('bjlg_cleanup_settings'));
+            $this->assertSame(
+                \BJLG\BJLG_Settings::convert_legacy_cleanup_to_policies($original_cleanup),
+                get_option('bjlg_cleanup_policies')
+            );
         }
 
         public function test_update_settings_rejects_invalid_cleanup_structure(): void
@@ -2609,6 +2619,7 @@ namespace {
 
             $original_cleanup = ['by_number' => 5, 'by_age' => 2];
             $GLOBALS['bjlg_test_options']['bjlg_cleanup_settings'] = $original_cleanup;
+            $GLOBALS['bjlg_test_options']['bjlg_cleanup_policies'] = \BJLG\BJLG_Settings::convert_legacy_cleanup_to_policies($original_cleanup);
 
             $request = new class {
                 public function get_json_params()
@@ -2624,6 +2635,10 @@ namespace {
             $this->assertInstanceOf(WP_Error::class, $result);
             $this->assertSame('invalid_cleanup_settings', $result->get_error_code());
             $this->assertSame($original_cleanup, get_option('bjlg_cleanup_settings'));
+            $this->assertSame(
+                \BJLG\BJLG_Settings::convert_legacy_cleanup_to_policies($original_cleanup),
+                get_option('bjlg_cleanup_policies')
+            );
         }
 
         public function test_update_settings_sanitizes_payload_before_saving(): void
@@ -2700,6 +2715,11 @@ namespace {
             $response = $api->update_settings($request);
 
             $this->assertIsArray($response);
+            $expectedPolicies = \BJLG\BJLG_Settings::convert_legacy_cleanup_to_policies([
+                'by_number' => 15,
+                'by_age' => 0,
+            ]);
+            $this->assertSame($expectedPolicies, get_option('bjlg_cleanup_policies'));
             $this->assertSame([
                 'by_number' => 15,
                 'by_age' => 0,

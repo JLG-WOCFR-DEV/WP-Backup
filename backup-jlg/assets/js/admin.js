@@ -3313,6 +3313,135 @@ jQuery(document).ready(function($) {
             });
     });
 
+    // --- GESTIONNAIRE DES RÈGLES DE RÉTENTION ---
+    (function setupCleanupPoliciesManager() {
+        const $container = $('.bjlg-cleanup-policies');
+
+        if (!$container.length) {
+            return;
+        }
+
+        const $tableBody = $container.find('tbody');
+        const templateHtml = ($('#bjlg-cleanup-policy-template').html() || '').trim();
+        const optionsAttr = $container.attr('data-policy-options') || '{}';
+        let policyOptions = {};
+
+        try {
+            const parsed = JSON.parse(optionsAttr);
+            if (parsed && typeof parsed === 'object') {
+                policyOptions = parsed;
+            }
+        } catch (error) {
+            policyOptions = {};
+        }
+
+        if (!Array.isArray(policyOptions.global)) {
+            policyOptions.global = [{ value: '*', label: 'Toutes les sauvegardes' }];
+        }
+
+        let nextIndex = parseInt($container.attr('data-next-index'), 10);
+        if (!Number.isFinite(nextIndex)) {
+            nextIndex = $tableBody.find('tr').length;
+        }
+
+        function resolveOptionsForScope(scope) {
+            const normalized = typeof scope === 'string' && scope !== '' ? scope : 'global';
+            const list = policyOptions[normalized];
+            if (Array.isArray(list) && list.length) {
+                return list;
+            }
+            return policyOptions.global;
+        }
+
+        function refreshValueSelect($row, scope, selectedValue) {
+            const $select = $row.find('.bjlg-cleanup-policy-value');
+            const options = resolveOptionsForScope(scope);
+            const currentValue = typeof selectedValue === 'string' ? selectedValue : ($select.val() || '');
+
+            $select.empty();
+
+            options.forEach(function(option) {
+                const value = option && option.value !== undefined ? String(option.value) : '';
+                if (value === '') {
+                    return;
+                }
+                const label = option && option.label ? String(option.label) : value;
+                const $option = $('<option/>', {
+                    value: value,
+                    text: label
+                });
+                if (String(currentValue) === value) {
+                    $option.prop('selected', true);
+                }
+                $select.append($option);
+            });
+
+            if (!$select.val() && options.length) {
+                $select.val(String(options[0].value));
+            }
+
+            $select.attr('data-current-scope', scope);
+        }
+
+        function refreshRow($row) {
+            const scope = ($row.find('.bjlg-cleanup-policy-scope').val() || 'global').toString();
+            const currentValue = ($row.find('.bjlg-cleanup-policy-value').val() || '').toString();
+            refreshValueSelect($row, scope, currentValue);
+        }
+
+        function updateRemoveButtons() {
+            const $rows = $tableBody.find('tr');
+            const disable = $rows.length <= 1;
+            $rows.find('.bjlg-remove-cleanup-policy').each(function() {
+                $(this)
+                    .prop('disabled', disable)
+                    .attr('aria-disabled', disable ? 'true' : 'false');
+            });
+        }
+
+        $tableBody.find('tr').each(function() {
+            refreshRow($(this));
+        });
+
+        updateRemoveButtons();
+
+        $container.on('change', '.bjlg-cleanup-policy-scope', function() {
+            const $row = $(this).closest('tr');
+            const scope = ($(this).val() || 'global').toString();
+            refreshValueSelect($row, scope, '');
+        });
+
+        $container.on('click', '.bjlg-add-cleanup-policy', function(event) {
+            event.preventDefault();
+
+            if (!templateHtml) {
+                return;
+            }
+
+            const newIndex = String(nextIndex++);
+            let rowHtml = templateHtml.replace(/__index__/g, newIndex);
+            const $row = $(rowHtml);
+
+            refreshRow($row);
+            $tableBody.append($row);
+
+            updateRemoveButtons();
+            $container.attr('data-next-index', String(nextIndex));
+        });
+
+        $container.on('click', '.bjlg-remove-cleanup-policy', function(event) {
+            event.preventDefault();
+
+            const $rows = $tableBody.find('tr');
+            if ($rows.length <= 1) {
+                return;
+            }
+
+            $(this).closest('tr').remove();
+            updateRemoveButtons();
+        });
+    })();
+
     // --- GESTIONNAIRE SAUVEGARDE DES RÉGLAGES ---
     $('.bjlg-settings-form').on('submit', function(e) {
         e.preventDefault();
