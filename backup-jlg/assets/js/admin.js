@@ -169,6 +169,362 @@ jQuery(document).ready(function($) {
         };
     })();
 
+    // --- BACKUP WIZARD ---
+    (function setupBackupWizard() {
+        const $wizard = $('[data-bjlg-backup-wizard]');
+        if (!$wizard.length) {
+            return;
+        }
+
+        const $form = $wizard.find('#bjlg-backup-creation-form');
+        const $steps = $wizard.find('[data-step]');
+        if (!$form.length || !$steps.length) {
+            return;
+        }
+
+        const $progressItems = $wizard.find('[data-step-indicator]');
+        const $nextButton = $wizard.find('[data-action="next"]');
+        const $prevButton = $wizard.find('[data-action="prev"]');
+        const $submitWrapper = $wizard.find('[data-role="submit-wrapper"]');
+        const $summary = $wizard.find('[data-role="summary"]');
+        const $summaryFields = {};
+        const $errors = $wizard.find('[data-role="errors"]');
+        const $navigationHint = $wizard.find('[data-role="navigation-hint"]');
+        const $nextLabel = $wizard.find('[data-role="next-label"]');
+        const $presetRadios = $form.find('input[name="backup_preset"]');
+
+        $summary.find('[data-summary]').each(function() {
+            const $field = $(this);
+            const key = $field.data('summary');
+            if (!key) {
+                return;
+            }
+            $summaryFields[key] = $field;
+        });
+
+        const $componentInputs = $form.find('input[name="backup_components[]"]');
+        const $optionInputs = $form.find('input[name="encrypt_backup"], input[name="incremental_backup"]');
+        const $postCheckInputs = $form.find('input[name="post_checks[]"]');
+        const $destinationInputs = $form.find('input[name="secondary_destinations[]"]');
+        const $includeTextarea = $form.find('textarea[name="include_patterns"]');
+        const $excludeTextarea = $form.find('textarea[name="exclude_patterns"]');
+
+        if ($steps.length < 2) {
+            return;
+        }
+
+        const state = {
+            currentStep: 0,
+            totalSteps: $steps.length,
+            activePreset: $presetRadios.filter(':checked').val() || 'custom'
+        };
+        let isApplyingPreset = false;
+
+        const getEmptyText = function($field) {
+            if (!$field || !$field.length) {
+                return '';
+            }
+            return $field.data('emptyText') || '';
+        };
+
+        const formatCount = function($field, count) {
+            if (!$field || !$field.length || !Number.isFinite(count)) {
+                return '';
+            }
+
+            if (count <= 0) {
+                return getEmptyText($field);
+            }
+
+            const singular = $field.data('countSingular');
+            const plural = $field.data('countPlural');
+            const template = count === 1 ? (singular || plural) : (plural || singular);
+            if (typeof template === 'string' && template.indexOf('%d') !== -1) {
+                return template.replace('%d', count);
+            }
+
+            return String(count);
+        };
+
+        const setSummary = function(key, value) {
+            const $field = $summaryFields[key];
+            if (!$field) {
+                return;
+            }
+
+            const display = value && value.length ? value : getEmptyText($field);
+            $field.text(display);
+        };
+
+        const getCheckedLabels = function($inputs) {
+            const labels = [];
+            $inputs.filter(':checked').each(function() {
+                const $input = $(this);
+                const label = $input.data('label');
+                if (label) {
+                    labels.push(label);
+                    return;
+                }
+                const $label = $input.closest('label');
+                if ($label.length) {
+                    labels.push($.trim($label.text()));
+                }
+            });
+            return labels;
+        };
+
+        const parsePatterns = function(raw) {
+            if (typeof raw !== 'string') {
+                return [];
+            }
+            return raw.split(/\r?\n/).map(function(line) {
+                return line.trim();
+            }).filter(function(line) {
+                return line.length > 0;
+            });
+        };
+
+        const updateSummary = function() {
+            const components = getCheckedLabels($componentInputs);
+            setSummary('components', components.join(', '));
+
+            const options = getCheckedLabels($optionInputs);
+            setSummary('options', options.join(', '));
+
+            const checks = getCheckedLabels($postCheckInputs);
+            setSummary('checks', checks.join(', '));
+
+            const includePatterns = parsePatterns($includeTextarea.val());
+            const excludePatterns = parsePatterns($excludeTextarea.val());
+
+            const includesText = formatCount($summaryFields.includes, includePatterns.length);
+            const excludesText = formatCount($summaryFields.excludes, excludePatterns.length);
+
+            setSummary('includes', includesText);
+            setSummary('excludes', excludesText);
+
+            const destinations = getCheckedLabels($destinationInputs);
+            setSummary('destinations', destinations.join(', '));
+        };
+
+        const hideError = function() {
+            if ($errors.length) {
+                $errors.text('').addClass('is-hidden');
+            }
+        };
+
+        const showError = function(message) {
+            if (!$errors.length || !message) {
+                return;
+            }
+            $errors.text(message).removeClass('is-hidden');
+        };
+
+        const setStep = function(index) {
+            if (index < 0 || index >= state.totalSteps) {
+                return;
+            }
+
+            state.currentStep = index;
+
+            $wizard.addClass('is-enhanced');
+            if ($navigationHint.length) {
+                $navigationHint.attr('hidden', 'hidden');
+            }
+
+            $steps.each(function(stepIndex) {
+                const $step = $(this);
+                const isActive = stepIndex === index;
+                $step.toggleClass('is-active', isActive);
+                $step.attr('aria-hidden', isActive ? 'false' : 'true');
+            });
+
+            $progressItems.each(function(progressIndex) {
+                const $item = $(this);
+                $item.toggleClass('is-active', progressIndex === index);
+                $item.toggleClass('is-complete', progressIndex < index);
+            });
+
+            $prevButton.prop('disabled', index === 0);
+
+            const isLastStep = index === state.totalSteps - 1;
+            if (isLastStep) {
+                $nextButton.addClass('is-hidden');
+                $submitWrapper.removeClass('is-hidden');
+            } else {
+                $nextButton.removeClass('is-hidden');
+                $submitWrapper.addClass('is-hidden');
+            }
+
+            if ($nextLabel.length) {
+                if (index === state.totalSteps - 2) {
+                    $nextLabel.text($nextLabel.data('labelConfirm') || $nextLabel.text());
+                } else {
+                    $nextLabel.text($nextLabel.data('labelDefault') || $nextLabel.text());
+                }
+            }
+
+            hideError();
+
+            const $heading = $steps.eq(index).find('h3').first();
+            if ($heading.length) {
+                $heading.attr('tabindex', '-1');
+                $heading.focus();
+                window.setTimeout(function() {
+                    $heading.removeAttr('tabindex');
+                }, 400);
+            }
+        };
+
+        const ensureNextLabels = function() {
+            if (!$nextLabel.length) {
+                return;
+            }
+            if (!$nextLabel.data('labelDefault')) {
+                $nextLabel.data('labelDefault', $nextLabel.text());
+            }
+            if (!$nextLabel.data('labelConfirm')) {
+                $nextLabel.data('labelConfirm', $nextLabel.attr('data-label-confirm'));
+            }
+        };
+
+        ensureNextLabels();
+
+        const validateStep = function(index) {
+            const $step = $steps.eq(index);
+            const stepKey = $step.data('step');
+
+            if (stepKey === 'components' && !$componentInputs.filter(':checked').length) {
+                showError($step.data('errorRequired') || '');
+                return false;
+            }
+
+            return true;
+        };
+
+        $nextButton.on('click', function(event) {
+            event.preventDefault();
+            if (!validateStep(state.currentStep)) {
+                return;
+            }
+            const nextIndex = Math.min(state.totalSteps - 1, state.currentStep + 1);
+            setStep(nextIndex);
+        });
+
+        $prevButton.on('click', function(event) {
+            event.preventDefault();
+            const prevIndex = Math.max(0, state.currentStep - 1);
+            setStep(prevIndex);
+        });
+
+        const markCustom = function() {
+            if (isApplyingPreset) {
+                return;
+            }
+            if (state.activePreset !== 'custom') {
+                state.activePreset = 'custom';
+                $presetRadios.filter('[value="custom"]').prop('checked', true);
+            }
+        };
+
+        const handleUserChange = function() {
+            markCustom();
+            updateSummary();
+        };
+
+        $componentInputs.on('change', handleUserChange);
+        $optionInputs.on('change', handleUserChange);
+        $postCheckInputs.on('change', handleUserChange);
+        $destinationInputs.on('change', handleUserChange);
+        $includeTextarea.on('input', handleUserChange);
+        $excludeTextarea.on('input', handleUserChange);
+
+        const applyPreset = function(preset) {
+            if (!preset || typeof preset !== 'object') {
+                return;
+            }
+
+            if (Array.isArray(preset.components) && preset.components.length) {
+                $componentInputs.prop('checked', false);
+                preset.components.forEach(function(component) {
+                    $componentInputs.filter('[value="' + component + '"]').prop('checked', true);
+                });
+            }
+
+            if (preset.options && typeof preset.options === 'object') {
+                if (preset.options.encrypt_backup !== undefined) {
+                    $optionInputs.filter('[name="encrypt_backup"]').prop('checked', !!preset.options.encrypt_backup);
+                }
+                if (preset.options.incremental_backup !== undefined) {
+                    $optionInputs.filter('[name="incremental_backup"]').prop('checked', !!preset.options.incremental_backup);
+                }
+                if (preset.options.post_checks && typeof preset.options.post_checks === 'object') {
+                    $postCheckInputs.prop('checked', false);
+                    Object.keys(preset.options.post_checks).forEach(function(key) {
+                        if (preset.options.post_checks[key]) {
+                            $postCheckInputs.filter('[value="' + key + '"]').prop('checked', true);
+                        }
+                    });
+                }
+            }
+
+            if (Array.isArray(preset.destinations)) {
+                $destinationInputs.prop('checked', false);
+                preset.destinations.forEach(function(destination) {
+                    $destinationInputs.filter('[value="' + destination + '"]').prop('checked', true);
+                });
+            }
+
+            if (preset.include_patterns !== undefined) {
+                const includes = Array.isArray(preset.include_patterns)
+                    ? preset.include_patterns.join('\n')
+                    : preset.include_patterns;
+                $includeTextarea.val(includes || '');
+            }
+
+            if (preset.exclude_patterns !== undefined) {
+                const excludes = Array.isArray(preset.exclude_patterns)
+                    ? preset.exclude_patterns.join('\n')
+                    : preset.exclude_patterns;
+                $excludeTextarea.val(excludes || '');
+            }
+        };
+
+        $presetRadios.on('change', function() {
+            const $radio = $(this);
+            const value = $radio.val();
+            state.activePreset = value;
+
+            if (value === 'custom') {
+                updateSummary();
+                return;
+            }
+
+            const rawPreset = $radio.attr('data-preset');
+            if (!rawPreset) {
+                updateSummary();
+                return;
+            }
+
+            let presetData = null;
+            try {
+                presetData = JSON.parse(rawPreset);
+            } catch (error) {
+                presetData = null;
+            }
+
+            isApplyingPreset = true;
+            applyPreset(presetData);
+            isApplyingPreset = false;
+
+            updateSummary();
+            setStep(0);
+        });
+
+        updateSummary();
+        setStep(0);
+    })();
+
     // --- GESTIONNAIRE DE PLANIFICATION ---
     (function setupScheduleManager() {
         const $scheduleForm = $('#bjlg-schedule-form');

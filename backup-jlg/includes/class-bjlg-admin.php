@@ -256,121 +256,376 @@ class BJLG_Admin {
             $secondary_destinations = [];
         }
 
-        $include_text = esc_textarea(implode("\n", array_map('strval', (array) $include_patterns)));
-        $exclude_text = esc_textarea(implode("\n", array_map('strval', (array) $exclude_patterns)));
+        $include_patterns = array_map('strval', (array) $include_patterns);
+        $exclude_patterns = array_map('strval', (array) $exclude_patterns);
+        $include_text = esc_textarea(implode("\n", $include_patterns));
+        $exclude_text = esc_textarea(implode("\n", $exclude_patterns));
         $destination_choices = $this->get_destination_choices();
+
+        $components = [
+            'db' => [
+                'label' => __('Base de données', 'backup-jlg'),
+                'description' => __('Toutes les tables WordPress', 'backup-jlg'),
+                'default' => true,
+            ],
+            'plugins' => [
+                'label' => __('Extensions', 'backup-jlg'),
+                'description' => __('Répertoire /wp-content/plugins', 'backup-jlg'),
+                'default' => true,
+            ],
+            'themes' => [
+                'label' => __('Thèmes', 'backup-jlg'),
+                'description' => __('Répertoire /wp-content/themes', 'backup-jlg'),
+                'default' => true,
+            ],
+            'uploads' => [
+                'label' => __('Médias', 'backup-jlg'),
+                'description' => __('Répertoire /wp-content/uploads', 'backup-jlg'),
+                'default' => true,
+            ],
+        ];
+
+        $default_components = array_keys(array_filter(array_map(static function ($component) {
+            return !empty($component['default']);
+        }, $components)));
+
+        $encryption_enabled = false;
+        $incremental_enabled = false;
+
+        $selected_post_checks = array_keys(array_filter($post_checks));
+        $selected_destinations = array_values(array_filter($secondary_destinations, 'strlen'));
+
+        $summary_components = array_map(static function ($component_key) use ($components) {
+            return $components[$component_key]['label'] ?? $component_key;
+        }, $default_components);
+
+        $summary_options = [];
+        if ($encryption_enabled) {
+            $summary_options[] = __('Chiffrement activé', 'backup-jlg');
+        }
+        if ($incremental_enabled) {
+            $summary_options[] = __('Sauvegarde incrémentale', 'backup-jlg');
+        }
+        if (empty($summary_options)) {
+            $summary_options[] = __('Aucune option avancée activée', 'backup-jlg');
+        }
+
+        $summary_checks = array_map(static function ($check) {
+            switch ($check) {
+                case 'dry_run':
+                    return __('Test de restauration à blanc', 'backup-jlg');
+                case 'checksum':
+                default:
+                    return __('Vérification de l’intégrité (SHA-256)', 'backup-jlg');
+            }
+        }, $selected_post_checks);
+        if (empty($summary_checks)) {
+            $summary_checks[] = __('Aucune vérification post-sauvegarde', 'backup-jlg');
+        }
+
+        $include_count = count(array_filter(array_map('trim', $include_patterns))); // After esc_html
+        $exclude_count = count(array_filter(array_map('trim', $exclude_patterns)));
+
+        $include_summary = $include_count
+            ? sprintf(_n('%d motif personnalisé', '%d motifs personnalisés', $include_count, 'backup-jlg'), $include_count)
+            : __('Tous les fichiers autorisés', 'backup-jlg');
+
+        $exclude_summary = $exclude_count
+            ? sprintf(_n('%d exclusion personnalisée', '%d exclusions personnalisées', $exclude_count, 'backup-jlg'), $exclude_count)
+            : __('Aucune exclusion supplémentaire', 'backup-jlg');
+
+        $destination_summary = [];
+        foreach ($selected_destinations as $destination_key) {
+            if (!empty($destination_choices[$destination_key])) {
+                $destination_summary[] = $destination_choices[$destination_key];
+            }
+        }
+        if (empty($destination_summary)) {
+            $destination_summary[] = __('Stockage local uniquement', 'backup-jlg');
+        }
+
+        $presets = [
+            'full' => [
+                'label' => __('Sauvegarde complète', 'backup-jlg'),
+                'description' => __('Tous les composants WordPress et vérification d’intégrité.', 'backup-jlg'),
+                'preset' => [
+                    'components' => array_keys($components),
+                    'options' => [
+                        'encrypt_backup' => true,
+                        'incremental_backup' => false,
+                        'post_checks' => ['checksum' => true, 'dry_run' => false],
+                    ],
+                ],
+            ],
+            'essentials' => [
+                'label' => __('Essentiel rapide', 'backup-jlg'),
+                'description' => __('Base de données et médias, plus une sauvegarde incrémentale.', 'backup-jlg'),
+                'preset' => [
+                    'components' => ['db', 'uploads'],
+                    'options' => [
+                        'encrypt_backup' => false,
+                        'incremental_backup' => true,
+                        'post_checks' => ['checksum' => true, 'dry_run' => false],
+                    ],
+                ],
+            ],
+            'database' => [
+                'label' => __('Base de données seule', 'backup-jlg'),
+                'description' => __('Sauvegarde minimale avec vérification et chiffrement.', 'backup-jlg'),
+                'preset' => [
+                    'components' => ['db'],
+                    'options' => [
+                        'encrypt_backup' => true,
+                        'incremental_backup' => false,
+                        'post_checks' => ['checksum' => true, 'dry_run' => false],
+                    ],
+                ],
+            ],
+        ];
+
         ?>
-        <div class="bjlg-section">
-            <h2>Créer une sauvegarde</h2>
-            <form id="bjlg-backup-creation-form">
-                <p>Choisissez les composants à inclure dans votre sauvegarde.</p>
-                <table class="form-table">
-                    <tbody>
-                        <tr>
-                            <th scope="row">Contenu de la sauvegarde</th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <fieldset>
-                                        <label><input type="checkbox" name="backup_components[]" value="db" checked> <strong>Base de données</strong> <span class="description">Toutes les tables WordPress</span></label><br>
-                                        <label><input type="checkbox" name="backup_components[]" value="plugins" checked> Extensions (<code>/wp-content/plugins</code>)</label><br>
-                                        <label><input type="checkbox" name="backup_components[]" value="themes" checked> Thèmes (<code>/wp-content/themes</code>)</label><br>
-                                        <label><input type="checkbox" name="backup_components[]" value="uploads" checked> Médias (<code>/wp-content/uploads</code>)</label>
-                                    </fieldset>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Options</th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <fieldset>
-                                        <label>
-                                            <input type="checkbox" name="encrypt_backup" value="1">
-                                            Chiffrer la sauvegarde (AES-256)
+        <div class="bjlg-section bjlg-backup-wizard" data-bjlg-backup-wizard>
+            <h2><?php esc_html_e('Créer une sauvegarde', 'backup-jlg'); ?></h2>
+            <form id="bjlg-backup-creation-form" class="bjlg-backup-form">
+                <p class="bjlg-backup-intro"><?php esc_html_e('Choisissez une configuration adaptée ou personnalisez chaque étape avant de lancer la sauvegarde.', 'backup-jlg'); ?></p>
+
+                <section class="bjlg-backup-presets" aria-labelledby="bjlg-backup-presets-title">
+                    <div class="bjlg-backup-presets__header">
+                        <h3 id="bjlg-backup-presets-title"><?php esc_html_e('Presets rapides', 'backup-jlg'); ?></h3>
+                        <p class="description"><?php esc_html_e('Appliquez un préréglage puis ajustez les options si besoin.', 'backup-jlg'); ?></p>
+                    </div>
+                    <div class="bjlg-backup-presets__grid" role="list">
+                        <?php foreach ($presets as $preset_key => $preset): ?>
+                            <label class="bjlg-backup-preset" role="listitem">
+                                <input type="radio"
+                                       name="backup_preset"
+                                       value="<?php echo esc_attr($preset_key); ?>"
+                                       data-preset="<?php echo esc_attr(wp_json_encode($preset['preset'])); ?>">
+                                <span class="bjlg-backup-preset__content">
+                                    <span class="bjlg-backup-preset__label"><?php echo esc_html($preset['label']); ?></span>
+                                    <span class="bjlg-backup-preset__description"><?php echo esc_html($preset['description']); ?></span>
+                                </span>
+                            </label>
+                        <?php endforeach; ?>
+                        <label class="bjlg-backup-preset bjlg-backup-preset--custom" role="listitem">
+                            <input type="radio" name="backup_preset" value="custom" checked>
+                            <span class="bjlg-backup-preset__content">
+                                <span class="bjlg-backup-preset__label"><?php esc_html_e('Configuration manuelle', 'backup-jlg'); ?></span>
+                                <span class="bjlg-backup-preset__description"><?php esc_html_e('Sélectionnez librement les composants et options ci-dessous.', 'backup-jlg'); ?></span>
+                            </span>
+                        </label>
+                    </div>
+                </section>
+
+                <ol class="bjlg-backup-stepper" data-role="progress" aria-label="<?php esc_attr_e('Étapes de la création de sauvegarde', 'backup-jlg'); ?>">
+                    <li class="bjlg-backup-stepper__item is-active" data-step-indicator="components"><?php esc_html_e('Composants', 'backup-jlg'); ?></li>
+                    <li class="bjlg-backup-stepper__item" data-step-indicator="advanced"><?php esc_html_e('Options avancées', 'backup-jlg'); ?></li>
+                    <li class="bjlg-backup-stepper__item" data-step-indicator="destinations"><?php esc_html_e('Destinations', 'backup-jlg'); ?></li>
+                </ol>
+
+                <div class="bjlg-backup-layout">
+                    <div class="bjlg-backup-steps" data-role="steps">
+                        <section class="bjlg-backup-step is-active" data-step="components" data-error-required="<?php esc_attr_e('Sélectionnez au moins un composant pour poursuivre.', 'backup-jlg'); ?>">
+                            <header class="bjlg-backup-step__header">
+                                <h3><?php esc_html_e('Sélection des composants', 'backup-jlg'); ?></h3>
+                                <p class="description"><?php esc_html_e('Cochez les éléments à inclure dans l’archive.', 'backup-jlg'); ?></p>
+                            </header>
+                            <fieldset>
+                                <legend class="screen-reader-text"><?php esc_html_e('Composants de sauvegarde', 'backup-jlg'); ?></legend>
+                                <div class="bjlg-backup-options-grid">
+                                    <?php foreach ($components as $component_key => $component): ?>
+                                        <label class="bjlg-backup-option">
+                                            <input type="checkbox"
+                                                   name="backup_components[]"
+                                                   value="<?php echo esc_attr($component_key); ?>"
+                                                   data-label="<?php echo esc_attr($component['label']); ?>"
+                                                   <?php checked(in_array($component_key, $default_components, true)); ?>>
+                                            <span class="bjlg-backup-option__title"><?php echo esc_html($component['label']); ?></span>
+                                            <span class="bjlg-backup-option__description"><?php echo esc_html($component['description']); ?></span>
                                         </label>
-                                        <p class="description">
-                                            Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
-                                        </p>
-                                        <br>
-                                        <label>
-                                            <input type="checkbox" name="incremental_backup" value="1">
-                                            Sauvegarde incrémentale
+                                    <?php endforeach; ?>
+                                </div>
+                            </fieldset>
+                        </section>
+
+                        <section class="bjlg-backup-step" data-step="advanced">
+                            <header class="bjlg-backup-step__header">
+                                <h3><?php esc_html_e('Options avancées', 'backup-jlg'); ?></h3>
+                                <p class="description"><?php esc_html_e('Affinez le périmètre et activez les contrôles supplémentaires.', 'backup-jlg'); ?></p>
+                            </header>
+                            <fieldset class="bjlg-backup-advanced">
+                                <legend class="screen-reader-text"><?php esc_html_e('Options de sauvegarde avancées', 'backup-jlg'); ?></legend>
+                                <div class="bjlg-backup-toggles">
+                                    <label class="bjlg-backup-toggle">
+                                        <input type="checkbox"
+                                               name="encrypt_backup"
+                                               value="1"
+                                               data-label="<?php esc_attr_e('Chiffrement AES-256', 'backup-jlg'); ?>"
+                                               <?php checked($encryption_enabled); ?>>
+                                        <span class="bjlg-backup-toggle__title"><?php esc_html_e('Chiffrer la sauvegarde (AES-256)', 'backup-jlg'); ?></span>
+                                        <span class="bjlg-backup-toggle__description"><?php esc_html_e('Recommandé pour le stockage sur un service distant.', 'backup-jlg'); ?></span>
+                                    </label>
+                                    <label class="bjlg-backup-toggle">
+                                        <input type="checkbox"
+                                               name="incremental_backup"
+                                               value="1"
+                                               data-label="<?php esc_attr_e('Sauvegarde incrémentale', 'backup-jlg'); ?>"
+                                               <?php checked($incremental_enabled); ?>>
+                                        <span class="bjlg-backup-toggle__title"><?php esc_html_e('Sauvegarde incrémentale', 'backup-jlg'); ?></span>
+                                        <span class="bjlg-backup-toggle__description"><?php esc_html_e('Ne copie que les changements depuis la dernière sauvegarde complète.', 'backup-jlg'); ?></span>
+                                    </label>
+                                </div>
+
+                                <div class="bjlg-backup-textareas">
+                                    <label class="bjlg-backup-textarea">
+                                        <span class="bjlg-backup-textarea__label"><?php esc_html_e('Inclusions personnalisées', 'backup-jlg'); ?></span>
+                                        <textarea name="include_patterns"
+                                                  rows="4"
+                                                  class="large-text code"
+                                                  placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"
+                                                  data-label="<?php esc_attr_e('Inclusions personnalisées', 'backup-jlg'); ?>"><?php echo $include_text; ?></textarea>
+                                        <span class="description"><?php esc_html_e('Un motif par ligne. Laissez vide pour inclure tous les fichiers autorisés.', 'backup-jlg'); ?></span>
+                                    </label>
+
+                                    <label class="bjlg-backup-textarea">
+                                        <span class="bjlg-backup-textarea__label"><?php esc_html_e('Exclusions', 'backup-jlg'); ?></span>
+                                        <textarea name="exclude_patterns"
+                                                  rows="4"
+                                                  class="large-text code"
+                                                  placeholder="*/cache/*&#10;*.log"
+                                                  data-label="<?php esc_attr_e('Exclusions personnalisées', 'backup-jlg'); ?>"><?php echo $exclude_text; ?></textarea>
+                                        <span class="description"><?php esc_html_e('Ajoutez des motifs pour ignorer des fichiers ou répertoires.', 'backup-jlg'); ?></span>
+                                    </label>
+                                </div>
+
+                                <div class="bjlg-backup-checks">
+                                    <span class="bjlg-backup-checks__title"><?php esc_html_e('Vérifications post-sauvegarde', 'backup-jlg'); ?></span>
+                                    <div class="bjlg-backup-options-grid">
+                                        <label class="bjlg-backup-option">
+                                            <input type="checkbox"
+                                                   name="post_checks[]"
+                                                   value="checksum"
+                                                   data-label="<?php esc_attr_e('Vérification de l’intégrité (SHA-256)', 'backup-jlg'); ?>"
+                                                   <?php checked(in_array('checksum', $selected_post_checks, true)); ?>>
+                                            <span class="bjlg-backup-option__title"><?php esc_html_e('Vérifier l’intégrité (SHA-256)', 'backup-jlg'); ?></span>
+                                            <span class="bjlg-backup-option__description"><?php esc_html_e('Calcule un hachage pour détecter une corruption éventuelle.', 'backup-jlg'); ?></span>
                                         </label>
-                                        <p class="description">
-                                            Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
-                                        </p>
-                                    </fieldset>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Inclusions personnalisées</th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <textarea name="include_patterns" rows="4" class="large-text code" placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"><?php echo $include_text; ?></textarea>
-                                    <p class="description">Un motif par ligne. Laissez vide pour inclure tous les fichiers autorisés.</p>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Exclusions</th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <textarea name="exclude_patterns" rows="4" class="large-text code" placeholder="*/cache/*&#10;*.log"><?php echo $exclude_text; ?></textarea>
-                                    <p class="description">Ajoutez des motifs pour ignorer certains fichiers ou répertoires. Les exclusions globales s'appliquent également.</p>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Vérifications post-sauvegarde</th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <fieldset>
-                                        <label>
-                                            <input type="checkbox" name="post_checks[]" value="checksum" <?php checked(!empty($post_checks['checksum'])); ?>> Vérifier l'intégrité (SHA-256)
+                                        <label class="bjlg-backup-option">
+                                            <input type="checkbox"
+                                                   name="post_checks[]"
+                                                   value="dry_run"
+                                                   data-label="<?php esc_attr_e('Test de restauration à blanc', 'backup-jlg'); ?>"
+                                                   <?php checked(in_array('dry_run', $selected_post_checks, true)); ?>>
+                                            <span class="bjlg-backup-option__title"><?php esc_html_e('Test de restauration à blanc', 'backup-jlg'); ?></span>
+                                            <span class="bjlg-backup-option__description"><?php esc_html_e('Valide que l’archive est exploitable (hors sauvegarde chiffrée).', 'backup-jlg'); ?></span>
                                         </label>
-                                        <p class="description">Calcule un hachage du fichier pour détecter les corruptions.</p>
-                                        <label>
-                                            <input type="checkbox" name="post_checks[]" value="dry_run" <?php checked(!empty($post_checks['dry_run'])); ?>> Test de restauration à blanc
-                                        </label>
-                                        <p class="description">Ouvre l'archive pour valider qu'elle est exploitable (non exécuté sur les fichiers chiffrés).</p>
-                                    </fieldset>
+                                    </div>
                                 </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Destinations secondaires</th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <fieldset>
-                                        <?php if (!empty($destination_choices)): ?>
-                                            <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
-                                                <label style="display:block; margin-bottom:4px;">
-                                                    <input type="checkbox"
-                                                           name="secondary_destinations[]"
-                                                           value="<?php echo esc_attr($destination_id); ?>"
-                                                           <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>>
-                                                <?php echo esc_html($destination_label); ?>
+                            </fieldset>
+                        </section>
+
+                        <section class="bjlg-backup-step" data-step="destinations">
+                            <header class="bjlg-backup-step__header">
+                                <h3><?php esc_html_e('Destinations et envoi', 'backup-jlg'); ?></h3>
+                                <p class="description"><?php esc_html_e('Choisissez où stocker la sauvegarde en plus du serveur local.', 'backup-jlg'); ?></p>
+                            </header>
+                            <fieldset class="bjlg-backup-destinations">
+                                <legend class="screen-reader-text"><?php esc_html_e('Destinations secondaires', 'backup-jlg'); ?></legend>
+                                <?php if (!empty($destination_choices)): ?>
+                                    <div class="bjlg-backup-options-grid">
+                                        <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
+                                            <label class="bjlg-backup-option">
+                                                <input type="checkbox"
+                                                       name="secondary_destinations[]"
+                                                       value="<?php echo esc_attr($destination_id); ?>"
+                                                       data-label="<?php echo esc_attr($destination_label); ?>"
+                                                       <?php checked(in_array($destination_id, $selected_destinations, true)); ?>>
+                                                <span class="bjlg-backup-option__title"><?php echo esc_html($destination_label); ?></span>
+                                                <span class="bjlg-backup-option__description"><?php esc_html_e('Ajoutée en cascade si la précédente échoue.', 'backup-jlg'); ?></span>
                                             </label>
                                         <?php endforeach; ?>
-                                    <?php else: ?>
-                                        <p class="description">Aucune destination distante n'est encore configurée.</p>
-                                    <?php endif; ?>
-                                    <p class="description">Les destinations sélectionnées recevront la sauvegarde dans l'ordre indiqué. En cas d'échec, la suivante est tentée automatiquement.</p>
-                                    </fieldset>
-                                </div>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-                <p class="submit">
+                                    </div>
+                                <?php else: ?>
+                                    <p class="description"><?php esc_html_e('Aucune destination distante n’est encore configurée. La sauvegarde restera locale.', 'backup-jlg'); ?></p>
+                                <?php endif; ?>
+                                <p class="description"><?php esc_html_e('L’ordre de sélection définit la priorité d’envoi.', 'backup-jlg'); ?></p>
+                            </fieldset>
+                        </section>
+                    </div>
+
+                    <aside class="bjlg-backup-summary" data-role="summary" aria-live="polite">
+                        <h3 class="bjlg-backup-summary__title"><?php esc_html_e('Résumé de la sauvegarde', 'backup-jlg'); ?></h3>
+                        <dl class="bjlg-backup-summary__list">
+                            <div class="bjlg-backup-summary__item">
+                                <dt><?php esc_html_e('Composants', 'backup-jlg'); ?></dt>
+                                <dd data-summary="components" data-empty-text="<?php esc_attr_e('Aucun composant sélectionné', 'backup-jlg'); ?>"><?php echo esc_html(implode(', ', $summary_components)); ?></dd>
+                            </div>
+                            <div class="bjlg-backup-summary__item">
+                                <dt><?php esc_html_e('Options avancées', 'backup-jlg'); ?></dt>
+                                <dd data-summary="options" data-empty-text="<?php esc_attr_e('Aucune option avancée activée', 'backup-jlg'); ?>"><?php echo esc_html(implode(', ', $summary_options)); ?></dd>
+                            </div>
+                            <div class="bjlg-backup-summary__item">
+                                <dt><?php esc_html_e('Vérifications', 'backup-jlg'); ?></dt>
+                                <dd data-summary="checks" data-empty-text="<?php esc_attr_e('Aucune vérification post-sauvegarde', 'backup-jlg'); ?>"><?php echo esc_html(implode(', ', $summary_checks)); ?></dd>
+                            </div>
+                            <div class="bjlg-backup-summary__item">
+                                <dt><?php esc_html_e('Inclusions', 'backup-jlg'); ?></dt>
+                                <dd data-summary="includes"
+                                    data-empty-text="<?php esc_attr_e('Tous les fichiers autorisés', 'backup-jlg'); ?>"
+                                    data-count-singular="<?php echo esc_attr__('%d motif personnalisé', 'backup-jlg'); ?>"
+                                    data-count-plural="<?php echo esc_attr__('%d motifs personnalisés', 'backup-jlg'); ?>"><?php echo esc_html($include_summary); ?></dd>
+                            </div>
+                            <div class="bjlg-backup-summary__item">
+                                <dt><?php esc_html_e('Exclusions', 'backup-jlg'); ?></dt>
+                                <dd data-summary="excludes"
+                                    data-empty-text="<?php esc_attr_e('Aucune exclusion supplémentaire', 'backup-jlg'); ?>"
+                                    data-count-singular="<?php echo esc_attr__('%d exclusion personnalisée', 'backup-jlg'); ?>"
+                                    data-count-plural="<?php echo esc_attr__('%d exclusions personnalisées', 'backup-jlg'); ?>"><?php echo esc_html($exclude_summary); ?></dd>
+                            </div>
+                            <div class="bjlg-backup-summary__item">
+                                <dt><?php esc_html_e('Destinations', 'backup-jlg'); ?></dt>
+                                <dd data-summary="destinations" data-empty-text="<?php esc_attr_e('Stockage local uniquement', 'backup-jlg'); ?>"><?php echo esc_html(implode(', ', $destination_summary)); ?></dd>
+                            </div>
+                        </dl>
+                        <div class="bjlg-backup-errors" data-role="errors" aria-live="assertive"></div>
+                        <p class="bjlg-backup-summary__hint">
+                            <?php esc_html_e('Le résumé se mettra à jour automatiquement lorsque vous modifiez les étapes.', 'backup-jlg'); ?>
+                        </p>
+                    </aside>
+                </div>
+
+                <div class="bjlg-backup-navigation" data-role="navigation">
+                    <p class="bjlg-backup-navigation__hint" data-role="navigation-hint">
+                        <?php esc_html_e('Sans JavaScript, remplissez simplement chaque section puis soumettez le formulaire.', 'backup-jlg'); ?>
+                    </p>
+                    <div class="bjlg-backup-navigation__actions">
+                        <button type="button" class="button button-secondary" data-action="prev" disabled>
+                            <span class="dashicons dashicons-arrow-left-alt2" aria-hidden="true"></span>
+                            <?php esc_html_e('Étape précédente', 'backup-jlg'); ?>
+                        </button>
+                        <button type="button" class="button button-primary" data-action="next">
+                            <span class="bjlg-backup-navigation__next-label"
+                                  data-role="next-label"
+                                  data-label-confirm="<?php esc_attr_e('Revoir & confirmer', 'backup-jlg'); ?>"><?php esc_html_e('Étape suivante', 'backup-jlg'); ?></span>
+                            <span class="dashicons dashicons-arrow-right-alt2" aria-hidden="true"></span>
+                        </button>
+                    </div>
+                </div>
+
+                <p class="submit" data-role="submit-wrapper">
                     <button id="bjlg-create-backup" type="submit" class="button button-primary button-hero">
-                        <span class="dashicons dashicons-backup" aria-hidden="true"></span> Lancer la création de la sauvegarde
+                        <span class="dashicons dashicons-backup" aria-hidden="true"></span>
+                        <?php esc_html_e('Lancer la création de la sauvegarde', 'backup-jlg'); ?>
                     </button>
                 </p>
+                <noscript>
+                    <p class="bjlg-backup-noscript">
+                        <?php esc_html_e('JavaScript est désactivé. Toutes les étapes restent visibles afin que vous puissiez soumettre la sauvegarde.', 'backup-jlg'); ?>
+                    </p>
+                </noscript>
             </form>
             <div id="bjlg-backup-progress-area" style="display: none;">
-                <h3>Progression</h3>
+                <h3><?php esc_html_e('Progression', 'backup-jlg'); ?></h3>
                 <div class="bjlg-progress-bar"><div
                         class="bjlg-progress-bar-inner"
                         id="bjlg-backup-progress-bar"
@@ -386,10 +641,10 @@ class BJLG_Admin {
                    role="status"
                    aria-live="polite"
                    aria-atomic="true"
-                   aria-busy="false">Initialisation...</p>
+                   aria-busy="false"><?php esc_html_e('Initialisation…', 'backup-jlg'); ?></p>
             </div>
             <div id="bjlg-backup-debug-wrapper" style="display: none;">
-                <h3><span class="dashicons dashicons-info" aria-hidden="true"></span> Détails techniques</h3>
+                <h3><span class="dashicons dashicons-info" aria-hidden="true"></span> <?php esc_html_e('Détails techniques', 'backup-jlg'); ?></h3>
                 <pre id="bjlg-backup-ajax-debug" class="bjlg-log-textarea"></pre>
             </div>
         </div>
