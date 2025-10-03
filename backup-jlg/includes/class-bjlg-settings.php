@@ -98,6 +98,8 @@ class BJLG_Settings {
         'secondary_destinations' => [],
     ];
 
+    private $default_backup_presets = [];
+
     public function __construct() {
         if (self::$instance instanceof self) {
             return;
@@ -111,6 +113,8 @@ class BJLG_Settings {
         add_action('wp_ajax_bjlg_reset_settings', [$this, 'handle_reset_settings']);
         add_action('wp_ajax_bjlg_export_settings', [$this, 'handle_export_settings']);
         add_action('wp_ajax_bjlg_import_settings', [$this, 'handle_import_settings']);
+        add_action('wp_ajax_bjlg_get_backup_presets', [$this, 'handle_get_backup_presets']);
+        add_action('wp_ajax_bjlg_save_backup_preset', [$this, 'handle_save_backup_preset']);
 
         // Initialiser les paramètres par défaut si nécessaire
         add_action('init', [$this, 'init_default_settings']);
@@ -530,7 +534,72 @@ class BJLG_Settings {
             wp_send_json_error(['message' => $e->getMessage()]);
         }
     }
-    
+
+    public function handle_get_backup_presets() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée.']);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $presets = array_values(self::get_backup_presets());
+
+        wp_send_json_success([
+            'presets' => $presets,
+        ]);
+    }
+
+    public function handle_save_backup_preset() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée.']);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $raw_name = isset($_POST['name']) ? sanitize_text_field(wp_unslash($_POST['name'])) : '';
+        if ($raw_name === '') {
+            wp_send_json_error(['message' => "Le nom du modèle est requis."]);
+        }
+
+        $raw_preset = $_POST['preset'] ?? [];
+        if (is_string($raw_preset)) {
+            $decoded = json_decode(wp_unslash($raw_preset), true);
+            $raw_preset = is_array($decoded) ? $decoded : [];
+        } elseif (is_array($raw_preset)) {
+            $raw_preset = wp_unslash($raw_preset);
+        } else {
+            $raw_preset = [];
+        }
+
+        if (!isset($raw_preset['label']) || !is_string($raw_preset['label']) || trim($raw_preset['label']) === '') {
+            $raw_preset['label'] = $raw_name;
+        }
+
+        $preset_id = isset($_POST['preset_id']) ? sanitize_key(wp_unslash($_POST['preset_id'])) : '';
+
+        $sanitized = self::sanitize_backup_preset($raw_preset, $preset_id !== '' ? $preset_id : $raw_name);
+        if (!$sanitized) {
+            wp_send_json_error(['message' => "Impossible d'enregistrer le modèle fourni."]);
+        }
+
+        if ($preset_id !== '') {
+            $sanitized['id'] = $preset_id;
+        }
+
+        $existing = self::sanitize_backup_presets(get_option('bjlg_backup_presets', []));
+        $existing[$sanitized['id']] = $sanitized;
+
+        update_option('bjlg_backup_presets', $existing);
+
+        BJLG_Debug::log('Modèle de sauvegarde enregistré : ' . $sanitized['id']);
+
+        wp_send_json_success([
+            'message' => sprintf('Modèle "%s" enregistré avec succès.', $sanitized['label']),
+            'saved' => $sanitized,
+            'presets' => array_values($existing),
+        ]);
+    }
+
     /**
      * Récupère tous les paramètres
      */
@@ -943,6 +1012,10 @@ class BJLG_Settings {
         if (get_option('bjlg_backup_post_checks', null) === null) {
             update_option('bjlg_backup_post_checks', $defaults['post_checks']);
         }
+
+        if (get_option('bjlg_backup_presets', null) === null) {
+            update_option('bjlg_backup_presets', $this->default_backup_presets);
+        }
     }
 
     public function update_backup_filters(array $includes, array $excludes, array $destinations, array $post_checks) {
@@ -955,6 +1028,133 @@ class BJLG_Settings {
         update_option('bjlg_backup_exclude_patterns', $excludes);
         update_option('bjlg_backup_secondary_destinations', $destinations);
         update_option('bjlg_backup_post_checks', $post_checks);
+    }
+
+    public static function get_backup_presets(): array {
+        return self::sanitize_backup_presets(get_option('bjlg_backup_presets', []));
+    }
+
+    public static function sanitize_backup_presets($presets): array {
+        if (is_string($presets)) {
+            $decoded = json_decode($presets, true);
+            if (is_array($decoded)) {
+                $presets = $decoded;
+            }
+        }
+
+        if (!is_array($presets)) {
+            return [];
+        }
+
+        $sanitized = [];
+
+        foreach ($presets as $key => $preset) {
+            $hint = '';
+            if (is_string($key)) {
+                $hint = $key;
+            } elseif (is_array($preset) && isset($preset['id']) && is_string($preset['id'])) {
+                $hint = $preset['id'];
+            }
+
+            $normalized = self::sanitize_backup_preset($preset, $hint);
+            if (!$normalized) {
+                continue;
+            }
+
+            $sanitized[$normalized['id']] = $normalized;
+        }
+
+        return $sanitized;
+    }
+
+    public static function sanitize_backup_preset($preset, string $slug_hint = ''): ?array {
+        if (is_string($preset)) {
+            $decoded = json_decode($preset, true);
+            if (is_array($decoded)) {
+                $preset = $decoded;
+            }
+        }
+
+        if (!is_array($preset)) {
+            return null;
+        }
+
+        $label = '';
+        if (isset($preset['label'])) {
+            $label = sanitize_text_field((string) $preset['label']);
+        } elseif (isset($preset['name'])) {
+            $label = sanitize_text_field((string) $preset['name']);
+        }
+
+        if ($label === '' && $slug_hint !== '') {
+            $label = ucwords(str_replace('_', ' ', $slug_hint));
+        }
+
+        $label = trim($label);
+        if ($label === '') {
+            return null;
+        }
+
+        $id = '';
+        if (isset($preset['id'])) {
+            $id = sanitize_key((string) $preset['id']);
+        }
+        if ($id === '' && $slug_hint !== '') {
+            $id = sanitize_key($slug_hint);
+        }
+        if ($id === '') {
+            $id = sanitize_key($label);
+        }
+        if ($id === '') {
+            $id = 'bjlg_preset_' . substr(md5($label . microtime(true)), 0, 8);
+        }
+
+        $components = self::sanitize_backup_components($preset['components'] ?? []);
+        if (empty($components)) {
+            $components = self::get_default_backup_components();
+        }
+
+        $include_patterns = self::sanitize_pattern_list($preset['include_patterns'] ?? []);
+        $exclude_patterns = self::sanitize_pattern_list($preset['exclude_patterns'] ?? []);
+        $post_checks = self::sanitize_post_checks($preset['post_checks'] ?? [], self::get_default_backup_post_checks());
+        $secondary_destinations = self::sanitize_destination_list(
+            $preset['secondary_destinations'] ?? [],
+            self::get_known_destination_ids()
+        );
+
+        return [
+            'id' => $id,
+            'label' => $label,
+            'components' => array_values($components),
+            'encrypt' => self::to_bool_static($preset['encrypt'] ?? false),
+            'incremental' => self::to_bool_static($preset['incremental'] ?? false),
+            'include_patterns' => $include_patterns,
+            'exclude_patterns' => $exclude_patterns,
+            'post_checks' => $post_checks,
+            'secondary_destinations' => $secondary_destinations,
+        ];
+    }
+
+    public static function sanitize_backup_components($components): array {
+        $components = self::sanitize_schedule_components($components);
+
+        $allowed = self::get_default_backup_components();
+        if (empty($components)) {
+            return $allowed;
+        }
+
+        $filtered = [];
+        foreach ($components as $component) {
+            if (in_array($component, $allowed, true) && !in_array($component, $filtered, true)) {
+                $filtered[] = $component;
+            }
+        }
+
+        return $filtered;
+    }
+
+    public static function get_default_backup_components(): array {
+        return ['db', 'plugins', 'themes', 'uploads'];
     }
 
     public static function sanitize_pattern_list($patterns) {
