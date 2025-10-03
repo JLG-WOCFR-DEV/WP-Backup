@@ -162,7 +162,7 @@ class BJLG_API_Keys {
      * Valide la requête AJAX.
      */
     private function validate_request() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error([
                 'message' => __('Permission refusée.', 'backup-jlg'),
             ], 403);

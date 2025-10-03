@@ -23,7 +23,7 @@ class BJLG_Diagnostics {
      * Gère la requête AJAX pour créer et fournir le pack de support.
      */
     public function handle_generate_support_package() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -99,7 +99,7 @@ class BJLG_Diagnostics {
 
             $download_token = wp_generate_password(32, false);
             $transient_key = 'bjlg_download_' . $download_token;
-            $payload = BJLG_Actions::build_download_token_payload($real_zip_path, BJLG_CAPABILITY);
+            $payload = BJLG_Actions::build_download_token_payload($real_zip_path, \bjlg_get_required_capability());
             $payload['delete_after_download'] = true;
             $ttl = BJLG_Actions::get_download_token_ttl($real_zip_path);
 
@@ -132,7 +132,7 @@ class BJLG_Diagnostics {
      * Exécute un test de diagnostic spécifique
      */
     public function handle_run_diagnostic_test() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -178,7 +178,7 @@ class BJLG_Diagnostics {
      * Obtient les informations système
      */
     public function handle_get_system_info() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         

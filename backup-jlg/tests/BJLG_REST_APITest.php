@@ -228,7 +228,7 @@ namespace {
 
         private function makeUser(int $id, string $login, ?array $caps = null, ?array $roles = null): object
         {
-            $caps = $caps ?? [BJLG_CAPABILITY => true];
+            $caps = $caps ?? [bjlg_get_required_capability() => true];
             $roles = $roles ?? ['administrator'];
 
             return (object) [
@@ -1603,7 +1603,7 @@ namespace {
             $this->assertArrayHasKey('file', $stored_payload);
             $this->assertSame($filepath, $stored_payload['file']);
             $this->assertArrayHasKey('requires_cap', $stored_payload);
-            $this->assertSame(BJLG_CAPABILITY, $stored_payload['requires_cap']);
+            $this->assertSame(bjlg_get_required_capability(), $stored_payload['requires_cap']);
             $this->assertArrayHasKey('issued_at', $stored_payload);
             $this->assertIsInt($stored_payload['issued_at']);
             $this->assertArrayHasKey('issued_by', $stored_payload);
@@ -1867,7 +1867,7 @@ namespace {
             $stored_payload = $GLOBALS['bjlg_test_transients']['bjlg_download_' . $token] ?? null;
             $this->assertIsArray($stored_payload);
             $this->assertSame($filepath, $stored_payload['file'] ?? null);
-            $this->assertSame(BJLG_CAPABILITY, $stored_payload['requires_cap'] ?? null);
+            $this->assertSame(bjlg_get_required_capability(), $stored_payload['requires_cap'] ?? null);
             $this->assertArrayHasKey('issued_at', $stored_payload);
             $this->assertArrayHasKey('issued_by', $stored_payload);
             $this->assertSame(0, $stored_payload['issued_by']);
@@ -3169,7 +3169,7 @@ namespace {
         $payload = get_transient('bjlg_download_' . $data['download_token']);
         $this->assertIsArray($payload);
         $this->assertSame($tempFile, $payload['file'] ?? null);
-        $this->assertSame(BJLG_CAPABILITY, $payload['requires_cap'] ?? null);
+        $this->assertSame(bjlg_get_required_capability(), $payload['requires_cap'] ?? null);
 
         if (file_exists($tempFile)) {
             unlink($tempFile);

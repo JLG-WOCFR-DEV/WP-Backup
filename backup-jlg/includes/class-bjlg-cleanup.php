@@ -97,7 +97,7 @@ class BJLG_Cleanup {
      * Gère le nettoyage manuel déclenché par l'utilisateur
      */
     public function handle_manual_cleanup() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');

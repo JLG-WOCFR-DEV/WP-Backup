@@ -157,8 +157,8 @@ final class BJLG_ActionsDownloadTest extends TestCase
         $GLOBALS['bjlg_test_users'] = [
             $user_id => (object) [
                 'ID' => $user_id,
-                'caps' => [BJLG_CAPABILITY => true],
-                'allcaps' => [BJLG_CAPABILITY => true],
+                'caps' => [bjlg_get_required_capability() => true],
+                'allcaps' => [bjlg_get_required_capability() => true],
             ],
         ];
         $GLOBALS['current_user'] = null;
@@ -166,7 +166,7 @@ final class BJLG_ActionsDownloadTest extends TestCase
 
         set_transient('bjlg_download_' . $token, [
             'file' => $realpath,
-            'requires_cap' => BJLG_CAPABILITY,
+            'requires_cap' => bjlg_get_required_capability(),
             'issued_at' => time(),
             'issued_by' => $user_id,
         ], 3600);

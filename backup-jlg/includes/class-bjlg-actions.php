@@ -26,7 +26,7 @@ class BJLG_Actions {
      * Génère un token de téléchargement à la demande pour un fichier spécifique.
      */
     public function prepare_download() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.'], 403);
         }
 
@@ -95,7 +95,7 @@ class BJLG_Actions {
      * Supprime un fichier de sauvegarde via AJAX.
      */
     public function handle_delete_backup() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.'], 403);
         }
 
@@ -318,11 +318,12 @@ class BJLG_Actions {
      * Construit la charge utile stockée avec un token de téléchargement.
      *
      * @param string $filepath
-     * @param string $required_capability
+     * @param string|null $required_capability
      * @return array
      */
-    public static function build_download_token_payload($filepath, $required_capability = BJLG_CAPABILITY) {
+    public static function build_download_token_payload($filepath, $required_capability = null) {
         $issued_by = function_exists('get_current_user_id') ? get_current_user_id() : 0;
+        $required_capability = $required_capability ?: \bjlg_get_required_capability();
 
         return [
             'file' => $filepath,
