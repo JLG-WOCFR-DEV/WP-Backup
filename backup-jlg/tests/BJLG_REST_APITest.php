@@ -58,6 +58,7 @@ namespace {
     require_once __DIR__ . '/../includes/class-bjlg-cleanup.php';
     require_once __DIR__ . '/../includes/class-bjlg-actions.php';
     require_once __DIR__ . '/../includes/class-bjlg-rest-api.php';
+    require_once __DIR__ . '/../includes/class-bjlg-api-keys.php';
     require_once __DIR__ . '/../includes/class-bjlg-restore.php';
     require_once __DIR__ . '/../includes/class-bjlg-encryption.php';
     require_once __DIR__ . '/../includes/class-bjlg-webhooks.php';
@@ -1046,6 +1047,72 @@ namespace {
         $this->assertIsArray($stored_stats);
         $this->assertSame(1, $stored_stats['usage_count']);
         $this->assertSame($user->ID, get_current_user_id());
+    }
+
+    public function test_admin_generated_key_survives_sanitization_and_rest_verification(): void
+    {
+        $GLOBALS['bjlg_test_options'] = [];
+        $_POST = [];
+        $_REQUEST = [];
+
+        $api_keys = new BJLG\BJLG_API_Keys();
+        $api = new BJLG\BJLG_REST_API();
+
+        $user = $this->makeUser(333, 'rest-admin');
+        $GLOBALS['bjlg_test_users'] = [
+            $user->ID => $user,
+        ];
+        wp_set_current_user($user->ID);
+
+        $_POST['label'] = 'REST Integration';
+        $_POST['nonce'] = 'rest-nonce';
+
+        $plain_secret = '';
+
+        try {
+            $api_keys->handle_create_key();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('key', $response->data);
+            $this->assertIsArray($response->data['key']);
+            $this->assertArrayHasKey('display_secret', $response->data['key']);
+            $this->assertArrayHasKey('is_secret_hidden', $response->data['key']);
+            $this->assertFalse($response->data['key']['is_secret_hidden']);
+            $plain_secret = (string) $response->data['key']['display_secret'];
+        }
+
+        $this->assertNotSame('', $plain_secret);
+
+        $_POST = [];
+        $_REQUEST = [];
+
+        $stored = $GLOBALS['bjlg_test_options'][BJLG\BJLG_API_Keys::OPTION_NAME] ?? [];
+        $this->assertCount(1, $stored);
+
+        $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
+        $sanitize = $reflection->getMethod('sanitize_api_keys');
+        $sanitize->setAccessible(true);
+
+        $sanitized = $sanitize->invoke($api, $stored);
+
+        $this->assertIsArray($sanitized);
+        $this->assertCount(1, $sanitized);
+        $this->assertArrayHasKey('key', $sanitized[0]);
+        $this->assertTrue(wp_check_password($plain_secret, $sanitized[0]['key']));
+        $this->assertSame($user->ID, $sanitized[0]['user_id']);
+
+        update_option(BJLG\BJLG_API_Keys::OPTION_NAME, $sanitized);
+
+        $verify = $reflection->getMethod('verify_api_key');
+        $verify->setAccessible(true);
+        $result = $verify->invoke($api, $plain_secret);
+
+        $this->assertIsObject($result);
+        $this->assertSame($user->ID, $result->ID);
+
+        wp_set_current_user(0);
+        $GLOBALS['bjlg_test_users'] = [];
     }
 
     public function test_filter_api_keys_before_save_hashes_plain_keys(): void

@@ -31,9 +31,12 @@ final class BJLG_AdminApiTabTest extends TestCase
             'demo' => [
                 'id' => 'demo',
                 'label' => 'Mon intégration',
-                'secret' => 'SECRETXYZ',
+                'key' => wp_hash_password('SECRETXYZ'),
                 'created_at' => $timestamp,
                 'last_rotated_at' => $timestamp,
+                'user_id' => 42,
+                'user_login' => 'editor',
+                'user_email' => 'editor@example.com',
             ],
         ];
 
@@ -50,6 +53,7 @@ final class BJLG_AdminApiTabTest extends TestCase
         $this->assertStringContainsString('API &amp; Intégrations', $output);
         $this->assertStringContainsString('bjlg-api-keys-table', $output);
         $this->assertStringContainsString('Mon intégration', $output);
-        $this->assertStringContainsString('SECRETXYZ', $output);
+        $this->assertStringContainsString('bjlg-api-key-value--hidden', $output);
+        $this->assertStringContainsString('Secret masqué. Régénérez la clé pour obtenir un nouveau secret.', $output);
     }
 }

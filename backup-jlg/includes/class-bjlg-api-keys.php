@@ -65,14 +65,19 @@ class BJLG_API_Keys {
 
         $secret = self::generate_secret();
         $timestamp = time();
+        $user_meta = self::get_current_user_metadata();
 
-        $keys[$identifier] = [
-            'id' => $identifier,
-            'label' => $label,
-            'secret' => $secret,
-            'created_at' => $timestamp,
-            'last_rotated_at' => $timestamp,
-        ];
+        $keys[$identifier] = array_merge(
+            [
+                'id' => $identifier,
+                'label' => $label,
+                'key' => self::hash_secret($secret),
+                'created_at' => $timestamp,
+                'last_rotated_at' => $timestamp,
+                'display_secret' => $secret,
+            ],
+            $user_meta
+        );
 
         self::save_indexed_keys($keys);
 
@@ -137,8 +142,12 @@ class BJLG_API_Keys {
             ], 404);
         }
 
-        $keys[$key_id]['secret'] = self::generate_secret();
+        $new_secret = self::generate_secret();
+        $keys[$key_id]['display_secret'] = $new_secret;
+        $keys[$key_id]['key'] = self::hash_secret($new_secret);
+        unset($keys[$key_id]['secret']);
         $keys[$key_id]['last_rotated_at'] = time();
+        $keys[$key_id] = array_merge($keys[$key_id], self::get_current_user_metadata());
 
         self::save_indexed_keys($keys);
 
@@ -248,17 +257,37 @@ class BJLG_API_Keys {
             $label = __('Sans nom', 'backup-jlg');
         }
 
-        return [
-            'id' => (string) $record['id'],
-            'label' => $label,
-            'secret' => (string) $record['secret'],
-            'created_at' => $created_at,
-            'last_rotated_at' => $rotated_at,
-            'created_at_iso' => gmdate('c', $created_at),
-            'last_rotated_at_iso' => gmdate('c', $rotated_at),
-            'created_at_human' => gmdate('Y-m-d H:i:s', $created_at),
-            'last_rotated_at_human' => gmdate('Y-m-d H:i:s', $rotated_at),
-        ];
+        $display_secret = '';
+        $is_hidden = false;
+
+        if (isset($record['display_secret']) && is_string($record['display_secret']) && $record['display_secret'] !== '') {
+            $display_secret = $record['display_secret'];
+        } elseif (isset($record['secret']) && is_string($record['secret']) && $record['secret'] !== '') {
+            $display_secret = $record['secret'];
+        }
+
+        if ($display_secret === '') {
+            $display_secret = __('Clé masquée', 'backup-jlg');
+            $is_hidden = true;
+        }
+
+        $user_meta = self::extract_user_metadata($record);
+
+        return array_merge(
+            [
+                'id' => (string) $record['id'],
+                'label' => $label,
+                'display_secret' => $display_secret,
+                'is_secret_hidden' => $is_hidden,
+                'created_at' => $created_at,
+                'last_rotated_at' => $rotated_at,
+                'created_at_iso' => gmdate('c', $created_at),
+                'last_rotated_at_iso' => gmdate('c', $rotated_at),
+                'created_at_human' => gmdate('Y-m-d H:i:s', $created_at),
+                'last_rotated_at_human' => gmdate('Y-m-d H:i:s', $rotated_at),
+            ],
+            $user_meta
+        );
     }
 
     /**
@@ -274,9 +303,8 @@ class BJLG_API_Keys {
         }
 
         $identifier = isset($record['id']) ? self::sanitize_identifier($record['id']) : '';
-        $secret = isset($record['secret']) ? self::sanitize_secret($record['secret']) : '';
 
-        if ($identifier === '' || $secret === '') {
+        if ($identifier === '') {
             return null;
         }
 
@@ -284,6 +312,38 @@ class BJLG_API_Keys {
         if (isset($record['label'])) {
             $label = sanitize_text_field((string) $record['label']);
             $label = self::truncate($label, 200);
+        }
+
+        $hashed_key = '';
+        if (isset($record['key']) && is_string($record['key'])) {
+            $hashed_key = trim($record['key']);
+        }
+
+        $plain_secret = '';
+        if (isset($record['secret'])) {
+            $plain_secret = self::sanitize_secret($record['secret']);
+        } elseif (isset($record['display_secret']) && is_string($record['display_secret'])) {
+            $plain_secret = self::sanitize_secret($record['display_secret']);
+        }
+
+        if ($hashed_key === '' && $plain_secret !== '') {
+            $hashed_key = self::hash_secret($plain_secret);
+        }
+
+        if ($hashed_key === '' && isset($record['raw_key']) && is_string($record['raw_key'])) {
+            $hashed_key = trim($record['raw_key']);
+        }
+
+        if ($hashed_key === '') {
+            return null;
+        }
+
+        if (!self::is_secret_hashed($hashed_key)) {
+            if ($plain_secret !== '') {
+                $hashed_key = self::hash_secret($plain_secret);
+            } else {
+                $hashed_key = self::hash_secret($hashed_key);
+            }
         }
 
         $created_at = isset($record['created_at']) ? (int) $record['created_at'] : time();
@@ -297,13 +357,23 @@ class BJLG_API_Keys {
             $rotated_at = $created_at;
         }
 
-        return [
-            'id' => $identifier,
-            'label' => $label,
-            'secret' => $secret,
-            'created_at' => $created_at,
-            'last_rotated_at' => $rotated_at,
-        ];
+        $user_meta = self::extract_user_metadata($record);
+        $user_meta['user_id'] = isset($user_meta['user_id']) ? (int) $user_meta['user_id'] : 0;
+
+        if ($user_meta['user_id'] < 0) {
+            $user_meta['user_id'] = 0;
+        }
+
+        return array_merge(
+            [
+                'id' => $identifier,
+                'label' => $label,
+                'key' => $hashed_key,
+                'created_at' => $created_at,
+                'last_rotated_at' => $rotated_at,
+            ],
+            $user_meta
+        );
     }
 
     /**
@@ -325,6 +395,25 @@ class BJLG_API_Keys {
     }
 
     /**
+     * Hash a secret using WordPress utilities when available.
+     */
+    private static function hash_secret($secret) {
+        if (!is_string($secret) || $secret === '') {
+            return '';
+        }
+
+        if (function_exists('wp_hash_password')) {
+            return wp_hash_password($secret);
+        }
+
+        if (function_exists('password_hash')) {
+            return password_hash($secret, PASSWORD_DEFAULT);
+        }
+
+        return hash('sha256', $secret);
+    }
+
+    /**
      * Sanitize an identifier string.
      */
     private static function sanitize_identifier($value) {
@@ -340,6 +429,109 @@ class BJLG_API_Keys {
         $value = preg_replace('/[^A-Za-z0-9]/', '', (string) $value);
 
         return is_string($value) ? $value : '';
+    }
+
+    /**
+     * Determine whether a stored value looks like a hashed secret.
+     */
+    private static function is_secret_hashed($value) {
+        if (!is_string($value) || $value === '') {
+            return false;
+        }
+
+        if (strpos($value, '$P$') === 0 || strpos($value, '$H$') === 0) {
+            return true;
+        }
+
+        if (strpos($value, '$argon2') === 0 || strpos($value, '$2y$') === 0 || strpos($value, '$2a$') === 0 || strpos($value, '$2b$') === 0) {
+            return true;
+        }
+
+        if (function_exists('password_get_info')) {
+            $info = password_get_info($value);
+
+            if (!empty($info['algo'])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Returns sanitized metadata for the currently authenticated user.
+     *
+     * @return array{user_id:int,user_login:string,user_email:string}
+     */
+    private static function get_current_user_metadata() {
+        $defaults = [
+            'user_id' => 0,
+            'user_login' => '',
+            'user_email' => '',
+        ];
+
+        if (!function_exists('wp_get_current_user')) {
+            return $defaults;
+        }
+
+        $user = wp_get_current_user();
+
+        if (!is_object($user)) {
+            return $defaults;
+        }
+
+        $user_id = isset($user->ID) ? (int) $user->ID : 0;
+        $user_login = '';
+        $user_email = '';
+
+        if (isset($user->user_login)) {
+            $user_login = sanitize_text_field((string) $user->user_login);
+        }
+
+        if (isset($user->user_email)) {
+            if (function_exists('sanitize_email')) {
+                $user_email = sanitize_email((string) $user->user_email);
+            } else {
+                $user_email = sanitize_text_field((string) $user->user_email);
+            }
+        }
+
+        return [
+            'user_id' => $user_id,
+            'user_login' => $user_login,
+            'user_email' => $user_email,
+        ];
+    }
+
+    /**
+     * Extract sanitized metadata from a record array.
+     *
+     * @param array<string, mixed> $record
+     *
+     * @return array{user_id:int,user_login:string,user_email:string}
+     */
+    private static function extract_user_metadata(array $record) {
+        $user_id = isset($record['user_id']) ? (int) $record['user_id'] : 0;
+        $user_login = '';
+        $user_email = '';
+
+        if (isset($record['user_login'])) {
+            $user_login = sanitize_text_field((string) $record['user_login']);
+        }
+
+        if (isset($record['user_email'])) {
+            if (function_exists('sanitize_email')) {
+                $user_email = sanitize_email((string) $record['user_email']);
+            } else {
+                $user_email = sanitize_text_field((string) $record['user_email']);
+            }
+        }
+
+        return [
+            'user_id' => $user_id,
+            'user_login' => $user_login,
+            'user_email' => $user_email,
+        ];
     }
 
     /**
