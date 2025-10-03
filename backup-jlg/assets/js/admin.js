@@ -26,17 +26,52 @@ jQuery(document).ready(function($) {
             return numeric.toLocaleString(undefined);
         };
 
+        const defaults = {};
+        $overview.find('[data-field]').each(function() {
+            const field = $(this).data('field');
+            if (field && defaults[field] === undefined) {
+                defaults[field] = $(this).text();
+            }
+        });
+
         const setField = function(field, value, fallback) {
             const $field = $overview.find('[data-field="' + field + '"]');
             if (!$field.length) {
                 return;
             }
-            const resolved = value === undefined || value === null || value === '' ? (fallback || '') : value;
+            const defaultValue = defaults[field] !== undefined ? defaults[field] : '';
+            const resolved = value === undefined || value === null || value === '' ? (fallback !== undefined ? fallback : defaultValue) : value;
             $field.text(resolved);
         };
 
         const state = {
-            metrics: parseJSON($overview.attr('data-bjlg-dashboard')) || {}
+            metrics: parseJSON($overview.attr('data-bjlg-dashboard')) || {},
+            charts: {}
+        };
+
+        const setChartEmptyState = function($card, isEmpty) {
+            const $canvas = $card.find('canvas');
+            const $message = $card.find('[data-role="empty-message"]');
+            if (isEmpty) {
+                $card.addClass('bjlg-chart-card--empty');
+                $canvas.attr('hidden', 'hidden');
+                $message.removeAttr('hidden').show();
+            } else {
+                $card.removeClass('bjlg-chart-card--empty');
+                $canvas.removeAttr('hidden');
+                $message.attr('hidden', 'hidden').hide();
+            }
+        };
+
+        const destroyChart = function(key) {
+            if (state.charts[key]) {
+                try {
+                    state.charts[key].destroy();
+                } catch (error) {
+                    // Ignored
+                }
+                delete state.charts[key];
+            }
         };
 
         const updateSummary = function(summary) {
@@ -51,6 +86,40 @@ jQuery(document).ready(function($) {
             setField('scheduler_success_rate', summary.scheduler_success_rate || '0%');
             setField('storage_total_size_human', summary.storage_total_size_human || '0');
             setField('storage_backup_count', formatNumber(summary.storage_backup_count || 0));
+        };
+
+        const updateActions = function(metrics) {
+            const $actions = $overview.find('[data-role="actions"]');
+            if (!$actions.length) {
+                return;
+            }
+
+            const summary = metrics.summary || {};
+            const storage = metrics.storage || {};
+
+            const lastBackupRelative = summary.history_last_backup_relative || '';
+            const lastBackupAbsolute = summary.history_last_backup || '';
+            const nextRunRelative = summary.scheduler_next_run_relative || '';
+            const nextRunAbsolute = summary.scheduler_next_run || '';
+
+            setField('cta_backup_last_backup', lastBackupRelative || lastBackupAbsolute || '');
+            setField('cta_backup_next_run', nextRunRelative || nextRunAbsolute || '');
+            setField('cta_restore_last_backup', lastBackupAbsolute || lastBackupRelative || '');
+            setField('cta_restore_backup_count', formatNumber(summary.storage_backup_count || storage.backup_count || 0));
+            setField('chart_history_subtitle', 'Total : ' + formatNumber(summary.history_total_actions || 0) + ' actions');
+            setField('chart_storage_subtitle', 'Total : ' + (storage.total_size_human || summary.storage_total_size_human || '0'));
+
+            const $restoreCard = $actions.find('[data-action="restore"]');
+            const $restoreButton = $restoreCard.find('[data-action-target="restore"]');
+            const backupCount = parseInt(storage.backup_count || summary.storage_backup_count || 0, 10);
+
+            if (!Number.isFinite(backupCount) || backupCount <= 0) {
+                $restoreCard.addClass('bjlg-action-card--disabled');
+                $restoreButton.addClass('disabled').attr('aria-disabled', 'true').attr('tabindex', '-1');
+            } else {
+                $restoreCard.removeClass('bjlg-action-card--disabled');
+                $restoreButton.removeClass('disabled').removeAttr('aria-disabled').removeAttr('tabindex');
+            }
         };
 
         const updateAlerts = function(alerts) {
@@ -146,9 +215,231 @@ jQuery(document).ready(function($) {
             });
         };
 
+        const getHistoryTrendDataset = function() {
+            const history = state.metrics.history || {};
+            const stats = history.stats || {};
+            const timeline = Array.isArray(stats.timeline) ? stats.timeline : [];
+            if (timeline.length < 2) {
+                return null;
+            }
+
+            const labels = [];
+            const successful = [];
+            const failed = [];
+
+            timeline.forEach(function(entry) {
+                labels.push(entry.label || entry.date || entry.day || '');
+                successful.push(Number(entry.success || entry.successful || entry.successes || 0));
+                failed.push(Number(entry.failed || entry.failures || 0));
+            });
+
+            const total = successful.reduce(function(sum, value) {
+                return sum + (Number.isFinite(value) ? value : 0);
+            }, 0) + failed.reduce(function(sum, value) {
+                return sum + (Number.isFinite(value) ? value : 0);
+            }, 0);
+
+            if (total === 0) {
+                return null;
+            }
+
+            return { labels: labels, successful: successful, failed: failed };
+        };
+
+        const getStorageTrendDataset = function() {
+            const storage = state.metrics.storage || {};
+            const trend = Array.isArray(storage.trend) ? storage.trend : [];
+            if (trend.length < 2) {
+                return null;
+            }
+
+            const labels = [];
+            const usage = [];
+
+            trend.forEach(function(entry) {
+                labels.push(entry.label || entry.date || '');
+                const bytes = Number(entry.bytes || entry.size || entry.value || entry.total_bytes || 0);
+                if (Number.isFinite(bytes)) {
+                    usage.push(bytes / (1024 * 1024));
+                } else {
+                    usage.push(0);
+                }
+            });
+
+            const total = usage.reduce(function(sum, value) {
+                return sum + (Number.isFinite(value) ? value : 0);
+            }, 0);
+
+            if (total === 0) {
+                return null;
+            }
+
+            return { labels: labels, usage: usage };
+        };
+
+        const updateHistoryChart = function() {
+            const $card = $overview.find('[data-chart="history-trend"]');
+            if (!$card.length) {
+                return;
+            }
+
+            const dataset = getHistoryTrendDataset();
+
+            if (typeof window.Chart === 'undefined' || !dataset) {
+                destroyChart('historyTrend');
+                setChartEmptyState($card, true);
+                return;
+            }
+
+            setChartEmptyState($card, false);
+
+            const canvas = $card.find('canvas')[0];
+            const ctx = canvas ? canvas.getContext('2d') : null;
+            if (!ctx) {
+                return;
+            }
+
+            if (!state.charts.historyTrend) {
+                state.charts.historyTrend = new window.Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: dataset.labels,
+                        datasets: [
+                            {
+                                label: 'Succès',
+                                data: dataset.successful,
+                                borderColor: '#1d976c',
+                                backgroundColor: 'rgba(29, 151, 108, 0.15)',
+                                tension: 0.3,
+                                fill: true,
+                                pointRadius: 3
+                            },
+                            {
+                                label: 'Échecs',
+                                data: dataset.failed,
+                                borderColor: '#d63638',
+                                backgroundColor: 'rgba(214, 54, 56, 0.1)',
+                                tension: 0.3,
+                                fill: false,
+                                pointRadius: 3
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'top'
+                            },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: {
+                                    precision: 0
+                                }
+                            }
+                        }
+                    }
+                });
+            } else {
+                const chart = state.charts.historyTrend;
+                chart.data.labels = dataset.labels;
+                chart.data.datasets[0].data = dataset.successful;
+                chart.data.datasets[1].data = dataset.failed;
+                chart.update();
+            }
+        };
+
+        const updateStorageChart = function() {
+            const $card = $overview.find('[data-chart="storage-trend"]');
+            if (!$card.length) {
+                return;
+            }
+
+            const dataset = getStorageTrendDataset();
+
+            if (typeof window.Chart === 'undefined' || !dataset) {
+                destroyChart('storageTrend');
+                setChartEmptyState($card, true);
+                return;
+            }
+
+            setChartEmptyState($card, false);
+
+            const canvas = $card.find('canvas')[0];
+            const ctx = canvas ? canvas.getContext('2d') : null;
+            if (!ctx) {
+                return;
+            }
+
+            const usageLabel = 'Utilisation (Mo)';
+
+            if (!state.charts.storageTrend) {
+                state.charts.storageTrend = new window.Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: dataset.labels,
+                        datasets: [
+                            {
+                                label: usageLabel,
+                                data: dataset.usage,
+                                borderColor: '#2563eb',
+                                backgroundColor: 'rgba(37, 99, 235, 0.15)',
+                                tension: 0.35,
+                                fill: true,
+                                pointRadius: 3
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'top'
+                            },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: {
+                                    callback: function(value) {
+                                        return value.toLocaleString(undefined, { maximumFractionDigits: 1 });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            } else {
+                const chart = state.charts.storageTrend;
+                chart.data.labels = dataset.labels;
+                chart.data.datasets[0].data = dataset.usage;
+                chart.update();
+            }
+        };
+
+        const updateCharts = function() {
+            updateHistoryChart();
+            updateStorageChart();
+        };
+
         updateSummary(state.metrics.summary || {});
         updateAlerts(state.metrics.alerts || []);
         updateOnboarding(state.metrics.onboarding || []);
+        updateActions(state.metrics);
+        updateCharts();
 
         window.bjlgDashboard = window.bjlgDashboard || {};
         window.bjlgDashboard.updateMetrics = function(nextMetrics) {
@@ -160,6 +451,8 @@ jQuery(document).ready(function($) {
             updateSummary(state.metrics.summary || {});
             updateAlerts(state.metrics.alerts || []);
             updateOnboarding(state.metrics.onboarding || []);
+            updateActions(state.metrics);
+            updateCharts();
 
             try {
                 $overview.attr('data-bjlg-dashboard', JSON.stringify(state.metrics));

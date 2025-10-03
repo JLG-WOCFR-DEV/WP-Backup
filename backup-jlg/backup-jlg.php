@@ -125,7 +125,8 @@ final class BJLG_Plugin {
 
         wp_enqueue_style('bjlg-admin', BJLG_PLUGIN_URL . 'assets/css/admin.css', [], BJLG_VERSION);
         wp_enqueue_style('bjlg-admin-advanced', BJLG_PLUGIN_URL . 'assets/css/admin-advanced.css', [], BJLG_VERSION);
-        wp_enqueue_script('bjlg-admin', BJLG_PLUGIN_URL . 'assets/js/admin.js', ['jquery'], BJLG_VERSION, true);
+        wp_enqueue_script('bjlg-chartjs', 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js', [], '4.4.4', true);
+        wp_enqueue_script('bjlg-admin', BJLG_PLUGIN_URL . 'assets/js/admin.js', ['jquery', 'bjlg-chartjs'], BJLG_VERSION, true);
         wp_localize_script('bjlg-admin', 'bjlg_ajax', [
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce'    => wp_create_nonce('bjlg_nonce'),
