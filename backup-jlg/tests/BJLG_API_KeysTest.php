@@ -11,8 +11,23 @@ final class BJLG_API_KeysTest extends TestCase
     {
         $GLOBALS['bjlg_test_current_user_can'] = true;
         $GLOBALS['bjlg_test_options'] = [];
+        $user = (object) [
+            'ID' => 1,
+            'user_login' => 'admin',
+            'user_email' => 'admin@example.com',
+            'allcaps' => [BJLG_CAPABILITY => true],
+            'roles' => ['administrator'],
+        ];
+        $GLOBALS['bjlg_test_users'] = [$user->ID => $user];
+        wp_set_current_user($user->ID);
         $_POST = [];
         $_REQUEST = [];
+    }
+
+    protected function tearDown(): void
+    {
+        wp_set_current_user(0);
+        $GLOBALS['bjlg_test_users'] = [];
     }
 
     public function test_handle_create_key_persists_option(): void
@@ -34,7 +49,10 @@ final class BJLG_API_KeysTest extends TestCase
 
             $createdKey = $response->data['key'];
             $this->assertArrayHasKey('id', $createdKey);
-            $this->assertArrayHasKey('secret', $createdKey);
+            $this->assertArrayHasKey('display_secret', $createdKey);
+            $this->assertArrayHasKey('is_secret_hidden', $createdKey);
+            $this->assertFalse($createdKey['is_secret_hidden']);
+            $this->assertNotEmpty($createdKey['display_secret']);
             $this->assertSame('Intégration Test', $createdKey['label']);
         }
 
@@ -43,13 +61,19 @@ final class BJLG_API_KeysTest extends TestCase
 
         $record = reset($stored);
         $this->assertSame('Intégration Test', $record['label']);
-        $this->assertArrayHasKey('secret', $record);
-        $this->assertNotEmpty($record['secret']);
+        $this->assertArrayHasKey('key', $record);
+        $this->assertNotEmpty($record['key']);
+        $this->assertTrue(wp_check_password($createdKey['display_secret'], $record['key']));
+        $this->assertSame(1, $record['user_id']);
+        $this->assertSame('admin', $record['user_login']);
+        $this->assertSame('admin@example.com', $record['user_email']);
     }
 
     public function test_handle_create_key_requires_capability(): void
     {
         $GLOBALS['bjlg_test_current_user_can'] = false;
+        wp_set_current_user(0);
+        $GLOBALS['bjlg_test_users'] = [];
 
         $service = new BJLG\BJLG_API_Keys();
 
@@ -72,9 +96,12 @@ final class BJLG_API_KeysTest extends TestCase
         $existing = [
             'id' => $keyId,
             'label' => 'Clé existante',
-            'secret' => 'SECRET123',
+            'key' => wp_hash_password('SECRET123'),
             'created_at' => time() - 100,
             'last_rotated_at' => time() - 50,
+            'user_id' => 1,
+            'user_login' => 'admin',
+            'user_email' => 'admin@example.com',
         ];
 
         $GLOBALS['bjlg_test_options'][BJLG\BJLG_API_Keys::OPTION_NAME] = [
@@ -105,9 +132,12 @@ final class BJLG_API_KeysTest extends TestCase
         $existing = [
             'id' => $keyId,
             'label' => 'Rotation',
-            'secret' => 'ANCIENSECRET',
+            'key' => wp_hash_password('ANCIENSECRET'),
             'created_at' => time() - 200,
             'last_rotated_at' => time() - 150,
+            'user_id' => 1,
+            'user_login' => 'admin',
+            'user_email' => 'admin@example.com',
         ];
 
         $GLOBALS['bjlg_test_options'][BJLG\BJLG_API_Keys::OPTION_NAME] = [
@@ -126,13 +156,18 @@ final class BJLG_API_KeysTest extends TestCase
 
             $rotated = $response->data['key'];
             $this->assertSame($keyId, $rotated['id']);
-            $this->assertNotSame('ANCIENSECRET', $rotated['secret']);
+            $this->assertArrayHasKey('display_secret', $rotated);
+            $this->assertArrayHasKey('is_secret_hidden', $rotated);
+            $this->assertFalse($rotated['is_secret_hidden']);
+            $this->assertNotSame('ANCIENSECRET', $rotated['display_secret']);
             $this->assertGreaterThan($existing['last_rotated_at'], $rotated['last_rotated_at']);
         }
 
         $stored = $GLOBALS['bjlg_test_options'][BJLG\BJLG_API_Keys::OPTION_NAME][$keyId] ?? null;
         $this->assertNotNull($stored);
-        $this->assertNotSame('ANCIENSECRET', $stored['secret']);
+        $this->assertTrue(wp_check_password($rotated['display_secret'], $stored['key']));
+        $this->assertFalse(wp_check_password('ANCIENSECRET', $stored['key']));
         $this->assertGreaterThan($existing['last_rotated_at'], $stored['last_rotated_at']);
+        $this->assertSame(1, $stored['user_id']);
     }
 }

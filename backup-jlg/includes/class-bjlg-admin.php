@@ -1282,12 +1282,29 @@ class BJLG_Admin {
                 </thead>
                 <tbody>
                 <?php foreach ($keys as $key): ?>
-                    <tr data-key-id="<?php echo esc_attr($key['id']); ?>" data-created-at="<?php echo esc_attr($key['created_at']); ?>" data-last-rotated-at="<?php echo esc_attr($key['last_rotated_at']); ?>">
+                    <?php
+                    $is_hidden = !empty($key['is_secret_hidden']);
+                    $secret_value = isset($key['display_secret']) ? (string) $key['display_secret'] : '';
+                    $secret_classes = 'bjlg-api-key-value';
+
+                    if ($is_hidden) {
+                        $secret_classes .= ' bjlg-api-key-value--hidden';
+                    }
+                    ?>
+                    <tr data-key-id="<?php echo esc_attr($key['id']); ?>"
+                        data-created-at="<?php echo esc_attr($key['created_at']); ?>"
+                        data-last-rotated-at="<?php echo esc_attr($key['last_rotated_at']); ?>"
+                        data-secret-hidden="<?php echo $is_hidden ? '1' : '0'; ?>">
                         <td>
                             <strong class="bjlg-api-key-label"><?php echo esc_html($key['label']); ?></strong>
                         </td>
                         <td>
-                            <code class="bjlg-api-key-value" aria-label="Clé API"><?php echo esc_html($key['secret']); ?></code>
+                            <code class="<?php echo esc_attr($secret_classes); ?>" aria-label="Clé API">
+                                <?php echo esc_html($secret_value); ?>
+                            </code>
+                            <?php if ($is_hidden): ?>
+                                <span class="bjlg-api-key-hidden-note"><?php esc_html_e('Secret masqué. Régénérez la clé pour obtenir un nouveau secret.', 'backup-jlg'); ?></span>
+                            <?php endif; ?>
                         </td>
                         <td>
                             <time class="bjlg-api-key-created" datetime="<?php echo esc_attr($key['created_at_iso']); ?>">

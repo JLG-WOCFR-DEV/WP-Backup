@@ -2865,7 +2865,10 @@ jQuery(document).ready(function($) {
             const label = key && typeof key.label === 'string' && key.label.trim() !== ''
                 ? key.label
                 : 'Sans nom';
-            const secret = key && key.secret ? key.secret : '';
+            const displaySecret = key && typeof key.display_secret === 'string'
+                ? key.display_secret
+                : '';
+            const isSecretHidden = !!(key && (key.is_secret_hidden || key.secret_hidden));
             const createdAt = key && typeof key.created_at !== 'undefined' ? key.created_at : '';
             const createdHuman = key && key.created_at_human ? key.created_at_human : '';
             const createdIso = key && key.created_at_iso ? key.created_at_iso : '';
@@ -2878,7 +2881,8 @@ jQuery(document).ready(function($) {
             const $row = $('<tr/>', {
                 'data-key-id': id,
                 'data-created-at': createdAt,
-                'data-last-rotated-at': rotatedAt
+                'data-last-rotated-at': rotatedAt,
+                'data-secret-hidden': isSecretHidden ? '1' : '0'
             });
 
             $('<td/>').append(
@@ -2888,13 +2892,25 @@ jQuery(document).ready(function($) {
                 })
             ).appendTo($row);
 
-            $('<td/>').append(
-                $('<code/>', {
-                    'class': 'bjlg-api-key-value',
-                    'aria-label': 'Clé API',
-                    text: secret
-                })
-            ).appendTo($row);
+            const $secretCell = $('<td/>').appendTo($row);
+            const secretClasses = ['bjlg-api-key-value'];
+
+            if (isSecretHidden) {
+                secretClasses.push('bjlg-api-key-value--hidden');
+            }
+
+            $('<code/>', {
+                'class': secretClasses.join(' '),
+                'aria-label': 'Clé API',
+                text: displaySecret
+            }).appendTo($secretCell);
+
+            if (isSecretHidden) {
+                $('<span/>', {
+                    'class': 'bjlg-api-key-hidden-note',
+                    text: 'Secret masqué. Régénérez la clé pour obtenir un nouveau secret.'
+                }).appendTo($secretCell);
+            }
 
             $('<td/>').append(
                 $('<time/>', {

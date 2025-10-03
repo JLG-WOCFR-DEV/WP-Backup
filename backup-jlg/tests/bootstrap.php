@@ -19,6 +19,12 @@ if (!function_exists('esc_html')) {
     }
 }
 
+if (!function_exists('esc_html_e')) {
+    function esc_html_e($text, $domain = 'default') {
+        echo esc_html($text);
+    }
+}
+
 if (!function_exists('esc_attr')) {
     function esc_attr($text) {
         return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
@@ -706,6 +712,32 @@ if (!function_exists('sanitize_text_field')) {
         $str = strip_tags($str);
         $str = preg_replace('/[\r\n\t ]+/', ' ', $str);
         return trim($str);
+    }
+}
+
+if (!function_exists('sanitize_email')) {
+    function sanitize_email($email) {
+        $email = trim((string) $email);
+
+        if ($email === '') {
+            return '';
+        }
+
+        $sanitized = filter_var($email, FILTER_SANITIZE_EMAIL);
+
+        return is_string($sanitized) ? $sanitized : '';
+    }
+}
+
+if (!function_exists('is_email')) {
+    function is_email($email) {
+        $email = sanitize_email($email);
+
+        if ($email === '') {
+            return false;
+        }
+
+        return $email;
     }
 }
 
