@@ -2443,6 +2443,383 @@ jQuery(document).ready(function($) {
         requestBackups();
     })();
 
+    function bjlgParseBackupPatternInput(value) {
+        let raw = [];
+        if (Array.isArray(value)) {
+            raw = value;
+        } else if (typeof value === 'string') {
+            raw = value.split(/[\r\n,]+/);
+        } else if (value && typeof value === 'object') {
+            raw = Object.values(value);
+        } else if (typeof value !== 'undefined' && value !== null) {
+            raw = [value];
+        }
+
+        const normalized = [];
+        raw.forEach(function(entry) {
+            if (!entry && entry !== 0) {
+                return;
+            }
+            const text = String(entry).trim();
+            if (!text) {
+                return;
+            }
+            const formatted = text.replace(/\\/g, '/');
+            if (!normalized.includes(formatted)) {
+                normalized.push(formatted);
+            }
+        });
+
+        return normalized;
+    }
+
+    function bjlgFormatBackupPatternsForTextarea(patterns) {
+        if (!Array.isArray(patterns)) {
+            return '';
+        }
+
+        return patterns
+            .map(function(pattern) {
+                return typeof pattern === 'string' ? pattern : String(pattern || '');
+            })
+            .filter(function(pattern) {
+                return pattern.trim() !== '';
+            })
+            .join('\n');
+    }
+
+    function bjlgCollectBackupFormState($form) {
+        if (!$form || !$form.length) {
+            return {
+                components: [],
+                encrypt: false,
+                incremental: false,
+                include_patterns: [],
+                exclude_patterns: [],
+                include_patterns_text: '',
+                exclude_patterns_text: '',
+                post_checks: {},
+                post_checks_array: [],
+                secondary_destinations: []
+            };
+        }
+
+        const components = [];
+        $form.find('input[name="backup_components[]"]').each(function() {
+            const value = $(this).val();
+            if (!value) {
+                return;
+            }
+            if ($(this).is(':checked')) {
+                components.push(String(value));
+            }
+        });
+
+        const includeText = ($form.find('textarea[name="include_patterns"]').val() || '').toString();
+        const excludeText = ($form.find('textarea[name="exclude_patterns"]').val() || '').toString();
+
+        const postChecksMap = {};
+        const postChecksArray = [];
+        $form.find('input[name="post_checks[]"]').each(function() {
+            const rawValue = ($(this).val() || '').toString();
+            if (rawValue === '') {
+                return;
+            }
+            const normalized = rawValue.trim();
+            const isChecked = $(this).is(':checked');
+            postChecksMap[normalized] = isChecked;
+            if (isChecked) {
+                postChecksArray.push(normalized);
+            }
+        });
+
+        const secondaryDestinations = [];
+        $form.find('input[name="secondary_destinations[]"]').each(function() {
+            const raw = ($(this).val() || '').toString();
+            if (raw === '') {
+                return;
+            }
+            if ($(this).is(':checked')) {
+                secondaryDestinations.push(raw);
+            }
+        });
+
+        return {
+            components: components,
+            encrypt: $form.find('input[name="encrypt_backup"]').is(':checked'),
+            incremental: $form.find('input[name="incremental_backup"]').is(':checked'),
+            include_patterns: bjlgParseBackupPatternInput(includeText),
+            exclude_patterns: bjlgParseBackupPatternInput(excludeText),
+            include_patterns_text: includeText,
+            exclude_patterns_text: excludeText,
+            post_checks: postChecksMap,
+            post_checks_array: postChecksArray,
+            secondary_destinations: secondaryDestinations
+        };
+    }
+
+    function bjlgApplyBackupPresetToForm($form, preset) {
+        if (!$form || !$form.length || !preset || typeof preset !== 'object') {
+            return false;
+        }
+
+        const components = Array.isArray(preset.components) ? preset.components.map(function(value) {
+            return String(value);
+        }) : [];
+        const componentSet = new Set(components);
+        $form.find('input[name="backup_components[]"]').each(function() {
+            const value = ($(this).val() || '').toString();
+            $(this).prop('checked', componentSet.has(value));
+        });
+
+        $form.find('input[name="encrypt_backup"]').prop('checked', !!preset.encrypt);
+        $form.find('input[name="incremental_backup"]').prop('checked', !!preset.incremental);
+
+        $form.find('textarea[name="include_patterns"]').val(bjlgFormatBackupPatternsForTextarea(preset.include_patterns));
+        $form.find('textarea[name="exclude_patterns"]').val(bjlgFormatBackupPatternsForTextarea(preset.exclude_patterns));
+
+        const postChecksSet = new Set();
+        if (preset.post_checks && typeof preset.post_checks === 'object') {
+            Object.keys(preset.post_checks).forEach(function(key) {
+                if (preset.post_checks[key]) {
+                    postChecksSet.add(String(key));
+                }
+            });
+        } else if (Array.isArray(preset.post_checks)) {
+            preset.post_checks.forEach(function(value) {
+                postChecksSet.add(String(value));
+            });
+        }
+
+        $form.find('input[name="post_checks[]"]').each(function() {
+            const value = ($(this).val() || '').toString();
+            $(this).prop('checked', postChecksSet.has(value));
+        });
+
+        const secondarySet = new Set(Array.isArray(preset.secondary_destinations) ? preset.secondary_destinations.map(function(value) {
+            return String(value);
+        }) : []);
+        $form.find('input[name="secondary_destinations[]"]').each(function() {
+            const value = ($(this).val() || '').toString();
+            $(this).prop('checked', secondarySet.has(value));
+        });
+
+        return true;
+    }
+
+    (function setupBackupPresets() {
+        const $form = $('#bjlg-backup-creation-form');
+        if (!$form.length) {
+            return;
+        }
+
+        const $panel = $form.find('.bjlg-backup-presets');
+        if (!$panel.length) {
+            return;
+        }
+
+        const $select = $panel.find('.bjlg-backup-presets__select');
+        const $apply = $panel.find('.bjlg-backup-presets__apply');
+        const $save = $panel.find('.bjlg-backup-presets__save');
+        const $status = $panel.find('.bjlg-backup-presets__status');
+
+        const state = {
+            presets: {}
+        };
+
+        function normalizePresetList(raw) {
+            if (Array.isArray(raw)) {
+                return raw;
+            }
+
+            if (raw && typeof raw === 'object') {
+                return Object.keys(raw).map(function(key) {
+                    return raw[key];
+                });
+            }
+
+            return [];
+        }
+
+        function updatePresets(rawList) {
+            const list = normalizePresetList(rawList);
+            state.presets = {};
+            list.forEach(function(item) {
+                if (!item || typeof item !== 'object') {
+                    return;
+                }
+                const id = item.id ? String(item.id) : '';
+                if (!id) {
+                    return;
+                }
+                state.presets[id] = $.extend(true, {}, item, { id: id });
+            });
+        }
+
+        function renderSelect(selectedId) {
+            const entries = Object.values(state.presets).sort(function(a, b) {
+                const labelA = (a.label || '').toString();
+                const labelB = (b.label || '').toString();
+                return labelA.localeCompare(labelB, undefined, { sensitivity: 'base' });
+            });
+
+            const currentSelection = selectedId || $select.val() || '';
+            $select.empty();
+            $('<option/>', { value: '', text: 'Sélectionnez un modèle…' }).appendTo($select);
+            entries.forEach(function(entry) {
+                $('<option/>', {
+                    value: entry.id,
+                    text: entry.label || entry.id
+                }).appendTo($select);
+            });
+
+            if (currentSelection && state.presets[currentSelection]) {
+                $select.val(currentSelection);
+            } else {
+                $select.val('');
+            }
+        }
+
+        function showStatus(type, message) {
+            if (!$status.length) {
+                return;
+            }
+
+            const normalizedType = type === 'error' ? 'error' : 'success';
+            $status
+                .removeClass('bjlg-backup-presets__status--error bjlg-backup-presets__status--success')
+                .addClass('bjlg-backup-presets__status--' + normalizedType)
+                .text(message || '')
+                .show();
+        }
+
+        function parseInitialPresets() {
+            const raw = $panel.attr('data-bjlg-presets');
+            if (!raw) {
+                return [];
+            }
+            try {
+                return JSON.parse(raw);
+            } catch (error) {
+                return [];
+            }
+        }
+
+        updatePresets(parseInitialPresets());
+        renderSelect();
+        if ($status.length) {
+            $status.hide();
+        }
+
+        function applySelectedPreset() {
+            const selectedId = $select.val();
+            if (!selectedId) {
+                showStatus('error', 'Veuillez sélectionner un modèle à appliquer.');
+                return;
+            }
+
+            const preset = state.presets[selectedId];
+            if (!preset) {
+                showStatus('error', 'Modèle introuvable.');
+                return;
+            }
+
+            bjlgApplyBackupPresetToForm($form, preset);
+            showStatus('success', `Modèle « ${preset.label || selectedId} » appliqué.`);
+        }
+
+        $apply.on('click', function(e) {
+            e.preventDefault();
+            applySelectedPreset();
+        });
+
+        $save.on('click', function(e) {
+            e.preventDefault();
+
+            const formState = bjlgCollectBackupFormState($form);
+            if (!formState.components.length) {
+                showStatus('error', 'Sélectionnez au moins un composant avant d’enregistrer un modèle.');
+                return;
+            }
+
+            const selectedId = $select.val();
+            const currentPreset = selectedId && state.presets[selectedId] ? state.presets[selectedId] : null;
+            const defaultName = currentPreset && currentPreset.label ? currentPreset.label : '';
+
+            let name = window.prompt('Nom du modèle', defaultName);
+            if (name === null) {
+                return;
+            }
+
+            name = name.trim();
+            if (name === '') {
+                showStatus('error', 'Le nom du modèle ne peut pas être vide.');
+                return;
+            }
+
+            let presetId = '';
+            if (currentPreset) {
+                const sameName = (currentPreset.label || '').toLowerCase() === name.toLowerCase();
+                if (sameName || window.confirm('Mettre à jour le modèle existant « ' + (currentPreset.label || selectedId) + ' » ? Cliquez sur Annuler pour créer un nouveau modèle.')) {
+                    presetId = currentPreset.id;
+                }
+            }
+
+            const payload = {
+                action: 'bjlg_save_backup_preset',
+                nonce: bjlg_ajax.nonce,
+                preset_id: presetId,
+                name: name,
+                preset: JSON.stringify({
+                    label: name,
+                    components: formState.components,
+                    encrypt: formState.encrypt,
+                    incremental: formState.incremental,
+                    include_patterns: formState.include_patterns,
+                    exclude_patterns: formState.exclude_patterns,
+                    post_checks: formState.post_checks,
+                    secondary_destinations: formState.secondary_destinations
+                })
+            };
+
+            $save.prop('disabled', true).addClass('is-busy');
+
+            $.post(bjlg_ajax.ajax_url, payload)
+                .done(function(response) {
+                    if (!response || response.success === false) {
+                        const errorMessage = response && response.data && response.data.message
+                            ? response.data.message
+                            : "Impossible d'enregistrer le modèle.";
+                        showStatus('error', errorMessage);
+                        return;
+                    }
+
+                    const data = response.data || {};
+                    updatePresets(data.presets || []);
+                    const saved = data.saved && data.saved.id ? String(data.saved.id) : '';
+                    renderSelect(saved);
+                    if (saved && state.presets[saved]) {
+                        $select.val(saved);
+                    }
+                    showStatus('success', data.message || 'Modèle enregistré.');
+                })
+                .fail(function(xhr) {
+                    let message = "Impossible d'enregistrer le modèle.";
+                    if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                        message = xhr.responseJSON.data.message;
+                    } else if (xhr && xhr.responseJSON && xhr.responseJSON.message) {
+                        message = xhr.responseJSON.message;
+                    } else if (xhr && typeof xhr.responseText === 'string' && xhr.responseText.trim() !== '') {
+                        message = xhr.responseText;
+                    }
+                    showStatus('error', message);
+                })
+                .always(function() {
+                    $save.prop('disabled', false).removeClass('is-busy');
+                });
+        });
+    })();
+
     // La navigation par onglets est gérée par PHP via rechargement de page.
 
     // --- GESTIONNAIRE DE SAUVEGARDE ASYNCHRONE ---
@@ -2493,25 +2870,9 @@ jQuery(document).ready(function($) {
             $statusText.text(textValue === '' ? '' : textValue);
         }
         
-        let components = [];
-        $form.find('input[name="backup_components[]"]:checked').each(function() {
-            components.push($(this).val());
-        });
+        const formState = bjlgCollectBackupFormState($form);
 
-        const encrypt = $form.find('input[name="encrypt_backup"]').is(':checked');
-        const incremental = $form.find('input[name="incremental_backup"]').is(':checked');
-        const includePatterns = ($form.find('textarea[name="include_patterns"]').val() || '').toString();
-        const excludePatterns = ($form.find('textarea[name="exclude_patterns"]').val() || '').toString();
-        const postChecks = [];
-        $form.find('input[name="post_checks[]"]:checked').each(function() {
-            postChecks.push($(this).val());
-        });
-        const secondaryDestinations = [];
-        $form.find('input[name="secondary_destinations[]"]:checked').each(function() {
-            secondaryDestinations.push($(this).val());
-        });
-
-        if (components.length === 0) {
+        if (formState.components.length === 0) {
             alert('Veuillez sélectionner au moins un composant à sauvegarder.');
             return;
         }
@@ -2526,13 +2887,13 @@ jQuery(document).ready(function($) {
         const data = {
             action: 'bjlg_start_backup_task',
             nonce: bjlg_ajax.nonce,
-            components: components,
-            encrypt: encrypt,
-            incremental: incremental,
-            include_patterns: includePatterns,
-            exclude_patterns: excludePatterns,
-            post_checks: postChecks,
-            secondary_destinations: secondaryDestinations
+            components: formState.components,
+            encrypt: formState.encrypt,
+            incremental: formState.incremental,
+            include_patterns: formState.include_patterns_text,
+            exclude_patterns: formState.exclude_patterns_text,
+            post_checks: formState.post_checks_array,
+            secondary_destinations: formState.secondary_destinations
         };
         let debugReport = "--- 1. REQUÊTE DE LANCEMENT ---\nDonnées envoyées:\n" + JSON.stringify(data, null, 2);
         if ($debugOutput.length) $debugOutput.text(debugReport);

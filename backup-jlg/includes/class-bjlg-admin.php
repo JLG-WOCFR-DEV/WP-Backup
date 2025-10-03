@@ -329,11 +329,29 @@ class BJLG_Admin {
         $include_text = esc_textarea(implode("\n", array_map('strval', (array) $include_patterns)));
         $exclude_text = esc_textarea(implode("\n", array_map('strval', (array) $exclude_patterns)));
         $destination_choices = $this->get_destination_choices();
+        $presets = BJLG_Settings::get_backup_presets();
+        $presets_json = !empty($presets) ? wp_json_encode(array_values($presets)) : '';
         ?>
         <div class="bjlg-section">
             <h2>Créer une sauvegarde</h2>
             <form id="bjlg-backup-creation-form">
                 <p>Choisissez les composants à inclure dans votre sauvegarde.</p>
+                <div class="bjlg-backup-presets"<?php echo $presets_json ? ' data-bjlg-presets=' . "'" . esc_attr($presets_json) . "'" : ''; ?>>
+                    <h3>Modèles</h3>
+                    <div class="bjlg-backup-presets__controls">
+                        <label class="screen-reader-text" for="bjlg-backup-preset-select">Sélectionner un modèle de sauvegarde</label>
+                        <select id="bjlg-backup-preset-select" class="bjlg-backup-presets__select">
+                            <option value="">Sélectionnez un modèle…</option>
+                            <?php foreach ($presets as $preset): ?>
+                                <option value="<?php echo esc_attr($preset['id']); ?>"><?php echo esc_html($preset['label']); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <button type="button" class="button bjlg-backup-presets__apply">Appliquer</button>
+                        <button type="button" class="button button-secondary bjlg-backup-presets__save">Enregistrer la configuration</button>
+                    </div>
+                    <p class="description">Appliquez un modèle existant ou enregistrez votre configuration actuelle pour la réutiliser plus tard.</p>
+                    <p class="bjlg-backup-presets__status" role="status" aria-live="polite"></p>
+                </div>
                 <table class="form-table">
                     <tbody>
                         <tr>
