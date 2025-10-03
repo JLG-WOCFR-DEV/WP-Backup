@@ -533,7 +533,14 @@ class BJLG_Admin {
                 </div>
             </div>
             <div id="bjlg-backup-list-feedback" class="notice notice-error" role="alert" style="display:none;"></div>
-            <table class="wp-list-table widefat striped bjlg-responsive-table bjlg-backup-table">
+            <table
+                class="wp-list-table widefat striped bjlg-responsive-table bjlg-backup-table"
+                aria-describedby="bjlg-backup-summary bjlg-backup-list-caption"
+            >
+                <caption id="bjlg-backup-list-caption" class="bjlg-table-caption">
+                    Tableau listant les sauvegardes disponibles avec leurs composants, tailles,
+                    dates et actions possibles.
+                </caption>
                 <thead>
                     <tr>
                         <th scope="col">Nom du fichier</th>
@@ -654,6 +661,10 @@ class BJLG_Admin {
             <h2>Historique des 50 dernières actions</h2>
             <?php if (!empty($history)): ?>
                 <table class="wp-list-table widefat striped bjlg-responsive-table bjlg-history-table">
+                    <caption class="bjlg-table-caption">
+                        Historique des 50 dernières actions liées aux sauvegardes et restaurations,
+                        incluant leur date, statut et détails.
+                    </caption>
                     <thead>
                         <tr>
                             <th scope="col" style="width: 180px;">Date</th>
