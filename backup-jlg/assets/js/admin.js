@@ -344,6 +344,36 @@ jQuery(document).ready(function($) {
                 }
                 $item.find('label[for^="bjlg-schedule-label-"]').attr('for', newId);
             }
+
+            $item.find('[data-id-template]').each(function() {
+                const $node = $(this);
+                const template = $node.attr('data-id-template');
+                if (typeof template !== 'string' || !template.includes('%s')) {
+                    return;
+                }
+                const newId = template.replace('%s', prefix);
+                $node.attr('id', newId);
+            });
+
+            $item.find('[data-for-template]').each(function() {
+                const $label = $(this);
+                const template = $label.attr('data-for-template');
+                if (typeof template !== 'string' || !template.includes('%s')) {
+                    return;
+                }
+                const newFor = template.replace('%s', prefix);
+                $label.attr('for', newFor);
+            });
+
+            $item.find('[data-describedby-template]').each(function() {
+                const $node = $(this);
+                const template = $node.attr('data-describedby-template');
+                if (typeof template !== 'string' || !template.includes('%s')) {
+                    return;
+                }
+                const newValue = template.replace('%s', prefix);
+                $node.attr('aria-describedby', newValue);
+            });
         }
 
         function setScheduleId($item, scheduleId) {

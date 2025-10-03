@@ -284,19 +284,31 @@ class BJLG_Admin {
                             <td>
                                 <div class="bjlg-field-control">
                                     <fieldset>
-                                        <label>
-                                            <input type="checkbox" name="encrypt_backup" value="1">
+                                        <label for="bjlg-encrypt-backup">
+                                            <input
+                                                type="checkbox"
+                                                id="bjlg-encrypt-backup"
+                                                name="encrypt_backup"
+                                                value="1"
+                                                aria-describedby="bjlg-encrypt-backup-description"
+                                            >
                                             Chiffrer la sauvegarde (AES-256)
                                         </label>
-                                        <p class="description">
+                                        <p id="bjlg-encrypt-backup-description" class="description">
                                             Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
                                         </p>
                                         <br>
-                                        <label>
-                                            <input type="checkbox" name="incremental_backup" value="1">
+                                        <label for="bjlg-incremental-backup">
+                                            <input
+                                                type="checkbox"
+                                                id="bjlg-incremental-backup"
+                                                name="incremental_backup"
+                                                value="1"
+                                                aria-describedby="bjlg-incremental-backup-description"
+                                            >
                                             Sauvegarde incrémentale
                                         </label>
-                                        <p class="description">
+                                        <p id="bjlg-incremental-backup-description" class="description">
                                             Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
                                         </p>
                                     </fieldset>
@@ -304,20 +316,34 @@ class BJLG_Admin {
                             </td>
                         </tr>
                         <tr>
-                            <th scope="row">Inclusions personnalisées</th>
+                            <th scope="row"><label for="bjlg-include-patterns">Inclusions personnalisées</label></th>
                             <td>
                                 <div class="bjlg-field-control">
-                                    <textarea name="include_patterns" rows="4" class="large-text code" placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"><?php echo $include_text; ?></textarea>
-                                    <p class="description">Un motif par ligne. Laissez vide pour inclure tous les fichiers autorisés.</p>
+                                    <textarea
+                                        id="bjlg-include-patterns"
+                                        name="include_patterns"
+                                        rows="4"
+                                        class="large-text code"
+                                        placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"
+                                        aria-describedby="bjlg-include-patterns-description"
+                                    ><?php echo $include_text; ?></textarea>
+                                    <p id="bjlg-include-patterns-description" class="description">Un motif par ligne. Laissez vide pour inclure tous les fichiers autorisés.</p>
                                 </div>
                             </td>
                         </tr>
                         <tr>
-                            <th scope="row">Exclusions</th>
+                            <th scope="row"><label for="bjlg-exclude-patterns">Exclusions</label></th>
                             <td>
                                 <div class="bjlg-field-control">
-                                    <textarea name="exclude_patterns" rows="4" class="large-text code" placeholder="*/cache/*&#10;*.log"><?php echo $exclude_text; ?></textarea>
-                                    <p class="description">Ajoutez des motifs pour ignorer certains fichiers ou répertoires. Les exclusions globales s'appliquent également.</p>
+                                    <textarea
+                                        id="bjlg-exclude-patterns"
+                                        name="exclude_patterns"
+                                        rows="4"
+                                        class="large-text code"
+                                        placeholder="*/cache/*&#10;*.log"
+                                        aria-describedby="bjlg-exclude-patterns-description"
+                                    ><?php echo $exclude_text; ?></textarea>
+                                    <p id="bjlg-exclude-patterns-description" class="description">Ajoutez des motifs pour ignorer certains fichiers ou répertoires. Les exclusions globales s'appliquent également.</p>
                                 </div>
                             </td>
                         </tr>
@@ -326,14 +352,26 @@ class BJLG_Admin {
                             <td>
                                 <div class="bjlg-field-control">
                                     <fieldset>
-                                        <label>
-                                            <input type="checkbox" name="post_checks[]" value="checksum" <?php checked(!empty($post_checks['checksum'])); ?>> Vérifier l'intégrité (SHA-256)
+                                        <label for="bjlg-post-checks-checksum">
+                                            <input type="checkbox"
+                                                   id="bjlg-post-checks-checksum"
+                                                   name="post_checks[]"
+                                                   value="checksum"
+                                                   <?php checked(!empty($post_checks['checksum'])); ?>
+                                                   aria-describedby="bjlg-post-checks-checksum-description"
+                                            > Vérifier l'intégrité (SHA-256)
                                         </label>
-                                        <p class="description">Calcule un hachage du fichier pour détecter les corruptions.</p>
-                                        <label>
-                                            <input type="checkbox" name="post_checks[]" value="dry_run" <?php checked(!empty($post_checks['dry_run'])); ?>> Test de restauration à blanc
+                                        <p id="bjlg-post-checks-checksum-description" class="description">Calcule un hachage du fichier pour détecter les corruptions.</p>
+                                        <label for="bjlg-post-checks-dry-run">
+                                            <input type="checkbox"
+                                                   id="bjlg-post-checks-dry-run"
+                                                   name="post_checks[]"
+                                                   value="dry_run"
+                                                   <?php checked(!empty($post_checks['dry_run'])); ?>
+                                                   aria-describedby="bjlg-post-checks-dry-run-description"
+                                            > Test de restauration à blanc
                                         </label>
-                                        <p class="description">Ouvre l'archive pour valider qu'elle est exploitable (non exécuté sur les fichiers chiffrés).</p>
+                                        <p id="bjlg-post-checks-dry-run-description" class="description">Ouvre l'archive pour valider qu'elle est exploitable (non exécuté sur les fichiers chiffrés).</p>
                                     </fieldset>
                                 </div>
                             </td>
@@ -970,18 +1008,26 @@ class BJLG_Admin {
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row">Conserver par ancienneté</th>
+                        <th scope="row"><label for="bjlg-cleanup-by-age">Conserver par ancienneté</label></th>
                         <td>
                             <div class="bjlg-field-control">
                                 <div class="bjlg-form-field-group">
                                     <div class="bjlg-form-field-control">
-                                        <input name="by_age" type="number" class="small-text" value="<?php echo esc_attr(isset($cleanup_settings['by_age']) ? $cleanup_settings['by_age'] : 0); ?>" min="0">
+                                        <input
+                                            id="bjlg-cleanup-by-age"
+                                            name="by_age"
+                                            type="number"
+                                            class="small-text"
+                                            value="<?php echo esc_attr(isset($cleanup_settings['by_age']) ? $cleanup_settings['by_age'] : 0); ?>"
+                                            min="0"
+                                            aria-describedby="bjlg-cleanup-by-age-description"
+                                        >
                                     </div>
                                     <div class="bjlg-form-field-actions">
                                         <span class="bjlg-form-field-unit">jours</span>
                                     </div>
                                 </div>
-                                <p class="description">0 = illimité</p>
+                                <p id="bjlg-cleanup-by-age-description" class="description">0 = illimité</p>
                             </div>
                         </td>
                     </tr>
@@ -990,11 +1036,19 @@ class BJLG_Admin {
                 <h3><span class="dashicons dashicons-admin-appearance" aria-hidden="true"></span> Marque Blanche</h3>
                 <table class="form-table">
                     <tr>
-                        <th scope="row">Nom du plugin</th>
+                        <th scope="row"><label for="bjlg-plugin-name">Nom du plugin</label></th>
                         <td>
                             <div class="bjlg-field-control">
-                                <input type="text" name="plugin_name" value="<?php echo esc_attr(isset($wl_settings['plugin_name']) ? $wl_settings['plugin_name'] : ''); ?>" class="regular-text" placeholder="Backup - JLG">
-                                <p class="description">Laissez vide pour utiliser le nom par défaut</p>
+                                <input
+                                    type="text"
+                                    id="bjlg-plugin-name"
+                                    name="plugin_name"
+                                    value="<?php echo esc_attr(isset($wl_settings['plugin_name']) ? $wl_settings['plugin_name'] : ''); ?>"
+                                    class="regular-text"
+                                    placeholder="Backup - JLG"
+                                    aria-describedby="bjlg-plugin-name-description"
+                                >
+                                <p id="bjlg-plugin-name-description" class="description">Laissez vide pour utiliser le nom par défaut</p>
                             </div>
                         </td>
                     </tr>
@@ -1018,20 +1072,33 @@ class BJLG_Admin {
                         <th scope="row">Notifications automatiques</th>
                         <td>
                             <div class="bjlg-field-control">
-                                <label>
-                                    <input type="checkbox" name="notifications_enabled" <?php checked(!empty($notification_settings['enabled'])); ?>>
+                                <label for="bjlg-notifications-enabled">
+                                    <input
+                                        type="checkbox"
+                                        id="bjlg-notifications-enabled"
+                                        name="notifications_enabled"
+                                        <?php checked(!empty($notification_settings['enabled'])); ?>
+                                        aria-describedby="bjlg-notifications-enabled-description"
+                                    >
                                     Activer l'envoi automatique des notifications
                                 </label>
-                                <p class="description">Recevez des alertes lorsqu'une action importante est exécutée.</p>
+                                <p id="bjlg-notifications-enabled-description" class="description">Recevez des alertes lorsqu'une action importante est exécutée.</p>
                             </div>
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row">Destinataires e-mail</th>
+                        <th scope="row"><label for="bjlg-notification-recipients">Destinataires e-mail</label></th>
                         <td>
                             <div class="bjlg-field-control">
-                                <textarea name="email_recipients" rows="3" class="large-text code" placeholder="admin@example.com&#10;contact@example.com"><?php echo esc_textarea($notification_recipients_display); ?></textarea>
-                                <p class="description">Une adresse par ligne ou séparée par une virgule. Obligatoire si le canal e-mail est activé.</p>
+                                <textarea
+                                    id="bjlg-notification-recipients"
+                                    name="email_recipients"
+                                    rows="3"
+                                    class="large-text code"
+                                    placeholder="admin@example.com&#10;contact@example.com"
+                                    aria-describedby="bjlg-notification-recipients-description"
+                                ><?php echo esc_textarea($notification_recipients_display); ?></textarea>
+                                <p id="bjlg-notification-recipients-description" class="description">Une adresse par ligne ou séparée par une virgule. Obligatoire si le canal e-mail est activé.</p>
                             </div>
                         </td>
                     </tr>
@@ -1598,6 +1665,16 @@ class BJLG_Admin {
             $field_prefix = '__index__';
         }
 
+        $label_id = 'bjlg-schedule-label-' . $field_prefix;
+        $time_id_template = 'bjlg-schedule-time-%s';
+        $time_description_id_template = 'bjlg-schedule-time-%s-description';
+        $include_id_template = 'bjlg-schedule-include-%s';
+        $exclude_id_template = 'bjlg-schedule-exclude-%s';
+        $time_id = sprintf($time_id_template, $field_prefix);
+        $time_description_id = sprintf($time_description_id_template, $field_prefix);
+        $include_id = sprintf($include_id_template, $field_prefix);
+        $exclude_id = sprintf($exclude_id_template, $field_prefix);
+
         $summary_html = $this->get_schedule_summary_markup(
             $schedule_components,
             $encrypt_enabled,
@@ -1622,12 +1699,13 @@ class BJLG_Admin {
             <header class="bjlg-schedule-item__header">
                 <div class="bjlg-schedule-item__title">
                     <span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span>
-                    <label class="screen-reader-text" for="bjlg-schedule-label-<?php echo esc_attr($field_prefix); ?>">Nom de la planification</label>
+                    <label class="screen-reader-text" for="<?php echo esc_attr($label_id); ?>" data-for-template="bjlg-schedule-label-%s">Nom de la planification</label>
                     <input type="text"
-                           id="bjlg-schedule-label-<?php echo esc_attr($field_prefix); ?>"
+                           id="<?php echo esc_attr($label_id); ?>"
                            class="regular-text"
                            data-field="label"
                            value="<?php echo esc_attr($label); ?>"
+                           data-id-template="bjlg-schedule-label-%s"
                            placeholder="Nom de la planification">
                 </div>
                 <div class="bjlg-schedule-item__meta">
@@ -1668,10 +1746,17 @@ class BJLG_Admin {
                         </td>
                     </tr>
                     <tr class="<?php echo esc_attr($time_classes); ?>" aria-hidden="<?php echo esc_attr($time_hidden ? 'true' : 'false'); ?>">
-                        <th scope="row">Heure</th>
+                        <th scope="row"><label for="<?php echo esc_attr($time_id); ?>" data-for-template="bjlg-schedule-time-%s">Heure</label></th>
                         <td>
-                            <input type="time" data-field="time" name="schedules[<?php echo esc_attr($field_prefix); ?>][time]" value="<?php echo esc_attr($time); ?>">
-                            <p class="description">Heure locale du site</p>
+                            <input type="time"
+                                   id="<?php echo esc_attr($time_id); ?>"
+                                   data-field="time"
+                                   data-id-template="bjlg-schedule-time-%s"
+                                   data-describedby-template="bjlg-schedule-time-%s-description"
+                                   name="schedules[<?php echo esc_attr($field_prefix); ?>][time]"
+                                   value="<?php echo esc_attr($time); ?>"
+                                   aria-describedby="<?php echo esc_attr($time_description_id); ?>">
+                            <p id="<?php echo esc_attr($time_description_id); ?>" class="description" data-id-template="bjlg-schedule-time-%s-description">Heure locale du site</p>
                         </td>
                     </tr>
                     <tr>
@@ -1716,21 +1801,25 @@ class BJLG_Admin {
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row">Inclusions</th>
+                        <th scope="row"><label for="<?php echo esc_attr($include_id); ?>" data-for-template="bjlg-schedule-include-%s">Inclusions</label></th>
                         <td>
                             <textarea rows="3"
                                       class="large-text code"
                                       data-field="include_patterns"
+                                      id="<?php echo esc_attr($include_id); ?>"
+                                      data-id-template="bjlg-schedule-include-%s"
                                       name="schedules[<?php echo esc_attr($field_prefix); ?>][include_patterns]"
                                       placeholder="wp-content/uploads/*&#10;wp-content/themes/mon-theme/*"><?php echo $include_text; ?></textarea>
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row">Exclusions</th>
+                        <th scope="row"><label for="<?php echo esc_attr($exclude_id); ?>" data-for-template="bjlg-schedule-exclude-%s">Exclusions</label></th>
                         <td>
                             <textarea rows="3"
                                       class="large-text code"
                                       data-field="exclude_patterns"
+                                      id="<?php echo esc_attr($exclude_id); ?>"
+                                      data-id-template="bjlg-schedule-exclude-%s"
                                       name="schedules[<?php echo esc_attr($field_prefix); ?>][exclude_patterns]"
                                       placeholder="*/cache/*&#10;*.tmp"><?php echo $exclude_text; ?></textarea>
                         </td>
