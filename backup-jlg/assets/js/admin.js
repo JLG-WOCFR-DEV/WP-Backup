@@ -204,6 +204,22 @@ jQuery(document).ready(function($) {
         let newScheduleCounter = 0;
 
         const destinationLabels = {};
+        const $timeline = $('#bjlg-schedule-timeline');
+        const initialSchedules = parseJSONAttr($scheduleForm.attr('data-schedules')) || [];
+        const state = {
+            schedules: Array.isArray(initialSchedules) ? initialSchedules : [],
+            nextRuns: initialNextRuns,
+            timelineView: 'week',
+            timezone: $timeline.length ? ($timeline.data('timezone') || '').toString() : '',
+            timezoneOffset: $timeline.length ? parseFloat($timeline.data('offset')) || 0 : 0
+        };
+        const timelineRanges = { week: 7, month: 30 };
+        const statusLabels = {
+            active: { label: 'Active', className: 'bjlg-status-badge--active' },
+            pending: { label: 'En attente', className: 'bjlg-status-badge--pending' },
+            paused: { label: 'En pause', className: 'bjlg-status-badge--paused' }
+        };
+
         $scheduleForm.find('[data-field="secondary_destinations"]').each(function() {
             const value = ($(this).val() || '').toString();
             if (!value || destinationLabels[value]) {
@@ -309,6 +325,381 @@ jQuery(document).ready(function($) {
             })(raw);
 
             return messages;
+        }
+
+        function safeJson(value) {
+            try {
+                return JSON.stringify(value);
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function getScheduleStatusKey(schedule, info) {
+            const recurrence = (schedule && schedule.recurrence ? schedule.recurrence : 'disabled').toString();
+            if (recurrence === 'disabled') {
+                return 'paused';
+            }
+
+            if (info && typeof info.enabled === 'boolean' && !info.enabled) {
+                return 'paused';
+            }
+
+            let rawNextRun = info && Object.prototype.hasOwnProperty.call(info, 'next_run') ? info.next_run : null;
+            if (rawNextRun === null && info && Object.prototype.hasOwnProperty.call(info, 'nextRun')) {
+                rawNextRun = info.nextRun;
+            }
+
+            const nextRunTimestamp = parseInt(rawNextRun, 10);
+            if (Number.isFinite(nextRunTimestamp) && nextRunTimestamp > 0) {
+                return 'active';
+            }
+
+            return 'pending';
+        }
+
+        function getStatusDescriptor(status) {
+            return statusLabels[status] || statusLabels.pending;
+        }
+
+        function parseTimeParts(schedule) {
+            const raw = schedule && schedule.time ? schedule.time.toString() : '23:59';
+            const parts = raw.split(':');
+            const hour = parseInt(parts[0], 10);
+            const minute = parseInt(parts[1], 10);
+
+            return {
+                hour: Number.isFinite(hour) ? Math.min(Math.max(hour, 0), 23) : 23,
+                minute: Number.isFinite(minute) ? Math.min(Math.max(minute, 0), 59) : 59
+            };
+        }
+
+        function getIntervalMs(recurrence) {
+            switch ((recurrence || '').toString()) {
+                case 'hourly':
+                    return 60 * 60 * 1000;
+                case 'twice_daily':
+                    return 12 * 60 * 60 * 1000;
+                case 'daily':
+                    return 24 * 60 * 60 * 1000;
+                case 'weekly':
+                    return 7 * 24 * 60 * 60 * 1000;
+                default:
+                    return 0;
+            }
+        }
+
+        function addMonths(date, count) {
+            const next = new Date(date.getTime());
+            next.setMonth(next.getMonth() + count);
+            return next;
+        }
+
+        function computeFallbackNextTimestamp(schedule, referenceSeconds) {
+            const recurrence = (schedule && schedule.recurrence ? schedule.recurrence : 'disabled').toString();
+            if (recurrence === 'disabled') {
+                return null;
+            }
+
+            const reference = Number.isFinite(referenceSeconds) ? referenceSeconds : Math.floor(Date.now() / 1000);
+            const referenceDate = new Date(reference * 1000);
+            const timeParts = parseTimeParts(schedule);
+
+            if (recurrence === 'hourly') {
+                const occurrence = new Date(referenceDate.getTime());
+                occurrence.setMinutes(timeParts.minute, 0, 0);
+                if (occurrence.getTime() / 1000 <= reference) {
+                    occurrence.setHours(occurrence.getHours() + 1);
+                }
+                return Math.floor(occurrence.getTime() / 1000);
+            }
+
+            const occurrence = new Date(referenceDate.getTime());
+            occurrence.setHours(timeParts.hour, timeParts.minute, 0, 0);
+
+            if (recurrence === 'twice_daily') {
+                while (occurrence.getTime() / 1000 <= reference) {
+                    occurrence.setHours(occurrence.getHours() + 12);
+                    if (occurrence.getTime() / 1000 - reference > 12 * 60 * 60) {
+                        break;
+                    }
+                }
+                return Math.floor(occurrence.getTime() / 1000);
+            }
+
+            if (recurrence === 'daily') {
+                if (occurrence.getTime() / 1000 <= reference) {
+                    occurrence.setDate(occurrence.getDate() + 1);
+                }
+                return Math.floor(occurrence.getTime() / 1000);
+            }
+
+            if (recurrence === 'weekly') {
+                const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+                const dayKey = (schedule && schedule.day ? schedule.day : 'sunday').toString().toLowerCase();
+                const targetIndex = days.indexOf(dayKey);
+                const currentIndex = occurrence.getDay();
+
+                let diff = targetIndex - currentIndex;
+                if (diff < 0 || (diff === 0 && occurrence.getTime() / 1000 <= reference)) {
+                    diff += 7;
+                }
+                occurrence.setDate(occurrence.getDate() + diff);
+                if (occurrence.getTime() / 1000 <= reference) {
+                    occurrence.setDate(occurrence.getDate() + 7);
+                }
+                return Math.floor(occurrence.getTime() / 1000);
+            }
+
+            if (recurrence === 'monthly') {
+                // Sans information dédiée, nous ne pouvons pas calculer précisément.
+                return null;
+            }
+
+            return null;
+        }
+
+        function buildTimelineEvents(schedules, nextRuns, view) {
+            if (!Array.isArray(schedules) || !schedules.length) {
+                return [];
+            }
+
+            const events = [];
+            const start = new Date();
+            const end = new Date(start.getTime() + (timelineRanges[view] || timelineRanges.week) * 24 * 60 * 60 * 1000);
+            const nextRunsMap = nextRuns && typeof nextRuns === 'object' ? nextRuns : {};
+
+            schedules.forEach(function(schedule) {
+                if (!schedule || typeof schedule !== 'object') {
+                    return;
+                }
+                const recurrence = (schedule.recurrence || 'disabled').toString();
+                if (recurrence === 'disabled') {
+                    return;
+                }
+
+                const scheduleId = (schedule.id || '').toString();
+                const info = nextRunsMap[scheduleId];
+
+                let baseTimestamp = info && info.next_run ? parseInt(info.next_run, 10) : NaN;
+                if (!Number.isFinite(baseTimestamp) || baseTimestamp <= 0) {
+                    baseTimestamp = computeFallbackNextTimestamp(schedule, Math.floor(start.getTime() / 1000));
+                }
+
+                if (!Number.isFinite(baseTimestamp) || !baseTimestamp) {
+                    return;
+                }
+
+                let occurrence = new Date(baseTimestamp * 1000);
+                const interval = getIntervalMs(recurrence);
+                let guard = 0;
+
+                if (occurrence < start && (interval > 0 || recurrence === 'monthly')) {
+                    while (occurrence < start && guard < 200) {
+                        occurrence = recurrence === 'monthly'
+                            ? addMonths(occurrence, 1)
+                            : new Date(occurrence.getTime() + interval);
+                        guard++;
+                    }
+                }
+
+                guard = 0;
+                while (occurrence <= end && guard < 200) {
+                    events.push({
+                        schedule: schedule,
+                        info: info,
+                        timestamp: Math.floor(occurrence.getTime() / 1000),
+                        status: getScheduleStatusKey(schedule, info)
+                    });
+
+                    if (recurrence === 'monthly') {
+                        occurrence = addMonths(occurrence, 1);
+                    } else if (interval > 0) {
+                        occurrence = new Date(occurrence.getTime() + interval);
+                    } else {
+                        break;
+                    }
+
+                    guard++;
+                }
+            });
+
+            events.sort(function(a, b) {
+                return a.timestamp - b.timestamp;
+            });
+
+            return events;
+        }
+
+        function renderTimeline() {
+            if (!$timeline.length) {
+                return;
+            }
+
+            const view = state.timelineView || 'week';
+            const schedules = Array.isArray(state.schedules) ? state.schedules : [];
+            const nextRuns = state.nextRuns || {};
+
+            const $grid = $timeline.find('[data-role="timeline-grid"]');
+            const $list = $timeline.find('[data-role="timeline-list"]');
+            const $empty = $timeline.find('[data-role="timeline-empty"]');
+
+            if (!$grid.length || !$list.length || !$empty.length) {
+                return;
+            }
+
+            $grid.empty();
+            $list.empty();
+
+            const events = buildTimelineEvents(schedules, nextRuns, view);
+            const rangeDays = timelineRanges[view] || timelineRanges.week;
+            const startDay = new Date();
+            startDay.setHours(0, 0, 0, 0);
+
+            const buckets = new Map();
+            events.forEach(function(event) {
+                const date = new Date(event.timestamp * 1000);
+                const key = date.toISOString().slice(0, 10);
+                if (!buckets.has(key)) {
+                    buckets.set(key, []);
+                }
+                buckets.get(key).push(event);
+            });
+
+            let dayFormatter;
+            let timeFormatter;
+            try {
+                dayFormatter = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'numeric' });
+                timeFormatter = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+            } catch (error) {
+                dayFormatter = null;
+                timeFormatter = null;
+            }
+
+            const $gridInner = $('<div/>', { class: 'bjlg-schedule-timeline__grid-inner' });
+            for (let dayIndex = 0; dayIndex < rangeDays; dayIndex++) {
+                const dayDate = new Date(startDay.getTime() + dayIndex * 24 * 60 * 60 * 1000);
+                const key = dayDate.toISOString().slice(0, 10);
+                const entries = (buckets.get(key) || []).slice().sort(function(a, b) {
+                    return a.timestamp - b.timestamp;
+                });
+
+                const $column = $('<div/>', { class: 'bjlg-schedule-timeline__column' });
+                const heading = dayFormatter ? dayFormatter.format(dayDate) : dayDate.toLocaleDateString();
+                $('<div/>', { class: 'bjlg-schedule-timeline__column-header', text: heading }).appendTo($column);
+
+                if (!entries.length) {
+                    $('<div/>', { class: 'bjlg-schedule-timeline__event bjlg-schedule-timeline__event--empty', text: '—' }).appendTo($column);
+                } else {
+                    entries.forEach(function(entry) {
+                        const schedule = entry.schedule || {};
+                        const descriptor = getStatusDescriptor(entry.status);
+                        const recurrence = (schedule.recurrence || '').toString();
+                        const eventDate = new Date(entry.timestamp * 1000);
+                        const $event = $('<div/>', {
+                            class: 'bjlg-schedule-timeline__event bjlg-schedule-timeline__event--' + entry.status,
+                            'data-schedule-id': schedule.id || ''
+                        });
+
+                        $('<strong/>', {
+                            class: 'bjlg-schedule-timeline__event-label',
+                            text: schedule.label || schedule.id || 'Planification'
+                        }).appendTo($event);
+
+                        const timeText = timeFormatter ? timeFormatter.format(eventDate) : eventDate.toLocaleTimeString();
+                        $('<span/>', { class: 'bjlg-schedule-timeline__event-time', text: timeText }).appendTo($event);
+                        $('<span/>', {
+                            class: 'bjlg-schedule-timeline__event-meta',
+                            text: recurrenceLabels[recurrence] || recurrence || '—'
+                        }).appendTo($event);
+                        $('<span/>', {
+                            class: 'bjlg-status-badge ' + descriptor.className,
+                            text: descriptor.label
+                        }).appendTo($event);
+
+                        $column.append($event);
+                    });
+                }
+
+                $gridInner.append($column);
+            }
+
+            $grid.append($gridInner);
+
+            events.forEach(function(entry) {
+                const schedule = entry.schedule || {};
+                const descriptor = getStatusDescriptor(entry.status);
+                const eventDate = new Date(entry.timestamp * 1000);
+                const $item = $('<li/>', {
+                    class: 'bjlg-schedule-timeline__list-item bjlg-schedule-timeline__list-item--' + entry.status,
+                    'data-schedule-id': schedule.id || ''
+                });
+
+                const $header = $('<div/>', { class: 'bjlg-schedule-timeline__list-header' }).appendTo($item);
+                $('<strong/>', { text: schedule.label || schedule.id || 'Planification' }).appendTo($header);
+                $('<span/>', { class: 'bjlg-status-badge ' + descriptor.className, text: descriptor.label }).appendTo($header);
+
+                const $meta = $('<div/>', { class: 'bjlg-schedule-timeline__list-meta' }).appendTo($item);
+                const dateText = dayFormatter ? dayFormatter.format(eventDate) : eventDate.toLocaleDateString();
+                const timeText = timeFormatter ? timeFormatter.format(eventDate) : eventDate.toLocaleTimeString();
+                const recurrenceText = recurrenceLabels[(schedule.recurrence || '').toString()] || schedule.recurrence || '—';
+                $meta.text(dateText + ' • ' + timeText + ' • ' + recurrenceText);
+
+                $list.append($item);
+            });
+
+            $empty.prop('hidden', events.length > 0);
+
+            $timeline.find('[data-role="timeline-view"]').removeClass('is-active');
+            $timeline.find('[data-role="timeline-view"][data-view="' + view + '"]').addClass('is-active');
+        }
+
+        function updateState(schedules, nextRuns, options) {
+            options = options || {};
+
+            if (Array.isArray(schedules)) {
+                state.schedules = schedules.slice();
+            }
+
+            if (nextRuns && typeof nextRuns === 'object') {
+                state.nextRuns = $.extend(true, {}, nextRuns);
+            }
+
+            const schedulesJson = safeJson(state.schedules);
+            if (schedulesJson) {
+                $scheduleForm.attr('data-schedules', schedulesJson);
+                $('#bjlg-schedule-overview').attr('data-schedules', schedulesJson);
+                if ($timeline.length) {
+                    $timeline.attr('data-schedules', schedulesJson);
+                }
+            }
+
+            const nextRunsJson = safeJson(state.nextRuns);
+            if (nextRunsJson) {
+                $scheduleForm.attr('data-next-runs', nextRunsJson);
+                $('#bjlg-schedule-overview').attr('data-next-runs', nextRunsJson);
+                if ($timeline.length) {
+                    $timeline.attr('data-next-runs', nextRunsJson);
+                }
+            }
+
+            if ($timeline.length && !options.skipTimeline) {
+                renderTimeline();
+            }
+        }
+
+        function findScheduleById(scheduleId) {
+            if (!Array.isArray(state.schedules) || !state.schedules.length) {
+                return null;
+            }
+            const target = (scheduleId || '').toString();
+            for (let index = 0; index < state.schedules.length; index += 1) {
+                const schedule = state.schedules[index];
+                if (schedule && (schedule.id || '').toString() === target) {
+                    return schedule;
+                }
+            }
+            return null;
         }
 
         function scheduleItems() {
@@ -557,6 +948,7 @@ jQuery(document).ready(function($) {
             const recurrence = ($item.find('[data-field="recurrence"]').val() || 'disabled').toString();
             const day = ($item.find('[data-field="day"]').val() || 'sunday').toString();
             const time = ($item.find('[data-field="time"]').val() || '23:59').toString();
+            const previousRecurrence = ($item.find('[data-field="previous_recurrence"]').val() || '').toString();
 
             const components = [];
             $item.find('[data-field="components"]').each(function() {
@@ -592,6 +984,7 @@ jQuery(document).ready(function($) {
                 id: id,
                 label: label,
                 recurrence: recurrence,
+                previous_recurrence: previousRecurrence,
                 day: day,
                 time: time,
                 components: components,
@@ -623,6 +1016,8 @@ jQuery(document).ready(function($) {
             assignFieldPrefix($item, prefix);
             const scheduleId = schedule && schedule.id ? schedule.id : '';
             setScheduleId($item, scheduleId);
+
+            $item.find('[data-field="previous_recurrence"]').val(schedule && schedule.previous_recurrence ? schedule.previous_recurrence : '');
 
             $item.find('[data-field="label"]').val(schedule && schedule.label ? schedule.label : '');
 
@@ -724,17 +1119,23 @@ jQuery(document).ready(function($) {
                 if (!schedule || typeof schedule !== 'object') {
                     return;
                 }
+
                 const scheduleId = schedule.id || 'schedule_' + (index + 1);
                 const label = schedule.label || ('Planification #' + (index + 1));
                 const recurrence = schedule.recurrence || 'disabled';
                 const recurrenceLabel = recurrenceLabels[recurrence] || recurrence || '—';
                 const info = nextRuns && typeof nextRuns === 'object' ? nextRuns[scheduleId] : null;
                 const nextRun = info && typeof info === 'object' ? info : defaultNextRunSummary;
+                const statusKey = getScheduleStatusKey(schedule, nextRun);
+                const descriptor = getStatusDescriptor(statusKey);
+                const toggleLabel = statusKey === 'paused' ? 'Reprendre' : 'Mettre en pause';
+                const toggleTarget = statusKey === 'paused' ? 'resume' : 'pause';
 
                 const $card = $('<article/>', {
                     class: 'bjlg-schedule-overview-card',
                     'data-schedule-id': scheduleId,
-                    'data-recurrence': recurrence
+                    'data-recurrence': recurrence,
+                    'data-status': statusKey
                 });
 
                 const $header = $('<header/>', { class: 'bjlg-schedule-overview-card__header' }).appendTo($card);
@@ -759,8 +1160,44 @@ jQuery(document).ready(function($) {
                     $relative.hide();
                 }
 
+                $('<p/>', { class: 'bjlg-schedule-overview-status' })
+                    .append($('<span/>', { class: 'bjlg-status-badge ' + descriptor.className, text: descriptor.label }))
+                    .appendTo($header);
+
                 const $summary = $('<div/>', { class: 'bjlg-schedule-overview-card__summary' }).appendTo($card);
                 renderScheduleBadgeGroups($summary, buildSummaryGroupsFromData(schedule));
+
+                const $footer = $('<footer/>', { class: 'bjlg-schedule-overview-card__footer' }).appendTo($card);
+                const $actions = $('<div/>', {
+                    class: 'bjlg-schedule-overview-card__actions',
+                    role: 'group',
+                    'aria-label': 'Actions de planification'
+                }).appendTo($footer);
+
+                $('<button/>', {
+                    type: 'button',
+                    class: 'button button-primary button-small bjlg-schedule-action',
+                    'data-action': 'run',
+                    'data-schedule-id': scheduleId,
+                    text: 'Exécuter'
+                }).appendTo($actions);
+
+                $('<button/>', {
+                    type: 'button',
+                    class: 'button button-secondary button-small bjlg-schedule-action',
+                    'data-action': 'toggle',
+                    'data-target-state': toggleTarget,
+                    'data-schedule-id': scheduleId,
+                    text: toggleLabel
+                }).appendTo($actions);
+
+                $('<button/>', {
+                    type: 'button',
+                    class: 'button button-secondary button-small bjlg-schedule-action',
+                    'data-action': 'duplicate',
+                    'data-schedule-id': scheduleId,
+                    text: 'Dupliquer'
+                }).appendTo($actions);
 
                 $list.append($card);
             });
@@ -774,6 +1211,8 @@ jQuery(document).ready(function($) {
             if (!$overview.length) {
                 return;
             }
+
+            updateState(null, nextRuns, { skipTimeline: true });
 
             Object.keys(nextRuns).forEach(function(scheduleId) {
                 const info = nextRuns[scheduleId];
@@ -808,7 +1247,28 @@ jQuery(document).ready(function($) {
                         $relative.text('').hide();
                     }
                 }
+
+                const schedule = findScheduleById(scheduleId) || { recurrence: recurrence };
+                const statusKey = getScheduleStatusKey(schedule, info);
+                const descriptor = getStatusDescriptor(statusKey);
+                $card.attr('data-status', statusKey);
+
+                const $statusBadge = $card.find('.bjlg-schedule-overview-status .bjlg-status-badge');
+                if ($statusBadge.length) {
+                    $statusBadge.attr('class', 'bjlg-status-badge ' + descriptor.className).text(descriptor.label);
+                }
+
+                const $toggleButton = $card.find('.bjlg-schedule-overview-card__actions [data-action="toggle"]');
+                if ($toggleButton.length) {
+                    const targetState = statusKey === 'paused' ? 'resume' : 'pause';
+                    const label = statusKey === 'paused' ? 'Reprendre' : 'Mettre en pause';
+                    $toggleButton.text(label).attr('data-target-state', targetState);
+                }
             });
+
+            if ($timeline.length) {
+                renderTimeline();
+            }
         }
 
         function collectSchedulesForRequest() {
@@ -819,6 +1279,172 @@ jQuery(document).ready(function($) {
             return schedules;
         }
 
+        function submitRunSchedule(scheduleId, $button, $item) {
+            if (!scheduleId) {
+                renderScheduleFeedback('error', 'Enregistrez cette planification avant de l\'exécuter.', []);
+                return $.Deferred().reject().promise();
+            }
+
+            if ($button && $button.length) {
+                $button.prop('disabled', true);
+            }
+
+            return $.ajax({
+                url: bjlg_ajax.ajax_url,
+                method: 'POST',
+                data: {
+                    action: 'bjlg_run_scheduled_now',
+                    nonce: bjlg_ajax.nonce,
+                    schedule_id: scheduleId
+                }
+            }).done(function(response) {
+                if (response && response.success) {
+                    const data = response.data || {};
+                    renderScheduleFeedback('success', typeof data.message === 'string' ? data.message : 'Sauvegarde planifiée lancée.', []);
+                    if (data.next_runs && typeof data.next_runs === 'object') {
+                        updateOverviewFromNextRuns(data.next_runs);
+                    }
+                } else {
+                    const data = response && response.data ? response.data : response;
+                    const message = data && typeof data.message === 'string' ? data.message : 'Impossible d\'exécuter la planification.';
+                    const details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
+                    renderScheduleFeedback('error', message, details);
+                    if (data && data.next_runs) {
+                        updateOverviewFromNextRuns(data.next_runs);
+                    }
+                }
+            }).fail(function(jqXHR) {
+                let message = 'Erreur de communication avec le serveur.';
+                let details = [];
+                if (jqXHR && jqXHR.responseJSON) {
+                    const data = jqXHR.responseJSON.data || jqXHR.responseJSON;
+                    if (data && typeof data.message === 'string') {
+                        message = data.message;
+                    }
+                    details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
+                }
+                renderScheduleFeedback('error', message, details);
+            }).always(function() {
+                if ($button && $button.length) {
+                    $button.prop('disabled', false);
+                }
+                if ($item && $item.length) {
+                    updateRunButtonState($item);
+                }
+            });
+        }
+
+        function toggleScheduleState(scheduleId, targetState, $button) {
+            if (!scheduleId || !targetState) {
+                renderScheduleFeedback('error', 'Action de planification invalide.', []);
+                return;
+            }
+
+            if ($button && $button.length) {
+                $button.prop('disabled', true);
+            }
+
+            $.ajax({
+                url: bjlg_ajax.ajax_url,
+                method: 'POST',
+                data: {
+                    action: 'bjlg_toggle_schedule_state',
+                    nonce: bjlg_ajax.nonce,
+                    schedule_id: scheduleId,
+                    state: targetState
+                }
+            }).done(function(response) {
+                const data = response && typeof response === 'object' ? response.data || {} : {};
+
+                if (response && response.success) {
+                    const schedulesData = Array.isArray(data.schedules) ? data.schedules : [];
+                    const nextRuns = data.next_runs && typeof data.next_runs === 'object' ? data.next_runs : {};
+                    renderScheduleFeedback('success', typeof data.message === 'string' ? data.message : 'Planification mise à jour.', []);
+                    rebuildScheduleItems(schedulesData, nextRuns);
+                    rebuildOverview(schedulesData, nextRuns);
+                    updateState(schedulesData, nextRuns);
+                } else {
+                    const payload = Object.keys(data).length ? data : (response && response.data) || response;
+                    const message = payload && typeof payload.message === 'string' ? payload.message : 'Impossible de modifier la planification.';
+                    const details = normalizeErrorList(payload && (payload.errors || payload.validation_errors || payload.field_errors));
+                    renderScheduleFeedback('error', message, details);
+                    if (payload && payload.next_runs) {
+                        updateOverviewFromNextRuns(payload.next_runs);
+                    }
+                }
+            }).fail(function(jqXHR) {
+                let message = 'Erreur de communication avec le serveur.';
+                let details = [];
+                if (jqXHR && jqXHR.responseJSON) {
+                    const data = jqXHR.responseJSON.data || jqXHR.responseJSON;
+                    if (data && typeof data.message === 'string') {
+                        message = data.message;
+                    }
+                    details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
+                }
+                renderScheduleFeedback('error', message, details);
+            }).always(function() {
+                if ($button && $button.length) {
+                    $button.prop('disabled', false);
+                }
+            });
+        }
+
+        function duplicateScheduleRequest(scheduleId, $button) {
+            if (!scheduleId) {
+                renderScheduleFeedback('error', 'Planification introuvable.', []);
+                return;
+            }
+
+            if ($button && $button.length) {
+                $button.prop('disabled', true);
+            }
+
+            $.ajax({
+                url: bjlg_ajax.ajax_url,
+                method: 'POST',
+                data: {
+                    action: 'bjlg_duplicate_schedule',
+                    nonce: bjlg_ajax.nonce,
+                    schedule_id: scheduleId
+                }
+            }).done(function(response) {
+                const data = response && typeof response === 'object' ? response.data || {} : {};
+
+                if (response && response.success) {
+                    const schedulesData = Array.isArray(data.schedules) ? data.schedules : [];
+                    const nextRuns = data.next_runs && typeof data.next_runs === 'object' ? data.next_runs : {};
+                    renderScheduleFeedback('success', typeof data.message === 'string' ? data.message : 'Planification dupliquée.', []);
+                    rebuildScheduleItems(schedulesData, nextRuns);
+                    rebuildOverview(schedulesData, nextRuns);
+                    updateState(schedulesData, nextRuns);
+                } else {
+                    const payload = Object.keys(data).length ? data : (response && response.data) || response;
+                    const message = payload && typeof payload.message === 'string' ? payload.message : 'Impossible de dupliquer la planification.';
+                    const details = normalizeErrorList(payload && (payload.errors || payload.validation_errors || payload.field_errors));
+                    renderScheduleFeedback('error', message, details);
+                    if (payload && payload.next_runs) {
+                        updateOverviewFromNextRuns(payload.next_runs);
+                    }
+                }
+            }).fail(function(jqXHR) {
+                let message = 'Erreur de communication avec le serveur.';
+                let details = [];
+                if (jqXHR && jqXHR.responseJSON) {
+                    const data = jqXHR.responseJSON.data || jqXHR.responseJSON;
+                    if (data && typeof data.message === 'string') {
+                        message = data.message;
+                    }
+                    details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
+                }
+                renderScheduleFeedback('error', message, details);
+            }).always(function() {
+                if ($button && $button.length) {
+                    $button.prop('disabled', false);
+                }
+            });
+        }
+
         // Initialisation des planifications existantes
         scheduleItems().each(function(index) {
             const $item = $(this);
@@ -827,19 +1453,24 @@ jQuery(document).ready(function($) {
             populateScheduleItem($item, collectScheduleData($item, true), nextRun, index);
         });
 
+        updateState(collectSchedulesForRequest(), state.nextRuns);
+
         // Gestion des événements de champ
         $scheduleForm.on('change', '.bjlg-schedule-item [data-field="recurrence"]', function() {
             const $item = $(this).closest('.bjlg-schedule-item');
             toggleScheduleRows($item);
             updateScheduleSummaryForItem($item);
+            updateState(collectSchedulesForRequest(), state.nextRuns);
         });
 
         $scheduleForm.on('change', '.bjlg-schedule-item [data-field="components"], .bjlg-schedule-item [data-field="encrypt"], .bjlg-schedule-item [data-field="incremental"], .bjlg-schedule-item [data-field="day"], .bjlg-schedule-item [data-field="time"], .bjlg-schedule-item [data-field="post_checks"], .bjlg-schedule-item [data-field="secondary_destinations"]', function() {
             updateScheduleSummaryForItem($(this).closest('.bjlg-schedule-item'));
+            updateState(collectSchedulesForRequest(), state.nextRuns);
         });
 
         $scheduleForm.on('input', '.bjlg-schedule-item [data-field="label"], .bjlg-schedule-item textarea[data-field]', function() {
             updateScheduleSummaryForItem($(this).closest('.bjlg-schedule-item'));
+            updateState(collectSchedulesForRequest(), state.nextRuns);
         });
 
         // Ajout d'une planification
@@ -853,6 +1484,7 @@ jQuery(document).ready(function($) {
             populateScheduleItem($item, defaultScheduleData, defaultNextRunSummary, scheduleItems().length);
             $item.insertBefore($template);
             renderScheduleFeedback('info', 'Nouvelle planification ajoutée. Enregistrez pour la synchroniser.', []);
+            updateState(collectSchedulesForRequest(), state.nextRuns);
         });
 
         // Suppression d'une planification
@@ -869,6 +1501,7 @@ jQuery(document).ready(function($) {
             }
             $item.slideUp(150, function() {
                 $(this).remove();
+                updateState(collectSchedulesForRequest(), state.nextRuns);
             });
         });
 
@@ -879,46 +1512,7 @@ jQuery(document).ready(function($) {
             const $button = $(this);
             const $item = $button.closest('.bjlg-schedule-item');
             const scheduleId = ($item.find('[data-field="id"]').val() || '').toString();
-            if (!scheduleId) {
-                renderScheduleFeedback('error', 'Enregistrez cette planification avant de l\'exécuter.', []);
-                return;
-            }
-
-            $button.prop('disabled', true);
-
-            $.ajax({
-                url: bjlg_ajax.ajax_url,
-                method: 'POST',
-                data: {
-                    action: 'bjlg_run_scheduled_now',
-                    nonce: bjlg_ajax.nonce,
-                    schedule_id: scheduleId
-                }
-            }).done(function(response) {
-                if (response && response.success) {
-                    const data = (response && response.data) || {};
-                    renderScheduleFeedback('success', typeof data.message === 'string' ? data.message : 'Sauvegarde planifiée lancée.', []);
-                } else {
-                    const data = response && response.data ? response.data : response;
-                    const message = data && typeof data.message === 'string' ? data.message : 'Impossible d\'exécuter la planification.';
-                    const details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
-                    renderScheduleFeedback('error', message, details);
-                }
-            }).fail(function(jqXHR) {
-                let message = 'Erreur de communication avec le serveur.';
-                let details = [];
-                if (jqXHR && jqXHR.responseJSON) {
-                    const data = jqXHR.responseJSON.data || jqXHR.responseJSON;
-                    if (data && typeof data.message === 'string') {
-                        message = data.message;
-                    }
-                    details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
-                }
-                renderScheduleFeedback('error', message, details);
-            }).always(function() {
-                $button.prop('disabled', false);
-                updateRunButtonState($item);
-            });
+            submitRunSchedule(scheduleId, $button, $item);
         });
 
         // Soumission du formulaire
@@ -956,9 +1550,7 @@ jQuery(document).ready(function($) {
 
                     rebuildScheduleItems(schedulesData, nextRuns);
                     rebuildOverview(schedulesData, nextRuns);
-
-                    $scheduleForm.attr('data-next-runs', JSON.stringify(nextRuns));
-                    $('#bjlg-schedule-overview').attr('data-next-runs', JSON.stringify(nextRuns));
+                    updateState(schedulesData, nextRuns);
                     return;
                 }
 
@@ -988,6 +1580,48 @@ jQuery(document).ready(function($) {
                 $submitButton.prop('disabled', false);
             });
         });
+
+        const $overview = $('#bjlg-schedule-overview');
+        if ($overview.length) {
+            $overview.on('click', '.bjlg-schedule-action', function(event) {
+                event.preventDefault();
+                resetScheduleFeedback();
+
+                const $button = $(this);
+                const action = ($button.data('action') || '').toString();
+                const scheduleId = ($button.data('schedule-id') || '').toString();
+
+                if (action === 'run') {
+                    submitRunSchedule(scheduleId, $button);
+                    return;
+                }
+
+                if (action === 'toggle') {
+                    const targetState = ($button.data('target-state') || '').toString();
+                    toggleScheduleState(scheduleId, targetState, $button);
+                    return;
+                }
+
+                if (action === 'duplicate') {
+                    duplicateScheduleRequest(scheduleId, $button);
+                }
+            });
+        }
+
+        if ($timeline.length) {
+            $timeline.on('click', '[data-role="timeline-view"]', function(event) {
+                event.preventDefault();
+                const view = ($(this).data('view') || '').toString();
+                if (!view || !Object.prototype.hasOwnProperty.call(timelineRanges, view)) {
+                    return;
+                }
+                if (state.timelineView === view) {
+                    return;
+                }
+                state.timelineView = view;
+                renderTimeline();
+            });
+        }
     })();
 
     // --- LISTE DES SAUVEGARDES VIA L'API REST ---

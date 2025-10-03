@@ -37,6 +37,8 @@ class BJLG_Scheduler {
         add_action('wp_ajax_bjlg_save_schedule_settings', [$this, 'handle_save_schedule']);
         add_action('wp_ajax_bjlg_get_next_scheduled', [$this, 'handle_get_next_scheduled']);
         add_action('wp_ajax_bjlg_run_scheduled_now', [$this, 'handle_run_scheduled_now']);
+        add_action('wp_ajax_bjlg_toggle_schedule_state', [$this, 'handle_toggle_schedule_state']);
+        add_action('wp_ajax_bjlg_duplicate_schedule', [$this, 'handle_duplicate_schedule']);
 
         // Hook Cron pour l'exécution automatique
         add_action(self::SCHEDULE_HOOK, [$this, 'run_scheduled_backup']);
@@ -377,10 +379,13 @@ class BJLG_Scheduler {
             wp_send_json_error(['message' => $error_message]);
         }
 
+        $next_runs = $this->get_next_runs_summary($collection['schedules']);
+
         wp_send_json_success([
             'message' => 'Sauvegarde planifiée lancée manuellement.',
             'task_id' => $task_id,
             'schedule_id' => $schedule['id'],
+            'next_runs' => $next_runs,
         ]);
     }
 
@@ -623,5 +628,130 @@ class BJLG_Scheduler {
     private function normalize_schedule_settings($settings) {
         // Conservé pour compatibilité interne éventuelle. Renvoie désormais l'ensemble de la collection.
         return BJLG_Settings::sanitize_schedule_collection($settings);
+    }
+
+    public function handle_toggle_schedule_state() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $posted = wp_unslash($_POST);
+        $schedule_id = isset($posted['schedule_id']) ? sanitize_key((string) $posted['schedule_id']) : '';
+        $state = isset($posted['state']) ? sanitize_key((string) $posted['state']) : '';
+
+        if ($schedule_id === '' || !in_array($state, ['pause', 'resume'], true)) {
+            wp_send_json_error(['message' => 'Requête invalide.'], 400);
+        }
+
+        $collection = $this->get_schedule_settings();
+        $schedules = $collection['schedules'];
+        $updated = false;
+
+        foreach ($schedules as &$schedule) {
+            if (!is_array($schedule) || !isset($schedule['id']) || $schedule['id'] !== $schedule_id) {
+                continue;
+            }
+
+            $current_recurrence = $schedule['recurrence'] ?? 'disabled';
+            $previous_recurrence = $schedule['previous_recurrence'] ?? '';
+
+            if ($state === 'pause') {
+                if ($current_recurrence !== 'disabled') {
+                    $schedule['previous_recurrence'] = $current_recurrence;
+                    $schedule['recurrence'] = 'disabled';
+                }
+                $updated = true;
+            } else {
+                $target = $previous_recurrence;
+                if ($target === '' || $target === 'disabled') {
+                    $target = $current_recurrence !== 'disabled' ? $current_recurrence : 'daily';
+                }
+                $schedule['recurrence'] = $target;
+                $schedule['previous_recurrence'] = '';
+                $updated = true;
+            }
+
+            break;
+        }
+        unset($schedule);
+
+        if (!$updated) {
+            wp_send_json_error(['message' => 'Planification introuvable.'], 404);
+        }
+
+        $collection = BJLG_Settings::sanitize_schedule_collection(['schedules' => $schedules]);
+        update_option('bjlg_schedule_settings', $collection);
+
+        $this->sync_schedules($collection['schedules']);
+        $next_runs = $this->get_next_runs_summary($collection['schedules']);
+
+        $schedule_entry = $this->find_schedule_by_id($collection['schedules'], $schedule_id);
+
+        $message = $state === 'pause' ? 'Planification mise en pause.' : 'Planification réactivée.';
+
+        wp_send_json_success([
+            'message' => $message,
+            'schedule' => $schedule_entry,
+            'schedules' => $collection['schedules'],
+            'next_runs' => $next_runs,
+        ]);
+    }
+
+    public function handle_duplicate_schedule() {
+        if (!current_user_can(BJLG_CAPABILITY)) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $posted = wp_unslash($_POST);
+        $schedule_id = isset($posted['schedule_id']) ? sanitize_key((string) $posted['schedule_id']) : '';
+
+        if ($schedule_id === '') {
+            wp_send_json_error(['message' => 'Identifiant de planification manquant.'], 400);
+        }
+
+        $collection = $this->get_schedule_settings();
+        $schedules = $collection['schedules'];
+        $existing_ids = array_map('strval', (array) \wp_list_pluck($schedules, 'id'));
+
+        $original = $this->find_schedule_by_id($schedules, $schedule_id);
+        if (!$original) {
+            wp_send_json_error(['message' => 'Planification introuvable.'], 404);
+        }
+
+        $label = isset($original['label']) && $original['label'] !== ''
+            ? $original['label'] . ' (copie)'
+            : 'Planification dupliquée';
+
+        $duplicate = $original;
+        $duplicate['id'] = '';
+        $duplicate['label'] = $label;
+        $duplicate['previous_recurrence'] = '';
+
+        $schedules[] = $duplicate;
+
+        $collection = BJLG_Settings::sanitize_schedule_collection(['schedules' => $schedules]);
+        update_option('bjlg_schedule_settings', $collection);
+
+        $this->sync_schedules($collection['schedules']);
+        $next_runs = $this->get_next_runs_summary($collection['schedules']);
+
+        $new_schedule = null;
+        foreach ($collection['schedules'] as $schedule) {
+            if (!in_array($schedule['id'], $existing_ids, true)) {
+                $new_schedule = $schedule;
+                break;
+            }
+        }
+
+        wp_send_json_success([
+            'message' => 'Planification dupliquée.',
+            'schedule' => $new_schedule,
+            'schedules' => $collection['schedules'],
+            'next_runs' => $next_runs,
+        ]);
     }
 }

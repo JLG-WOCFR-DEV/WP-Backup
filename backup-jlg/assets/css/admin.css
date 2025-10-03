@@ -305,7 +305,7 @@
 /* Planification des sauvegardes
 --------------------------------------------- */
 
-.bjlg-schedule-overview {
+.bjlg-schedule-overview { 
     margin: 15px 0;
     padding: 12px;
     border: 1px solid #e5e7eb;
@@ -324,6 +324,27 @@
 .bjlg-schedule-overview-frequency {
     color: #1f2937;
     font-weight: 600;
+}
+
+.bjlg-schedule-overview-status {
+    margin: 4px 0 0;
+}
+
+.bjlg-schedule-overview-card__footer {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.bjlg-schedule-overview-card__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.bjlg-schedule-overview-card__actions .button-small {
+    line-height: 1.4;
+    padding: 2px 10px;
 }
 
 .bjlg-switch {
@@ -395,6 +416,204 @@
 
 .bjlg-badge-bg-gray {
     background-color: #6b7280;
+}
+
+.bjlg-status-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    font-size: 0.75em;
+    font-weight: 600;
+    padding: 2px 10px;
+    color: #ffffff;
+}
+
+.bjlg-status-badge--active {
+    background-color: #16a34a;
+}
+
+.bjlg-status-badge--pending {
+    background-color: #f59e0b;
+}
+
+.bjlg-status-badge--paused {
+    background-color: #9ca3af;
+}
+
+.bjlg-schedule-timeline {
+    margin-top: 20px;
+    padding: 16px;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.bjlg-schedule-timeline__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.bjlg-schedule-timeline__controls .button {
+    margin-right: 6px;
+}
+
+.bjlg-schedule-timeline__controls .button.is-active {
+    background-color: #2271b1;
+    border-color: #2271b1;
+    color: #ffffff;
+}
+
+.bjlg-schedule-timeline__legend {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.bjlg-schedule-timeline__body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.bjlg-schedule-timeline__grid {
+    overflow-x: auto;
+}
+
+.bjlg-schedule-timeline__grid-inner {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    min-width: 100%;
+}
+
+.bjlg-schedule-timeline__column {
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 150px;
+}
+
+.bjlg-schedule-timeline__column-header {
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.bjlg-schedule-timeline__event {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.bjlg-schedule-timeline__event--active {
+    border-color: #16a34a;
+}
+
+.bjlg-schedule-timeline__event--pending {
+    border-color: #f59e0b;
+}
+
+.bjlg-schedule-timeline__event--paused {
+    border-color: #d1d5db;
+    opacity: 0.85;
+}
+
+.bjlg-schedule-timeline__event--empty {
+    border: 1px dashed #d1d5db;
+    background: transparent;
+    text-align: center;
+    color: #6b7280;
+    font-style: italic;
+}
+
+.bjlg-schedule-timeline__event-label {
+    font-weight: 600;
+    color: #111827;
+}
+
+.bjlg-schedule-timeline__event-time {
+    font-size: 0.9em;
+    color: #1f2937;
+}
+
+.bjlg-schedule-timeline__event-meta {
+    font-size: 0.8em;
+    color: #4b5563;
+}
+
+.bjlg-schedule-timeline__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bjlg-schedule-timeline__list-item {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.bjlg-schedule-timeline__list-item--active {
+    border-color: #16a34a;
+}
+
+.bjlg-schedule-timeline__list-item--pending {
+    border-color: #f59e0b;
+}
+
+.bjlg-schedule-timeline__list-item--paused {
+    border-color: #d1d5db;
+    opacity: 0.85;
+}
+
+.bjlg-schedule-timeline__list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.bjlg-schedule-timeline__list-meta {
+    font-size: 0.85em;
+    color: #4b5563;
+}
+
+.bjlg-schedule-timeline__empty {
+    margin: 0;
+    color: #6b7280;
+    font-style: italic;
+}
+
+@media (max-width: 782px) {
+    .bjlg-schedule-timeline__grid {
+        display: none;
+    }
+
+    .bjlg-schedule-timeline__list {
+        display: flex;
+    }
 }
 
 /* Navigation par onglets
