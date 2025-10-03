@@ -449,6 +449,17 @@ class BJLG_Admin {
             'weekly' => 'Hebdomadaire',
             'monthly' => 'Mensuelle',
         ];
+        $schedules_json = esc_attr(wp_json_encode($schedules));
+        $next_runs_json = esc_attr(wp_json_encode($next_runs));
+        $timezone_string = function_exists('wp_timezone_string') ? wp_timezone_string() : '';
+        if ($timezone_string === '' && function_exists('wp_timezone')) {
+            $timezone_object = wp_timezone();
+            if ($timezone_object instanceof \DateTimeZone) {
+                $timezone_string = $timezone_object->getName();
+            }
+        }
+        $timezone_offset = get_option('gmt_offset', 0);
+        $current_timestamp = current_time('timestamp');
         ?>
         <div class="bjlg-section" id="bjlg-backup-list-section" data-default-page="1" data-default-per-page="10">
             <h2>Sauvegardes Disponibles</h2>
@@ -487,7 +498,8 @@ class BJLG_Admin {
                 id="bjlg-schedule-overview"
                 class="bjlg-schedule-overview"
                 aria-live="polite"
-                data-next-runs="<?php echo esc_attr(wp_json_encode($next_runs)); ?>"
+                data-next-runs="<?php echo $next_runs_json; ?>"
+                data-schedules="<?php echo $schedules_json; ?>"
             >
                 <header class="bjlg-schedule-overview-header">
                     <span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span>
@@ -532,6 +544,20 @@ class BJLG_Admin {
                             $next_run_relative = isset($next_run_summary['next_run_relative']) && $next_run_summary['next_run_relative'] !== ''
                                 ? (string) $next_run_summary['next_run_relative']
                                 : '';
+                            $next_run_timestamp = isset($next_run_summary['next_run']) && $next_run_summary['next_run']
+                                ? (int) $next_run_summary['next_run']
+                                : null;
+                            $is_active = $recurrence !== 'disabled';
+                            $has_next_run = $is_active && !empty($next_run_timestamp);
+                            $status_key = $is_active ? ($has_next_run ? 'active' : 'pending') : 'paused';
+                            $status_labels = [
+                                'active' => 'Active',
+                                'pending' => 'En attente',
+                                'paused' => 'En pause',
+                            ];
+                            $status_label = $status_labels[$status_key] ?? '—';
+                            $status_class = 'bjlg-status-badge--' . $status_key;
+                            $toggle_label = $is_active ? 'Mettre en pause' : 'Reprendre';
                             $summary_markup = $this->get_schedule_summary_markup(
                                 $components,
                                 $encrypt,
@@ -546,6 +572,7 @@ class BJLG_Admin {
                                 class="bjlg-schedule-overview-card"
                                 data-schedule-id="<?php echo esc_attr($schedule_id); ?>"
                                 data-recurrence="<?php echo esc_attr($recurrence); ?>"
+                                data-status="<?php echo esc_attr($status_key); ?>"
                             >
                                 <header class="bjlg-schedule-overview-card__header">
                                     <h4 class="bjlg-schedule-overview-card__title"><?php echo esc_html($label); ?></h4>
@@ -559,15 +586,72 @@ class BJLG_Admin {
                                             <?php echo $next_run_relative !== '' ? '(' . esc_html($next_run_relative) . ')' : ''; ?>
                                         </span>
                                     </p>
+                                    <p class="bjlg-schedule-overview-status">
+                                        <span class="bjlg-status-badge <?php echo esc_attr($status_class); ?>"><?php echo esc_html($status_label); ?></span>
+                                    </p>
                                 </header>
                                 <div class="bjlg-schedule-overview-card__summary">
                                     <?php echo $summary_markup; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
                                 </div>
+                                <footer class="bjlg-schedule-overview-card__footer">
+                                    <div class="bjlg-schedule-overview-card__actions" role="group" aria-label="Actions de planification">
+                                        <button type="button"
+                                                class="button button-primary button-small bjlg-schedule-action"
+                                                data-action="run"
+                                                data-schedule-id="<?php echo esc_attr($schedule_id); ?>">
+                                            Exécuter
+                                        </button>
+                                        <button type="button"
+                                                class="button button-secondary button-small bjlg-schedule-action"
+                                                data-action="toggle"
+                                                data-target-state="<?php echo $is_active ? 'pause' : 'resume'; ?>"
+                                                data-schedule-id="<?php echo esc_attr($schedule_id); ?>">
+                                            <?php echo esc_html($toggle_label); ?>
+                                        </button>
+                                        <button type="button"
+                                                class="button button-secondary button-small bjlg-schedule-action"
+                                                data-action="duplicate"
+                                                data-schedule-id="<?php echo esc_attr($schedule_id); ?>">
+                                            Dupliquer
+                                        </button>
+                                    </div>
+                                </footer>
                             </article>
                         <?php endforeach; ?>
                     <?php else: ?>
                         <p class="description">Aucune planification active pour le moment.</p>
                     <?php endif; ?>
+                </div>
+            </div>
+            <div
+                id="bjlg-schedule-timeline"
+                class="bjlg-schedule-timeline"
+                aria-live="polite"
+                data-schedules="<?php echo $schedules_json; ?>"
+                data-next-runs="<?php echo $next_runs_json; ?>"
+                data-timezone="<?php echo esc_attr($timezone_string); ?>"
+                data-offset="<?php echo esc_attr((string) $timezone_offset); ?>"
+                data-now="<?php echo esc_attr((string) $current_timestamp); ?>"
+            >
+                <header class="bjlg-schedule-timeline__header">
+                    <div class="bjlg-schedule-timeline__title">
+                        <span class="dashicons dashicons-schedule" aria-hidden="true"></span>
+                        <strong>Timeline des occurrences</strong>
+                    </div>
+                    <div class="bjlg-schedule-timeline__controls" role="group" aria-label="Changer la vue de la timeline">
+                        <button type="button" class="button button-secondary is-active" data-role="timeline-view" data-view="week">Semaine</button>
+                        <button type="button" class="button button-secondary" data-role="timeline-view" data-view="month">Mois</button>
+                    </div>
+                </header>
+                <div class="bjlg-schedule-timeline__legend">
+                    <span class="bjlg-status-badge bjlg-status-badge--active">Active</span>
+                    <span class="bjlg-status-badge bjlg-status-badge--pending">En attente</span>
+                    <span class="bjlg-status-badge bjlg-status-badge--paused">En pause</span>
+                </div>
+                <div class="bjlg-schedule-timeline__body">
+                    <div class="bjlg-schedule-timeline__grid" data-role="timeline-grid"></div>
+                    <ul class="bjlg-schedule-timeline__list" data-role="timeline-list"></ul>
+                    <p class="bjlg-schedule-timeline__empty" data-role="timeline-empty" hidden>Enregistrez ou activez une planification pour afficher la timeline.</p>
                 </div>
             </div>
             <div id="bjlg-backup-list-feedback" class="notice notice-error" role="alert" style="display:none;"></div>
@@ -902,7 +986,8 @@ class BJLG_Admin {
             <form
                 id="bjlg-schedule-form"
                 data-default-schedule="<?php echo esc_attr(wp_json_encode($default_schedule)); ?>"
-                data-next-runs="<?php echo esc_attr(wp_json_encode($next_runs)); ?>"
+                data-next-runs="<?php echo $next_runs_json; ?>"
+                data-schedules="<?php echo $schedules_json; ?>"
             >
                 <div id="bjlg-schedule-feedback" class="notice" role="status" aria-live="polite" style="display:none;"></div>
                 <div class="bjlg-schedule-list">
@@ -1633,6 +1718,7 @@ class BJLG_Admin {
         $recurrence = isset($schedule['recurrence']) ? (string) $schedule['recurrence'] : 'disabled';
         $day = isset($schedule['day']) ? (string) $schedule['day'] : 'sunday';
         $time = isset($schedule['time']) ? (string) $schedule['time'] : '23:59';
+        $previous_recurrence = isset($schedule['previous_recurrence']) ? (string) $schedule['previous_recurrence'] : '';
 
         $schedule_components = isset($schedule['components']) && is_array($schedule['components']) ? $schedule['components'] : [];
         $include_patterns = isset($schedule['include_patterns']) && is_array($schedule['include_patterns']) ? $schedule['include_patterns'] : [];
@@ -1696,6 +1782,10 @@ class BJLG_Admin {
              data-schedule-id="<?php echo esc_attr($schedule_id); ?>"
              <?php echo $is_template ? "data-template='true' style='display:none;'" : ''; ?>>
             <input type="hidden" data-field="id" value="<?php echo esc_attr($schedule_id); ?>">
+            <input type="hidden"
+                   data-field="previous_recurrence"
+                   name="schedules[<?php echo esc_attr($field_prefix); ?>][previous_recurrence]"
+                   value="<?php echo esc_attr($previous_recurrence); ?>">
             <header class="bjlg-schedule-item__header">
                 <div class="bjlg-schedule-item__title">
                     <span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span>

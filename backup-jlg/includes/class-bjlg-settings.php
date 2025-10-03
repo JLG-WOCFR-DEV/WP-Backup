@@ -1051,6 +1051,7 @@ class BJLG_Settings {
             'id' => '',
             'label' => '',
             'recurrence' => 'disabled',
+            'previous_recurrence' => '',
             'day' => 'sunday',
             'time' => '23:59',
             'components' => ['db', 'plugins', 'themes', 'uploads'],
@@ -1147,6 +1148,14 @@ class BJLG_Settings {
             $time = $defaults['time'];
         }
 
+        $previous_recurrence = '';
+        if (isset($entry['previous_recurrence'])) {
+            $maybe_previous = sanitize_key((string) $entry['previous_recurrence']);
+            if (in_array($maybe_previous, self::VALID_SCHEDULE_RECURRENCES, true)) {
+                $previous_recurrence = $maybe_previous;
+            }
+        }
+
         $components = self::sanitize_schedule_components($entry['components'] ?? $defaults['components']);
         if (empty($components)) {
             $components = $defaults['components'];
@@ -1171,6 +1180,7 @@ class BJLG_Settings {
             'recurrence' => $recurrence,
             'day' => $day,
             'time' => $time,
+            'previous_recurrence' => $previous_recurrence,
             'components' => array_values($components),
             'encrypt' => self::to_bool_static($entry['encrypt'] ?? $defaults['encrypt']),
             'incremental' => self::to_bool_static($entry['incremental'] ?? $defaults['incremental']),
