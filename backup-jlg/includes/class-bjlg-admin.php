@@ -1290,6 +1290,9 @@ class BJLG_Admin {
                     if ($is_hidden) {
                         $secret_classes .= ' bjlg-api-key-value--hidden';
                     }
+
+                    $masked_value = isset($key['masked_secret']) ? (string) $key['masked_secret'] : __('Clé masquée', 'backup-jlg');
+                    $secret_value = $secret_value !== '' ? $secret_value : $masked_value;
                     ?>
                     <tr data-key-id="<?php echo esc_attr($key['id']); ?>"
                         data-created-at="<?php echo esc_attr($key['created_at']); ?>"
@@ -1299,7 +1302,7 @@ class BJLG_Admin {
                             <strong class="bjlg-api-key-label"><?php echo esc_html($key['label']); ?></strong>
                         </td>
                         <td>
-                            <code class="<?php echo esc_attr($secret_classes); ?>" aria-label="Clé API">
+                            <code class="<?php echo esc_attr($secret_classes); ?>" aria-label="<?php echo esc_attr($is_hidden ? __('Clé API masquée', 'backup-jlg') : __('Clé API', 'backup-jlg')); ?>">
                                 <?php echo esc_html($secret_value); ?>
                             </code>
                             <?php if ($is_hidden): ?>

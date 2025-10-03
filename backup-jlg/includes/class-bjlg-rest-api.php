@@ -588,7 +588,7 @@ class BJLG_REST_API {
 
             unset($keys[$index]['usage_count'], $keys[$index]['last_used']);
 
-            foreach (['plain_key', 'raw_key', 'display_key', 'api_key_plain', 'api_key_plaintext'] as $sensitive_field) {
+            foreach (['plain_key', 'raw_key', 'display_key', 'api_key_plain', 'api_key_plaintext', 'display_secret', 'secret', 'masked_secret'] as $sensitive_field) {
                 if (isset($keys[$index][$sensitive_field])) {
                     unset($keys[$index][$sensitive_field]);
                 }
@@ -603,6 +603,34 @@ class BJLG_REST_API {
 
             $keys[$index]['user_id'] = $user_id;
             $user = get_user_by('id', $user_id);
+
+            $user_login = isset($keys[$index]['user_login']) ? sanitize_text_field((string) $keys[$index]['user_login']) : '';
+            $user_email = '';
+
+            if (isset($keys[$index]['user_email'])) {
+                if (function_exists('sanitize_email')) {
+                    $user_email = sanitize_email((string) $keys[$index]['user_email']);
+                } else {
+                    $user_email = sanitize_text_field((string) $keys[$index]['user_email']);
+                }
+            }
+
+            if ($user) {
+                if (isset($user->user_login)) {
+                    $user_login = sanitize_text_field((string) $user->user_login);
+                }
+
+                if (isset($user->user_email)) {
+                    if (function_exists('sanitize_email')) {
+                        $user_email = sanitize_email((string) $user->user_email);
+                    } else {
+                        $user_email = sanitize_text_field((string) $user->user_email);
+                    }
+                }
+            }
+
+            $keys[$index]['user_login'] = $user_login;
+            $keys[$index]['user_email'] = $user_email;
             $keys[$index]['roles'] = $this->extract_roles_for_key($keys[$index], $user);
         }
 
