@@ -54,6 +54,10 @@ final class BJLG_AdminApiTabTest extends TestCase
         $this->assertStringContainsString('bjlg-api-keys-table', $output);
         $this->assertStringContainsString('Mon intégration', $output);
         $this->assertStringContainsString('bjlg-api-key-value--hidden', $output);
+        $this->assertStringContainsString('bjlg-api-key-secret__feedback', $output);
+        $this->assertStringContainsString('••••••', $output);
         $this->assertStringContainsString('Secret masqué. Régénérez la clé pour obtenir un nouveau secret.', $output);
+        $this->assertStringNotContainsString('bjlg-copy-api-secret', $output);
+        $this->assertStringNotContainsString('Copiez la clé maintenant, elle ne sera plus visible.', $output);
     }
 }

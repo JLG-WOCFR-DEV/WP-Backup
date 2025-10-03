@@ -2782,6 +2782,99 @@ jQuery(document).ready(function($) {
         const $tbody = $table.find('tbody');
         const $emptyState = $apiSection.find('.bjlg-api-keys-empty');
         const $form = $apiSection.find('#bjlg-create-api-key');
+        const messages = $.extend({
+            copy_button: 'Copier',
+            toggle_show: 'Afficher',
+            toggle_hide: 'Masquer',
+            copy_notice: 'Copiez la clé maintenant, elle ne sera plus visible.',
+            hidden_note: 'Secret masqué. Régénérez la clé pour obtenir un nouveau secret.',
+            secret_placeholder: '••••••',
+            secret_shown: 'Clé affichée.',
+            secret_hidden: 'Clé masquée.',
+            copy_success: 'Clé copiée dans le presse-papiers.',
+            copy_error: 'Impossible de copier la clé automatiquement. Copiez-la manuellement.',
+        }, (typeof bjlg_ajax === 'object' && bjlg_ajax && typeof bjlg_ajax.i18n === 'object') ? bjlg_ajax.i18n : {});
+
+        function announceSecret($container, text) {
+            const $region = $container.find('.bjlg-api-key-secret__feedback').first();
+            if (!$region.length || typeof text !== 'string') {
+                return;
+            }
+
+            $region.text('');
+            setTimeout(function() {
+                $region.text(text);
+            }, 10);
+        }
+
+        function updateSecretVisibility($container, makeVisible, options) {
+            const settings = $.extend({ announce: true }, options || {});
+            const secret = ($container.attr('data-secret') || '').toString();
+            const $code = $container.find('.bjlg-api-key-value').first();
+            const $toggle = $container.find('.bjlg-toggle-api-secret').first();
+            const mask = $code.length ? ($code.attr('data-mask') || $container.attr('data-mask') || messages.secret_placeholder) : messages.secret_placeholder;
+
+            if (!$code.length) {
+                return;
+            }
+
+            if (makeVisible && secret) {
+                $code.text(secret);
+                $container.attr('data-secret-visible', '1');
+                if ($toggle.length) {
+                    $toggle.attr('aria-expanded', 'true');
+                    const hideLabel = $container.attr('data-toggle-hide') || messages.toggle_hide;
+                    $toggle.text(hideLabel);
+                }
+                if (settings.announce) {
+                    const visibleMessage = $container.attr('data-message-visible') || messages.secret_shown;
+                    announceSecret($container, visibleMessage);
+                }
+            } else {
+                $code.text(mask);
+                $container.attr('data-secret-visible', '0');
+                if ($toggle.length) {
+                    $toggle.attr('aria-expanded', 'false');
+                    const showLabel = $container.attr('data-toggle-show') || messages.toggle_show;
+                    $toggle.text(showLabel);
+                }
+                if (settings.announce) {
+                    const hiddenMessage = $container.attr('data-message-hidden') || messages.secret_hidden;
+                    announceSecret($container, hiddenMessage);
+                }
+            }
+        }
+
+        function copySecretToClipboard(text) {
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                return navigator.clipboard.writeText(text);
+            }
+
+            return new Promise(function(resolve, reject) {
+                const $helper = $('<textarea/>')
+                    .css({
+                        position: 'absolute',
+                        left: '-9999px',
+                        top: '0'
+                    })
+                    .val(text)
+                    .appendTo('body');
+
+                try {
+                    $helper[0].select();
+                    const success = document.execCommand('copy');
+                    $helper.remove();
+                    if (success) {
+                        resolve();
+                    } else {
+                        reject();
+                    }
+                } catch (error) {
+                    $helper.remove();
+                    reject(error);
+                }
+            });
+        }
 
         function getNonce() {
             if (typeof bjlg_ajax[nonceKey] === 'string' && bjlg_ajax[nonceKey].length) {
@@ -2860,6 +2953,56 @@ jQuery(document).ready(function($) {
             }
         }
 
+        $apiSection.find('.bjlg-api-key-secret').each(function() {
+            updateSecretVisibility($(this), false, { announce: false });
+        });
+
+        $apiSection.on('click', '.bjlg-toggle-api-secret', function(event) {
+            event.preventDefault();
+
+            const $button = $(this);
+            const $container = $button.closest('.bjlg-api-key-secret');
+            if (!$container.length) {
+                return;
+            }
+
+            const available = $container.attr('data-secret-available') === '1';
+            if (!available) {
+                return;
+            }
+
+            const currentlyVisible = $container.attr('data-secret-visible') === '1';
+            updateSecretVisibility($container, !currentlyVisible);
+        });
+
+        $apiSection.on('click', '.bjlg-copy-api-secret', function(event) {
+            event.preventDefault();
+
+            const $button = $(this);
+            const $container = $button.closest('.bjlg-api-key-secret');
+            if (!$container.length) {
+                return;
+            }
+
+            const secret = ($container.attr('data-secret') || '').toString();
+            if (!secret) {
+                const errorMessage = $container.attr('data-message-copy-error') || messages.copy_error;
+                announceSecret($container, errorMessage);
+                return;
+            }
+
+            copySecretToClipboard(secret)
+                .then(function() {
+                    const successMessage = $container.attr('data-message-copy-success') || messages.copy_success;
+                    announceSecret($container, successMessage);
+                    $button.trigger('focus');
+                })
+                .catch(function() {
+                    const errorMessage = $container.attr('data-message-copy-error') || messages.copy_error;
+                    announceSecret($container, errorMessage);
+                });
+        });
+
         function buildKeyRow(key) {
             const id = key && key.id ? key.id : '';
             const label = key && typeof key.label === 'string' && key.label.trim() !== ''
@@ -2869,6 +3012,7 @@ jQuery(document).ready(function($) {
                 ? key.display_secret
                 : '';
             const isSecretHidden = !!(key && (key.is_secret_hidden || key.secret_hidden));
+            const hasDisplaySecret = !isSecretHidden && displaySecret.trim() !== '';
             const createdAt = key && typeof key.created_at !== 'undefined' ? key.created_at : '';
             const createdHuman = key && key.created_at_human ? key.created_at_human : '';
             const createdIso = key && key.created_at_iso ? key.created_at_iso : '';
@@ -2895,21 +3039,77 @@ jQuery(document).ready(function($) {
             const $secretCell = $('<td/>').appendTo($row);
             const secretClasses = ['bjlg-api-key-value'];
 
-            if (isSecretHidden) {
+            if (isSecretHidden || !hasDisplaySecret) {
                 secretClasses.push('bjlg-api-key-value--hidden');
             }
 
+            const secretId = (typeof id === 'string' && id !== '')
+                ? 'bjlg-api-secret-' + id.replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase()
+                : 'bjlg-api-secret-' + Math.random().toString(36).slice(2, 10);
+
+            const $secretContainer = $('<div/>', {
+                'class': 'bjlg-api-key-secret',
+                'data-mask': messages.secret_placeholder,
+                'data-secret-visible': '0',
+                'data-secret-available': hasDisplaySecret ? '1' : '0',
+                'data-toggle-show': messages.toggle_show,
+                'data-toggle-hide': messages.toggle_hide,
+                'data-message-visible': messages.secret_shown,
+                'data-message-hidden': messages.secret_hidden,
+                'data-message-copy-success': messages.copy_success,
+                'data-message-copy-error': messages.copy_error
+            }).appendTo($secretCell);
+
+            if (hasDisplaySecret) {
+                $secretContainer.attr('data-secret', displaySecret);
+                $('<p/>', {
+                    'class': 'bjlg-api-key-secret__notice',
+                    text: messages.copy_notice
+                }).appendTo($secretContainer);
+            }
+
             $('<code/>', {
+                id: secretId,
                 'class': secretClasses.join(' '),
                 'aria-label': 'Clé API',
-                text: displaySecret
-            }).appendTo($secretCell);
+                'data-mask': messages.secret_placeholder,
+                text: messages.secret_placeholder
+            }).appendTo($secretContainer);
+
+            if (hasDisplaySecret) {
+                const $actions = $('<div/>', { 'class': 'bjlg-api-key-secret__actions' }).appendTo($secretContainer);
+                $('<button/>', {
+                    type: 'button',
+                    'class': 'button-link bjlg-toggle-api-secret',
+                    'data-target': secretId,
+                    'aria-expanded': 'false',
+                    text: messages.toggle_show
+                }).appendTo($actions);
+
+                $('<button/>', {
+                    type: 'button',
+                    'class': 'button button-secondary bjlg-copy-api-secret',
+                    'data-secret-target': secretId,
+                    'aria-label': 'Copier la clé API',
+                    text: messages.copy_button
+                }).appendTo($actions);
+            }
+
+            $('<p/>', {
+                'class': 'bjlg-api-key-secret__feedback',
+                role: 'status',
+                'aria-live': 'polite'
+            }).appendTo($secretContainer);
 
             if (isSecretHidden) {
                 $('<span/>', {
                     'class': 'bjlg-api-key-hidden-note',
-                    text: 'Secret masqué. Régénérez la clé pour obtenir un nouveau secret.'
-                }).appendTo($secretCell);
+                    text: messages.hidden_note
+                }).appendTo($secretContainer);
+            }
+
+            if (hasDisplaySecret) {
+                updateSecretVisibility($secretContainer, false, { announce: false });
             }
 
             $('<td/>').append(

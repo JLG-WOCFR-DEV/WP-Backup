@@ -134,6 +134,18 @@ final class BJLG_Plugin {
             'rest_namespace' => 'backup-jlg/v1',
             'rest_root' => esc_url_raw(rest_url()),
             'rest_backups' => esc_url_raw(rest_url('backup-jlg/v1/backups')),
+            'i18n' => [
+                'copy_button' => __('Copier', 'backup-jlg'),
+                'toggle_show' => __('Afficher', 'backup-jlg'),
+                'toggle_hide' => __('Masquer', 'backup-jlg'),
+                'copy_notice' => __('Copiez la clé maintenant, elle ne sera plus visible.', 'backup-jlg'),
+                'hidden_note' => __('Secret masqué. Régénérez la clé pour obtenir un nouveau secret.', 'backup-jlg'),
+                'secret_placeholder' => '••••••',
+                'secret_shown' => __('Clé affichée.', 'backup-jlg'),
+                'secret_hidden' => __('Clé masquée.', 'backup-jlg'),
+                'copy_success' => __('Clé copiée dans le presse-papiers.', 'backup-jlg'),
+                'copy_error' => __("Impossible de copier la clé automatiquement. Copiez-la manuellement.", 'backup-jlg'),
+            ],
         ]);
     }
 

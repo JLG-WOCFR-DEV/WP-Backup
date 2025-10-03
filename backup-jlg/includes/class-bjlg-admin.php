@@ -1286,11 +1286,38 @@ class BJLG_Admin {
                     $is_hidden = !empty($key['is_secret_hidden']);
                     $secret_value = isset($key['display_secret']) ? (string) $key['display_secret'] : '';
                     $secret_classes = 'bjlg-api-key-value';
+                    $has_display_secret = !$is_hidden && $secret_value !== '';
+                    $masked_placeholder = '••••••';
+                    $secret_container_attributes = [
+                        'class' => 'bjlg-api-key-secret',
+                        'data-mask' => $masked_placeholder,
+                        'data-secret-visible' => '0',
+                        'data-secret-available' => $has_display_secret ? '1' : '0',
+                    ];
 
-                    if ($is_hidden) {
+                    if ($is_hidden || !$has_display_secret) {
                         $secret_classes .= ' bjlg-api-key-value--hidden';
                     }
-                    ?>
+
+                    if ($has_display_secret) {
+                        $secret_container_attributes['data-secret'] = $secret_value;
+                    }
+
+                    $secret_element_id = 'bjlg-api-secret-' . substr(md5((string) $key['id']), 0, 12);
+                    $secret_show_label = esc_html(__('Afficher', 'backup-jlg'));
+                    $secret_hide_label = esc_html(__('Masquer', 'backup-jlg'));
+                    $secret_shown_message = esc_html(__('Clé affichée.', 'backup-jlg'));
+                    $secret_hidden_message = esc_html(__('Clé masquée.', 'backup-jlg'));
+                    $secret_copy_success = esc_html(__('Clé copiée dans le presse-papiers.', 'backup-jlg'));
+                    $secret_copy_error = esc_html(__("Impossible de copier la clé automatiquement. Copiez-la manuellement.", 'backup-jlg'));
+
+                    $secret_container_attributes['data-toggle-show'] = $secret_show_label;
+                    $secret_container_attributes['data-toggle-hide'] = $secret_hide_label;
+                    $secret_container_attributes['data-message-visible'] = $secret_shown_message;
+                    $secret_container_attributes['data-message-hidden'] = $secret_hidden_message;
+                    $secret_container_attributes['data-message-copy-success'] = $secret_copy_success;
+                    $secret_container_attributes['data-message-copy-error'] = $secret_copy_error;
+                ?>
                     <tr data-key-id="<?php echo esc_attr($key['id']); ?>"
                         data-created-at="<?php echo esc_attr($key['created_at']); ?>"
                         data-last-rotated-at="<?php echo esc_attr($key['last_rotated_at']); ?>"
@@ -1299,12 +1326,37 @@ class BJLG_Admin {
                             <strong class="bjlg-api-key-label"><?php echo esc_html($key['label']); ?></strong>
                         </td>
                         <td>
-                            <code class="<?php echo esc_attr($secret_classes); ?>" aria-label="Clé API">
-                                <?php echo esc_html($secret_value); ?>
-                            </code>
-                            <?php if ($is_hidden): ?>
-                                <span class="bjlg-api-key-hidden-note"><?php esc_html_e('Secret masqué. Régénérez la clé pour obtenir un nouveau secret.', 'backup-jlg'); ?></span>
-                            <?php endif; ?>
+                            <div <?php foreach ($secret_container_attributes as $attr => $value) { printf('%s="%s" ', esc_attr($attr), esc_attr($value)); } ?>>
+                                <?php if ($has_display_secret): ?>
+                                    <p class="bjlg-api-key-secret__notice"><?php esc_html_e('Copiez la clé maintenant, elle ne sera plus visible.', 'backup-jlg'); ?></p>
+                                <?php endif; ?>
+                                <code id="<?php echo esc_attr($secret_element_id); ?>"
+                                      class="<?php echo esc_attr($secret_classes); ?>"
+                                      aria-label="<?php echo esc_attr(__('Clé API', 'backup-jlg')); ?>"
+                                      data-mask="<?php echo esc_attr($masked_placeholder); ?>">
+                                    <?php echo esc_html($masked_placeholder); ?>
+                                </code>
+                                <?php if ($has_display_secret): ?>
+                                    <div class="bjlg-api-key-secret__actions">
+                                        <button type="button"
+                                                class="button-link bjlg-toggle-api-secret"
+                                                data-target="<?php echo esc_attr($secret_element_id); ?>"
+                                                aria-expanded="false">
+                                            <?php echo esc_html($secret_show_label); ?>
+                                        </button>
+                                        <button type="button"
+                                                class="button button-secondary bjlg-copy-api-secret"
+                                                data-secret-target="<?php echo esc_attr($secret_element_id); ?>"
+                                                aria-label="<?php echo esc_attr(__('Copier la clé API', 'backup-jlg')); ?>">
+                                            <?php esc_html_e('Copier', 'backup-jlg'); ?>
+                                        </button>
+                                    </div>
+                                <?php endif; ?>
+                                <p class="bjlg-api-key-secret__feedback" role="status" aria-live="polite"></p>
+                                <?php if ($is_hidden): ?>
+                                    <span class="bjlg-api-key-hidden-note"><?php esc_html_e('Secret masqué. Régénérez la clé pour obtenir un nouveau secret.', 'backup-jlg'); ?></span>
+                                <?php endif; ?>
+                            </div>
                         </td>
                         <td>
                             <time class="bjlg-api-key-created" datetime="<?php echo esc_attr($key['created_at_iso']); ?>">
