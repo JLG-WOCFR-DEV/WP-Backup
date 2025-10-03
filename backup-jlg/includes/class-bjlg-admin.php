@@ -141,6 +141,17 @@ class BJLG_Admin {
         $onboarding = $metrics['onboarding'] ?? [];
         $data_attr = !empty($metrics) ? wp_json_encode($metrics) : '';
 
+        $backup_tab_url = add_query_arg(
+            [
+                'page' => 'backup-jlg',
+                'tab' => 'backup_restore',
+            ],
+            admin_url('admin.php')
+        );
+
+        $backup_cta_url = $backup_tab_url . '#bjlg-backup-creation-form';
+        $restore_cta_url = $backup_tab_url . '#bjlg-restore-form';
+
         ?>
         <section class="bjlg-dashboard-overview" <?php echo $data_attr ? 'data-bjlg-dashboard="' . esc_attr($data_attr) . '"' : ''; ?>>
             <header class="bjlg-dashboard-overview__header">
@@ -151,6 +162,41 @@ class BJLG_Admin {
                     </span>
                 <?php endif; ?>
             </header>
+
+            <div class="bjlg-dashboard-actions" data-role="actions">
+                <article class="bjlg-action-card" data-action="backup">
+                    <div class="bjlg-action-card__content">
+                        <h3 class="bjlg-action-card__title"><?php esc_html_e('Lancer une sauvegarde', 'backup-jlg'); ?></h3>
+                        <p class="bjlg-action-card__meta" data-field="cta_backup_last_backup">
+                            <?php echo esc_html($summary['history_last_backup_relative'] ?? __('Aucune sauvegarde récente.', 'backup-jlg')); ?>
+                        </p>
+                        <p class="bjlg-action-card__meta" data-field="cta_backup_next_run">
+                            <?php echo esc_html($summary['scheduler_next_run_relative'] ?? __('Aucune planification active.', 'backup-jlg')); ?>
+                        </p>
+                    </div>
+                    <a class="button button-primary button-hero bjlg-action-card__cta" href="<?php echo esc_url($backup_cta_url); ?>">
+                        <span class="dashicons dashicons-backup" aria-hidden="true"></span>
+                        <?php esc_html_e('Créer une sauvegarde', 'backup-jlg'); ?>
+                    </a>
+                </article>
+
+                <article class="bjlg-action-card" data-action="restore">
+                    <div class="bjlg-action-card__content">
+                        <h3 class="bjlg-action-card__title"><?php esc_html_e('Restaurer une sauvegarde', 'backup-jlg'); ?></h3>
+                        <p class="bjlg-action-card__meta" data-field="cta_restore_last_backup">
+                            <?php echo esc_html($summary['history_last_backup'] ?? __('Aucune sauvegarde disponible.', 'backup-jlg')); ?>
+                        </p>
+                        <p class="bjlg-action-card__meta">
+                            <?php esc_html_e('Archives stockées :', 'backup-jlg'); ?>
+                            <span data-field="cta_restore_backup_count"><?php echo esc_html(number_format_i18n($summary['storage_backup_count'] ?? 0)); ?></span>
+                        </p>
+                    </div>
+                    <a class="button button-secondary button-hero bjlg-action-card__cta" data-action-target="restore" href="<?php echo esc_url($restore_cta_url); ?>">
+                        <span class="dashicons dashicons-update" aria-hidden="true"></span>
+                        <?php esc_html_e('Ouvrir l’assistant de restauration', 'backup-jlg'); ?>
+                    </a>
+                </article>
+            </div>
 
             <div class="bjlg-alerts" data-role="alerts">
                 <?php foreach ($alerts as $alert): ?>
@@ -236,6 +282,30 @@ class BJLG_Admin {
                         </li>
                     <?php endforeach; ?>
                 </ul>
+            </div>
+
+            <div class="bjlg-dashboard-charts" data-role="charts">
+                <article class="bjlg-chart-card" data-chart="history-trend">
+                    <header class="bjlg-chart-card__header">
+                        <h3 class="bjlg-chart-card__title"><?php esc_html_e('Tendance des sauvegardes', 'backup-jlg'); ?></h3>
+                        <p class="bjlg-chart-card__subtitle" data-field="chart_history_subtitle">
+                            <?php esc_html_e('Actions réussies et échouées sur 30 jours.', 'backup-jlg'); ?>
+                        </p>
+                    </header>
+                    <canvas class="bjlg-chart-card__canvas" id="bjlg-history-trend" aria-hidden="true"></canvas>
+                    <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Données de tendance indisponibles pour le moment.', 'backup-jlg'); ?></p>
+                </article>
+
+                <article class="bjlg-chart-card" data-chart="storage-trend">
+                    <header class="bjlg-chart-card__header">
+                        <h3 class="bjlg-chart-card__title"><?php esc_html_e('Evolution du stockage', 'backup-jlg'); ?></h3>
+                        <p class="bjlg-chart-card__subtitle" data-field="chart_storage_subtitle">
+                            <?php esc_html_e('Capacité utilisée par vos archives.', 'backup-jlg'); ?>
+                        </p>
+                    </header>
+                    <canvas class="bjlg-chart-card__canvas" id="bjlg-storage-trend" aria-hidden="true"></canvas>
+                    <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Aucune mesure d’utilisation disponible.', 'backup-jlg'); ?></p>
+                </article>
             </div>
         </section>
         <?php
