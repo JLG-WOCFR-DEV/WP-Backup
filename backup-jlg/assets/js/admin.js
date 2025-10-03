@@ -819,6 +819,23 @@ jQuery(document).ready(function($) {
             return schedules;
         }
 
+        function focusScheduleItemCard($item) {
+            if (!$item || !$item.length) {
+                return;
+            }
+
+            const $labelField = $item.find('[data-field="label"]').first();
+            if ($labelField.length) {
+                $labelField.focus();
+                return;
+            }
+
+            if (!$item.is('[tabindex]')) {
+                $item.attr('tabindex', '-1');
+            }
+            $item.focus();
+        }
+
         // Initialisation des planifications existantes
         scheduleItems().each(function(index) {
             const $item = $(this);
@@ -852,6 +869,7 @@ jQuery(document).ready(function($) {
             setScheduleId($item, '');
             populateScheduleItem($item, defaultScheduleData, defaultNextRunSummary, scheduleItems().length);
             $item.insertBefore($template);
+            focusScheduleItemCard($item);
             renderScheduleFeedback('info', 'Nouvelle planification ajoutée. Enregistrez pour la synchroniser.', []);
         });
 
@@ -867,8 +885,19 @@ jQuery(document).ready(function($) {
                 renderScheduleFeedback('error', 'Vous devez conserver au moins une planification active.', []);
                 return;
             }
+            const $addButton = $scheduleForm.find('.bjlg-add-schedule').first();
+            const $items = scheduleItems();
+            const currentIndex = $items.index($item);
             $item.slideUp(150, function() {
                 $(this).remove();
+                const $remainingItems = scheduleItems();
+                if ($remainingItems.length) {
+                    const fallbackIndex = currentIndex < 0 ? 0 : Math.min(currentIndex, $remainingItems.length - 1);
+                    const $targetItem = $($remainingItems.get(fallbackIndex));
+                    focusScheduleItemCard($targetItem);
+                } else if ($addButton.length) {
+                    $addButton.focus();
+                }
             });
         });
 

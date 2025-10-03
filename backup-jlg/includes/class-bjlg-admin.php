@@ -1605,6 +1605,7 @@ class BJLG_Admin {
         ob_start();
         ?>
         <div class="<?php echo esc_attr(implode(' ', $classes)); ?>"
+             tabindex="-1"
              data-schedule-id="<?php echo esc_attr($schedule_id); ?>"
              <?php echo $is_template ? "data-template='true' style='display:none;'" : ''; ?>>
             <input type="hidden" data-field="id" value="<?php echo esc_attr($schedule_id); ?>">
