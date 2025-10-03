@@ -78,7 +78,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         $is_connected = $this->is_connected();
 
         echo "<div class='bjlg-destination bjlg-destination--s3'>";
-        echo "<h4><span class='dashicons dashicons-amazon'></span> Amazon S3</h4>";
+        echo "<h4><span class='dashicons dashicons-amazon' aria-hidden='true'></span> Amazon S3</h4>";
         echo "<p class='description'>Envoyez automatiquement vos sauvegardes WordPress vers un bucket Amazon S3.</p>";
 
         echo "<table class='form-table'>";
@@ -110,17 +110,17 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
 
         if ($status['last_result'] === 'success' && $status['tested_at'] > 0) {
             $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
-            echo "<p class='description'><span class='dashicons dashicons-yes'></span> Dernier test réussi le {$tested_at}.";
+            echo "<p class='description'><span class='dashicons dashicons-yes' aria-hidden='true'></span> Dernier test réussi le {$tested_at}.";
             if ($status['message'] !== '') {
                 echo ' ' . esc_html($status['message']);
             }
             echo '</p>';
         } elseif ($status['last_result'] === 'error') {
-            echo "<p class='description' style='color:#b32d2e;'><span class='dashicons dashicons-warning'></span> " . esc_html($status['message']) . "</p>";
+            echo "<p class='description' style='color:#b32d2e;'><span class='dashicons dashicons-warning' aria-hidden='true'></span> " . esc_html($status['message']) . "</p>";
         }
 
         if ($is_connected) {
-            echo "<p class='description'><span class='dashicons dashicons-lock'></span> Connexion Amazon S3 configurée.</p>";
+            echo "<p class='description'><span class='dashicons dashicons-lock' aria-hidden='true'></span> Connexion Amazon S3 configurée.</p>";
             echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' style='margin-top:10px;'>";
             echo "<input type='hidden' name='action' value='bjlg_s3_disconnect'>";
             if (function_exists('wp_nonce_field')) {
