@@ -90,7 +90,7 @@ class BJLG_Scheduler {
      * Gère la requête AJAX pour enregistrer les paramètres de planification.
      */
     public function handle_save_schedule() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -294,7 +294,7 @@ class BJLG_Scheduler {
      * Obtient la prochaine exécution planifiée
      */
     public function handle_get_next_scheduled() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
 
@@ -317,7 +317,7 @@ class BJLG_Scheduler {
      * Exécute immédiatement une sauvegarde planifiée
      */
     public function handle_run_scheduled_now() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -631,7 +631,7 @@ class BJLG_Scheduler {
     }
 
     public function handle_toggle_schedule_state() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.'], 403);
         }
 
@@ -700,7 +700,7 @@ class BJLG_Scheduler {
     }
 
     public function handle_duplicate_schedule() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.'], 403);
         }
 

@@ -373,7 +373,7 @@ class BJLG_REST_API {
         }
 
         // Vérifier l'authentification WordPress standard
-        return current_user_can(BJLG_CAPABILITY);
+        return \bjlg_can_manage_plugin();
     }
     
     /**
@@ -462,7 +462,7 @@ class BJLG_REST_API {
                 );
             }
 
-            if (!user_can($user, BJLG_CAPABILITY)) {
+            if (!\bjlg_can_manage_plugin($user)) {
                 $this->remove_api_key_entry($stored_keys, $index, true);
                 unset($key_data);
 
@@ -995,7 +995,7 @@ class BJLG_REST_API {
             );
         }
 
-        $has_capability = function_exists('user_can') ? user_can($user, BJLG_CAPABILITY) : false;
+        $has_capability = \bjlg_can_manage_plugin($user);
 
         if (!$has_capability) {
             return new WP_Error(
@@ -1084,7 +1084,7 @@ class BJLG_REST_API {
                 );
             }
 
-            if (!user_can($user, BJLG_CAPABILITY)) {
+            if (!\bjlg_can_manage_plugin($user)) {
                 return new WP_Error(
                     'insufficient_permissions',
                     'User does not have backup permissions',
@@ -1121,7 +1121,7 @@ class BJLG_REST_API {
             );
         }
         
-        if (!user_can($user, BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin($user)) {
             return new WP_Error(
                 'insufficient_permissions',
                 'User does not have backup permissions',

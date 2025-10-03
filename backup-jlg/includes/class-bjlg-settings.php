@@ -138,6 +138,10 @@ class BJLG_Settings {
             }
         }
 
+        if (get_option('bjlg_required_capability', null) === null) {
+            add_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+        }
+
         $this->init_backup_preferences_defaults();
     }
 
@@ -145,11 +149,11 @@ class BJLG_Settings {
      * Gère la requête AJAX pour sauvegarder tous les réglages.
      */
     public function handle_save_settings() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
-        
+
         try {
             $saved_settings = [];
             
@@ -165,7 +169,7 @@ class BJLG_Settings {
             }
 
             // --- Réglages de la Marque Blanche ---
-            if (isset($_POST['plugin_name']) || isset($_POST['hide_from_non_admins'])) {
+            if (isset($_POST['plugin_name']) || isset($_POST['hide_from_non_admins']) || isset($_POST['required_capability'])) {
                 $wl_settings = [
                     'plugin_name'          => isset($_POST['plugin_name']) ? sanitize_text_field(wp_unslash($_POST['plugin_name'])) : '',
                     'hide_from_non_admins' => isset($_POST['hide_from_non_admins']) ? $this->to_bool(wp_unslash($_POST['hide_from_non_admins'])) : false,
@@ -173,6 +177,17 @@ class BJLG_Settings {
                 update_option('bjlg_whitelabel_settings', $wl_settings);
                 $saved_settings['whitelabel'] = $wl_settings;
                 BJLG_Debug::log("Réglages de marque blanche sauvegardés : " . print_r($wl_settings, true));
+
+                if (array_key_exists('required_capability', $_POST)) {
+                    $raw_permission = wp_unslash($_POST['required_capability']);
+                    $required_capability = $this->sanitize_required_capability_value($raw_permission);
+                    update_option('bjlg_required_capability', $required_capability);
+                    $saved_settings['permissions'] = [
+                        'required_capability' => $required_capability,
+                        'type' => $this->is_role_permission($required_capability) ? 'role' : 'capability',
+                    ];
+                    BJLG_Debug::log('Permission requise mise à jour : ' . $required_capability);
+                }
             }
 
             // --- Réglages de Chiffrement ---
@@ -535,10 +550,12 @@ class BJLG_Settings {
      * Récupère tous les paramètres
      */
     public function handle_get_settings() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         
+        $required_permission = \bjlg_get_required_capability();
+
         $settings = [
             'cleanup' => get_option('bjlg_cleanup_settings', $this->default_settings['cleanup']),
             'whitelabel' => get_option('bjlg_whitelabel_settings', $this->default_settings['whitelabel']),
@@ -548,6 +565,10 @@ class BJLG_Settings {
             'gdrive' => get_option('bjlg_gdrive_settings', $this->default_settings['gdrive']),
             'webhooks' => get_option('bjlg_webhook_settings', []),
             'schedule' => get_option('bjlg_schedule_settings', []),
+            'permissions' => [
+                'required_capability' => $required_permission,
+                'type' => $this->is_role_permission($required_permission) ? 'role' : 'capability',
+            ],
             'ajax_debug' => get_option('bjlg_ajax_debug_enabled', false)
         ];
         
@@ -572,9 +593,13 @@ class BJLG_Settings {
                 foreach ($this->default_settings as $key => $defaults) {
                     update_option('bjlg_' . $key . '_settings', $defaults);
                 }
+                update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
                 BJLG_History::log('settings_reset', 'info', 'Tous les réglages ont été réinitialisés');
             } else {
-                if (isset($this->default_settings[$section])) {
+                if ($section === 'permissions') {
+                    update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+                    BJLG_History::log('settings_reset', 'info', "Réglages 'permissions' réinitialisés");
+                } elseif (isset($this->default_settings[$section])) {
                     update_option('bjlg_' . $section . '_settings', $this->default_settings[$section]);
                     BJLG_History::log('settings_reset', 'info', "Réglages '$section' réinitialisés");
                 } else {
@@ -609,7 +634,8 @@ class BJLG_Settings {
             'bjlg_performance_settings',
             'bjlg_gdrive_settings',
             'bjlg_webhook_settings',
-            'bjlg_schedule_settings'
+            'bjlg_schedule_settings',
+            'bjlg_required_capability'
         ];
         
         foreach ($option_keys as $key) {
@@ -743,6 +769,9 @@ class BJLG_Settings {
                 }
 
                 return $sanitized;
+
+            case 'bjlg_required_capability':
+                return $this->sanitize_required_capability_value($value);
 
             case 'bjlg_encryption_settings':
                 $defaults = $this->default_settings['encryption'];
@@ -897,6 +926,68 @@ class BJLG_Settings {
             default:
                 return null;
         }
+    }
+
+    /**
+     * Nettoie et valide la capability ou le rôle requis.
+     *
+     * @param mixed $value
+     * @return string
+     * @throws Exception
+     */
+    private function sanitize_required_capability_value($value) {
+        $permission = is_string($value) ? sanitize_text_field($value) : '';
+
+        if ($permission === '') {
+            return \BJLG_DEFAULT_CAPABILITY;
+        }
+
+        if (!$this->required_capability_exists_in_wp($permission)) {
+            throw new Exception(sprintf(
+                __('La permission "%s" est introuvable dans WordPress.', 'backup-jlg'),
+                $permission
+            ));
+        }
+
+        return $permission;
+    }
+
+    /**
+     * Vérifie si la permission correspond à un rôle enregistré.
+     */
+    private function is_role_permission($permission): bool {
+        if (!is_string($permission) || $permission === '') {
+            return false;
+        }
+
+        $roles = function_exists('wp_roles') ? wp_roles() : null;
+
+        return $roles && class_exists('WP_Roles') && $roles instanceof \WP_Roles && $roles->is_role($permission);
+    }
+
+    /**
+     * Vérifie si la capability ou le rôle existe dans WordPress.
+     */
+    private function required_capability_exists_in_wp($permission): bool {
+        if (!is_string($permission) || $permission === '') {
+            return false;
+        }
+
+        $roles = function_exists('wp_roles') ? wp_roles() : null;
+
+        if ($roles && class_exists('WP_Roles') && $roles instanceof \WP_Roles) {
+            if ($roles->is_role($permission)) {
+                return true;
+            }
+
+            foreach ($roles->roles as $role) {
+                if (isset($role['capabilities'][$permission]) && $role['capabilities'][$permission]) {
+                    return true;
+                }
+            }
+        }
+
+        return $permission === \BJLG_DEFAULT_CAPABILITY;
     }
 
     /**

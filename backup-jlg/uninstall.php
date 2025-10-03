@@ -77,6 +77,7 @@ if ( ! function_exists( 'bjlg_uninstall_site' ) ) {
             'bjlg_webhook_settings',
             'bjlg_webhook_key',
             'bjlg_ajax_debug_enabled',
+            'bjlg_required_capability',
         );
 
         foreach ( $options as $option_name ) {

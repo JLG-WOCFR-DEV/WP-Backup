@@ -740,7 +740,7 @@ class BJLG_Performance {
      * AJAX: Lance un benchmark
      */
     public function ajax_run_benchmark() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -792,7 +792,7 @@ class BJLG_Performance {
      * AJAX: Obtient les statistiques
      */
     public function ajax_get_stats() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée']);
         }
         

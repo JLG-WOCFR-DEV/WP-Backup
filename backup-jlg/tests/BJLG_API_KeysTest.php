@@ -15,7 +15,7 @@ final class BJLG_API_KeysTest extends TestCase
             'ID' => 1,
             'user_login' => 'admin',
             'user_email' => 'admin@example.com',
-            'allcaps' => [BJLG_CAPABILITY => true],
+            'allcaps' => [bjlg_get_required_capability() => true],
             'roles' => ['administrator'],
         ];
         $GLOBALS['bjlg_test_users'] = [$user->ID => $user];

@@ -49,7 +49,7 @@ class BJLG_Restore {
      * Crée une sauvegarde de sécurité complète avant de lancer une restauration.
      */
     public function handle_create_pre_restore_backup() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -244,7 +244,7 @@ class BJLG_Restore {
      * Gère l'upload d'un fichier de restauration
      */
     public function handle_upload_restore_file() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -487,7 +487,7 @@ class BJLG_Restore {
      * Exécute la restauration granulaire à partir d'un fichier de sauvegarde.
      */
     public function handle_run_restore() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -642,7 +642,7 @@ class BJLG_Restore {
      * Vérifie la progression de la restauration
      */
     public function handle_check_restore_progress() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');

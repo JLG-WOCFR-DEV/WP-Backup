@@ -415,7 +415,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             wp_send_json_error(['message' => 'Le SDK Google n\'est pas disponible.'], 500);
         }
 
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.'], 403);
         }
 
@@ -478,7 +478,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             return;
         }
 
-        if (function_exists('current_user_can') && !current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             return;
         }
 
@@ -520,7 +520,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      * Gère la requête de déconnexion.
      */
     public function handle_disconnect_request() {
-        if (function_exists('current_user_can') && !current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             return;
         }
 

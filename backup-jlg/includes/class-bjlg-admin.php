@@ -65,7 +65,7 @@ class BJLG_Admin {
         add_menu_page(
             $plugin_name,
             $plugin_name,
-            BJLG_CAPABILITY,
+            'bjlg_manage_plugin',
             'backup-jlg',
             [$this, 'render_admin_page'],
             'dashicons-database-export',
@@ -945,6 +945,8 @@ class BJLG_Admin {
         $default_schedule = isset($schedule_collection['default']) && is_array($schedule_collection['default'])
             ? $schedule_collection['default']
             : BJLG_Settings::get_default_schedule_entry();
+        $schedules_json = esc_attr(wp_json_encode($schedules));
+        $next_runs_json = esc_attr(wp_json_encode($next_runs));
 
         $components_labels = [
             'db' => 'Base de données',
@@ -958,6 +960,11 @@ class BJLG_Admin {
         ];
         $destination_choices = $this->get_destination_choices();
         $wl_settings = get_option('bjlg_whitelabel_settings', ['plugin_name' => '', 'hide_from_non_admins' => false]);
+        $required_permission = \bjlg_get_required_capability();
+        $permission_choices = $this->get_permission_choices();
+        $is_custom_permission = $required_permission !== ''
+            && !isset($permission_choices['roles'][$required_permission])
+            && !isset($permission_choices['capabilities'][$required_permission]);
         $webhook_key = class_exists(BJLG_Webhooks::class) ? BJLG_Webhooks::get_webhook_key() : '';
 
         $notification_defaults = [
@@ -1212,6 +1219,39 @@ class BJLG_Admin {
                         <td>
                             <div class="bjlg-field-control">
                                 <label><input type="checkbox" name="hide_from_non_admins" <?php checked(isset($wl_settings['hide_from_non_admins']) && $wl_settings['hide_from_non_admins']); ?>> Cacher le plugin pour les non-administrateurs</label>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="bjlg-required-capability"><?php esc_html_e('Permissions requises', 'backup-jlg'); ?></label></th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <select id="bjlg-required-capability" name="required_capability" class="regular-text">
+                                    <?php if ($is_custom_permission): ?>
+                                        <option value="<?php echo esc_attr($required_permission); ?>" selected>
+                                            <?php echo esc_html(sprintf(__('Personnalisé : %s', 'backup-jlg'), $required_permission)); ?>
+                                        </option>
+                                    <?php endif; ?>
+                                    <?php if (!empty($permission_choices['roles'])): ?>
+                                        <optgroup label="<?php esc_attr_e('Rôles', 'backup-jlg'); ?>">
+                                            <?php foreach ($permission_choices['roles'] as $role_key => $role_label): ?>
+                                                <option value="<?php echo esc_attr($role_key); ?>" <?php selected($required_permission, $role_key); ?>>
+                                                    <?php echo esc_html($role_label); ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </optgroup>
+                                    <?php endif; ?>
+                                    <?php if (!empty($permission_choices['capabilities'])): ?>
+                                        <optgroup label="<?php esc_attr_e('Capacités', 'backup-jlg'); ?>">
+                                            <?php foreach ($permission_choices['capabilities'] as $capability_key => $capability_label): ?>
+                                                <option value="<?php echo esc_attr($capability_key); ?>" <?php selected($required_permission, $capability_key); ?>>
+                                                    <?php echo esc_html($capability_label); ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </optgroup>
+                                    <?php endif; ?>
+                                </select>
+                                <p class="description"><?php esc_html_e('Sélectionnez le rôle ou la capability requis pour accéder au plugin.', 'backup-jlg'); ?></p>
                             </div>
                         </td>
                     </tr>
@@ -1568,6 +1608,70 @@ class BJLG_Admin {
             </table>
         </div>
         <?php
+    }
+
+    private function get_permission_choices() {
+        $roles = [];
+        $capabilities = [];
+
+        $wp_roles = function_exists('wp_roles') ? wp_roles() : null;
+
+        if ($wp_roles && class_exists('WP_Roles') && $wp_roles instanceof \WP_Roles) {
+            foreach ($wp_roles->roles as $role_key => $role_details) {
+                $label = isset($role_details['name']) ? (string) $role_details['name'] : $role_key;
+                if (function_exists('translate_user_role')) {
+                    $label = translate_user_role($label);
+                }
+                $roles[$role_key] = $label;
+
+                if (!empty($role_details['capabilities']) && is_array($role_details['capabilities'])) {
+                    foreach ($role_details['capabilities'] as $capability => $granted) {
+                        if ($granted) {
+                            $capabilities[$capability] = $capability;
+                        }
+                    }
+                }
+            }
+        }
+
+        ksort($roles);
+        ksort($capabilities);
+
+        $sanitize = static function ($items) {
+            $result = [];
+            if (!is_array($items)) {
+                return $result;
+            }
+
+            foreach ($items as $key => $label) {
+                if (!is_string($key) || $key === '') {
+                    continue;
+                }
+
+                $result[$key] = is_string($label) && $label !== '' ? $label : $key;
+            }
+
+            return $result;
+        };
+
+        $choices = [
+            'roles' => $sanitize($roles),
+            'capabilities' => $sanitize($capabilities),
+        ];
+
+        /** @var array<string, array<string, string>>|null $filtered */
+        $filtered = apply_filters('bjlg_required_capability_choices', $choices);
+        if (is_array($filtered)) {
+            $roles_filtered = $sanitize($filtered['roles'] ?? $choices['roles']);
+            $caps_filtered = $sanitize($filtered['capabilities'] ?? $choices['capabilities']);
+
+            return [
+                'roles' => $roles_filtered,
+                'capabilities' => $caps_filtered,
+            ];
+        }
+
+        return $choices;
     }
 
     private function get_destination_choices() {

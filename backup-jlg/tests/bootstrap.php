@@ -9,8 +9,87 @@ if (!defined('ABSPATH')) {
 
 require_once __DIR__ . '/../includes/class-bjlg-debug.php';
 
+if (!defined('BJLG_DEFAULT_CAPABILITY')) {
+    define('BJLG_DEFAULT_CAPABILITY', 'manage_options');
+}
+
+if (!function_exists('bjlg_get_required_capability')) {
+    function bjlg_get_required_capability() {
+        if (function_exists('get_option')) {
+            $capability = get_option('bjlg_required_capability');
+        } else {
+            $capability = $GLOBALS['bjlg_test_options']['bjlg_required_capability'] ?? null;
+        }
+
+        if (!is_string($capability) || $capability === '') {
+            $capability = BJLG_DEFAULT_CAPABILITY;
+        }
+
+        return $capability;
+    }
+}
+
+if (!function_exists('bjlg_can_manage_plugin')) {
+    function bjlg_can_manage_plugin($user = null) {
+        $permission = bjlg_get_required_capability();
+
+        $wp_roles = function_exists('wp_roles') ? wp_roles() : null;
+        $is_role = $wp_roles && class_exists('WP_Roles') && $wp_roles instanceof \WP_Roles && $wp_roles->is_role($permission);
+
+        if ($is_role) {
+            if ($user === null) {
+                $user = wp_get_current_user();
+            } elseif (is_numeric($user)) {
+                $user = get_user_by('id', (int) $user);
+            } elseif (is_object($user) && !isset($user->roles) && isset($user->ID)) {
+                $user = get_user_by('id', (int) $user->ID);
+            }
+
+            if (!is_object($user)) {
+                return false;
+            }
+
+            $roles = isset($user->roles) ? (array) $user->roles : [];
+
+            return in_array($permission, $roles, true);
+        }
+
+        if ($user === null) {
+            return current_user_can($permission);
+        }
+
+        return user_can($user, $permission);
+    }
+}
+
 if (!defined('BJLG_CAPABILITY')) {
-    define('BJLG_CAPABILITY', 'manage_options');
+    define('BJLG_CAPABILITY', bjlg_get_required_capability());
+}
+
+if (!function_exists('bjlg_map_required_capability')) {
+    function bjlg_map_required_capability($caps, $cap, $user_id, $args) {
+        if ($cap !== 'bjlg_manage_plugin') {
+            return $caps;
+        }
+
+        $permission = bjlg_get_required_capability();
+        $wp_roles = function_exists('wp_roles') ? wp_roles() : null;
+        $is_role = $wp_roles && class_exists('WP_Roles') && $wp_roles instanceof \WP_Roles && $wp_roles->is_role($permission);
+
+        if ($is_role) {
+            $user = is_numeric($user_id) ? get_user_by('id', (int) $user_id) : null;
+
+            if (!is_object($user)) {
+                return ['do_not_allow'];
+            }
+
+            $roles = isset($user->roles) ? (array) $user->roles : [];
+
+            return in_array($permission, $roles, true) ? [] : ['do_not_allow'];
+        }
+
+        return [$permission];
+    }
 }
 
 if (!function_exists('esc_html')) {
@@ -1300,6 +1379,10 @@ if (!function_exists('register_rest_route')) {
 
         return true;
     }
+}
+
+if (function_exists('add_filter')) {
+    add_filter('map_meta_cap', 'bjlg_map_required_capability', 10, 4);
 }
 
 }

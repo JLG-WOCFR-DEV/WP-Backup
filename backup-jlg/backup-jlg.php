@@ -22,7 +22,114 @@ define('BJLG_PLUGIN_BASENAME', plugin_basename(__FILE__));
 define('BJLG_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('BJLG_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('BJLG_INCLUDES_DIR', BJLG_PLUGIN_DIR . 'includes/');
-define('BJLG_CAPABILITY', 'manage_options');
+define('BJLG_DEFAULT_CAPABILITY', 'manage_options');
+
+if (!function_exists('bjlg_get_required_capability')) {
+    /**
+     * Returns the capability or role required to access the plugin features.
+     */
+    function bjlg_get_required_capability() {
+        $capability = get_option('bjlg_required_capability');
+
+        if (!is_string($capability) || $capability === '') {
+            $capability = BJLG_DEFAULT_CAPABILITY;
+        }
+
+        /**
+         * Filters the capability or role required to access the plugin features.
+         *
+         * @param string $capability
+         */
+        return apply_filters('bjlg_required_capability', $capability);
+    }
+}
+
+if (!function_exists('bjlg_can_manage_plugin')) {
+    /**
+     * Checks whether a user (or the current user) can access the plugin features.
+     *
+     * @param int|\WP_User|null $user Optional user to check. Defaults to current user.
+     */
+    function bjlg_can_manage_plugin($user = null) {
+        $permission = bjlg_get_required_capability();
+
+        if (!is_string($permission) || $permission === '') {
+            $permission = BJLG_DEFAULT_CAPABILITY;
+        }
+
+        $wp_roles = function_exists('wp_roles') ? wp_roles() : null;
+        $is_role = $wp_roles && class_exists('WP_Roles') && $wp_roles instanceof \WP_Roles && $wp_roles->is_role($permission);
+
+        if ($is_role) {
+            if ($user === null) {
+                if (!function_exists('wp_get_current_user')) {
+                    return false;
+                }
+                $user = wp_get_current_user();
+            } elseif (is_numeric($user)) {
+                $user = get_user_by('id', (int) $user);
+            } elseif (is_object($user) && !isset($user->roles) && isset($user->ID)) {
+                $user = get_user_by('id', (int) $user->ID);
+            }
+
+            if (!is_object($user)) {
+                return false;
+            }
+
+            $roles = isset($user->roles) ? (array) $user->roles : [];
+
+            return in_array($permission, $roles, true);
+        }
+
+        if ($user === null) {
+            return function_exists('current_user_can') ? current_user_can($permission) : false;
+        }
+
+        return function_exists('user_can') ? user_can($user, $permission) : false;
+    }
+}
+
+if (!function_exists('bjlg_map_required_capability')) {
+    /**
+     * Maps the custom meta capability used for the admin menu to the configured permission.
+     *
+     * @param array  $caps
+     * @param string $cap
+     * @param int    $user_id
+     * @param array  $args
+     *
+     * @return array
+     */
+    function bjlg_map_required_capability($caps, $cap, $user_id, $args) {
+        if ($cap !== 'bjlg_manage_plugin') {
+            return $caps;
+        }
+
+        $permission = bjlg_get_required_capability();
+        $wp_roles = function_exists('wp_roles') ? wp_roles() : null;
+        $is_role = $wp_roles && class_exists('WP_Roles') && $wp_roles instanceof \WP_Roles && $wp_roles->is_role($permission);
+
+        if ($is_role) {
+            $user = is_numeric($user_id) ? get_user_by('id', (int) $user_id) : null;
+
+            if (!is_object($user)) {
+                return ['do_not_allow'];
+            }
+
+            $roles = isset($user->roles) ? (array) $user->roles : [];
+
+            return in_array($permission, $roles, true) ? [] : ['do_not_allow'];
+        }
+
+        return [$permission];
+    }
+
+    add_filter('map_meta_cap', 'bjlg_map_required_capability', 10, 4);
+}
+
+if (!defined('BJLG_CAPABILITY')) {
+    define('BJLG_CAPABILITY', bjlg_get_required_capability());
+}
 
 if (!defined('BJLG_BACKUP_DIR')) {
     $uploads = wp_get_upload_dir();
@@ -146,6 +253,10 @@ final class BJLG_Plugin {
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-debug.php';
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-history.php';
         BJLG\BJLG_History::create_table();
+
+        if (get_option('bjlg_required_capability', null) === null) {
+            add_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY);
+        }
 
         if (!is_dir(BJLG_BACKUP_DIR)) {
             wp_mkdir_p(BJLG_BACKUP_DIR);

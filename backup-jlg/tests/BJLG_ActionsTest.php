@@ -173,7 +173,7 @@ final class BJLG_ActionsTest extends TestCase
                 $this->assertArrayHasKey('issued_by', $payload);
 
                 $this->assertSame($real_filepath, $payload['file']);
-                $this->assertSame(BJLG_CAPABILITY, $payload['requires_cap']);
+                $this->assertSame(bjlg_get_required_capability(), $payload['requires_cap']);
                 $this->assertIsInt($payload['issued_at']);
                 $this->assertGreaterThan(0, $payload['issued_at']);
                 $this->assertSame(0, $payload['issued_by']);
@@ -294,8 +294,8 @@ final class BJLG_ActionsTest extends TestCase
         $user_id = 123;
         $user = (object) [
             'ID' => $user_id,
-            'caps' => [BJLG_CAPABILITY => true],
-            'allcaps' => [BJLG_CAPABILITY => true],
+            'caps' => [bjlg_get_required_capability() => true],
+            'allcaps' => [bjlg_get_required_capability() => true],
         ];
 
         $GLOBALS['bjlg_test_users'] = [$user_id => $user];
@@ -305,7 +305,7 @@ final class BJLG_ActionsTest extends TestCase
 
         set_transient('bjlg_download_' . $token, [
             'file' => $filepath,
-            'requires_cap' => BJLG_CAPABILITY,
+            'requires_cap' => bjlg_get_required_capability(),
             'issued_at' => time(),
             'issued_by' => $user_id,
         ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);

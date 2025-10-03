@@ -252,7 +252,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
      * Gère la requête AJAX de test de connexion.
      */
     public function handle_test_connection() {
-        if (!current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.'], 403);
         }
 
@@ -292,7 +292,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
      * Gère la demande de déconnexion depuis l'administration.
      */
     public function handle_disconnect_request() {
-        if (function_exists('current_user_can') && !current_user_can(BJLG_CAPABILITY)) {
+        if (!\bjlg_can_manage_plugin()) {
             return;
         }
 
