@@ -86,7 +86,7 @@ class BJLG_Admin {
         ?>
         <div class="wrap bjlg-wrap">
             <h1>
-                <span class="dashicons dashicons-database-export"></span>
+                <span class="dashicons dashicons-database-export" aria-hidden="true"></span>
                 <?php echo esc_html(get_admin_page_title()); ?>
                 <span class="bjlg-version">v<?php echo esc_html(BJLG_VERSION); ?></span>
             </h1>
@@ -365,7 +365,7 @@ class BJLG_Admin {
                 </table>
                 <p class="submit">
                     <button id="bjlg-create-backup" type="submit" class="button button-primary button-hero">
-                        <span class="dashicons dashicons-backup"></span> Lancer la création de la sauvegarde
+                        <span class="dashicons dashicons-backup" aria-hidden="true"></span> Lancer la création de la sauvegarde
                     </button>
                 </p>
             </form>
@@ -389,7 +389,7 @@ class BJLG_Admin {
                    aria-busy="false">Initialisation...</p>
             </div>
             <div id="bjlg-backup-debug-wrapper" style="display: none;">
-                <h3><span class="dashicons dashicons-info"></span> Détails techniques</h3>
+                <h3><span class="dashicons dashicons-info" aria-hidden="true"></span> Détails techniques</h3>
                 <pre id="bjlg-backup-ajax-debug" class="bjlg-log-textarea"></pre>
             </div>
         </div>
@@ -614,7 +614,7 @@ class BJLG_Admin {
                 </table>
                 <div id="bjlg-restore-errors" class="notice notice-error" style="display: none;" role="alert"></div>
                 <p class="submit">
-                    <button type="submit" class="button button-primary"><span class="dashicons dashicons-upload"></span> Téléverser et Restaurer</button>
+                    <button type="submit" class="button button-primary"><span class="dashicons dashicons-upload" aria-hidden="true"></span> Téléverser et Restaurer</button>
                 </p>
             </form>
             <div id="bjlg-restore-status" style="display: none;">
@@ -637,7 +637,7 @@ class BJLG_Admin {
                    aria-busy="false">Préparation...</p>
             </div>
             <div id="bjlg-restore-debug-wrapper" style="display: none;">
-                <h3><span class="dashicons dashicons-info"></span> Détails techniques</h3>
+                <h3><span class="dashicons dashicons-info" aria-hidden="true"></span> Détails techniques</h3>
                 <pre id="bjlg-restore-ajax-debug" class="bjlg-log-textarea"></pre>
             </div>
         </div>
@@ -722,7 +722,7 @@ class BJLG_Admin {
                     <?php endforeach; ?>
                 </tbody>
             </table>
-            <p style="margin-top: 20px;"><button class="button" onclick="window.location.reload();"><span class="dashicons dashicons-update"></span> Relancer les vérifications</button></p>
+            <p style="margin-top: 20px;"><button class="button" onclick="window.location.reload();"><span class="dashicons dashicons-update" aria-hidden="true"></span> Relancer les vérifications</button></p>
         </div>
         <?php
     }
@@ -835,7 +835,7 @@ class BJLG_Admin {
         <div class="bjlg-section">
             <h2>Configuration du Plugin</h2>
             
-            <h3><span class="dashicons dashicons-cloud"></span> Destinations Cloud</h3>
+            <h3><span class="dashicons dashicons-cloud" aria-hidden="true"></span> Destinations Cloud</h3>
             <form class="bjlg-settings-form">
                 <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
                 <?php
@@ -849,7 +849,7 @@ class BJLG_Admin {
                 ?>
             </form>
             
-            <h3><span class="dashicons dashicons-calendar-alt"></span> Planification des Sauvegardes</h3>
+            <h3><span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span> Planification des Sauvegardes</h3>
             <form
                 id="bjlg-schedule-form"
                 data-default-schedule="<?php echo esc_attr(wp_json_encode($default_schedule)); ?>"
@@ -909,7 +909,7 @@ class BJLG_Admin {
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les planifications</button></p>
             </form>
             
-            <h3><span class="dashicons dashicons-admin-links"></span> Webhook</h3>
+            <h3><span class="dashicons dashicons-admin-links" aria-hidden="true"></span> Webhook</h3>
             <p>Utilisez ce point de terminaison pour déclencher une sauvegarde à distance en toute sécurité :</p>
             <div class="bjlg-webhook-url bjlg-mb-10">
                 <label for="bjlg-webhook-endpoint" class="bjlg-label-block bjlg-fw-600">Point de terminaison</label>
@@ -940,7 +940,7 @@ class BJLG_Admin {
 
             <form class="bjlg-settings-form">
                 <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
-                <h3><span class="dashicons dashicons-trash"></span> Rétention des Sauvegardes</h3>
+                <h3><span class="dashicons dashicons-trash" aria-hidden="true"></span> Rétention des Sauvegardes</h3>
                 <table class="form-table">
                     <tr>
                         <th scope="row">Conserver par nombre</th>
@@ -976,7 +976,7 @@ class BJLG_Admin {
                     </tr>
                 </table>
                 
-                <h3><span class="dashicons dashicons-admin-appearance"></span> Marque Blanche</h3>
+                <h3><span class="dashicons dashicons-admin-appearance" aria-hidden="true"></span> Marque Blanche</h3>
                 <table class="form-table">
                     <tr>
                         <th scope="row">Nom du plugin</th>
@@ -1000,7 +1000,7 @@ class BJLG_Admin {
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les Réglages</button></p>
             </form>
 
-            <h3><span class="dashicons dashicons-megaphone"></span> Notifications</h3>
+            <h3><span class="dashicons dashicons-megaphone" aria-hidden="true"></span> Notifications</h3>
             <form class="bjlg-settings-form" data-success-message="Notifications mises à jour." data-error-message="Impossible de sauvegarder les notifications.">
                 <table class="form-table">
                     <tr>
@@ -1043,7 +1043,7 @@ class BJLG_Admin {
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les notifications</button></p>
             </form>
 
-            <h3><span class="dashicons dashicons-admin-site-alt3"></span> Canaux</h3>
+            <h3><span class="dashicons dashicons-admin-site-alt3" aria-hidden="true"></span> Canaux</h3>
             <form class="bjlg-settings-form" data-success-message="Canaux mis à jour." data-error-message="Impossible de mettre à jour les canaux.">
                 <table class="form-table">
                     <tr>
@@ -1128,7 +1128,7 @@ class BJLG_Admin {
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les canaux</button></p>
             </form>
 
-            <h3><span class="dashicons dashicons-performance"></span> Performance</h3>
+            <h3><span class="dashicons dashicons-performance" aria-hidden="true"></span> Performance</h3>
             <form class="bjlg-settings-form" data-success-message="Paramètres de performance sauvegardés." data-error-message="Impossible de sauvegarder la configuration de performance.">
                 <table class="form-table">
                     <tr>
@@ -1223,7 +1223,7 @@ class BJLG_Admin {
             <p>Générez un pack de support contenant les journaux et les informations système pour faciliter le diagnostic.</p>
             <p>
                 <button id="bjlg-generate-support-package" class="button button-primary">
-                    <span class="dashicons dashicons-download"></span> Créer un pack de support
+                    <span class="dashicons dashicons-download" aria-hidden="true"></span> Créer un pack de support
                 </button>
             </p>
             <div id="bjlg-support-package-status" style="display: none;">
@@ -1260,7 +1260,7 @@ class BJLG_Admin {
                     </div>
                     <div class="bjlg-form-field-actions">
                         <button type="submit" class="button button-primary">
-                            <span class="dashicons dashicons-plus"></span> Générer une clé API
+                            <span class="dashicons dashicons-plus" aria-hidden="true"></span> Générer une clé API
                         </button>
                     </div>
                 </div>
@@ -1302,10 +1302,10 @@ class BJLG_Admin {
                         <td>
                             <div class="bjlg-api-key-actions">
                                 <button type="button" class="button bjlg-rotate-api-key" data-key-id="<?php echo esc_attr($key['id']); ?>">
-                                    <span class="dashicons dashicons-update"></span> Régénérer
+                                    <span class="dashicons dashicons-update" aria-hidden="true"></span> Régénérer
                                 </button>
                                 <button type="button" class="button button-link-delete bjlg-revoke-api-key" data-key-id="<?php echo esc_attr($key['id']); ?>">
-                                    <span class="dashicons dashicons-no"></span> Révoquer
+                                    <span class="dashicons dashicons-no" aria-hidden="true"></span> Révoquer
                                 </button>
                             </div>
                         </td>

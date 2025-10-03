@@ -105,7 +105,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
 
     public function render_settings() {
         echo "<div class='bjlg-destination bjlg-destination--gdrive'>";
-        echo "<h4><span class='dashicons dashicons-google'></span> Google Drive</h4>";
+        echo "<h4><span class='dashicons dashicons-google' aria-hidden='true'></span> Google Drive</h4>";
 
         if (!$this->sdk_available) {
             echo "<p class='description'>Le SDK Google n'est pas disponible. Installez les dépendances via Composer pour activer cette destination.</p></div>";
@@ -135,13 +135,13 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
 
         if ($status['last_result'] === 'success' && $status['tested_at'] > 0) {
             $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
-            $last_test_content = "<span class='dashicons dashicons-yes'></span> Dernier test réussi le {$tested_at}.";
+            $last_test_content = "<span class='dashicons dashicons-yes' aria-hidden='true'></span> Dernier test réussi le {$tested_at}.";
             if ($status['message'] !== '') {
                 $last_test_content .= ' ' . esc_html($status['message']);
             }
         } elseif ($status['last_result'] === 'error' && $status['tested_at'] > 0) {
             $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
-            $last_test_content = "<span class='dashicons dashicons-warning'></span> Dernier test échoué le {$tested_at}.";
+            $last_test_content = "<span class='dashicons dashicons-warning' aria-hidden='true'></span> Dernier test échoué le {$tested_at}.";
             if ($status['message'] !== '') {
                 $last_test_content .= ' ' . esc_html($status['message']);
             }
@@ -163,7 +163,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         }
 
         if ($is_connected) {
-            echo "<p class='description'><span class='dashicons dashicons-yes'></span> Compte Google Drive connecté.</p>";
+            echo "<p class='description'><span class='dashicons dashicons-yes' aria-hidden='true'></span> Compte Google Drive connecté.</p>";
             echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "'>";
             echo "<input type='hidden' name='action' value='bjlg_gdrive_disconnect'>";
             if (function_exists('wp_nonce_field')) {

@@ -83,7 +83,7 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
         $phpseclib_available = class_exists(PhpseclibSFTP::class);
 
         echo "<div class='bjlg-destination bjlg-destination--sftp'>";
-        echo "<h4><span class='dashicons dashicons-shield-alt'></span> Serveur SFTP</h4>";
+        echo "<h4><span class='dashicons dashicons-shield-alt' aria-hidden='true'></span> Serveur SFTP</h4>";
 
         if (!$phpseclib_available) {
             echo "<p class='description'>L'extension PHP <code>phpseclib3</code> est requise pour le support SFTP. Installez les dépendances via Composer.</p></div>";
@@ -109,14 +109,14 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
 
         if ($status['last_result'] === 'success' && $status['tested_at'] > 0) {
             $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
-            echo "<p class='description'><span class='dashicons dashicons-yes'></span> Dernier test réussi le {$tested_at}.";
+            echo "<p class='description'><span class='dashicons dashicons-yes' aria-hidden='true'></span> Dernier test réussi le {$tested_at}.";
             if ($status['message'] !== '') {
                 echo ' ' . esc_html($status['message']);
             }
             echo '</p>';
         } elseif ($status['last_result'] === 'error' && $status['tested_at'] > 0) {
             $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
-            echo "<p class='description' style='color:#b32d2e;'><span class='dashicons dashicons-warning'></span> Dernier test échoué le {$tested_at}.";
+            echo "<p class='description' style='color:#b32d2e;'><span class='dashicons dashicons-warning' aria-hidden='true'></span> Dernier test échoué le {$tested_at}.";
             if ($status['message'] !== '') {
                 echo ' ' . esc_html($status['message']);
             }
@@ -124,7 +124,7 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
         }
 
         if ($connected) {
-            echo "<p class='description'><span class='dashicons dashicons-lock'></span> Connexion SFTP configurée.</p>";
+            echo "<p class='description'><span class='dashicons dashicons-lock' aria-hidden='true'></span> Connexion SFTP configurée.</p>";
             echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' style='margin-top:10px;'>";
             echo "<input type='hidden' name='action' value='bjlg_sftp_disconnect'>";
             if (function_exists('wp_nonce_field')) {
