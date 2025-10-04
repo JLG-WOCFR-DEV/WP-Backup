@@ -49,13 +49,17 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
     /** @var callable */
     private $media_upload_factory;
 
+    /** @var callable */
+    private $time_provider;
+
     /**
      * @param callable|null $client_factory
      * @param callable|null $drive_factory
      * @param callable|null $state_generator
      * @param callable|null $media_upload_factory
+     * @param callable|null $time_provider
      */
-    public function __construct(?callable $client_factory = null, ?callable $drive_factory = null, ?callable $state_generator = null, ?callable $media_upload_factory = null) {
+    public function __construct(?callable $client_factory = null, ?callable $drive_factory = null, ?callable $state_generator = null, ?callable $media_upload_factory = null, ?callable $time_provider = null) {
         $this->sdk_available = class_exists(Google_Client::class) && class_exists(Google_Service_Drive::class);
 
         $this->client_factory = $client_factory ?: static function () {
@@ -69,6 +73,9 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         };
         $this->media_upload_factory = $media_upload_factory ?: static function (Google_Client $client, $request, string $mime_type, int $chunk_size) {
             return new Google_Http_MediaFileUpload($client, $request, $mime_type, null, true, $chunk_size);
+        };
+        $this->time_provider = $time_provider ?: static function () {
+            return time();
         };
 
         add_action('admin_init', [$this, 'handle_oauth_callback']);
@@ -307,6 +314,266 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         }
 
         BJLG_Debug::log(sprintf('Sauvegarde "%s" envoyée sur Google Drive (ID: %s).', basename($filepath), $uploaded_file->getId()));
+    }
+
+    public function list_remote_backups() {
+        if (!$this->sdk_available || !$this->is_connected()) {
+            return [];
+        }
+
+        try {
+            $service = $this->create_drive_service();
+            return $this->fetch_remote_backups($service);
+        } catch (Exception $exception) {
+            BJLG_Debug::log('ERREUR Google Drive (listing) : ' . $exception->getMessage());
+            return [];
+        }
+    }
+
+    public function prune_remote_backups($retain_by_number, $retain_by_age_days) {
+        $result = [
+            'deleted' => 0,
+            'errors' => [],
+            'inspected' => 0,
+            'deleted_items' => [],
+        ];
+
+        if (!$this->sdk_available || !$this->is_connected()) {
+            return $result;
+        }
+
+        $retain_by_number = (int) $retain_by_number;
+        $retain_by_age_days = (int) $retain_by_age_days;
+
+        if ($retain_by_number === 0 && $retain_by_age_days === 0) {
+            return $result;
+        }
+
+        try {
+            $service = $this->create_drive_service();
+        } catch (Exception $exception) {
+            $result['errors'][] = $exception->getMessage();
+            return $result;
+        }
+
+        $backups = $this->fetch_remote_backups($service);
+        $result['inspected'] = count($backups);
+
+        if (empty($backups)) {
+            return $result;
+        }
+
+        $to_delete = $this->select_backups_to_delete($backups, $retain_by_number, $retain_by_age_days);
+
+        foreach ($to_delete as $backup) {
+            try {
+                $this->delete_remote_backup($service, $backup);
+                $result['deleted']++;
+                if (!empty($backup['name'])) {
+                    $result['deleted_items'][] = $backup['name'];
+                }
+            } catch (Exception $exception) {
+                $result['errors'][] = $exception->getMessage();
+            }
+        }
+
+        return $result;
+    }
+
+    private function create_drive_service() {
+        $client = $this->build_configured_client();
+        return call_user_func($this->drive_factory, $client);
+    }
+
+    private function fetch_remote_backups($drive_service) {
+        $settings = $this->get_settings();
+        $folder_id = $settings['folder_id'] !== '' ? $settings['folder_id'] : 'root';
+
+        $query_parts = ['trashed = false'];
+        $query_parts[] = sprintf("'%s' in parents", str_replace("'", "\\'", $folder_id === '' ? 'root' : $folder_id));
+
+        $backups = [];
+        $page_token = null;
+
+        do {
+            $params = [
+                'q' => implode(' and ', $query_parts),
+                'fields' => 'nextPageToken, files(id, name, createdTime, modifiedTime, size)',
+                'pageSize' => 1000,
+                'orderBy' => 'modifiedTime desc',
+            ];
+
+            if ($page_token !== null && $page_token !== '') {
+                $params['pageToken'] = $page_token;
+            }
+
+            try {
+                $file_list = $drive_service->files->listFiles($params);
+            } catch (Google_Service_Exception $exception) {
+                throw new Exception('Erreur lors de la liste des sauvegardes Google Drive : ' . $exception->getMessage(), 0, $exception);
+            }
+
+            $files = [];
+            if (is_object($file_list) && method_exists($file_list, 'getFiles')) {
+                $files = $file_list->getFiles();
+            } elseif (is_array($file_list) && isset($file_list['files'])) {
+                $files = $file_list['files'];
+            }
+
+            if (is_array($files)) {
+                foreach ($files as $file) {
+                    $entry = $this->normalize_drive_backup_entry($file);
+                    if ($entry !== null && $this->is_backup_filename($entry['name'])) {
+                        $backups[] = $entry;
+                    }
+                }
+            }
+
+            $page_token = $this->extract_next_page_token($file_list);
+        } while ($page_token !== null && $page_token !== '');
+
+        return $backups;
+    }
+
+    private function normalize_drive_backup_entry($file) {
+        $id = $this->extract_value($file, 'getId', 'id');
+        $name = $this->extract_value($file, 'getName', 'name');
+
+        if ($id === null || $name === null) {
+            return null;
+        }
+
+        $created = $this->extract_value($file, 'getCreatedTime', 'createdTime');
+        $modified = $this->extract_value($file, 'getModifiedTime', 'modifiedTime');
+        $timestamp_source = $modified !== null ? $modified : $created;
+        $timestamp = is_string($timestamp_source) ? strtotime($timestamp_source) : null;
+
+        if (!is_int($timestamp) || $timestamp <= 0) {
+            $timestamp = $this->get_time();
+        }
+
+        $size = (int) $this->extract_value($file, 'getSize', 'size');
+
+        return [
+            'id' => (string) $id,
+            'name' => (string) $name,
+            'timestamp' => $timestamp,
+            'size' => $size,
+        ];
+    }
+
+    private function delete_remote_backup($drive_service, array $backup) {
+        $identifier = isset($backup['id']) ? (string) $backup['id'] : '';
+        if ($identifier === '') {
+            throw new Exception('Identifiant Google Drive manquant pour la suppression.');
+        }
+
+        try {
+            $drive_service->files->delete($identifier);
+        } catch (Google_Service_Exception $exception) {
+            throw new Exception('Suppression Google Drive impossible : ' . $exception->getMessage(), 0, $exception);
+        }
+
+        if (class_exists(BJLG_Debug::class)) {
+            $name = isset($backup['name']) ? $backup['name'] : $identifier;
+            BJLG_Debug::log(sprintf('Sauvegarde distante supprimée sur Google Drive : %s', $name));
+        }
+    }
+
+    private function select_backups_to_delete(array $backups, int $retain_by_number, int $retain_by_age_days) {
+        $to_delete = [];
+        $now = $this->get_time();
+
+        if ($retain_by_age_days > 0) {
+            $age_limit = $retain_by_age_days * DAY_IN_SECONDS;
+            foreach ($backups as $backup) {
+                $timestamp = (int) ($backup['timestamp'] ?? 0);
+                if ($timestamp > 0 && ($now - $timestamp) > $age_limit) {
+                    $to_delete[$this->get_backup_identifier($backup)] = $backup;
+                }
+            }
+        }
+
+        if ($retain_by_number > 0 && count($backups) > $retain_by_number) {
+            usort($backups, static function ($a, $b) {
+                $time_a = (int) ($a['timestamp'] ?? 0);
+                $time_b = (int) ($b['timestamp'] ?? 0);
+
+                if ($time_a === $time_b) {
+                    return 0;
+                }
+
+                return $time_b <=> $time_a;
+            });
+
+            $excess = array_slice($backups, $retain_by_number);
+            foreach ($excess as $backup) {
+                $to_delete[$this->get_backup_identifier($backup)] = $backup;
+            }
+        }
+
+        return array_values($to_delete);
+    }
+
+    private function extract_next_page_token($file_list) {
+        if (is_object($file_list)) {
+            if (method_exists($file_list, 'getNextPageToken')) {
+                $token = $file_list->getNextPageToken();
+                if (is_string($token)) {
+                    return $token;
+                }
+            }
+
+            if (isset($file_list->nextPageToken) && is_string($file_list->nextPageToken)) {
+                return $file_list->nextPageToken;
+            }
+        }
+
+        if (is_array($file_list) && isset($file_list['nextPageToken']) && is_string($file_list['nextPageToken'])) {
+            return $file_list['nextPageToken'];
+        }
+
+        return null;
+    }
+
+    private function extract_value($source, $method, $property) {
+        if (is_object($source)) {
+            if (method_exists($source, $method)) {
+                return $source->{$method}();
+            }
+
+            if (isset($source->{$property})) {
+                return $source->{$property};
+            }
+        }
+
+        if (is_array($source) && array_key_exists($property, $source)) {
+            return $source[$property];
+        }
+
+        return null;
+    }
+
+    private function get_backup_identifier(array $backup) {
+        foreach (['id', 'name'] as $key) {
+            if (!empty($backup[$key])) {
+                return (string) $backup[$key];
+            }
+        }
+
+        return sha1(json_encode($backup));
+    }
+
+    private function is_backup_filename($name) {
+        if (!is_string($name) || $name === '') {
+            return false;
+        }
+
+        return (bool) preg_match('/\.zip(\.[A-Za-z0-9]+)?$/i', $name);
+    }
+
+    private function get_time() {
+        return (int) call_user_func($this->time_provider);
     }
 
     /**

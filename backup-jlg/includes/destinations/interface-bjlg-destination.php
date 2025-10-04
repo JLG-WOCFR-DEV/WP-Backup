@@ -49,4 +49,20 @@ interface BJLG_Destination_Interface {
      * @throws Exception
      */
     public function upload_file($filepath, $task_id);
+
+    /**
+     * Liste les sauvegardes distantes connues de la destination.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function list_remote_backups();
+
+    /**
+     * Supprime les sauvegardes distantes qui dépassent les règles de rétention.
+     *
+     * @param int $retain_by_number Nombre de sauvegardes à conserver (0 = illimité).
+     * @param int $retain_by_age_days Ancienneté maximale en jours (0 = illimité).
+     * @return array<string, mixed>
+     */
+    public function prune_remote_backups($retain_by_number, $retain_by_age_days);
 }

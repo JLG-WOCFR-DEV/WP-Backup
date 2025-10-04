@@ -267,6 +267,16 @@ final class BJLG_BackupTest extends TestCase
                 $this->uploads++;
                 throw new Exception('API indisponible');
             }
+
+            public function list_remote_backups()
+            {
+                return [];
+            }
+
+            public function prune_remote_backups($retain_by_number, $retain_by_age_days)
+            {
+                return ['deleted' => 0, 'errors' => [], 'inspected' => 0, 'deleted_items' => []];
+            }
         };
 
         $secondary = new class implements BJLG_Destination_Interface {
@@ -298,6 +308,16 @@ final class BJLG_BackupTest extends TestCase
             public function upload_file($filepath, $task_id)
             {
                 $this->uploads[] = [$filepath, $task_id];
+            }
+
+            public function list_remote_backups()
+            {
+                return [];
+            }
+
+            public function prune_remote_backups($retain_by_number, $retain_by_age_days)
+            {
+                return ['deleted' => 0, 'errors' => [], 'inspected' => 0, 'deleted_items' => []];
             }
         };
 

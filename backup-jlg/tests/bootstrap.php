@@ -197,6 +197,14 @@ if (!defined('HOUR_IN_SECONDS')) {
     define('HOUR_IN_SECONDS', 3600);
 }
 
+if (!defined('phpseclib3\Net\NET_SSH2_DISCONNECT_BY_APPLICATION')) {
+    if (defined('NET_SSH2_DISCONNECT_BY_APPLICATION')) {
+        define('phpseclib3\Net\NET_SSH2_DISCONNECT_BY_APPLICATION', NET_SSH2_DISCONNECT_BY_APPLICATION);
+    } else {
+        define('phpseclib3\Net\NET_SSH2_DISCONNECT_BY_APPLICATION', 11);
+    }
+}
+
 if (!defined('MINUTE_IN_SECONDS')) {
     define('MINUTE_IN_SECONDS', 60);
 }
