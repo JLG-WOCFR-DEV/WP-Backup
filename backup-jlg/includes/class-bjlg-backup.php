@@ -1790,6 +1790,11 @@ class BJLG_Backup {
                     return new BJLG_AWS_S3();
                 }
                 break;
+            case 'sftp':
+                if (class_exists(BJLG_SFTP::class)) {
+                    return new BJLG_SFTP();
+                }
+                break;
         }
 
         return null;
