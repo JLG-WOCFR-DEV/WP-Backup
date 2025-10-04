@@ -24,6 +24,12 @@ if (!class_exists('BJLG\\BJLG_Debug')) {
     class_alias('BJLG_Test_Debug_Logger', 'BJLG\\BJLG_Debug');
 }
 
+if (!class_exists('BJLG_Test_Debug_Logger')) {
+    class BJLG_Test_Debug_Logger extends BJLG\BJLG_Debug
+    {
+    }
+}
+
 final class BJLG_RestoreTaskTest extends TestCase
 {
     /** @var mixed */
@@ -224,6 +230,43 @@ final class BJLG_RestoreTaskTest extends TestCase
 
         if (is_dir($temporary_dir)) {
             rmdir($temporary_dir);
+        }
+    }
+
+    public function test_handle_run_restore_rejects_when_another_restore_is_running(): void
+    {
+        $restore = new BJLG\BJLG_Restore();
+
+        $backup_path = BJLG_BACKUP_DIR . 'restore-lock-' . uniqid('', true) . '.zip';
+        file_put_contents($backup_path, 'dummy');
+
+        $existing_task = 'bjlg_restore_' . md5(uniqid('existing', true));
+        $lock_acquired = BJLG\BJLG_Backup::reserve_task_slot($existing_task);
+        $this->assertTrue($lock_acquired, 'Le verrou initial aurait dû être acquis pour le test.');
+
+        $_POST = [
+            'nonce' => 'test-nonce',
+            'filename' => basename($backup_path),
+            'components' => ['db'],
+        ];
+
+        try {
+            $restore->handle_run_restore();
+            $this->fail('Un refus de restauration simultanée était attendu.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertSame(409, $response->status_code);
+            $this->assertIsArray($response->data);
+            $this->assertArrayHasKey('message', $response->data);
+        } finally {
+            if ($lock_acquired) {
+                BJLG\BJLG_Backup::release_task_slot($existing_task);
+            }
+
+            if (file_exists($backup_path)) {
+                unlink($backup_path);
+            }
+
+            $_POST = [];
         }
     }
 

@@ -593,13 +593,27 @@ class BJLG_Restore {
             'create_restore_point' => $create_backup_before_restore,
             'components' => $requested_components,
         ];
-        
+
+        if (!BJLG_Backup::reserve_task_slot($task_id)) {
+            if (class_exists('BJLG_Debug')) {
+                BJLG_Debug::log("Impossible de démarrer la restauration {$task_id} : une autre tâche est en cours.");
+            }
+
+            wp_send_json_error([
+                'message' => "Une autre restauration est déjà en cours d'exécution.",
+            ], 409);
+
+            return;
+        }
+
         $transient_set = set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
 
         if ($transient_set === false) {
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log("ERREUR : Impossible d'initialiser la tâche de restauration {$task_id}.");
             }
+
+            BJLG_Backup::release_task_slot($task_id);
 
             wp_send_json_error(['message' => "Impossible d'initialiser la tâche de restauration."], 500);
 
@@ -611,6 +625,8 @@ class BJLG_Restore {
 
         if ($scheduled === false || is_wp_error($scheduled)) {
             delete_transient($task_id);
+
+            BJLG_Backup::release_task_slot($task_id);
 
             $error_details = is_wp_error($scheduled) ? $scheduled->get_error_message() : null;
 
@@ -661,9 +677,24 @@ class BJLG_Restore {
      * Exécute la tâche de restauration en arrière-plan
      */
     public function run_restore_task($task_id) {
+        if (!BJLG_Backup::reserve_task_slot($task_id)) {
+            if (class_exists('BJLG_Debug')) {
+                BJLG_Debug::log("Tâche de restauration {$task_id} retardée : un autre processus utilise le verrou.");
+            }
+
+            $rescheduled = wp_schedule_single_event(time() + 30, 'bjlg_run_restore_task', ['task_id' => $task_id]);
+
+            if ($rescheduled === false && class_exists('BJLG_Debug')) {
+                BJLG_Debug::log("Échec de la replanification de la tâche de restauration {$task_id}.");
+            }
+
+            return;
+        }
+
         $task_data = get_transient($task_id);
         if (!$task_data) {
             BJLG_Debug::log("ERREUR: Tâche de restauration $task_id introuvable.");
+            BJLG_Backup::release_task_slot($task_id);
             return;
         }
 
@@ -999,6 +1030,8 @@ class BJLG_Restore {
                     );
                 }
             }
+
+            BJLG_Backup::release_task_slot($task_id);
         }
     }
 
