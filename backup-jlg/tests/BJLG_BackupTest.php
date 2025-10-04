@@ -10,6 +10,84 @@ use ZipArchive;
 
 require_once __DIR__ . '/../includes/class-bjlg-backup.php';
 require_once __DIR__ . '/../includes/destinations/interface-bjlg-destination.php';
+require_once __DIR__ . '/../includes/destinations/class-bjlg-sftp.php';
+
+class BJLG_Test_Phpseclib_SFTP_Stub
+{
+    public const SOURCE_LOCAL_FILE = 1;
+
+    public static array $uploaded = [];
+
+    private array $directories = [];
+
+    public function __construct($host, $port)
+    {
+        $this->directories['/'] = true;
+    }
+
+    public function login($username, $credential)
+    {
+        return true;
+    }
+
+    public function is_dir($path)
+    {
+        return isset($this->directories[$this->normalize($path)]);
+    }
+
+    public function mkdir($path)
+    {
+        $this->directories[$this->normalize($path)] = true;
+
+        return true;
+    }
+
+    public function put($remote_file, $filepath, $mode)
+    {
+        self::$uploaded[] = [
+            'path' => $this->normalize($remote_file, false),
+            'local' => $filepath,
+            'mode' => $mode,
+        ];
+
+        return true;
+    }
+
+    public function pwd()
+    {
+        return '/';
+    }
+
+    private function normalize($path, bool $for_directory = true)
+    {
+        $path = str_replace('\\', '/', (string) $path);
+        if ($path === '') {
+            return $for_directory ? '/' : '';
+        }
+
+        if ($path[0] !== '/') {
+            $path = '/' . $path;
+        }
+
+        if ($for_directory) {
+            return rtrim($path, '/') !== '' ? rtrim($path, '/') : '/';
+        }
+
+        return ltrim($path, '/');
+    }
+}
+
+if (!class_exists('phpseclib3\\Net\\SFTP')) {
+    class_alias(BJLG_Test_Phpseclib_SFTP_Stub::class, 'phpseclib3\\Net\\SFTP');
+}
+
+if (!class_exists('phpseclib3\\Exception\\UnableToConnectException')) {
+    class BJLG_Test_Phpseclib_UnableToConnectException extends Exception
+    {
+    }
+
+    class_alias(BJLG_Test_Phpseclib_UnableToConnectException::class, 'phpseclib3\\Exception\\UnableToConnectException');
+}
 
 final class BJLG_BackupTest extends TestCase
 {
@@ -326,6 +404,51 @@ final class BJLG_BackupTest extends TestCase
         $this->assertSame(1, $primary->uploads);
         $this->assertCount(1, $secondary->uploads);
         $this->assertSame('task-99', $secondary->uploads[0][1]);
+    }
+
+    public function test_dispatch_to_destinations_supports_sftp_destination(): void
+    {
+        if (class_exists('phpseclib3\\Net\\SFTP') && !is_a('phpseclib3\\Net\\SFTP', BJLG_Test_Phpseclib_SFTP_Stub::class, true)) {
+            $this->markTestSkipped('Real phpseclib SFTP implementation is available; this test relies on the stub.');
+        }
+
+        \phpseclib3\Net\SFTP::$uploaded = [];
+
+        update_option('bjlg_sftp_settings', [
+            'enabled' => true,
+            'host' => 'sftp.example.org',
+            'port' => 22,
+            'username' => 'backup-user',
+            'password' => 'secret',
+            'private_key' => '',
+            'passphrase' => '',
+            'remote_path' => 'wordpress/backups',
+            'fingerprint' => '',
+        ]);
+
+        $backup = new BJLG\BJLG_Backup();
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'dispatch_to_destinations');
+        $method->setAccessible(true);
+
+        $file = tempnam(sys_get_temp_dir(), 'bjlg-sftp');
+        $this->assertIsString($file);
+        file_put_contents($file, 'content');
+
+        try {
+            $results = $method->invoke($backup, $file, ['sftp'], 'task-sftp-1');
+        } finally {
+            @unlink($file);
+            update_option('bjlg_sftp_settings', []);
+        }
+
+        $this->assertSame(['sftp'], $results['success']);
+        $this->assertSame([], $results['failures']);
+
+        $this->assertCount(1, \phpseclib3\Net\SFTP::$uploaded);
+        $upload = \phpseclib3\Net\SFTP::$uploaded[0];
+        $this->assertSame('wordpress/backups/' . basename($file), $upload['path']);
+        $this->assertSame($file, $upload['local']);
+        $this->assertSame(\phpseclib3\Net\SFTP::SOURCE_LOCAL_FILE, $upload['mode']);
     }
 
     public function test_resolve_destination_queue_uses_saved_options(): void
