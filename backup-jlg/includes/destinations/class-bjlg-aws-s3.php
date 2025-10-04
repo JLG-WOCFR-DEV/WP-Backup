@@ -133,6 +133,9 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         echo '</div>';
     }
 
+    private const DEFAULT_STREAM_CHUNK_SIZE = 5242880; // 5 MiB
+    private const DEFAULT_MULTIPART_THRESHOLD = 20971520; // 20 MiB
+
     public function upload_file($filepath, $task_id) {
         if (is_array($filepath)) {
             $errors = [];
@@ -162,19 +165,28 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         }
 
         $object_key = $this->build_object_key(basename($filepath), $settings['object_prefix']);
-        $contents = file_get_contents($filepath);
-        if ($contents === false) {
-            throw new Exception('Impossible de lire le fichier de sauvegarde à envoyer.');
-        }
-
         $file_size = filesize($filepath);
         if ($file_size === false) {
             throw new Exception('Impossible de déterminer la taille du fichier à envoyer.');
         }
 
+        $handle = fopen($filepath, 'rb');
+        if ($handle === false) {
+            throw new Exception('Impossible d\'ouvrir le fichier de sauvegarde pour lecture.');
+        }
+
+        $chunk_size = (int) apply_filters('bjlg_s3_upload_chunk_size', self::DEFAULT_STREAM_CHUNK_SIZE, $filepath, $task_id, $settings);
+        if ($chunk_size <= 0) {
+            $chunk_size = self::DEFAULT_STREAM_CHUNK_SIZE;
+        }
+
+        $multipart_threshold = (int) apply_filters('bjlg_s3_multipart_threshold', max(self::DEFAULT_MULTIPART_THRESHOLD, $chunk_size), $filepath, $task_id, $settings);
+        if ($multipart_threshold < $chunk_size) {
+            $multipart_threshold = $chunk_size;
+        }
+
         $headers = [
             'Content-Type' => 'application/zip',
-            'Content-Length' => (string) $file_size,
             'x-amz-meta-bjlg-task' => (string) $task_id,
         ];
 
@@ -189,13 +201,117 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         $this->log(sprintf('Envoi de "%s" vers Amazon S3 (%s).', basename($filepath), $object_key));
 
         try {
-            $this->perform_request('PUT', $object_key, $contents, $headers, $settings);
+            if ($file_size <= $multipart_threshold) {
+                $headers['Content-Length'] = (string) $file_size;
+                $this->perform_request('PUT', $object_key, $handle, $headers, $settings);
+            } else {
+                $this->multipart_upload($handle, $object_key, $headers, $settings, $chunk_size);
+            }
         } catch (Exception $exception) {
             $this->log('ERREUR S3 : ' . $exception->getMessage());
             throw $exception;
+        } finally {
+            fclose($handle);
         }
 
         $this->log(sprintf('Sauvegarde "%s" envoyée sur Amazon S3 (%s).', basename($filepath), $object_key));
+    }
+
+    private function multipart_upload($handle, $object_key, array $headers, array $settings, int $chunk_size) {
+        $upload_id = null;
+        $parts = [];
+
+        $init_headers = $headers;
+        $init_headers['Content-Length'] = '0';
+
+        try {
+            $response = $this->perform_request('POST', $object_key, '', $init_headers, $settings, ['uploads' => '']);
+            $upload_id = $this->extract_upload_id($response);
+
+            if ($upload_id === null) {
+                throw new Exception('Amazon S3 n\'a pas renvoyé d\'identifiant de téléversement multipart.');
+            }
+
+            $part_number = 1;
+            while (!feof($handle)) {
+                $data = fread($handle, $chunk_size);
+                if ($data === false) {
+                    throw new Exception('Lecture du fichier interrompue pendant l\'envoi multipart.');
+                }
+
+                if ($data === '') {
+                    break;
+                }
+
+                $part_headers = [
+                    'Content-Type' => $headers['Content-Type'] ?? 'application/octet-stream',
+                    'Content-Length' => (string) strlen($data),
+                    'X-Amz-Content-Sha256' => hash('sha256', $data),
+                ];
+
+                $response = $this->perform_request('PUT', $object_key, $data, $part_headers, $settings, [
+                    'partNumber' => (string) $part_number,
+                    'uploadId' => $upload_id,
+                ]);
+
+                $etag = $this->extract_response_header($response, 'ETag');
+                if ($etag === null || $etag === '') {
+                    throw new Exception(sprintf('Amazon S3 n\'a pas renvoyé d\'ETag pour la partie %d.', $part_number));
+                }
+
+                $parts[] = [
+                    'PartNumber' => $part_number,
+                    'ETag' => $etag,
+                ];
+
+                $part_number++;
+            }
+
+            if (empty($parts)) {
+                throw new Exception('Aucune donnée n\'a été lue pendant le téléversement multipart.');
+            }
+
+            $complete_xml = '<CompleteMultipartUpload>';
+            foreach ($parts as $part) {
+                $complete_xml .= sprintf(
+                    '<Part><PartNumber>%d</PartNumber><ETag>%s</ETag></Part>',
+                    $part['PartNumber'],
+                    htmlspecialchars($part['ETag'], ENT_XML1)
+                );
+            }
+            $complete_xml .= '</CompleteMultipartUpload>';
+
+            $complete_headers = [
+                'Content-Type' => 'application/xml',
+                'Content-Length' => (string) strlen($complete_xml),
+            ];
+
+            if (isset($headers['x-amz-server-side-encryption'])) {
+                $complete_headers['x-amz-server-side-encryption'] = $headers['x-amz-server-side-encryption'];
+            }
+
+            if (isset($headers['x-amz-server-side-encryption-aws-kms-key-id'])) {
+                $complete_headers['x-amz-server-side-encryption-aws-kms-key-id'] = $headers['x-amz-server-side-encryption-aws-kms-key-id'];
+            }
+
+            if (isset($headers['x-amz-meta-bjlg-task'])) {
+                $complete_headers['x-amz-meta-bjlg-task'] = $headers['x-amz-meta-bjlg-task'];
+            }
+
+            $this->perform_request('POST', $object_key, $complete_xml, $complete_headers, $settings, [
+                'uploadId' => $upload_id,
+            ]);
+        } catch (Exception $exception) {
+            if ($upload_id !== null) {
+                try {
+                    $this->perform_request('DELETE', $object_key, '', [], $settings, ['uploadId' => $upload_id]);
+                } catch (Exception $cleanup) {
+                    $this->log('ERREUR S3 : ' . $cleanup->getMessage());
+                }
+            }
+
+            throw $exception;
+        }
     }
 
     /**
@@ -311,7 +427,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         }
     }
 
-    private function perform_request($method, $object_key, $body, array $headers, array $settings) {
+    private function perform_request($method, $object_key, $body, array $headers, array $settings, array $query = []) {
         $this->assert_settings_complete($settings);
 
         $timestamp = $this->get_time();
@@ -330,14 +446,38 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
             $canonical_uri = '/';
         }
 
-        $endpoint = 'https://' . $host . $canonical_uri;
-        $payload_hash = hash('sha256', (string) $body);
+        if (!isset($headers['Content-Length']) && is_string($body)) {
+            $headers['Content-Length'] = (string) strlen($body);
+        } elseif (!isset($headers['Content-Length']) && is_resource($body)) {
+            $stat = fstat($body);
+            if (is_array($stat) && isset($stat['size'])) {
+                $headers['Content-Length'] = (string) $stat['size'];
+            } else {
+                $headers['Transfer-Encoding'] = $headers['Transfer-Encoding'] ?? 'chunked';
+            }
+        }
+
+        $payload_hash = null;
+        if (isset($headers['X-Amz-Content-Sha256'])) {
+            $payload_hash = (string) $headers['X-Amz-Content-Sha256'];
+        } elseif (is_resource($body)) {
+            $payload_hash = 'UNSIGNED-PAYLOAD';
+            $headers['X-Amz-Content-Sha256'] = $payload_hash;
+        } else {
+            $payload_hash = hash('sha256', (string) $body);
+            $headers['X-Amz-Content-Sha256'] = $payload_hash;
+        }
 
         $headers = array_merge([
             'Host' => $host,
             'X-Amz-Date' => $amz_date,
-            'X-Amz-Content-Sha256' => $payload_hash,
         ], $headers);
+
+        $canonical_query = $this->build_canonical_query($query);
+        $endpoint = 'https://' . $host . $canonical_uri;
+        if ($canonical_query !== '') {
+            $endpoint .= '?' . $canonical_query;
+        }
 
         $sorted_headers = [];
         foreach ($headers as $name => $value) {
@@ -354,7 +494,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         $canonical_request = implode("\n", [
             strtoupper($method),
             $canonical_uri,
-            '',
+            $canonical_query,
             $canonical_headers,
             $signed_headers,
             $payload_hash,
@@ -388,7 +528,9 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
             'timeout' => apply_filters('bjlg_s3_request_timeout', 60, $method, $object_key),
         ];
 
-        if ($method === 'PUT') {
+        if ($body !== null && $body !== '') {
+            $args['body'] = $body;
+        } elseif (is_resource($body)) {
             $args['body'] = $body;
         }
 
@@ -405,6 +547,89 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         }
 
         return $response;
+    }
+
+    private function extract_upload_id($response) {
+        $body = '';
+        if (is_array($response) && isset($response['body'])) {
+            $body = (string) $response['body'];
+        }
+
+        if ($body === '') {
+            return null;
+        }
+
+        if (preg_match('/<UploadId>([^<]+)<\/UploadId>/', $body, $matches) === 1) {
+            return $matches[1];
+        }
+
+        return null;
+    }
+
+    private function extract_response_header($response, $header) {
+        $headers = null;
+
+        if (is_array($response) && isset($response['headers'])) {
+            $headers = $response['headers'];
+        }
+
+        if ($headers === null) {
+            return null;
+        }
+
+        $normalized = $this->normalize_response_headers($headers);
+        $key = strtolower($header);
+
+        return $normalized[$key] ?? null;
+    }
+
+    private function normalize_response_headers($headers) {
+        if ($headers instanceof \ArrayAccess || $headers instanceof \Traversable) {
+            $headers = (array) $headers;
+        } elseif (is_object($headers)) {
+            if (method_exists($headers, 'getAll')) {
+                $headers = $headers->getAll();
+            } elseif (method_exists($headers, 'get_all')) {
+                $headers = $headers->get_all();
+            } else {
+                $headers = (array) $headers;
+            }
+        }
+
+        if (!is_array($headers)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($headers as $name => $value) {
+            $normalized[strtolower((string) $name)] = is_array($value) ? reset($value) : (string) $value;
+        }
+
+        return $normalized;
+    }
+
+    private function build_canonical_query(array $query) {
+        if (empty($query)) {
+            return '';
+        }
+
+        $pairs = [];
+        ksort($query);
+
+        foreach ($query as $key => $value) {
+            $encoded_key = rawurlencode((string) $key);
+
+            if (is_array($value)) {
+                sort($value);
+                foreach ($value as $single) {
+                    $pairs[] = $encoded_key . '=' . rawurlencode((string) $single);
+                }
+            } else {
+                $pairs[] = $encoded_key . '=' . rawurlencode((string) $value);
+            }
+        }
+
+        return implode('&', $pairs);
     }
 
     private function build_object_key($filename, $prefix, $apply_basename = true) {

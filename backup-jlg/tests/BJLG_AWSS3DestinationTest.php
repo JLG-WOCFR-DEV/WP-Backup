@@ -54,7 +54,9 @@ final class BJLG_AWSS3DestinationTest extends TestCase
         $this->assertArrayNotHasKey('x-amz-server-side-encryption-aws-kms-key-id', $headers);
         $this->assertSame('application/zip', $headers['Content-Type']);
         $this->assertSame((string) filesize($file), $headers['Content-Length']);
-        $this->assertSame('archive-content', $request['args']['body']);
+        $body = $request['args']['body'] ?? null;
+        $this->assertTrue(is_resource($body) || gettype($body) === 'resource (closed)');
+        $this->assertSame('UNSIGNED-PAYLOAD', $headers['X-Amz-Content-Sha256']);
 
         unlink($file);
     }
@@ -127,6 +129,133 @@ final class BJLG_AWSS3DestinationTest extends TestCase
                 unlink($file);
             }
         }
+    }
+
+    public function test_upload_file_uses_multipart_for_large_files(): void
+    {
+        $captured = [];
+        $responses = [
+            [
+                'response' => [
+                    'code' => 200,
+                    'message' => 'OK',
+                ],
+                'body' => '<InitiateMultipartUploadResult><UploadId>upload-123</UploadId></InitiateMultipartUploadResult>',
+            ],
+            [
+                'response' => [
+                    'code' => 200,
+                    'message' => 'OK',
+                ],
+                'headers' => ['ETag' => '"etag-part-1"'],
+                'body' => '',
+            ],
+            [
+                'response' => [
+                    'code' => 200,
+                    'message' => 'OK',
+                ],
+                'headers' => ['ETag' => '"etag-part-2"'],
+                'body' => '',
+            ],
+            [
+                'response' => [
+                    'code' => 200,
+                    'message' => 'OK',
+                ],
+                'headers' => ['ETag' => '"etag-part-3"'],
+                'body' => '',
+            ],
+            [
+                'response' => [
+                    'code' => 200,
+                    'message' => 'OK',
+                ],
+                'body' => '',
+            ],
+        ];
+
+        $handler = function ($url, array $args) use (&$responses, &$captured) {
+            $captured[] = ['url' => $url, 'args' => $args];
+
+            $response = array_shift($responses);
+            if ($response === null) {
+                return [
+                    'response' => [
+                        'code' => 500,
+                        'message' => 'Unexpected request',
+                    ],
+                    'body' => '',
+                ];
+            }
+
+            return $response;
+        };
+
+        $destination = $this->createDestination($handler);
+
+        add_filter('bjlg_s3_upload_chunk_size', static function () {
+            return 1024 * 1024; // 1 MiB
+        }, 10, 4);
+
+        add_filter('bjlg_s3_multipart_threshold', static function () {
+            return 2 * 1024 * 1024; // 2 MiB
+        }, 10, 4);
+
+        update_option('bjlg_s3_settings', [
+            'access_key' => 'AK',
+            'secret_key' => 'SECRET',
+            'region' => 'eu-west-3',
+            'bucket' => 'multipart-bucket',
+            'enabled' => true,
+        ]);
+
+        $file = tempnam(sys_get_temp_dir(), 'bjlg');
+        self::assertNotFalse($file);
+
+        $size = (2 * 1024 * 1024) + 128;
+        $chunk = str_repeat('A', 1024 * 1024);
+        $content = str_repeat($chunk, 2) . substr($chunk, 0, 128);
+        file_put_contents($file, $content);
+
+        try {
+            $destination->upload_file($file, 'task-large');
+        } finally {
+            if (is_string($file) && file_exists($file)) {
+                unlink($file);
+            }
+
+            unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_s3_upload_chunk_size']);
+            unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_s3_multipart_threshold']);
+        }
+
+        $this->assertCount(5, $captured);
+
+        $this->assertSame('POST', $captured[0]['args']['method']);
+        $this->assertStringContainsString('uploads=', $captured[0]['url']);
+
+        $first_part = $captured[1]['args'];
+        $second_part = $captured[2]['args'];
+        $third_part = $captured[3]['args'];
+
+        $this->assertSame('PUT', $first_part['method']);
+        $this->assertSame('PUT', $second_part['method']);
+        $this->assertSame('PUT', $third_part['method']);
+
+        $this->assertSame(1024 * 1024, strlen($first_part['body']));
+        $this->assertSame(1024 * 1024, strlen($second_part['body']));
+        $this->assertSame($size - (2 * 1024 * 1024), strlen($third_part['body']));
+
+        $this->assertSame((string) (1024 * 1024), $first_part['headers']['Content-Length']);
+        $this->assertSame((string) (1024 * 1024), $second_part['headers']['Content-Length']);
+        $this->assertSame((string) ($size - (2 * 1024 * 1024)), $third_part['headers']['Content-Length']);
+
+        $this->assertSame($first_part['headers']['X-Amz-Content-Sha256'], hash('sha256', $first_part['body']));
+        $this->assertSame($second_part['headers']['X-Amz-Content-Sha256'], hash('sha256', $second_part['body']));
+        $this->assertSame($third_part['headers']['X-Amz-Content-Sha256'], hash('sha256', $third_part['body']));
+
+        $this->assertSame('POST', $captured[4]['args']['method']);
+        $this->assertStringContainsString('uploadId=upload-123', $captured[4]['url']);
     }
 
     public function test_test_connection_uses_head_request(): void

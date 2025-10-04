@@ -111,6 +111,26 @@ falsifiée et contourner le limiteur de taux.
 
 Une fois l'autorisation OAuth terminée, rendez-vous dans **Backup JLG → Réglages → Google Drive** et cliquez sur le bouton **Tester la connexion**. Le plugin enverra une requête légère pour valider le Client ID, le Client Secret et le dossier cible, affichera immédiatement le résultat et mémorisera la date du dernier test. Utilisez ce bouton après chaque changement d'identifiants pour confirmer que l'accès Drive est fonctionnel.
 
+### 6. Paramétrer l'envoi Amazon S3
+
+Les sauvegardes sont maintenant envoyées vers Amazon S3 en flux continu. Par défaut, les fichiers jusqu'à 20&nbsp;MiB sont transmis en une seule requête `PUT` (contenu lu via un flux `fopen`), tandis que les fichiers plus volumineux basculent automatiquement sur un téléversement multipart (parties de 5&nbsp;MiB par défaut) pour limiter l'utilisation mémoire.
+
+Deux filtres permettent d'ajuster ce comportement :
+
+```php
+// Ajuster la taille d'un chunk (en octets) : au moins 5 MiB conseillés par Amazon S3.
+add_filter('bjlg_s3_upload_chunk_size', function ($size, $path) {
+    return 10 * 1024 * 1024; // 10 MiB
+}, 10, 4);
+
+// Modifier le seuil à partir duquel on déclenche l'upload multipart.
+add_filter('bjlg_s3_multipart_threshold', function ($threshold) {
+    return 50 * 1024 * 1024; // 50 MiB
+}, 10, 4);
+```
+
+> ℹ️ Gardez des valeurs supérieures ou égales à 5&nbsp;MiB pour respecter les contraintes du service S3.
+
 ## 🎯 Utilisation
 
 ### Interface Web
