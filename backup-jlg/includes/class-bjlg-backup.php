@@ -1791,10 +1791,11 @@ class BJLG_Backup {
                 }
                 break;
             case 'sftp':
-                if (class_exists(BJLG_SFTP::class)) {
-                    return new BJLG_SFTP();
+                if (!class_exists(BJLG_SFTP::class)) {
+                    break;
                 }
-                break;
+
+                return new BJLG_SFTP();
         }
 
         return null;

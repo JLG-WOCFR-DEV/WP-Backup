@@ -434,6 +434,8 @@ final class BJLG_BackupTest extends TestCase
 
         \phpseclib3\Net\SFTP::$uploaded = [];
 
+        $previous_settings = get_option('bjlg_sftp_settings');
+
         update_option('bjlg_sftp_settings', [
             'enabled' => true,
             'host' => 'sftp.example.org',
@@ -458,7 +460,7 @@ final class BJLG_BackupTest extends TestCase
             $results = $method->invoke($backup, $file, ['sftp'], 'task-sftp-1');
         } finally {
             @unlink($file);
-            update_option('bjlg_sftp_settings', []);
+            update_option('bjlg_sftp_settings', $previous_settings);
         }
 
         $this->assertSame(['sftp'], $results['success']);
