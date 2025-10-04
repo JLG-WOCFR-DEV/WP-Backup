@@ -173,6 +173,104 @@ if (!defined('BJLG_BACKUP_DIR')) {
     define('BJLG_BACKUP_DIR', $test_backup_dir);
 }
 
+if (!function_exists('bjlg_tests_recursive_delete')) {
+    function bjlg_tests_recursive_delete(string $path): void
+    {
+        if (is_link($path) || is_file($path)) {
+            @unlink($path);
+            return;
+        }
+
+        if (!is_dir($path)) {
+            return;
+        }
+
+        $entries = scandir($path);
+        if ($entries === false) {
+            return;
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            bjlg_tests_recursive_delete($path . DIRECTORY_SEPARATOR . $entry);
+        }
+
+        @rmdir($path);
+    }
+}
+
+if (!function_exists('bjlg_tests_cleanup_backup_dir')) {
+    function bjlg_tests_cleanup_backup_dir(): void
+    {
+        if (!is_dir(BJLG_BACKUP_DIR)) {
+            return;
+        }
+
+        $sentinels = ['.htaccess', 'index.php', 'web.config'];
+        $items = glob(BJLG_BACKUP_DIR . '*') ?: [];
+
+        foreach ($items as $item) {
+            $basename = basename($item);
+            if (in_array($basename, $sentinels, true)) {
+                continue;
+            }
+
+            if (is_dir($item) && !is_link($item)) {
+                bjlg_tests_recursive_delete($item);
+            } else {
+                @unlink($item);
+            }
+        }
+    }
+}
+
+if (!function_exists('bjlg_tests_ensure_backup_sentinels')) {
+    function bjlg_tests_ensure_backup_sentinels(): void
+    {
+        if (!is_dir(BJLG_BACKUP_DIR)) {
+            return;
+        }
+
+        $sentinels = [
+            '.htaccess' => "deny from all\n",
+            'index.php' => "<?php\nexit;\n",
+        ];
+
+        foreach ($sentinels as $filename => $contents) {
+            $path = BJLG_BACKUP_DIR . $filename;
+            if (!file_exists($path)) {
+                file_put_contents($path, $contents);
+            }
+        }
+
+        $web_config_path = BJLG_BACKUP_DIR . 'web.config';
+        if (!file_exists($web_config_path)) {
+            $web_config_contents = <<<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <system.webServer>
+        <authorization>
+            <deny users="*" />
+        </authorization>
+    </system.webServer>
+</configuration>
+XML;
+
+            file_put_contents($web_config_path, $web_config_contents);
+        }
+    }
+}
+
+if (!is_dir(BJLG_BACKUP_DIR)) {
+    mkdir(BJLG_BACKUP_DIR, 0777, true);
+}
+
+bjlg_tests_cleanup_backup_dir();
+bjlg_tests_ensure_backup_sentinels();
+
 if (!defined('DB_NAME')) {
     define('DB_NAME', 'wordpress_test');
 }

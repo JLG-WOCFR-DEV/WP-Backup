@@ -262,9 +262,32 @@ final class BJLG_Plugin {
             wp_mkdir_p(BJLG_BACKUP_DIR);
         }
         if (is_dir(BJLG_BACKUP_DIR) && is_writable(BJLG_BACKUP_DIR)) {
-            $htaccess_path = BJLG_BACKUP_DIR . '.htaccess';
-            if (!file_exists($htaccess_path)) {
-                file_put_contents($htaccess_path, 'deny from all');
+            $sentinels = [
+                '.htaccess' => "deny from all\n",
+                'index.php' => "<?php\nexit;\n",
+            ];
+
+            foreach ($sentinels as $filename => $contents) {
+                $path = BJLG_BACKUP_DIR . $filename;
+                if (!file_exists($path)) {
+                    file_put_contents($path, $contents);
+                }
+            }
+
+            $web_config_path = BJLG_BACKUP_DIR . 'web.config';
+            if (!file_exists($web_config_path)) {
+                $web_config_contents = <<<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <system.webServer>
+        <authorization>
+            <deny users="*" />
+        </authorization>
+    </system.webServer>
+</configuration>
+XML;
+
+                file_put_contents($web_config_path, $web_config_contents);
             }
         }
     }
