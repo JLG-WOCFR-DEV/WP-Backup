@@ -306,11 +306,15 @@ SET GLOBAL wait_timeout = 600;
 # Dossier de sauvegarde
 chmod 755 wp-content/bjlg-backups
 chmod 644 wp-content/bjlg-backups/.htaccess
+chmod 644 wp-content/bjlg-backups/index.php
+chmod 644 wp-content/bjlg-backups/web.config
 
 # Fichiers du plugin
 chmod 755 wp-content/plugins/backup-jlg
 chmod 644 wp-content/plugins/backup-jlg/*.php
 ```
+
+> ℹ️ Le dossier `wp-content/bjlg-backups/` contient désormais des fichiers sentinelles (`.htaccess`, `index.php`, `web.config`) créés automatiquement pour bloquer l'accès direct. Les opérations de nettoyage doivent les conserver en place.
 
 ### Headers de sécurité
 
