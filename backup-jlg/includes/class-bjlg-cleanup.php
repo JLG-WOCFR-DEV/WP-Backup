@@ -60,29 +60,37 @@ class BJLG_Cleanup {
             
             // Nettoyage des sauvegardes
             $deleted_backups = $this->cleanup_backups();
-            
+
+            // Nettoyage des sauvegardes distantes
+            $remote_cleanup = $this->cleanup_remote_destinations();
+            $remote_deleted = isset($remote_cleanup['total_deleted']) ? (int) $remote_cleanup['total_deleted'] : 0;
+
             // Nettoyage des fichiers temporaires
             $deleted_temp = $this->cleanup_temp_files();
-            
+
             // Nettoyage de l'historique ancien
             $deleted_history = $this->cleanup_old_history();
-            
+
             // Nettoyage des transients expirés
             $this->cleanup_transients();
-            
+
+            $this->report_remote_cleanup($remote_cleanup);
+
             $summary = sprintf(
-                '%d sauvegarde(s), %d fichier(s) temporaire(s), %d entrée(s) d\'historique supprimés',
+                '%d sauvegarde(s) locales, %d sauvegarde(s) distantes, %d fichier(s) temporaire(s), %d entrée(s) d\'historique supprimés',
                 $deleted_backups,
+                $remote_deleted,
                 $deleted_temp,
                 $deleted_history
             );
-            
+
             BJLG_History::log('cleanup_task_finished', 'success', $summary);
             BJLG_Debug::log("--- FIN DE LA TÂCHE DE NETTOYAGE : $summary ---");
-            
+
             // Notification si configuré
             do_action('bjlg_cleanup_complete', [
                 'backups_deleted' => $deleted_backups,
+                'remote_backups_deleted' => $remote_deleted,
                 'temp_files_deleted' => $deleted_temp,
                 'history_entries_deleted' => $deleted_history
             ]);
@@ -268,7 +276,139 @@ class BJLG_Cleanup {
         
         return $deleted_count;
     }
-    
+
+    private function cleanup_remote_destinations() {
+        $settings = get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
+        $retain_by_number = isset($settings['by_number']) ? (int) $settings['by_number'] : 0;
+        $retain_by_age_days = isset($settings['by_age']) ? (int) $settings['by_age'] : 0;
+
+        $results = [
+            'total_deleted' => 0,
+            'destinations' => [],
+            'retain_by_number' => $retain_by_number,
+            'retain_by_age_days' => $retain_by_age_days,
+        ];
+
+        if ($retain_by_number === 0 && $retain_by_age_days === 0) {
+            return $results;
+        }
+
+        $destination_ids = BJLG_Settings::get_known_destination_ids();
+
+        foreach ($destination_ids as $destination_id) {
+            $destination = $this->instantiate_destination($destination_id);
+            if (!$destination instanceof BJLG_Destination_Interface) {
+                continue;
+            }
+
+            try {
+                $data = $destination->prune_remote_backups($retain_by_number, $retain_by_age_days);
+            } catch (Exception $exception) {
+                $data = [
+                    'deleted' => 0,
+                    'errors' => [$exception->getMessage()],
+                    'inspected' => 0,
+                    'deleted_items' => [],
+                ];
+            }
+
+            $normalized = $this->normalize_remote_cleanup_result($data);
+            $normalized['name'] = $destination->get_name();
+            $normalized['id'] = $destination_id;
+
+            $results['destinations'][$destination_id] = $normalized;
+            $results['total_deleted'] += (int) $normalized['deleted'];
+        }
+
+        return $results;
+    }
+
+    private function normalize_remote_cleanup_result($result) {
+        $defaults = [
+            'deleted' => 0,
+            'errors' => [],
+            'inspected' => 0,
+            'deleted_items' => [],
+        ];
+
+        if (!is_array($result)) {
+            return $defaults;
+        }
+
+        $normalized = array_merge($defaults, $result);
+        $normalized['deleted'] = (int) $normalized['deleted'];
+        $normalized['inspected'] = (int) $normalized['inspected'];
+
+        if (!is_array($normalized['errors'])) {
+            $normalized['errors'] = $normalized['errors'] === null ? [] : [(string) $normalized['errors']];
+        }
+
+        if (!is_array($normalized['deleted_items'])) {
+            $normalized['deleted_items'] = $normalized['deleted_items'] === null ? [] : (array) $normalized['deleted_items'];
+        }
+
+        return $normalized;
+    }
+
+    private function report_remote_cleanup(array $remote_cleanup) {
+        if (empty($remote_cleanup['destinations'])) {
+            return;
+        }
+
+        foreach ($remote_cleanup['destinations'] as $destination_id => $result) {
+            $name = isset($result['name']) ? $result['name'] : $destination_id;
+            $deleted = isset($result['deleted']) ? (int) $result['deleted'] : 0;
+
+            if ($deleted > 0) {
+                $message = sprintf('Nettoyage distant %s : %d sauvegarde(s) supprimée(s).', $name, $deleted);
+                BJLG_Debug::log($message);
+                BJLG_History::log('cleanup_remote', 'success', $message);
+            } else {
+                $message = sprintf('Nettoyage distant %s : aucune sauvegarde à supprimer.', $name);
+                BJLG_Debug::log($message);
+                BJLG_History::log('cleanup_remote', 'info', $message);
+            }
+
+            if (!empty($result['errors'])) {
+                foreach ($result['errors'] as $error) {
+                    if ($error === '' || !is_string($error)) {
+                        continue;
+                    }
+                    $error_message = sprintf('Nettoyage distant %s - erreur : %s', $name, $error);
+                    BJLG_Debug::log($error_message);
+                    BJLG_History::log('cleanup_remote', 'failure', $error_message);
+                }
+            }
+        }
+    }
+
+    private function instantiate_destination($destination_id) {
+        $provided = apply_filters('bjlg_cleanup_instantiate_destination', null, $destination_id);
+        if ($provided instanceof BJLG_Destination_Interface) {
+            return $provided;
+        }
+
+        switch ($destination_id) {
+            case 'google_drive':
+                if (class_exists(BJLG_Google_Drive::class)) {
+                    return new BJLG_Google_Drive();
+                }
+                break;
+            case 'aws_s3':
+                if (class_exists(BJLG_AWS_S3::class)) {
+                    return new BJLG_AWS_S3();
+                }
+                break;
+            case 'sftp':
+                if (class_exists(BJLG_SFTP::class)) {
+                    return new BJLG_SFTP();
+                }
+                break;
+        }
+
+        return null;
+    }
+
     /**
      * Nettoie les fichiers temporaires
      */

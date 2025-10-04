@@ -190,6 +190,193 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
         $this->log(sprintf('Sauvegarde "%s" envoyée sur le serveur SFTP.', basename($filepath)));
     }
 
+    public function list_remote_backups() {
+        if (!class_exists(PhpseclibSFTP::class) || !$this->is_connected()) {
+            return [];
+        }
+
+        $settings = $this->get_settings();
+
+        try {
+            $connection = $this->connect($settings);
+            return $this->fetch_remote_backups($connection, $settings);
+        } catch (Exception $exception) {
+            $this->log('ERREUR SFTP (listing) : ' . $exception->getMessage());
+            return [];
+        }
+    }
+
+    public function prune_remote_backups($retain_by_number, $retain_by_age_days) {
+        $result = [
+            'deleted' => 0,
+            'errors' => [],
+            'inspected' => 0,
+            'deleted_items' => [],
+        ];
+
+        if (!class_exists(PhpseclibSFTP::class) || !$this->is_connected()) {
+            return $result;
+        }
+
+        $retain_by_number = (int) $retain_by_number;
+        $retain_by_age_days = (int) $retain_by_age_days;
+
+        if ($retain_by_number === 0 && $retain_by_age_days === 0) {
+            return $result;
+        }
+
+        $settings = $this->get_settings();
+
+        try {
+            $connection = $this->connect($settings);
+            $backups = $this->fetch_remote_backups($connection, $settings);
+        } catch (Exception $exception) {
+            $result['errors'][] = $exception->getMessage();
+            return $result;
+        }
+
+        $result['inspected'] = count($backups);
+
+        if (empty($backups)) {
+            return $result;
+        }
+
+        $to_delete = $this->select_backups_to_delete($backups, $retain_by_number, $retain_by_age_days);
+
+        foreach ($to_delete as $backup) {
+            try {
+                $this->delete_remote_backup($connection, $backup);
+                $result['deleted']++;
+                if (!empty($backup['name'])) {
+                    $result['deleted_items'][] = $backup['name'];
+                }
+            } catch (Exception $exception) {
+                $result['errors'][] = $exception->getMessage();
+            }
+        }
+
+        return $result;
+    }
+
+    private function fetch_remote_backups(PhpseclibSFTP $connection, array $settings): array {
+        $remote_path = $this->normalize_remote_path($settings['remote_path']);
+        $target = $remote_path !== '' ? $remote_path : '.';
+
+        $list = $connection->rawlist($target);
+        if (!is_array($list)) {
+            return [];
+        }
+
+        $backups = [];
+
+        foreach ($list as $name => $details) {
+            if (!is_string($name) || $name === '' || $name === '.' || $name === '..') {
+                continue;
+            }
+
+            if (!is_array($details)) {
+                continue;
+            }
+
+            $type = isset($details['type']) ? (int) $details['type'] : null;
+            $is_file = $type === null || $type === PhpseclibSFTP::TYPE_REGULAR;
+
+            if (!$is_file) {
+                continue;
+            }
+
+            if (!$this->is_backup_filename($name)) {
+                continue;
+            }
+
+            $path = $remote_path !== '' ? $remote_path . '/' . $name : $name;
+            $timestamp = isset($details['mtime']) ? (int) $details['mtime'] : $this->get_time();
+            $size = isset($details['size']) ? (int) $details['size'] : 0;
+
+            $backups[] = [
+                'id' => $path,
+                'path' => $path,
+                'name' => $name,
+                'timestamp' => $timestamp,
+                'size' => $size,
+            ];
+        }
+
+        return $backups;
+    }
+
+    private function delete_remote_backup(PhpseclibSFTP $connection, array $backup): void {
+        $path = '';
+        if (!empty($backup['path'])) {
+            $path = (string) $backup['path'];
+        } elseif (!empty($backup['id'])) {
+            $path = (string) $backup['id'];
+        }
+
+        if ($path === '') {
+            throw new Exception('Chemin distant manquant pour la suppression SFTP.');
+        }
+
+        if (!$connection->delete($path)) {
+            throw new Exception(sprintf('Impossible de supprimer la sauvegarde SFTP "%s".', $path));
+        }
+
+        $this->log(sprintf('Sauvegarde distante supprimée sur le serveur SFTP : %s', $path));
+    }
+
+    private function select_backups_to_delete(array $backups, int $retain_by_number, int $retain_by_age_days): array {
+        $to_delete = [];
+        $now = $this->get_time();
+
+        if ($retain_by_age_days > 0) {
+            $age_limit = $retain_by_age_days * DAY_IN_SECONDS;
+            foreach ($backups as $backup) {
+                $timestamp = (int) ($backup['timestamp'] ?? 0);
+                if ($timestamp > 0 && ($now - $timestamp) > $age_limit) {
+                    $to_delete[$this->get_backup_identifier($backup)] = $backup;
+                }
+            }
+        }
+
+        if ($retain_by_number > 0 && count($backups) > $retain_by_number) {
+            usort($backups, static function ($a, $b) {
+                $time_a = (int) ($a['timestamp'] ?? 0);
+                $time_b = (int) ($b['timestamp'] ?? 0);
+
+                if ($time_a === $time_b) {
+                    return 0;
+                }
+
+                return $time_b <=> $time_a;
+            });
+
+            $excess = array_slice($backups, $retain_by_number);
+            foreach ($excess as $backup) {
+                $to_delete[$this->get_backup_identifier($backup)] = $backup;
+            }
+        }
+
+        return array_values($to_delete);
+    }
+
+    private function get_backup_identifier(array $backup): string {
+        foreach (['path', 'id', 'name'] as $key) {
+            if (!empty($backup[$key])) {
+                return (string) $backup[$key];
+            }
+        }
+
+        return sha1(json_encode($backup));
+    }
+
+    private function is_backup_filename($name): bool {
+        if (!is_string($name) || $name === '') {
+            return false;
+        }
+
+        return (bool) preg_match('/\.zip(\.[A-Za-z0-9]+)?$/i', $name);
+    }
+
     public function handle_test_connection() {
         if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
@@ -392,10 +579,14 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
         ]);
     }
 
+    private function get_time(): int {
+        return (int) call_user_func($this->time_provider);
+    }
+
     private function store_status(string $result, string $message): void {
         $status = [
             'last_result' => $result,
-            'tested_at' => call_user_func($this->time_provider),
+            'tested_at' => $this->get_time(),
             'message' => $message,
         ];
 

@@ -198,6 +198,215 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         $this->log(sprintf('Sauvegarde "%s" envoyée sur Amazon S3 (%s).', basename($filepath), $object_key));
     }
 
+    public function list_remote_backups() {
+        if (!$this->is_connected()) {
+            return [];
+        }
+
+        $settings = $this->get_settings();
+
+        try {
+            return $this->fetch_remote_backups($settings);
+        } catch (Exception $exception) {
+            $this->log('ERREUR S3 (listing) : ' . $exception->getMessage());
+            return [];
+        }
+    }
+
+    public function prune_remote_backups($retain_by_number, $retain_by_age_days) {
+        $result = [
+            'deleted' => 0,
+            'errors' => [],
+            'inspected' => 0,
+            'deleted_items' => [],
+        ];
+
+        if (!$this->is_connected()) {
+            return $result;
+        }
+
+        $retain_by_number = (int) $retain_by_number;
+        $retain_by_age_days = (int) $retain_by_age_days;
+
+        if ($retain_by_number === 0 && $retain_by_age_days === 0) {
+            return $result;
+        }
+
+        $settings = $this->get_settings();
+
+        try {
+            $backups = $this->fetch_remote_backups($settings);
+        } catch (Exception $exception) {
+            $result['errors'][] = $exception->getMessage();
+            return $result;
+        }
+
+        $result['inspected'] = count($backups);
+
+        if (empty($backups)) {
+            return $result;
+        }
+
+        $to_delete = $this->select_backups_to_delete($backups, $retain_by_number, $retain_by_age_days);
+
+        foreach ($to_delete as $backup) {
+            try {
+                $this->delete_remote_backup($settings, $backup);
+                $result['deleted']++;
+                if (!empty($backup['name'])) {
+                    $result['deleted_items'][] = $backup['name'];
+                }
+            } catch (Exception $exception) {
+                $result['errors'][] = $exception->getMessage();
+            }
+        }
+
+        return $result;
+    }
+
+    private function fetch_remote_backups(array $settings) {
+        $backups = [];
+
+        $prefix = trim((string) $settings['object_prefix']);
+        if ($prefix !== '') {
+            $prefix = str_replace('\\', '/', $prefix);
+            $prefix = trim($prefix, '/');
+        }
+
+        $base_query = ['list-type' => '2'];
+        if ($prefix !== '') {
+            $base_query['prefix'] = $prefix . '/';
+        }
+
+        $continuation = null;
+
+        do {
+            $query = $base_query;
+            if ($continuation !== null && $continuation !== '') {
+                $query['continuation-token'] = $continuation;
+            }
+
+            $response = $this->perform_request('GET', '', '', [], $settings, $query);
+            $body = isset($response['body']) ? (string) $response['body'] : '';
+
+            if ($body === '') {
+                break;
+            }
+
+            $xml = @simplexml_load_string($body);
+            if ($xml === false) {
+                throw new Exception('Réponse Amazon S3 invalide lors du listing.');
+            }
+
+            if (isset($xml->Contents)) {
+                foreach ($xml->Contents as $content) {
+                    $key = (string) $content->Key;
+                    if ($key === '') {
+                        continue;
+                    }
+
+                    $name = basename($key);
+                    if (!$this->is_backup_filename($name)) {
+                        continue;
+                    }
+
+                    $timestamp = strtotime((string) $content->LastModified);
+                    if (!is_int($timestamp) || $timestamp <= 0) {
+                        $timestamp = $this->get_time();
+                    }
+
+                    $size = isset($content->Size) ? (int) $content->Size : 0;
+
+                    $backups[] = [
+                        'id' => $key,
+                        'key' => $key,
+                        'name' => $name,
+                        'timestamp' => $timestamp,
+                        'size' => $size,
+                    ];
+                }
+            }
+
+            $is_truncated = isset($xml->IsTruncated) && (string) $xml->IsTruncated === 'true';
+            if ($is_truncated && isset($xml->NextContinuationToken)) {
+                $continuation = (string) $xml->NextContinuationToken;
+            } else {
+                $continuation = null;
+            }
+        } while ($continuation !== null && $continuation !== '');
+
+        return $backups;
+    }
+
+    private function delete_remote_backup(array $settings, array $backup) {
+        $key = '';
+        if (!empty($backup['key'])) {
+            $key = (string) $backup['key'];
+        } elseif (!empty($backup['id'])) {
+            $key = (string) $backup['id'];
+        }
+
+        if ($key === '') {
+            throw new Exception('Clé Amazon S3 manquante pour la suppression.');
+        }
+
+        $this->perform_request('DELETE', $key, '', [], $settings);
+        $this->log(sprintf('Sauvegarde distante supprimée sur Amazon S3 : %s', $key));
+    }
+
+    private function select_backups_to_delete(array $backups, int $retain_by_number, int $retain_by_age_days) {
+        $to_delete = [];
+        $now = $this->get_time();
+
+        if ($retain_by_age_days > 0) {
+            $age_limit = $retain_by_age_days * DAY_IN_SECONDS;
+            foreach ($backups as $backup) {
+                $timestamp = (int) ($backup['timestamp'] ?? 0);
+                if ($timestamp > 0 && ($now - $timestamp) > $age_limit) {
+                    $to_delete[$this->get_backup_identifier($backup)] = $backup;
+                }
+            }
+        }
+
+        if ($retain_by_number > 0 && count($backups) > $retain_by_number) {
+            usort($backups, static function ($a, $b) {
+                $time_a = (int) ($a['timestamp'] ?? 0);
+                $time_b = (int) ($b['timestamp'] ?? 0);
+
+                if ($time_a === $time_b) {
+                    return 0;
+                }
+
+                return $time_b <=> $time_a;
+            });
+
+            $excess = array_slice($backups, $retain_by_number);
+            foreach ($excess as $backup) {
+                $to_delete[$this->get_backup_identifier($backup)] = $backup;
+            }
+        }
+
+        return array_values($to_delete);
+    }
+
+    private function get_backup_identifier(array $backup) {
+        foreach (['key', 'id', 'name'] as $key) {
+            if (!empty($backup[$key])) {
+                return (string) $backup[$key];
+            }
+        }
+
+        return sha1(json_encode($backup));
+    }
+
+    private function is_backup_filename($name) {
+        if (!is_string($name) || $name === '') {
+            return false;
+        }
+
+        return (bool) preg_match('/\.zip(\.[A-Za-z0-9]+)?$/i', $name);
+    }
+
     /**
      * Supprime un objet du bucket S3 configuré.
      *
@@ -311,7 +520,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         }
     }
 
-    private function perform_request($method, $object_key, $body, array $headers, array $settings) {
+    private function perform_request($method, $object_key, $body, array $headers, array $settings, array $query = []) {
         $this->assert_settings_complete($settings);
 
         $timestamp = $this->get_time();
@@ -330,7 +539,13 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
             $canonical_uri = '/';
         }
 
+        $canonical_query = $this->build_canonical_query_string($query);
+
         $endpoint = 'https://' . $host . $canonical_uri;
+        if ($canonical_query !== '') {
+            $endpoint .= '?' . $canonical_query;
+        }
+
         $payload_hash = hash('sha256', (string) $body);
 
         $headers = array_merge([
@@ -354,7 +569,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         $canonical_request = implode("\n", [
             strtoupper($method),
             $canonical_uri,
-            '',
+            $canonical_query,
             $canonical_headers,
             $signed_headers,
             $payload_hash,
@@ -388,7 +603,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
             'timeout' => apply_filters('bjlg_s3_request_timeout', 60, $method, $object_key),
         ];
 
-        if ($method === 'PUT') {
+        if ($method === 'PUT' || $method === 'POST') {
             $args['body'] = $body;
         }
 
@@ -420,6 +635,32 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         }
 
         return trim($key, '/');
+    }
+
+    private function build_canonical_query_string(array $query) {
+        if (empty($query)) {
+            return '';
+        }
+
+        $pairs = [];
+
+        foreach ($query as $key => $value) {
+            $encoded_key = rawurlencode((string) $key);
+
+            if (is_array($value)) {
+                $values = $value;
+                sort($values);
+                foreach ($values as $single) {
+                    $pairs[] = $encoded_key . '=' . rawurlencode((string) $single);
+                }
+            } else {
+                $pairs[] = $encoded_key . '=' . rawurlencode((string) $value);
+            }
+        }
+
+        sort($pairs);
+
+        return implode('&', $pairs);
     }
 
     private function get_settings() {
