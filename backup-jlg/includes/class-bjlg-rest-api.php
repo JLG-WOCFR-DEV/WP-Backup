@@ -202,6 +202,14 @@ class BJLG_REST_API {
                     'type' => 'boolean',
                     'default' => true
                 ],
+                'restore_environment' => [
+                    'type' => 'string',
+                    'default' => BJLG_Restore::ENV_PRODUCTION,
+                ],
+                'sandbox_path' => [
+                    'type' => 'string',
+                    'required' => false,
+                ],
                 'password' => [
                     'type' => 'string',
                     'required' => false
@@ -1888,6 +1896,47 @@ class BJLG_REST_API {
             );
         }
 
+        $restore_environment = $request->get_param('restore_environment');
+        if (is_string($restore_environment)) {
+            $restore_environment = sanitize_key($restore_environment);
+        } else {
+            $restore_environment = BJLG_Restore::ENV_PRODUCTION;
+        }
+
+        if ($restore_environment === BJLG_Restore::ENV_SANDBOX && !BJLG_Restore::user_can_use_sandbox()) {
+            return new WP_Error(
+                'rest_restore_sandbox_forbidden',
+                __('Vous ne disposez pas des permissions nécessaires pour restaurer dans la sandbox.', 'backup-jlg'),
+                ['status' => 403]
+            );
+        }
+
+        $sandbox_path = $request->get_param('sandbox_path');
+        if (!is_string($sandbox_path)) {
+            $sandbox_path = '';
+        }
+
+        try {
+            $environment_config = BJLG_Restore::prepare_environment($restore_environment, [
+                'sandbox_path' => $sandbox_path,
+            ]);
+        } catch (Exception $exception) {
+            $error_message = sprintf(
+                __('Impossible de préparer la cible de restauration : %s', 'backup-jlg'),
+                $exception->getMessage()
+            );
+
+            $error_data = ['status' => 400];
+
+            if ($restore_environment === BJLG_Restore::ENV_SANDBOX) {
+                $error_data['validation_errors'] = [
+                    'sandbox_path' => [$exception->getMessage()],
+                ];
+            }
+
+            return new WP_Error('rest_restore_invalid_environment', $error_message, $error_data);
+        }
+
         $raw_create_restore_point = $request->get_param('create_restore_point');
         if ($raw_create_restore_point === null) {
             $create_restore_point = true;
@@ -1969,7 +2018,13 @@ class BJLG_REST_API {
             'create_restore_point' => (bool) $create_restore_point,
             'password_encrypted' => $encrypted_password,
             'filename' => $filename,
+            'environment' => $environment_config['environment'],
+            'routing_table' => $environment_config['routing_table'],
         ];
+
+        if (!empty($environment_config['sandbox'])) {
+            $task_data['sandbox'] = $environment_config['sandbox'];
+        }
 
         $task_ttl = BJLG_Backup::get_task_ttl();
         $transient_set = set_transient($task_id, $task_data, $task_ttl);

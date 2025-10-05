@@ -836,6 +836,27 @@ class BJLG_Admin {
                                 </div>
                             </td>
                         </tr>
+                        <?php if (BJLG_Restore::user_can_use_sandbox()) : ?>
+                        <tr>
+                            <th scope="row">Environnement de test</th>
+                            <td>
+                                <div class="bjlg-field-control">
+                                    <label>
+                                        <input type="checkbox" name="restore_to_sandbox" value="1">
+                                        Restaurer dans un environnement de test
+                                    </label>
+                                    <p class="description">Les fichiers seront restaurés dans un dossier isolé sans impacter la production.</p>
+                                    <label for="bjlg-restore-sandbox-path" class="screen-reader-text">Chemin de la sandbox</label>
+                                    <input type="text"
+                                           id="bjlg-restore-sandbox-path"
+                                           name="sandbox_path"
+                                           class="regular-text"
+                                           placeholder="Laisser vide pour utiliser le dossier sandbox automatique"
+                                           disabled>
+                                </div>
+                            </td>
+                        </tr>
+                        <?php endif; ?>
                     </tbody>
                 </table>
                 <div id="bjlg-restore-errors" class="notice notice-error" style="display: none;" role="alert"></div>

@@ -18,6 +18,9 @@ require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
  */
 class BJLG_Restore {
 
+    public const ENV_PRODUCTION = 'production';
+    public const ENV_SANDBOX = 'sandbox';
+
     /**
      * Instance du gestionnaire de sauvegarde.
      *
@@ -43,6 +46,249 @@ class BJLG_Restore {
         add_action('wp_ajax_bjlg_upload_restore_file', [$this, 'handle_upload_restore_file']);
         add_action('wp_ajax_bjlg_check_restore_progress', [$this, 'handle_check_restore_progress']);
         add_action('bjlg_run_restore_task', [$this, 'run_restore_task'], 10, 1);
+        add_action('wp_ajax_bjlg_cleanup_sandbox_restore', [$this, 'handle_cleanup_sandbox']);
+        add_action('wp_ajax_bjlg_publish_sandbox_restore', [$this, 'handle_publish_sandbox']);
+    }
+
+    /**
+     * Nettoie un environnement sandbox existant.
+     */
+    public function handle_cleanup_sandbox() {
+        if (!self::user_can_use_sandbox()) {
+            wp_send_json_error(['message' => 'Permission refusée pour nettoyer la sandbox.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $task_id = isset($_POST['task_id']) ? sanitize_text_field(wp_unslash($_POST['task_id'])) : '';
+
+        if ($task_id === '') {
+            wp_send_json_error(['message' => 'Identifiant de tâche manquant.']);
+        }
+
+        $task_data = get_transient($task_id);
+        if (!is_array($task_data)) {
+            wp_send_json_error(['message' => 'Tâche introuvable.']);
+        }
+
+        $environment = isset($task_data['environment']) ? sanitize_key((string) $task_data['environment']) : self::ENV_PRODUCTION;
+        if ($environment !== self::ENV_SANDBOX) {
+            wp_send_json_error(['message' => 'Cette tâche ne correspond pas à un environnement de test.']);
+        }
+
+        $sandbox_context = isset($task_data['sandbox']) && is_array($task_data['sandbox']) ? $task_data['sandbox'] : [];
+        $base_path = isset($sandbox_context['base_path']) && is_string($sandbox_context['base_path'])
+            ? $sandbox_context['base_path']
+            : '';
+
+        if ($base_path === '' || !file_exists($base_path)) {
+            wp_send_json_success(['message' => 'Aucun répertoire sandbox à supprimer.']);
+        }
+
+        try {
+            $this->recursive_delete($base_path);
+            BJLG_History::log('restore_sandbox_cleanup', 'success', 'Sandbox supprimée : ' . $base_path);
+
+            $sandbox_context['cleaned_at'] = function_exists('current_time') ? current_time('mysql') : date('Y-m-d H:i:s');
+            $task_data['sandbox'] = $sandbox_context;
+            set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
+
+            wp_send_json_success([
+                'message' => 'Environnement de test nettoyé.',
+                'sandbox' => $sandbox_context,
+            ]);
+        } catch (Throwable $throwable) {
+            $error_message = 'Impossible de supprimer la sandbox : ' . $throwable->getMessage();
+            BJLG_History::log('restore_sandbox_cleanup', 'failure', $error_message);
+
+            wp_send_json_error([
+                'message' => $error_message,
+            ]);
+        }
+    }
+
+    /**
+     * Publie le contenu d'une sandbox vers la production.
+     */
+    public function handle_publish_sandbox() {
+        if (!self::user_can_use_sandbox()) {
+            wp_send_json_error(['message' => 'Permission refusée pour promouvoir la sandbox.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $task_id = isset($_POST['task_id']) ? sanitize_text_field(wp_unslash($_POST['task_id'])) : '';
+
+        if ($task_id === '') {
+            wp_send_json_error(['message' => 'Identifiant de tâche manquant.']);
+        }
+
+        $task_data = get_transient($task_id);
+        if (!is_array($task_data)) {
+            wp_send_json_error(['message' => 'Tâche introuvable.']);
+        }
+
+        $environment = isset($task_data['environment']) ? sanitize_key((string) $task_data['environment']) : self::ENV_PRODUCTION;
+        if ($environment !== self::ENV_SANDBOX) {
+            wp_send_json_error(['message' => 'Cette tâche ne correspond pas à un environnement de test.']);
+        }
+
+        $routing_table = isset($task_data['routing_table']) && is_array($task_data['routing_table'])
+            ? $task_data['routing_table']
+            : [];
+
+        $sandbox_context = isset($task_data['sandbox']) && is_array($task_data['sandbox']) ? $task_data['sandbox'] : [];
+        $base_path = isset($sandbox_context['base_path']) && is_string($sandbox_context['base_path'])
+            ? $sandbox_context['base_path']
+            : '';
+
+        if ($base_path === '' || !is_dir($base_path)) {
+            wp_send_json_error(['message' => 'Le répertoire sandbox est introuvable.']);
+        }
+
+        $components = self::normalize_requested_components($task_data['components'] ?? null);
+        $summary = [];
+
+        try {
+            $this->perform_pre_restore_backup();
+
+            if (in_array('db', $components, true)) {
+                $db_file = $this->resolve_database_destination($routing_table, $sandbox_context);
+                if ($db_file && file_exists($db_file)) {
+                    $this->import_database($db_file);
+                    $summary[] = 'base de données';
+                }
+            }
+
+            foreach (['plugins', 'themes', 'uploads'] as $component) {
+                if (!in_array($component, $components, true)) {
+                    continue;
+                }
+
+                $source = $this->resolve_component_destination($component, $routing_table, self::ENV_SANDBOX);
+
+                if ($source === null && isset($sandbox_context['routing_table'][$component])) {
+                    $candidate = $sandbox_context['routing_table'][$component];
+                    if (is_string($candidate) && $candidate !== '') {
+                        $source = $candidate;
+                    }
+                }
+
+                if ($source === null || !is_dir($source)) {
+                    continue;
+                }
+
+                $destination = $this->get_production_destination($component);
+
+                if ($destination === null) {
+                    continue;
+                }
+
+                $this->recursive_copy($source, $destination);
+                $summary[] = $component;
+            }
+
+            $this->clear_all_caches();
+
+            $sandbox_context['published_at'] = function_exists('current_time') ? current_time('mysql') : date('Y-m-d H:i:s');
+            $sandbox_context['published_components'] = $summary;
+            $task_data['sandbox'] = $sandbox_context;
+            set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
+
+            BJLG_History::log('restore_sandbox_publish', 'success', 'Sandbox promue : ' . $base_path);
+
+            wp_send_json_success([
+                'message' => 'Sandbox promue en production.',
+                'components' => $summary,
+                'sandbox' => $sandbox_context,
+            ]);
+        } catch (Throwable $throwable) {
+            $error_message = 'Promotion sandbox échouée : ' . $throwable->getMessage();
+            BJLG_History::log('restore_sandbox_publish', 'failure', $error_message);
+
+            wp_send_json_error([
+                'message' => $error_message,
+            ]);
+        }
+    }
+
+    /**
+     * Détermine la destination finale pour la base de données selon l'environnement.
+     *
+     * @param array<string, string> $routing_table
+     * @param array<string, mixed>|null $sandbox_context
+     * @return string|null
+     */
+    private function resolve_database_destination(array $routing_table, $sandbox_context) {
+        if (isset($routing_table['db']) && is_string($routing_table['db']) && $routing_table['db'] !== '') {
+            return $routing_table['db'];
+        }
+
+        if (is_array($sandbox_context)) {
+            if (isset($sandbox_context['routing_table']['db']) && is_string($sandbox_context['routing_table']['db'])) {
+                return $sandbox_context['routing_table']['db'];
+            }
+
+            if (isset($sandbox_context['base_path']) && is_string($sandbox_context['base_path']) && $sandbox_context['base_path'] !== '') {
+                return rtrim($sandbox_context['base_path'], '/\\') . '/database.sql';
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Résout le répertoire cible pour un composant donné.
+     *
+     * @param string $component
+     * @param array<string, string> $routing_table
+     * @param string $environment
+     * @return string|null
+     */
+    private function resolve_component_destination($component, array $routing_table, $environment) {
+        if (isset($routing_table[$component]) && is_string($routing_table[$component]) && $routing_table[$component] !== '') {
+            return $routing_table[$component];
+        }
+
+        if ($environment === self::ENV_SANDBOX) {
+            return null;
+        }
+
+        return $this->get_production_destination($component);
+    }
+
+    /**
+     * Retourne le chemin de destination pour la production.
+     *
+     * @param string $component
+     * @return string|null
+     */
+    private function get_production_destination($component) {
+        switch ($component) {
+            case 'plugins':
+                return WP_PLUGIN_DIR;
+            case 'themes':
+                return get_theme_root();
+            case 'uploads':
+                $upload_dir = wp_get_upload_dir();
+                return isset($upload_dir['basedir']) ? $upload_dir['basedir'] : null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Retourne le chemin de base de la sandbox.
+     *
+     * @param array<string, mixed>|null $sandbox_context
+     * @return string|null
+     */
+    private function get_sandbox_base_path($sandbox_context) {
+        if (is_array($sandbox_context) && isset($sandbox_context['base_path']) && is_string($sandbox_context['base_path'])) {
+            return $sandbox_context['base_path'];
+        }
+
+        return null;
     }
 
     /**
@@ -237,6 +483,266 @@ class BJLG_Restore {
             }
 
             $cleanup_sql_file();
+        }
+    }
+
+    /**
+     * Prépare la configuration d'environnement pour une restauration.
+     *
+     * @param string|null $environment
+     * @param array<string, mixed> $context
+     * @return array{environment: string, routing_table: array<string, string>, sandbox: array<string, mixed>|null}
+     */
+    public static function prepare_environment($environment, array $context = []) {
+        $normalized_environment = is_string($environment) ? sanitize_key($environment) : '';
+
+        if ($normalized_environment === '' || $normalized_environment === self::ENV_PRODUCTION) {
+            return [
+                'environment' => self::ENV_PRODUCTION,
+                'routing_table' => [],
+                'sandbox' => null,
+            ];
+        }
+
+        if ($normalized_environment !== self::ENV_SANDBOX) {
+            return [
+                'environment' => self::ENV_PRODUCTION,
+                'routing_table' => [],
+                'sandbox' => null,
+            ];
+        }
+
+        $sandbox = self::prepare_sandbox_environment($context);
+
+        return [
+            'environment' => self::ENV_SANDBOX,
+            'routing_table' => $sandbox['routing_table'],
+            'sandbox' => $sandbox,
+        ];
+    }
+
+    /**
+     * Indique si l'utilisateur courant peut utiliser les restaurations sandbox.
+     *
+     * @param mixed $user Utilisateur optionnel.
+     * @return bool
+     */
+    public static function user_can_use_sandbox($user = null) {
+        $default_permission = true;
+
+        if (function_exists('bjlg_can_manage_plugin')) {
+            $default_permission = (bool) \bjlg_can_manage_plugin($user);
+        } elseif (function_exists('current_user_can')) {
+            $default_permission = current_user_can('manage_options');
+        }
+
+        if (function_exists('apply_filters')) {
+            return (bool) apply_filters('bjlg_user_can_restore_to_sandbox', $default_permission, $user);
+        }
+
+        return (bool) $default_permission;
+    }
+
+    /**
+     * Prépare le dossier sandbox et la table de routage associée.
+     *
+     * @param array<string, mixed> $context
+     * @return array<string, mixed>
+     */
+    private static function prepare_sandbox_environment(array $context) {
+        $requested_path = '';
+        if (isset($context['sandbox_path']) && is_string($context['sandbox_path'])) {
+            $requested_path = trim($context['sandbox_path']);
+        }
+
+        $allowed_bases = self::get_allowed_sandbox_bases();
+        $base_path = self::resolve_sandbox_path($requested_path, $allowed_bases);
+
+        self::ensure_directory_exists_static($base_path);
+
+        $wp_content = rtrim($base_path, '/\\') . '/wp-content';
+        self::ensure_directory_exists_static($wp_content);
+
+        $routing_table = [
+            'plugins' => $wp_content . '/plugins',
+            'themes' => $wp_content . '/themes',
+            'uploads' => $wp_content . '/uploads',
+            'db' => rtrim($base_path, '/\\') . '/database.sql',
+        ];
+
+        foreach (['plugins', 'themes', 'uploads'] as $key) {
+            self::ensure_directory_exists_static($routing_table[$key]);
+        }
+
+        $database_directory = dirname($routing_table['db']);
+        if ($database_directory !== '' && $database_directory !== '.') {
+            self::ensure_directory_exists_static($database_directory);
+        }
+
+        $sandbox_data = [
+            'base_path' => $base_path,
+            'requested_path' => $requested_path,
+            'created_at' => function_exists('current_time') ? current_time('mysql') : date('Y-m-d H:i:s'),
+            'routing_table' => $routing_table,
+        ];
+
+        if (function_exists('apply_filters')) {
+            $sandbox_data = apply_filters('bjlg_restore_prepare_sandbox', $sandbox_data, $context);
+            if (!is_array($sandbox_data)) {
+                $sandbox_data = [
+                    'base_path' => $base_path,
+                    'requested_path' => $requested_path,
+                    'created_at' => function_exists('current_time') ? current_time('mysql') : date('Y-m-d H:i:s'),
+                    'routing_table' => $routing_table,
+                ];
+            }
+        }
+
+        if (!isset($sandbox_data['routing_table']) || !is_array($sandbox_data['routing_table'])) {
+            $sandbox_data['routing_table'] = $routing_table;
+        }
+
+        return $sandbox_data;
+    }
+
+    /**
+     * Retourne la liste des répertoires autorisés pour les sandboxes.
+     *
+     * @return array<int, string>
+     */
+    private static function get_allowed_sandbox_bases() {
+        $defaults = [
+            self::normalize_path(self::get_default_sandbox_base_dir()),
+        ];
+
+        if (defined('BJLG_BACKUP_DIR')) {
+            $defaults[] = self::normalize_path(BJLG_BACKUP_DIR);
+        }
+
+        if (defined('WP_CONTENT_DIR')) {
+            $defaults[] = self::normalize_path(WP_CONTENT_DIR);
+        }
+
+        $defaults = array_values(array_filter(array_unique($defaults)));
+
+        if (function_exists('apply_filters')) {
+            $allowed = apply_filters('bjlg_restore_sandbox_allowed_paths', $defaults);
+            if (is_array($allowed)) {
+                $sanitized = [];
+                foreach ($allowed as $path) {
+                    if (!is_string($path) || $path === '') {
+                        continue;
+                    }
+                    $sanitized[] = self::normalize_path($path);
+                }
+                if (!empty($sanitized)) {
+                    return array_values(array_unique(array_filter($sanitized)));
+                }
+            }
+        }
+
+        return $defaults;
+    }
+
+    /**
+     * Résout le chemin final de la sandbox.
+     *
+     * @param string $requested_path
+     * @param array<int, string> $allowed_bases
+     * @return string
+     */
+    private static function resolve_sandbox_path($requested_path, array $allowed_bases) {
+        $requested_path = self::normalize_path($requested_path);
+
+        if ($requested_path !== '') {
+            if (!self::is_absolute_path($requested_path)) {
+                $requested_path = rtrim(self::get_default_sandbox_base_dir(), '/\\') . '/' . ltrim($requested_path, '/\\');
+            }
+
+            foreach ($allowed_bases as $base) {
+                if ($base !== '' && self::path_is_within($requested_path, $base)) {
+                    return $requested_path;
+                }
+            }
+
+            throw new RuntimeException('Le chemin de sandbox fourni est interdit.');
+        }
+
+        $base_dir = rtrim(self::get_default_sandbox_base_dir(), '/\\');
+        self::ensure_directory_exists_static($base_dir);
+
+        return $base_dir . '/sandbox-' . uniqid('', true);
+    }
+
+    /**
+     * Retourne le répertoire sandbox par défaut.
+     */
+    private static function get_default_sandbox_base_dir() {
+        $base = defined('BJLG_BACKUP_DIR') ? BJLG_BACKUP_DIR : sys_get_temp_dir() . '/bjlg-backups/';
+
+        return rtrim($base, '/\\') . '/sandboxes';
+    }
+
+    /**
+     * Normalise un chemin.
+     */
+    private static function normalize_path($path) {
+        if (!is_string($path) || $path === '') {
+            return '';
+        }
+
+        if (function_exists('wp_normalize_path')) {
+            $normalized = wp_normalize_path($path);
+        } else {
+            $normalized = str_replace('\\', '/', $path);
+        }
+
+        return rtrim($normalized, '/');
+    }
+
+    /**
+     * Vérifie si un chemin est absolu.
+     */
+    private static function is_absolute_path($path) {
+        if ($path === '') {
+            return false;
+        }
+
+        return $path[0] === '/' || preg_match('/^[A-Za-z]:\//', $path) === 1;
+    }
+
+    /**
+     * Vérifie si un chemin est contenu dans un répertoire de base.
+     */
+    private static function path_is_within($path, $base) {
+        $normalized_path = self::normalize_path($path);
+        $normalized_base = self::normalize_path($base);
+
+        if ($normalized_path === '' || $normalized_base === '') {
+            return false;
+        }
+
+        if ($normalized_path === $normalized_base) {
+            return true;
+        }
+
+        return strpos($normalized_path . '/', rtrim($normalized_base, '/') . '/') === 0;
+    }
+
+    /**
+     * S'assure qu'un répertoire existe (version statique).
+     */
+    private static function ensure_directory_exists_static($directory) {
+        if ($directory === '' || is_dir($directory)) {
+            return;
+        }
+
+        if (function_exists('wp_mkdir_p') && wp_mkdir_p($directory)) {
+            return;
+        }
+
+        if (!@mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new RuntimeException('Impossible de préparer le répertoire de sandbox.');
         }
     }
 
@@ -540,6 +1046,47 @@ class BJLG_Restore {
 
         $requested_components = self::normalize_requested_components($raw_components);
 
+        $restore_environment = self::ENV_PRODUCTION;
+        if (array_key_exists('restore_environment', $_POST)) {
+            $raw_environment = wp_unslash($_POST['restore_environment']);
+            if (is_string($raw_environment)) {
+                $restore_environment = sanitize_key($raw_environment);
+            }
+        }
+
+        if ($restore_environment === self::ENV_SANDBOX && !self::user_can_use_sandbox()) {
+            wp_send_json_error([
+                'message' => 'Permission insuffisante pour utiliser la sandbox.',
+            ], 403);
+        }
+
+        $sandbox_path = '';
+        if (array_key_exists('sandbox_path', $_POST)) {
+            $raw_sandbox_path = wp_unslash($_POST['sandbox_path']);
+            if (is_string($raw_sandbox_path)) {
+                $sandbox_path = trim($raw_sandbox_path);
+            }
+        }
+
+        try {
+            $environment_config = self::prepare_environment($restore_environment, [
+                'sandbox_path' => $sandbox_path,
+            ]);
+        } catch (Exception $exception) {
+            $error_message = $exception->getMessage();
+            $response = [
+                'message' => 'Impossible de préparer la cible de restauration : ' . $error_message,
+            ];
+
+            if ($restore_environment === self::ENV_SANDBOX) {
+                $response['validation_errors'] = [
+                    'sandbox_path' => [$error_message],
+                ];
+            }
+
+            wp_send_json_error($response, 400);
+        }
+
         $password = null;
         if (array_key_exists('password', $_POST)) {
             $maybe_password = wp_unslash($_POST['password']);
@@ -592,7 +1139,13 @@ class BJLG_Restore {
             'password_encrypted' => $encrypted_password,
             'create_restore_point' => $create_backup_before_restore,
             'components' => $requested_components,
+            'environment' => $environment_config['environment'],
+            'routing_table' => $environment_config['routing_table'],
         ];
+
+        if (!empty($environment_config['sandbox'])) {
+            $task_data['sandbox'] = $environment_config['sandbox'];
+        }
 
         if (!BJLG_Backup::reserve_task_slot($task_id)) {
             if (class_exists('BJLG_Debug')) {
@@ -700,6 +1253,24 @@ class BJLG_Restore {
             return;
         }
 
+        $environment = self::ENV_PRODUCTION;
+        if (is_array($task_data) && isset($task_data['environment']) && is_string($task_data['environment'])) {
+            $maybe_environment = sanitize_key($task_data['environment']);
+            if ($maybe_environment === self::ENV_SANDBOX) {
+                $environment = self::ENV_SANDBOX;
+            }
+        }
+
+        $routing_table = [];
+        if (isset($task_data['routing_table']) && is_array($task_data['routing_table'])) {
+            $routing_table = $task_data['routing_table'];
+        }
+
+        $sandbox_context = null;
+        if (isset($task_data['sandbox']) && is_array($task_data['sandbox'])) {
+            $sandbox_context = $task_data['sandbox'];
+        }
+
         $filepath = $task_data['filepath'];
         $encrypted_password = $task_data['password_encrypted'] ?? null;
         $password = null;
@@ -708,6 +1279,7 @@ class BJLG_Restore {
         $create_restore_point = !empty($task_data['create_restore_point']);
         $requested_components = self::normalize_requested_components($task_data['components'] ?? null);
         $current_status = is_array($task_data) ? $task_data : [];
+        $current_status['environment'] = $environment;
 
         if (!empty($encrypted_password)) {
             try {
@@ -847,8 +1419,17 @@ class BJLG_Restore {
                     );
                 }
 
+                $history_message = $error_message;
+
+                if ($environment === self::ENV_SANDBOX) {
+                    $sandbox_base_path = $this->get_sandbox_base_path($sandbox_context);
+                    if (!empty($sandbox_base_path)) {
+                        $history_message .= ' (sandbox : ' . $sandbox_base_path . ')';
+                    }
+                }
+
                 try {
-                    BJLG_History::log('restore_run', 'failure', $error_message);
+                    BJLG_History::log('restore_run', 'failure', $history_message);
                 } catch (Throwable $history_exception) {
                     BJLG_Debug::log(
                         "ERREUR: Impossible d'enregistrer l'échec de la restauration : " . $history_exception->getMessage(),
@@ -871,7 +1452,9 @@ class BJLG_Restore {
                 $current_status = array_merge($current_status, [
                     'progress' => 30,
                     'status' => 'running',
-                    'status_text' => 'Restauration de la base de données...'
+                    'status_text' => $environment === self::ENV_SANDBOX
+                        ? 'Préparation de la base de données sandbox...'
+                        : 'Restauration de la base de données...'
                 ]);
                 set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
 
@@ -885,13 +1468,35 @@ class BJLG_Restore {
                     $zip->extractTo($temp_extract_dir, 'database.sql');
                     $sql_filepath = $temp_extract_dir . '/database.sql';
 
-                    BJLG_Debug::log("Import de la base de données...");
-                    $this->import_database($sql_filepath);
+                    if ($environment === self::ENV_SANDBOX) {
+                        $db_destination = $this->resolve_database_destination($routing_table, $sandbox_context);
+
+                        if ($db_destination === null) {
+                            BJLG_Debug::log('Sandbox : aucun emplacement de base de données défini, export ignoré.');
+                        } else {
+                            $database_directory = dirname($db_destination);
+                            if ($database_directory !== '' && $database_directory !== '.') {
+                                self::ensure_directory_exists_static($database_directory);
+                            }
+
+                            if (!@copy($sql_filepath, $db_destination)) {
+                                throw new Exception("Impossible de copier le dump SQL vers la sandbox.");
+                            }
+
+                            BJLG_Debug::log('Dump SQL copié dans la sandbox : ' . $db_destination);
+                        }
+
+                        $status_text = 'Base de données exportée vers la sandbox.';
+                    } else {
+                        BJLG_Debug::log("Import de la base de données...");
+                        $this->import_database($sql_filepath);
+                        $status_text = 'Base de données restaurée.';
+                    }
 
                     $current_status = array_merge($current_status, [
                         'progress' => 50,
                         'status' => 'running',
-                        'status_text' => 'Base de données restaurée.'
+                        'status_text' => $status_text,
                     ]);
                     set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
                 }
@@ -899,15 +1504,22 @@ class BJLG_Restore {
 
             $folders_to_restore = [];
 
-            if (in_array('plugins', $components_to_restore, true)) {
-                $folders_to_restore['plugins'] = WP_PLUGIN_DIR;
-            }
-            if (in_array('themes', $components_to_restore, true)) {
-                $folders_to_restore['themes'] = get_theme_root();
-            }
-            if (in_array('uploads', $components_to_restore, true)) {
-                $upload_dir = wp_get_upload_dir();
-                $folders_to_restore['uploads'] = $upload_dir['basedir'];
+            foreach (['plugins', 'themes', 'uploads'] as $component_type) {
+                if (!in_array($component_type, $components_to_restore, true)) {
+                    continue;
+                }
+
+                $destination = $this->resolve_component_destination($component_type, $routing_table, $environment);
+
+                if ($destination === null) {
+                    if (class_exists('BJLG_Debug')) {
+                        BJLG_Debug::log("Destination introuvable pour {$component_type} dans l'environnement {$environment}, composant ignoré.");
+                    }
+
+                    continue;
+                }
+
+                $folders_to_restore[$component_type] = $destination;
             }
 
             $progress = $current_status['progress'] ?? 50;
@@ -968,7 +1580,16 @@ class BJLG_Restore {
             $this->recursive_delete($temp_extract_dir);
             $this->clear_all_caches();
 
-            BJLG_History::log('restore_run', 'success', "Fichier : " . basename($original_archive_path));
+            $log_details = "Fichier : " . basename($original_archive_path);
+
+            if ($environment === self::ENV_SANDBOX) {
+                $sandbox_base_path = $this->get_sandbox_base_path($sandbox_context);
+                if (!empty($sandbox_base_path)) {
+                    $log_details .= ' | Sandbox : ' . $sandbox_base_path;
+                }
+            }
+
+            BJLG_History::log('restore_run', 'success', $log_details);
 
             $current_status = array_merge($current_status, [
                 'progress' => 100,
@@ -986,8 +1607,17 @@ class BJLG_Restore {
             ]);
             $final_error_status = $current_status;
 
+            $history_message = $error_message;
+
+            if ($environment === self::ENV_SANDBOX) {
+                $sandbox_base_path = $this->get_sandbox_base_path($sandbox_context);
+                if (!empty($sandbox_base_path)) {
+                    $history_message .= ' (sandbox : ' . $sandbox_base_path . ')';
+                }
+            }
+
             try {
-                BJLG_History::log('restore_run', 'failure', $error_message);
+                BJLG_History::log('restore_run', 'failure', $history_message);
             } catch (Throwable $history_exception) {
                 BJLG_Debug::log(
                     "ERREUR: Impossible d'enregistrer l'échec de la restauration : " . $history_exception->getMessage(),

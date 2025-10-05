@@ -233,6 +233,96 @@ final class BJLG_RestoreTaskTest extends TestCase
         }
     }
 
+    public function test_run_restore_task_uses_sandbox_environment_without_touching_production(): void
+    {
+        $temporary_dir = sys_get_temp_dir() . '/bjlg-restore-sandbox-' . uniqid('', true);
+        if (!is_dir($temporary_dir)) {
+            mkdir($temporary_dir, 0755, true);
+        }
+
+        $zip_path = $temporary_dir . '/sandbox.zip';
+        $zip = new ZipArchive();
+        $open_result = $zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+        $this->assertTrue($open_result === true || $open_result === ZipArchive::ER_OK);
+
+        $manifest = [
+            'type' => 'test',
+            'contains' => ['plugins', 'uploads'],
+        ];
+
+        $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $zip->addFromString('wp-content/plugins/sample/plugin.php', '<?php echo "sandbox";');
+        $zip->addFromString('wp-content/uploads/example.txt', 'sandbox file');
+        $zip->close();
+
+        $destination = BJLG_BACKUP_DIR . 'sandbox-' . uniqid('', true) . '.zip';
+        copy($zip_path, $destination);
+
+        $sandbox_target = BJLG_BACKUP_DIR . 'sandbox-target-' . uniqid('', true);
+        $environment_config = BJLG\BJLG_Restore::prepare_environment(
+            BJLG\BJLG_Restore::ENV_SANDBOX,
+            ['sandbox_path' => $sandbox_target]
+        );
+
+        $restore = new BJLG\BJLG_Restore();
+
+        $task_id = 'bjlg_restore_' . uniqid('', true);
+        set_transient($task_id, [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => '',
+            'filename' => basename($destination),
+            'filepath' => $destination,
+            'password_encrypted' => null,
+            'components' => ['plugins', 'uploads'],
+            'environment' => $environment_config['environment'],
+            'routing_table' => $environment_config['routing_table'],
+            'sandbox' => $environment_config['sandbox'],
+        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
+
+        $production_plugin_path = WP_PLUGIN_DIR . '/sample/plugin.php';
+        if (file_exists($production_plugin_path)) {
+            unlink($production_plugin_path);
+        }
+
+        $production_upload_path = wp_get_upload_dir()['basedir'] . '/example.txt';
+        if (file_exists($production_upload_path)) {
+            unlink($production_upload_path);
+        }
+
+        $restore->run_restore_task($task_id);
+
+        $task_data = get_transient($task_id);
+        $this->assertIsArray($task_data);
+        $this->assertSame('complete', $task_data['status']);
+        $this->assertSame(BJLG\BJLG_Restore::ENV_SANDBOX, $task_data['environment']);
+
+        $sandbox_routes = $environment_config['routing_table'];
+        $sandbox_plugin = $sandbox_routes['plugins'] . '/sample/plugin.php';
+        $sandbox_upload = $sandbox_routes['uploads'] . '/example.txt';
+
+        $this->assertFileExists($sandbox_plugin);
+        $this->assertFileExists($sandbox_upload);
+        $this->assertFalse(file_exists($production_plugin_path));
+        $this->assertFalse(file_exists($production_upload_path));
+
+        if (file_exists($destination)) {
+            unlink($destination);
+        }
+
+        if (file_exists($zip_path)) {
+            unlink($zip_path);
+        }
+
+        if (is_dir($temporary_dir)) {
+            bjlg_tests_recursive_delete($temporary_dir);
+        }
+
+        if (isset($environment_config['sandbox']['base_path'])) {
+            bjlg_tests_recursive_delete($environment_config['sandbox']['base_path']);
+        }
+    }
+
     public function test_handle_run_restore_rejects_when_another_restore_is_running(): void
     {
         $restore = new BJLG\BJLG_Restore();

@@ -2152,6 +2152,7 @@ namespace {
         $this->assertIsArray($task_data);
         $this->assertSame(['db'], $task_data['components']);
         $this->assertTrue($task_data['create_restore_point']);
+        $this->assertSame(BJLG\BJLG_Restore::ENV_PRODUCTION, $task_data['environment']);
 
         try {
             $restore = new BJLG_Test_Restore_For_Rest();
@@ -2268,6 +2269,84 @@ namespace {
             if (file_exists($encrypted_path)) {
                 unlink($encrypted_path);
             }
+        }
+    }
+
+    public function test_restore_endpoint_supports_sandbox_environment(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $archive_path = BJLG_BACKUP_DIR . 'bjlg-rest-sandbox-' . uniqid('', true) . '.zip';
+
+        $zip = new \ZipArchive();
+        $open_result = $zip->open($archive_path, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
+        $this->assertTrue($open_result === true || $open_result === \ZipArchive::ER_OK);
+
+        $manifest = [
+            'type' => 'test',
+            'contains' => ['plugins'],
+        ];
+
+        $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $zip->addFromString('wp-content/plugins/sample/plugin.php', '<?php echo "sandbox";');
+        $zip->close();
+
+        $sandbox_target = BJLG_BACKUP_DIR . 'rest-sandbox-target-' . uniqid('', true);
+
+        $request = new class($archive_path, $sandbox_target) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct(string $archive_path, string $sandbox_target)
+            {
+                $this->params = [
+                    'id' => basename($archive_path),
+                    'components' => ['plugins'],
+                    'create_restore_point' => false,
+                    'restore_environment' => BJLG\BJLG_Restore::ENV_SANDBOX,
+                    'sandbox_path' => $sandbox_target,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $response = $api->restore_backup($request);
+
+        $this->assertIsArray($response);
+        $this->assertArrayHasKey('task_id', $response);
+
+        $task_id = $response['task_id'];
+        $task_data = get_transient($task_id);
+
+        $this->assertIsArray($task_data);
+        $this->assertSame(BJLG\BJLG_Restore::ENV_SANDBOX, $task_data['environment']);
+        $this->assertArrayHasKey('sandbox', $task_data);
+        $this->assertIsArray($task_data['sandbox']);
+
+        $restore = new BJLG_Test_Restore_For_Rest();
+        $restore->run_restore_task($task_id);
+
+        $final_status = get_transient($task_id);
+        $this->assertIsArray($final_status);
+        $this->assertSame('complete', $final_status['status']);
+
+        $sandbox_routes = isset($task_data['routing_table']) ? $task_data['routing_table'] : [];
+        $sandbox_plugin = $sandbox_routes['plugins'] . '/sample/plugin.php';
+        $this->assertFileExists($sandbox_plugin);
+        $this->assertFalse(file_exists(WP_PLUGIN_DIR . '/sample/plugin.php'));
+
+        if (file_exists($archive_path)) {
+            unlink($archive_path);
+        }
+
+        if (isset($task_data['sandbox']['base_path'])) {
+            bjlg_tests_recursive_delete($task_data['sandbox']['base_path']);
         }
     }
 
