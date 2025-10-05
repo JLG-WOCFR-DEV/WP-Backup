@@ -414,6 +414,11 @@ class BJLG_Cleanup {
                     return new BJLG_OneDrive();
                 }
                 break;
+            case 'pcloud':
+                if (class_exists(BJLG_PCloud::class)) {
+                    return new BJLG_PCloud();
+                }
+                break;
             case 'sftp':
                 if (class_exists(BJLG_SFTP::class)) {
                     return new BJLG_SFTP();

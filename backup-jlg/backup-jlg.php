@@ -199,6 +199,7 @@ final class BJLG_Plugin {
             'destinations/interface-bjlg-destination.php', 'destinations/abstract-class-bjlg-s3-compatible.php',
             'destinations/class-bjlg-google-drive.php', 'destinations/class-bjlg-aws-s3.php', 'destinations/class-bjlg-sftp.php',
             'destinations/class-bjlg-wasabi.php', 'destinations/class-bjlg-dropbox.php', 'destinations/class-bjlg-onedrive.php',
+            'destinations/class-bjlg-pcloud.php',
         ];
         foreach ($files_to_load as $file) {
             $path = BJLG_INCLUDES_DIR . $file;
