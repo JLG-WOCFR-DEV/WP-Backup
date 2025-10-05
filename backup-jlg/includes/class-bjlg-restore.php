@@ -184,7 +184,7 @@ class BJLG_Restore {
                     continue;
                 }
 
-                $this->recursive_copy($source, $destination);
+                $this->publish_component_directory($source, $destination);
                 $summary[] = $component;
             }
 
@@ -2108,9 +2108,107 @@ class BJLG_Restore {
     }
 
     /**
-     * Copie récursive de fichiers
+     * Prépare et remplace atomiquement un composant de sandbox vers la production.
+     *
+     * @param string $source
+     * @param string $destination
+     * @return void
      */
-    private function recursive_copy($source, $destination) {
+    private function publish_component_directory($source, $destination): void {
+        if (!is_dir($source)) {
+            return;
+        }
+
+        if (file_exists($destination) && !is_dir($destination)) {
+            $this->safe_delete_path($destination);
+        }
+
+        $staging_directory = $this->create_staging_directory($destination);
+
+        try {
+            $this->recursive_copy($source, $staging_directory, true);
+
+            if ($this->swap_component_directories($destination, $staging_directory)) {
+                return;
+            }
+
+            $this->recursive_delete($staging_directory);
+            $this->recursive_copy($source, $destination, true);
+        } catch (Throwable $throwable) {
+            $this->recursive_delete($staging_directory);
+            throw $throwable;
+        }
+    }
+
+    /**
+     * Crée un répertoire de mise en scène pour une promotion sandbox.
+     *
+     * @param string $destination
+     * @return string
+     */
+    private function create_staging_directory($destination) {
+        $normalized_destination = rtrim((string) $destination, '/\\');
+        $parent_directory = $normalized_destination !== '' ? dirname($normalized_destination) : '';
+
+        if ($parent_directory !== '' && $parent_directory !== '.' && $parent_directory !== $normalized_destination) {
+            $this->ensure_directory_exists($parent_directory);
+        }
+
+        $staging_directory = $normalized_destination . '-bjlg-staging-' . str_replace('.', '-', uniqid('', true));
+
+        if (!@mkdir($staging_directory, 0755, true) && !is_dir($staging_directory)) {
+            throw new RuntimeException('Impossible de préparer le répertoire temporaire pour la publication de la sandbox.');
+        }
+
+        return $staging_directory;
+    }
+
+    /**
+     * Échange le répertoire de destination avec son équivalent en mise en scène.
+     *
+     * @param string $destination
+     * @param string $staging_directory
+     * @return bool
+     */
+    private function swap_component_directories($destination, $staging_directory): bool {
+        if (is_link($destination)) {
+            throw new RuntimeException("Lien symbolique détecté lors de la publication : {$destination}");
+        }
+
+        $backup_directory = null;
+
+        if (is_dir($destination)) {
+            $backup_directory = rtrim($destination, '/\\') . '-bjlg-backup-' . str_replace('.', '-', uniqid('', true));
+
+            if (!@rename($destination, $backup_directory)) {
+                return false;
+            }
+        }
+
+        if (!@rename($staging_directory, $destination)) {
+            if ($backup_directory !== null && is_dir($backup_directory)) {
+                @rename($backup_directory, $destination);
+            }
+
+            throw new RuntimeException("Impossible de remplacer le répertoire de destination : {$destination}");
+        }
+
+        if ($backup_directory !== null && is_dir($backup_directory)) {
+            $this->recursive_delete($backup_directory);
+        }
+
+        return true;
+    }
+
+    /**
+     * Copie récursive de fichiers.
+     *
+     * @param string $source
+     * @param string $destination
+     * @param bool   $prune_missing
+     * @return bool
+     */
+    private function recursive_copy($source, $destination, $prune_missing = false) {
         if (!is_dir($source)) {
             return false;
         }
@@ -2122,6 +2220,8 @@ class BJLG_Restore {
             throw new RuntimeException('Impossible d\'ouvrir le répertoire source pour la copie.');
         }
 
+        $copied_entries = [];
+
         try {
             while (($file = readdir($dir)) !== false) {
                 if ($file == '.' || $file == '..') {
@@ -2131,13 +2231,27 @@ class BJLG_Restore {
                 $src_path = $source . '/' . $file;
                 $dst_path = $destination . '/' . $file;
 
+                $copied_entries[] = $file;
+
                 if (is_link($src_path)) {
                     throw new RuntimeException("Lien symbolique détecté lors de la restauration : {$src_path}");
                 }
 
                 if (is_dir($src_path)) {
-                    $this->recursive_copy($src_path, $dst_path);
+                    if (file_exists($dst_path) && !is_dir($dst_path)) {
+                        $this->safe_delete_path($dst_path);
+                    }
+
+                    $this->recursive_copy($src_path, $dst_path, $prune_missing);
                 } else {
+                    if (is_dir($dst_path)) {
+                        $this->safe_delete_path($dst_path);
+                    }
+
+                    if (is_link($dst_path)) {
+                        throw new RuntimeException("Lien symbolique détecté lors de l'écriture : {$dst_path}");
+                    }
+
                     if (!@copy($src_path, $dst_path)) {
                         throw new RuntimeException("Impossible de copier le fichier : {$src_path}");
                     }
@@ -2147,7 +2261,47 @@ class BJLG_Restore {
             closedir($dir);
         }
 
+        if ($prune_missing) {
+            $destination_entries = scandir($destination);
+
+            if ($destination_entries === false) {
+                throw new RuntimeException("Impossible de parcourir le répertoire de destination : {$destination}");
+            }
+
+            foreach ($destination_entries as $entry) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
+
+                if (!in_array($entry, $copied_entries, true)) {
+                    $this->safe_delete_path($destination . '/' . $entry);
+                }
+            }
+        }
+
         return true;
+    }
+
+    /**
+     * Supprime en toute sécurité un chemin fichier ou dossier.
+     *
+     * @param string $path
+     * @return void
+     */
+    private function safe_delete_path($path): void {
+        if (is_link($path)) {
+            throw new RuntimeException("Lien symbolique détecté lors de la suppression : {$path}");
+        }
+
+        if (is_dir($path)) {
+            $this->recursive_delete($path);
+
+            return;
+        }
+
+        if (file_exists($path) && !@unlink($path)) {
+            throw new RuntimeException("Impossible de supprimer le fichier : {$path}");
+        }
     }
 
     /**
@@ -2187,18 +2341,51 @@ class BJLG_Restore {
      * Suppression récursive de dossier
      */
     private function recursive_delete($dir) {
+        if (is_link($dir)) {
+            @unlink($dir);
+
+            return;
+        }
+
+        if (is_file($dir)) {
+            @unlink($dir);
+
+            return;
+        }
+
         if (!is_dir($dir)) {
             return;
         }
-        
-        $files = array_diff(scandir($dir), ['.', '..']);
-        
-        foreach ($files as $file) {
-            $path = $dir . '/' . $file;
-            is_dir($path) ? $this->recursive_delete($path) : unlink($path);
+
+        $files = scandir($dir);
+
+        if ($files === false) {
+            return;
         }
-        
-        rmdir($dir);
+
+        foreach ($files as $file) {
+            if ($file === '.' || $file === '..') {
+                continue;
+            }
+
+            $path = $dir . '/' . $file;
+
+            if (is_link($path)) {
+                @unlink($path);
+
+                continue;
+            }
+
+            if (is_dir($path)) {
+                $this->recursive_delete($path);
+
+                continue;
+            }
+
+            @unlink($path);
+        }
+
+        @rmdir($dir);
     }
 
     /**

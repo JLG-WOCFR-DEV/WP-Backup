@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BJLG\BJLG_Restore;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/class-bjlg-restore.php';
@@ -475,6 +476,85 @@ final class BJLG_RestoreTaskTest extends TestCase
 
         $this->assertNotEmpty($wpdb->queries);
         $this->assertStringContainsString("\\_transient\\_bjlg\\_%", $wpdb->queries[0]);
+    }
+
+    public function test_publish_sandbox_removes_obsolete_production_files(): void
+    {
+        $sandbox_base = sys_get_temp_dir() . '/bjlg-sandbox-publish-' . uniqid('', true);
+        $sandbox_plugins_dir = $sandbox_base . '/wp-content/plugins';
+        $sandbox_plugin_dir = $sandbox_plugins_dir . '/sample-plugin';
+        $sandbox_plugin_file = $sandbox_plugin_dir . '/plugin.php';
+
+        if (!is_dir($sandbox_plugin_dir)) {
+            mkdir($sandbox_plugin_dir, 0777, true);
+        }
+
+        file_put_contents($sandbox_plugin_file, "<?php // sandbox version\n");
+
+        $production_plugin_dir = WP_PLUGIN_DIR . '/sample-plugin';
+        $production_plugin_file = $production_plugin_dir . '/plugin.php';
+        $obsolete_file = $production_plugin_dir . '/obsolete.txt';
+
+        bjlg_tests_recursive_delete($production_plugin_dir);
+
+        mkdir($production_plugin_dir, 0777, true);
+        file_put_contents($production_plugin_file, "<?php // production version\n");
+        file_put_contents($obsolete_file, 'to be removed');
+
+        $task_id = 'bjlg_publish_' . uniqid('', true);
+        $task_data = [
+            'environment' => BJLG_Restore::ENV_SANDBOX,
+            'routing_table' => [
+                'plugins' => $sandbox_plugins_dir,
+            ],
+            'sandbox' => [
+                'base_path' => $sandbox_base,
+                'routing_table' => [
+                    'plugins' => $sandbox_plugins_dir,
+                ],
+            ],
+            'components' => ['plugins'],
+        ];
+
+        set_transient($task_id, $task_data, 3600);
+
+        $_POST['task_id'] = $task_id;
+        $_POST['nonce'] = 'publish';
+
+        $restore = new class(false) extends BJLG_Restore {
+            public function __construct($backup_manager = null)
+            {
+                parent::__construct($backup_manager);
+            }
+
+            protected function perform_pre_restore_backup(): array
+            {
+                return [
+                    'filename' => 'dummy.zip',
+                    'filepath' => BJLG_BACKUP_DIR . 'dummy.zip',
+                ];
+            }
+        };
+
+        try {
+            $restore->handle_publish_sandbox();
+            $this->fail('Expected JSON response not thrown');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+            $this->assertSame('Sandbox promue en production.', $response->data['message']);
+        }
+
+        $this->assertFileExists($production_plugin_file);
+        $this->assertSame(
+            file_get_contents($sandbox_plugin_file),
+            file_get_contents($production_plugin_file)
+        );
+        $this->assertFalse(file_exists($obsolete_file));
+
+        bjlg_tests_recursive_delete($sandbox_base);
+        bjlg_tests_recursive_delete($production_plugin_dir);
+        delete_transient($task_id);
+        unset($_POST['task_id'], $_POST['nonce']);
     }
 
     private function removePath(string $path): void
