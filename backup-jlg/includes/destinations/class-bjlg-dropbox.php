@@ -99,7 +99,87 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
             echo "<p><a class='button button-secondary' href='" . esc_url($disconnect_url) . "'>Déconnecter Dropbox</a></p>";
         }
 
+        if ($this->is_connected()) {
+            echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' class='bjlg-dropbox-disconnect-form'>";
+            echo "<input type='hidden' name='action' value='bjlg_dropbox_disconnect'>";
+            if (function_exists('wp_nonce_field')) {
+                wp_nonce_field('bjlg_dropbox_disconnect', 'bjlg_dropbox_nonce');
+            }
+            echo "<button type='submit' class='button'>Déconnecter Dropbox</button></form>";
+        }
+
         echo '</div>';
+    }
+
+    public function test_connection(?array $settings = null) {
+        $settings = $settings ? array_merge($this->get_default_settings(), $settings) : $this->get_settings();
+
+        if (empty($settings['access_token'])) {
+            throw new Exception("Token d'accès Dropbox manquant.");
+        }
+
+        $path = $this->normalize_folder($settings['folder']);
+        $this->api_json('https://api.dropboxapi.com/2/files/list_folder', [
+            'path' => $path === '' ? '' : $path,
+            'recursive' => false,
+            'include_media_info' => false,
+            'include_deleted' => false,
+        ], $settings);
+
+        $this->store_status([
+            'last_result' => 'success',
+            'tested_at' => $this->get_time(),
+            'message' => 'Connexion Dropbox vérifiée avec succès.',
+        ]);
+
+        return true;
+    }
+
+    public function handle_test_connection() {
+        if (!\bjlg_can_manage_plugin()) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $settings = [
+            'access_token' => isset($_POST['dropbox_access_token']) ? sanitize_text_field(wp_unslash($_POST['dropbox_access_token'])) : '',
+            'folder' => isset($_POST['dropbox_folder']) ? sanitize_text_field(wp_unslash($_POST['dropbox_folder'])) : '',
+            'enabled' => true,
+        ];
+
+        try {
+            $this->test_connection($settings);
+            wp_send_json_success(['message' => 'Connexion Dropbox réussie.']);
+        } catch (Exception $exception) {
+            $this->store_status([
+                'last_result' => 'error',
+                'tested_at' => $this->get_time(),
+                'message' => $exception->getMessage(),
+            ]);
+
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public function handle_disconnect_request() {
+        if (!\bjlg_can_manage_plugin()) {
+            return;
+        }
+
+        if (isset($_POST['bjlg_dropbox_nonce'])) {
+            $nonce = wp_unslash($_POST['bjlg_dropbox_nonce']);
+            if (function_exists('wp_verify_nonce') && !wp_verify_nonce($nonce, 'bjlg_dropbox_disconnect')) {
+                return;
+            }
+        }
+
+        $this->disconnect();
+
+        if (function_exists('wp_safe_redirect')) {
+            wp_safe_redirect(admin_url('admin.php?page=backup-jlg&tab=settings'));
+            exit;
+        }
     }
 
     public function upload_file($filepath, $task_id) {

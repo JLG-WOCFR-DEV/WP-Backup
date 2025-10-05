@@ -1802,6 +1802,7 @@ class BJLG_Admin {
                 'onedrive' => 'Microsoft OneDrive',
                 'pcloud' => 'pCloud',
                 'sftp' => 'Serveur SFTP',
+                'wasabi' => 'Wasabi',
             ];
         }
 

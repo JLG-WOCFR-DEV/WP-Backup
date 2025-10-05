@@ -99,7 +99,81 @@ class BJLG_OneDrive implements BJLG_Destination_Interface {
             echo "<p><a class='button button-secondary' href='" . esc_url($disconnect_url) . "'>Déconnecter OneDrive</a></p>";
         }
 
+        if ($this->is_connected()) {
+            echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' class='bjlg-onedrive-disconnect-form'>";
+            echo "<input type='hidden' name='action' value='bjlg_onedrive_disconnect'>";
+            if (function_exists('wp_nonce_field')) {
+                wp_nonce_field('bjlg_onedrive_disconnect', 'bjlg_onedrive_nonce');
+            }
+            echo "<button type='submit' class='button'>Déconnecter OneDrive</button></form>";
+        }
+
         echo '</div>';
+    }
+
+    public function test_connection(?array $settings = null) {
+        $settings = $settings ? array_merge($this->get_default_settings(), $settings) : $this->get_settings();
+
+        if (empty($settings['access_token'])) {
+            throw new Exception("Token d'accès OneDrive manquant.");
+        }
+
+        $this->api_request('https://graph.microsoft.com/v1.0/me/drive/root', $settings, 'GET');
+
+        $this->store_status([
+            'last_result' => 'success',
+            'tested_at' => $this->get_time(),
+            'message' => 'Connexion OneDrive vérifiée avec succès.',
+        ]);
+
+        return true;
+    }
+
+    public function handle_test_connection() {
+        if (!\bjlg_can_manage_plugin()) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $settings = [
+            'access_token' => isset($_POST['onedrive_access_token']) ? sanitize_text_field(wp_unslash($_POST['onedrive_access_token'])) : '',
+            'folder' => isset($_POST['onedrive_folder']) ? sanitize_text_field(wp_unslash($_POST['onedrive_folder'])) : '',
+            'enabled' => true,
+        ];
+
+        try {
+            $this->test_connection($settings);
+            wp_send_json_success(['message' => 'Connexion OneDrive réussie.']);
+        } catch (Exception $exception) {
+            $this->store_status([
+                'last_result' => 'error',
+                'tested_at' => $this->get_time(),
+                'message' => $exception->getMessage(),
+            ]);
+
+            wp_send_json_error(['message' => $exception->getMessage()]);
+        }
+    }
+
+    public function handle_disconnect_request() {
+        if (!\bjlg_can_manage_plugin()) {
+            return;
+        }
+
+        if (isset($_POST['bjlg_onedrive_nonce'])) {
+            $nonce = wp_unslash($_POST['bjlg_onedrive_nonce']);
+            if (function_exists('wp_verify_nonce') && !wp_verify_nonce($nonce, 'bjlg_onedrive_disconnect')) {
+                return;
+            }
+        }
+
+        $this->disconnect();
+
+        if (function_exists('wp_safe_redirect')) {
+            wp_safe_redirect(admin_url('admin.php?page=backup-jlg&tab=settings'));
+            exit;
+        }
     }
 
     public function upload_file($filepath, $task_id) {

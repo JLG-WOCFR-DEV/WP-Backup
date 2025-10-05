@@ -89,6 +89,21 @@ class BJLG_Settings {
             'object_prefix' => '',
             'enabled' => false,
         ],
+        'dropbox' => [
+            'access_token' => '',
+            'folder' => '',
+            'enabled' => false,
+        ],
+        'onedrive' => [
+            'access_token' => '',
+            'folder' => '',
+            'enabled' => false,
+        ],
+        'pcloud' => [
+            'access_token' => '',
+            'folder' => '',
+            'enabled' => false,
+        ],
         'azure_blob' => [
             'account_name' => '',
             'account_key' => '',
