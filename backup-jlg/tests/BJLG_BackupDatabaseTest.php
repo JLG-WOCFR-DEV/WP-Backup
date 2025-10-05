@@ -93,7 +93,15 @@ final class BJLG_BackupDatabaseTest extends TestCase
                     return [['wp_test']];
                 }
 
-                if (stripos($query, 'SELECT * FROM `wp_test`') === 0) {
+                if (stripos($query, 'SHOW INDEX FROM `wp_test`') === 0) {
+                    return [[
+                        'Key_name' => 'PRIMARY',
+                        'Column_name' => 'id',
+                        'Seq_in_index' => 1,
+                    ]];
+                }
+
+                if (stripos($query, 'SELECT * FROM `wp_test` ORDER BY `id` ASC LIMIT 1000') === 0) {
                     return [[
                         'id' => 1,
                         'name' => "Streamed",
@@ -109,6 +117,17 @@ final class BJLG_BackupDatabaseTest extends TestCase
                     return ['wp_test', 'CREATE TABLE `wp_test` (`id` int(11))'];
                 }
 
+                if (stripos($query, 'SHOW COLUMNS FROM `wp_test`') === 0) {
+                    return [
+                        'Field' => 'id',
+                        'Type' => 'int(11)',
+                        'Null' => 'NO',
+                        'Key' => 'PRI',
+                        'Default' => null,
+                        'Extra' => '',
+                    ];
+                }
+
                 return null;
             }
 
@@ -119,6 +138,23 @@ final class BJLG_BackupDatabaseTest extends TestCase
                 }
 
                 return 0;
+            }
+
+            public function prepare($query, ...$args)
+            {
+                if (count($args) === 1 && is_array($args[0])) {
+                    $args = $args[0];
+                }
+
+                $formatted = array_map(static function ($arg) {
+                    if (is_int($arg) || is_float($arg)) {
+                        return $arg;
+                    }
+
+                    return "'" . str_replace("'", "\\'", (string) $arg) . "'";
+                }, $args);
+
+                return vsprintf($query, $formatted);
             }
         };
 
@@ -298,26 +334,31 @@ final class BJLG_BackupDatabaseTest extends TestCase
                     return [['wp_large']];
                 }
 
-                if (preg_match('/^SELECT \* FROM `wp_large` LIMIT (\d+), (\d+)/i', $query, $matches) === 1) {
+                if (stripos($query, 'SHOW INDEX FROM `wp_large`') === 0) {
+                    return [[
+                        'Key_name' => 'PRIMARY',
+                        'Column_name' => 'id',
+                        'Seq_in_index' => 1,
+                    ]];
+                }
+
+                if (stripos($query, 'SELECT * FROM `wp_large`') === 0) {
                     $this->selectQueries[] = $query;
-
-                    $offset = (int) $matches[1];
-
-                    if ($offset === 0) {
+                    if (stripos($query, 'WHERE') === false) {
                         return [
                             ['id' => 1, 'value' => 'batch-0-row-1'],
                             ['id' => 2, 'value' => 'batch-0-row-2'],
                         ];
                     }
 
-                    if ($offset === 1000) {
+                    if (strpos($query, 'WHERE `id` > 2') !== false) {
                         return [
                             ['id' => 1001, 'value' => 'batch-1-row-1'],
                             ['id' => 1002, 'value' => 'batch-1-row-2'],
                         ];
                     }
 
-                    if ($offset === 2000) {
+                    if (strpos($query, 'WHERE `id` > 1002') !== false) {
                         return [
                             ['id' => 2001, 'value' => 'batch-2-row-1'],
                         ];
@@ -335,6 +376,13 @@ final class BJLG_BackupDatabaseTest extends TestCase
                     return ['wp_large', 'CREATE TABLE `wp_large` (`id` int(11), `value` varchar(255))'];
                 }
 
+                if (stripos($query, 'SHOW COLUMNS FROM `wp_large`') === 0) {
+                    return [
+                        'Field' => 'id',
+                        'Type' => 'int(11)',
+                    ];
+                }
+
                 return null;
             }
 
@@ -345,6 +393,23 @@ final class BJLG_BackupDatabaseTest extends TestCase
                 }
 
                 return 0;
+            }
+
+            public function prepare($query, ...$args)
+            {
+                if (count($args) === 1 && is_array($args[0])) {
+                    $args = $args[0];
+                }
+
+                $formatted = array_map(static function ($arg) {
+                    if (is_int($arg) || is_float($arg)) {
+                        return $arg;
+                    }
+
+                    return "'" . str_replace("'", "\\'", (string) $arg) . "'";
+                }, $args);
+
+                return vsprintf($query, $formatted);
             }
         };
 
@@ -372,9 +437,10 @@ final class BJLG_BackupDatabaseTest extends TestCase
         $wpdb_mock = $GLOBALS['wpdb'];
 
         $this->assertSame([
-            'SELECT * FROM `wp_large` LIMIT 0, 1000',
-            'SELECT * FROM `wp_large` LIMIT 1000, 1000',
-            'SELECT * FROM `wp_large` LIMIT 2000, 1000',
+            'SELECT * FROM `wp_large` ORDER BY `id` ASC LIMIT 1000',
+            'SELECT * FROM `wp_large` WHERE `id` > 2 ORDER BY `id` ASC LIMIT 1000',
+            'SELECT * FROM `wp_large` WHERE `id` > 1002 ORDER BY `id` ASC LIMIT 1000',
+            'SELECT * FROM `wp_large` WHERE `id` > 2001 ORDER BY `id` ASC LIMIT 1000',
         ], $wpdb_mock->selectQueries);
 
         $this->assertStringContainsString('batch-0-row-1', $dumpContent);
@@ -436,26 +502,22 @@ final class BJLG_BackupDatabaseTest extends TestCase
                     return [['wp_large_stream']];
                 }
 
-                if (preg_match('/^SELECT \* FROM `wp_large_stream` LIMIT (\d+), (\d+)/i', $query, $matches) === 1) {
+                if (stripos($query, 'SHOW INDEX FROM `wp_large_stream`') === 0) {
+                    return [];
+                }
+
+                if (stripos($query, 'SELECT * FROM `wp_large_stream`') === 0) {
                     $this->selectQueries[] = $query;
-
-                    $offset = (int) $matches[1];
-
-                    if ($offset === 0) {
-                        return [
+                    return array_merge(
+                        [
                             ['id' => 1, 'value' => 'stream-batch-0-row-1'],
                             ['id' => 2, 'value' => 'stream-batch-0-row-2'],
-                        ];
-                    }
-
-                    if ($offset === 1000) {
-                        return [
+                        ],
+                        [
                             ['id' => 1001, 'value' => 'stream-batch-1-row-1'],
                             ['id' => 1002, 'value' => 'stream-batch-1-row-2'],
-                        ];
-                    }
-
-                    return [];
+                        ]
+                    );
                 }
 
                 return [];
@@ -477,6 +539,23 @@ final class BJLG_BackupDatabaseTest extends TestCase
                 }
 
                 return 0;
+            }
+
+            public function prepare($query, ...$args)
+            {
+                if (count($args) === 1 && is_array($args[0])) {
+                    $args = $args[0];
+                }
+
+                $formatted = array_map(static function ($arg) {
+                    if (is_int($arg) || is_float($arg)) {
+                        return $arg;
+                    }
+
+                    return "'" . str_replace("'", "\\'", (string) $arg) . "'";
+                }, $args);
+
+                return vsprintf($query, $formatted);
             }
         };
 
@@ -504,8 +583,7 @@ final class BJLG_BackupDatabaseTest extends TestCase
         $wpdb_mock = $GLOBALS['wpdb'];
 
         $this->assertSame([
-            'SELECT * FROM `wp_large_stream` LIMIT 0, 1000',
-            'SELECT * FROM `wp_large_stream` LIMIT 1000, 1000',
+            'SELECT * FROM `wp_large_stream`',
         ], $wpdb_mock->selectQueries);
 
         $this->assertStringContainsString('stream-batch-0-row-1', $dumpContent);
@@ -523,6 +601,183 @@ final class BJLG_BackupDatabaseTest extends TestCase
             unset($GLOBALS['wpdb']);
         } else {
             $GLOBALS['wpdb'] = $previous_wpdb;
+        }
+    }
+
+    /**
+     * @runInSeparateProcess
+     */
+    public function test_backup_database_respects_incremental_table_changes(): void
+    {
+        require_once __DIR__ . '/stubs/class-bjlg-incremental-stub.php';
+
+        BJLG_Incremental::$changedTables = [
+            'wp_changed' => true,
+            'wp_unchanged' => false,
+        ];
+        BJLG_Incremental::$checkedTables = [];
+        new BJLG_Incremental();
+
+        $backup = new BJLG\BJLG_Backup();
+
+        $zip = new class extends ZipArchive {
+            /** @var array<int, array{0: string, 1: string}> */
+            public $addedFiles = [];
+
+            /** @var array<string, string|false> */
+            public $fileContents = [];
+
+            public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
+            {
+                $this->addedFiles[] = [$filepath, $entryname];
+                $this->fileContents[$entryname] = @file_get_contents($filepath);
+
+                return true;
+            }
+        };
+
+        $previous_wpdb = $GLOBALS['wpdb'] ?? null;
+
+        $GLOBALS['wpdb'] = new class {
+            /** @var string */
+            public $prefix = 'wp_';
+
+            /** @var array<int, string> */
+            public $selectQueries = [];
+
+            /** @var array<int, string> */
+            public $createTableQueries = [];
+
+            public function get_results($query, $output = 'OBJECT')
+            {
+                if (stripos($query, 'SHOW TABLES') === 0) {
+                    return [
+                        ['wp_changed'],
+                        ['wp_unchanged'],
+                    ];
+                }
+
+                if (stripos($query, 'SHOW INDEX FROM `wp_changed`') === 0) {
+                    return [[
+                        'Key_name' => 'PRIMARY',
+                        'Column_name' => 'id',
+                        'Seq_in_index' => 1,
+                    ]];
+                }
+
+                if (stripos($query, 'SELECT * FROM `wp_changed`') === 0) {
+                    $this->selectQueries[] = $query;
+
+                    if (stripos($query, 'WHERE') === false) {
+                        return [
+                            ['id' => 1, 'value' => 'changed-1'],
+                            ['id' => 2, 'value' => 'changed-2'],
+                        ];
+                    }
+
+                    return [];
+                }
+
+                $this->selectQueries[] = $query;
+
+                return [];
+            }
+
+            public function get_row($query, $output = 'OBJECT', $y = 0)
+            {
+                if (stripos($query, 'SHOW CREATE TABLE') === 0) {
+                    $this->createTableQueries[] = $query;
+
+                    if (strpos($query, '`wp_changed`') !== false) {
+                        return ['wp_changed', 'CREATE TABLE `wp_changed` (`id` int(11), `value` varchar(255))'];
+                    }
+
+                    if (strpos($query, '`wp_unchanged`') !== false) {
+                        return ['wp_unchanged', 'CREATE TABLE `wp_unchanged` (`id` int(11))'];
+                    }
+                }
+
+                if (stripos($query, 'SHOW COLUMNS FROM `wp_changed`') === 0) {
+                    return [
+                        'Field' => 'id',
+                        'Type' => 'int(11)',
+                    ];
+                }
+
+                return null;
+            }
+
+            public function get_var($query)
+            {
+                if (stripos($query, 'SELECT COUNT(*) FROM `wp_changed`') === 0) {
+                    return 2;
+                }
+
+                if (stripos($query, 'SELECT COUNT(*) FROM `wp_unchanged`') === 0) {
+                    return 1;
+                }
+
+                return 0;
+            }
+
+            public function prepare($query, ...$args)
+            {
+                if (count($args) === 1 && is_array($args[0])) {
+                    $args = $args[0];
+                }
+
+                $formatted = array_map(static function ($arg) {
+                    if (is_int($arg) || is_float($arg)) {
+                        return $arg;
+                    }
+
+                    return "'" . str_replace("'", "\\'", (string) $arg) . "'";
+                }, $args);
+
+                return vsprintf($query, $formatted);
+            }
+        };
+
+        try {
+            $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'backup_database');
+            $method->setAccessible(true);
+            $method->invokeArgs($backup, [&$zip, true]);
+
+            $this->assertSame([
+                'wp_changed',
+                'wp_unchanged',
+            ], BJLG_Incremental::$checkedTables);
+
+            $wpdb_mock = $GLOBALS['wpdb'];
+
+            $this->assertCount(1, $wpdb_mock->createTableQueries);
+            $this->assertStringContainsString('`wp_changed`', $wpdb_mock->createTableQueries[0]);
+
+            $this->assertSame([
+                'SELECT * FROM `wp_changed` ORDER BY `id` ASC LIMIT 1000',
+                'SELECT * FROM `wp_changed` WHERE `id` > 2 ORDER BY `id` ASC LIMIT 1000',
+            ], $wpdb_mock->selectQueries);
+
+            $this->assertNotEmpty($zip->addedFiles);
+            $this->assertArrayHasKey('database.sql', $zip->fileContents);
+
+            $dumpContent = $zip->fileContents['database.sql'];
+            $this->assertIsString($dumpContent);
+
+            $this->assertStringContainsString('-- Table: wp_changed', $dumpContent);
+            $this->assertStringNotContainsString('-- Table: wp_unchanged', $dumpContent);
+            $this->assertStringContainsString('changed-1', $dumpContent);
+            $this->assertStringContainsString('changed-2', $dumpContent);
+        } finally {
+            if ($previous_wpdb === null) {
+                unset($GLOBALS['wpdb']);
+            } else {
+                $GLOBALS['wpdb'] = $previous_wpdb;
+            }
+
+            BJLG_Incremental::$changedTables = [];
+            BJLG_Incremental::$checkedTables = [];
+            BJLG_Incremental::$latestInstance = null;
         }
     }
 }

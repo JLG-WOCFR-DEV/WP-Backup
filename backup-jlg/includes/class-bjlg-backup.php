@@ -1207,14 +1207,13 @@ class BJLG_Backup {
                 if ($row_count > 0) {
                     fwrite($handle, "-- Data for table: {$table}\n");
 
-                    // Traiter par lots pour économiser la mémoire
                     $batch_size = 1000;
-                    for ($offset = 0; $offset < $row_count; $offset += $batch_size) {
-                        $rows = $wpdb->get_results("SELECT * FROM `{$table}` LIMIT {$offset}, {$batch_size}", ARRAY_A);
+                    $primary_key = $this->get_table_primary_key($table);
 
-                        if ($rows) {
-                            fwrite($handle, $this->create_insert_statement($table, $rows));
-                        }
+                    if ($primary_key !== null) {
+                        $this->export_table_by_primary_key($handle, $table, $primary_key, $batch_size);
+                    } else {
+                        $this->export_table_with_streaming($handle, $table, $batch_size);
                     }
                 }
             }
@@ -1257,6 +1256,207 @@ class BJLG_Backup {
         }
 
         return "INSERT INTO `{$table}` ({$columns_str}) VALUES\n" . implode(",\n", $values) . ";\n\n";
+    }
+
+    /**
+     * Détermine la colonne de clé primaire pour une table donnée si elle est exploitable.
+     *
+     * @param string $table
+     * @return array{column: string, numeric: bool}|null
+     */
+    private function get_table_primary_key($table)
+    {
+        global $wpdb;
+
+        if (!$this->is_safe_identifier($table)) {
+            return null;
+        }
+
+        $quoted_table = $this->quote_identifier($table);
+
+        $indexes = $wpdb->get_results("SHOW INDEX FROM {$quoted_table}", ARRAY_A);
+
+        if (empty($indexes)) {
+            return null;
+        }
+
+        $primary_columns = array_values(array_filter($indexes, static function ($index) {
+            return isset($index['Key_name']) && $index['Key_name'] === 'PRIMARY';
+        }));
+
+        if (count($primary_columns) !== 1 || !isset($primary_columns[0]['Column_name'])) {
+            return null;
+        }
+
+        $primary_column = (string) $primary_columns[0]['Column_name'];
+
+        if (!$this->is_safe_identifier($primary_column)) {
+            return null;
+        }
+
+        $column_query = $wpdb->prepare(
+            "SHOW COLUMNS FROM {$quoted_table} LIKE %s",
+            $primary_column
+        );
+
+        $column_details = $wpdb->get_row($column_query, ARRAY_A);
+
+        $is_numeric = false;
+
+        if (is_array($column_details) && isset($column_details['Type'])) {
+            $type = strtolower((string) $column_details['Type']);
+            $is_numeric = (bool) preg_match('/^(?:tinyint|smallint|mediumint|int|bigint|decimal|numeric|float|double)/', $type);
+        }
+
+        return [
+            'column' => $primary_column,
+            'numeric' => $is_numeric,
+        ];
+    }
+
+    /**
+     * Exporte les lignes d'une table en se basant sur des intervalles de clé primaire.
+     *
+     * @param resource $handle
+     * @param string   $table
+     * @param array{column: string, numeric: bool} $primary_key
+     * @param int      $batch_size
+     * @return void
+     */
+    private function export_table_by_primary_key($handle, $table, array $primary_key, $batch_size)
+    {
+        global $wpdb;
+
+        $batch_size = max(1, (int) $batch_size);
+        $quoted_table = $this->quote_identifier($table);
+        $quoted_column = $this->quote_identifier($primary_key['column']);
+
+        $last_value = null;
+        $placeholder = $primary_key['numeric'] ? '%d' : '%s';
+
+        do {
+            if ($last_value === null) {
+                $query = sprintf(
+                    'SELECT * FROM %s ORDER BY %s ASC LIMIT %d',
+                    $quoted_table,
+                    $quoted_column,
+                    $batch_size
+                );
+            } else {
+                $prepared_sql = sprintf(
+                    'SELECT * FROM %s WHERE %s > %s ORDER BY %s ASC LIMIT %d',
+                    $quoted_table,
+                    $quoted_column,
+                    $placeholder,
+                    $quoted_column,
+                    $batch_size
+                );
+
+                $query = $wpdb->prepare($prepared_sql, $last_value);
+            }
+
+            $rows = $wpdb->get_results($query, ARRAY_A);
+
+            if (empty($rows)) {
+                break;
+            }
+
+            fwrite($handle, $this->create_insert_statement($table, $rows));
+
+            $last_row = end($rows);
+            $current_value = $last_row[$primary_key['column']] ?? null;
+
+            if ($current_value === null || $current_value === $last_value) {
+                break;
+            }
+
+            if ($primary_key['numeric']) {
+                $last_value = (int) $current_value;
+            } else {
+                $last_value = (string) $current_value;
+            }
+        } while (true);
+    }
+
+    /**
+     * Exporte les données d'une table en mode streaming lorsque la clé primaire n'est pas exploitable.
+     *
+     * @param resource $handle
+     * @param string   $table
+     * @param int      $batch_size
+     * @return void
+     */
+    private function export_table_with_streaming($handle, $table, $batch_size)
+    {
+        global $wpdb;
+
+        if (!$this->is_safe_identifier($table)) {
+            return;
+        }
+
+        $batch_size = max(1, (int) $batch_size);
+        $quoted_table = $this->quote_identifier($table);
+
+        $dbh = $wpdb->dbh ?? null;
+
+        if ($dbh instanceof \mysqli) {
+            $result = $dbh->query("SELECT * FROM {$quoted_table}", MYSQLI_USE_RESULT);
+
+            if ($result instanceof \mysqli_result) {
+                try {
+                    $buffer = [];
+
+                    while ($row = $result->fetch_assoc()) {
+                        $buffer[] = $row;
+
+                        if (count($buffer) >= $batch_size) {
+                            fwrite($handle, $this->create_insert_statement($table, $buffer));
+                            $buffer = [];
+                        }
+                    }
+
+                    if (!empty($buffer)) {
+                        fwrite($handle, $this->create_insert_statement($table, $buffer));
+                    }
+                } finally {
+                    $result->free();
+                }
+
+                return;
+            }
+        }
+
+        $rows = $wpdb->get_results("SELECT * FROM {$quoted_table}", ARRAY_A);
+
+        if (empty($rows)) {
+            return;
+        }
+
+        foreach (array_chunk($rows, $batch_size) as $chunk) {
+            fwrite($handle, $this->create_insert_statement($table, $chunk));
+        }
+    }
+
+    /**
+     * Vérifie qu'un identifiant SQL (table, colonne) ne contient pas de caractères dangereux.
+     *
+     * @param string $identifier
+     * @return bool
+     */
+    private function is_safe_identifier($identifier)
+    {
+        return is_string($identifier) && $identifier !== '' && preg_match('/^[A-Za-z0-9_]+$/', $identifier) === 1;
+    }
+
+    /**
+     * Entoure un identifiant de backticks en échappant ceux déjà présents.
+     *
+     * @param string $identifier
+     * @return string
+     */
+    private function quote_identifier($identifier)
+    {
+        return '`' . str_replace('`', '``', $identifier) . '`';
     }
 
     /**
