@@ -11,13 +11,10 @@ if (!interface_exists(BJLG_Destination_Interface::class)) {
     return;
 }
 
-/**
- * Destination Dropbox via l'API v2.
- */
-class BJLG_Dropbox implements BJLG_Destination_Interface {
+class BJLG_pCloud implements BJLG_Destination_Interface {
 
-    private const OPTION_SETTINGS = 'bjlg_dropbox_settings';
-    private const OPTION_STATUS = 'bjlg_dropbox_status';
+    private const OPTION_SETTINGS = 'bjlg_pcloud_settings';
+    private const OPTION_STATUS = 'bjlg_pcloud_status';
 
     /** @var callable */
     private $request_handler;
@@ -34,17 +31,17 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
         };
 
         if (function_exists('add_action')) {
-            add_action('wp_ajax_bjlg_test_dropbox_connection', [$this, 'handle_test_connection']);
-            add_action('admin_post_bjlg_dropbox_disconnect', [$this, 'handle_disconnect_request']);
+            add_action('wp_ajax_bjlg_test_pcloud_connection', [$this, 'handle_test_connection']);
+            add_action('admin_post_bjlg_pcloud_disconnect', [$this, 'handle_disconnect_request']);
         }
     }
 
     public function get_id() {
-        return 'dropbox';
+        return 'pcloud';
     }
 
     public function get_name() {
-        return 'Dropbox';
+        return 'pCloud';
     }
 
     public function is_connected() {
@@ -67,22 +64,22 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
         $settings = $this->get_settings();
         $status = $this->get_status();
 
-        echo "<div class='bjlg-destination bjlg-destination--dropbox'>";
-        echo "<h4><span class='dashicons dashicons-archive' aria-hidden='true'></span> Dropbox</h4>";
-        echo "<p class='description'>Connectez un dossier Dropbox pour stocker automatiquement vos archives de sauvegarde.</p>";
+        echo "<div class='bjlg-destination bjlg-destination--pcloud'>";
+        echo "<h4><span class='dashicons dashicons-cloud' aria-hidden='true'></span> pCloud</h4>";
+        echo "<p class='description'>Connectez votre espace pCloud via un token API pour stocker vos archives.</p>";
 
         echo "<table class='form-table'>";
-        echo "<tr><th scope='row'>Access Token</th><td><input type='password' name='dropbox_access_token' value='" . esc_attr($settings['access_token']) . "' class='regular-text' autocomplete='off' placeholder='sl.BA...'>";
-        echo "<p class='description'>Générez un token OAuth avec les permissions <code>files.content.write</code> et <code>files.content.read</code>.</p></td></tr>";
-        echo "<tr><th scope='row'>Dossier cible</th><td><input type='text' name='dropbox_folder' value='" . esc_attr($settings['folder']) . "' class='regular-text' placeholder='/Backups/WP'>";
-        echo "<p class='description'>Chemin relatif dans Dropbox. Laissez vide pour la racine.</p></td></tr>";
+        echo "<tr><th scope='row'>Token d'accès</th><td><input type='password' name='pcloud_access_token' value='" . esc_attr($settings['access_token']) . "' class='regular-text' autocomplete='off' placeholder='pcloud-token-...'>";
+        echo "<p class='description'>Générez un token personnel pCloud avec accès en lecture/écriture.</p></td></tr>";
+        echo "<tr><th scope='row'>Dossier cible</th><td><input type='text' name='pcloud_folder' value='" . esc_attr($settings['folder']) . "' class='regular-text' placeholder='/Backups/WP'>";
+        echo "<p class='description'>Chemin relatif dans votre espace pCloud. Laissez vide pour la racine.</p></td></tr>";
 
         $enabled_attr = $settings['enabled'] ? " checked='checked'" : '';
-        echo "<tr><th scope='row'>Activer Dropbox</th><td><label><input type='checkbox' name='dropbox_enabled' value='true'{$enabled_attr}> Activer l'envoi automatique vers Dropbox.</label></td></tr>";
+        echo "<tr><th scope='row'>Activer pCloud</th><td><label><input type='checkbox' name='pcloud_enabled' value='true'{$enabled_attr}> Activer l'envoi automatique vers pCloud.</label></td></tr>";
         echo "</table>";
 
-        echo "<div class='notice bjlg-dropbox-test-feedback bjlg-hidden' role='status' aria-live='polite'></div>";
-        echo "<p class='bjlg-dropbox-test-actions'><button type='button' class='button bjlg-dropbox-test-connection'>Tester la connexion</button> <span class='spinner bjlg-dropbox-test-spinner' style='float:none;margin:0 0 0 8px;display:none;'></span></p>";
+        echo "<div class='notice bjlg-pcloud-test-feedback bjlg-hidden' role='status' aria-live='polite'></div>";
+        echo "<p class='bjlg-pcloud-test-actions'><button type='button' class='button bjlg-pcloud-test-connection'>Tester la connexion</button> <span class='spinner bjlg-pcloud-test-spinner' style='float:none;margin:0 0 0 8px;display:none;'></span></p>";
 
         if ($status['last_result'] === 'success' && $status['tested_at'] > 0) {
             $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
@@ -96,12 +93,12 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
         }
 
         if ($this->is_connected()) {
-            echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' class='bjlg-dropbox-disconnect-form'>";
-            echo "<input type='hidden' name='action' value='bjlg_dropbox_disconnect'>";
+            echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' class='bjlg-pcloud-disconnect-form'>";
+            echo "<input type='hidden' name='action' value='bjlg_pcloud_disconnect'>";
             if (function_exists('wp_nonce_field')) {
-                wp_nonce_field('bjlg_dropbox_disconnect', 'bjlg_dropbox_nonce');
+                wp_nonce_field('bjlg_pcloud_disconnect', 'bjlg_pcloud_nonce');
             }
-            echo "<button type='submit' class='button'>Déconnecter Dropbox</button></form>";
+            echo "<button type='submit' class='button'>Déconnecter pCloud</button></form>";
         }
 
         echo '</div>';
@@ -111,21 +108,19 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
         $settings = $settings ? array_merge($this->get_default_settings(), $settings) : $this->get_settings();
 
         if (empty($settings['access_token'])) {
-            throw new Exception("Token d'accès Dropbox manquant.");
+            throw new Exception("Token d'accès pCloud manquant.");
         }
 
         $path = $this->normalize_folder($settings['folder']);
-        $this->api_json('https://api.dropboxapi.com/2/files/list_folder', [
-            'path' => $path === '' ? '' : $path,
-            'recursive' => false,
-            'include_media_info' => false,
-            'include_deleted' => false,
+        $this->api_request('https://api.pcloud.com/listfolder', [
+            'path' => $path === '' ? '/' : $path,
+            'recursive' => 0,
         ], $settings);
 
         $this->store_status([
             'last_result' => 'success',
             'tested_at' => $this->get_time(),
-            'message' => 'Connexion Dropbox vérifiée avec succès.',
+            'message' => 'Connexion pCloud vérifiée avec succès.',
         ]);
 
         return true;
@@ -139,14 +134,14 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
         check_ajax_referer('bjlg_nonce', 'nonce');
 
         $settings = [
-            'access_token' => isset($_POST['dropbox_access_token']) ? sanitize_text_field(wp_unslash($_POST['dropbox_access_token'])) : '',
-            'folder' => isset($_POST['dropbox_folder']) ? sanitize_text_field(wp_unslash($_POST['dropbox_folder'])) : '',
+            'access_token' => isset($_POST['pcloud_access_token']) ? sanitize_text_field(wp_unslash($_POST['pcloud_access_token'])) : '',
+            'folder' => isset($_POST['pcloud_folder']) ? sanitize_text_field(wp_unslash($_POST['pcloud_folder'])) : '',
             'enabled' => true,
         ];
 
         try {
             $this->test_connection($settings);
-            wp_send_json_success(['message' => 'Connexion Dropbox réussie.']);
+            wp_send_json_success(['message' => 'Connexion pCloud réussie.']);
         } catch (Exception $exception) {
             $this->store_status([
                 'last_result' => 'error',
@@ -163,9 +158,9 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
             return;
         }
 
-        if (isset($_POST['bjlg_dropbox_nonce'])) {
-            $nonce = wp_unslash($_POST['bjlg_dropbox_nonce']);
-            if (function_exists('wp_verify_nonce') && !wp_verify_nonce($nonce, 'bjlg_dropbox_disconnect')) {
+        if (isset($_POST['bjlg_pcloud_nonce'])) {
+            $nonce = wp_unslash($_POST['bjlg_pcloud_nonce']);
+            if (function_exists('wp_verify_nonce') && !wp_verify_nonce($nonce, 'bjlg_pcloud_disconnect')) {
                 return;
             }
         }
@@ -190,48 +185,43 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
             }
 
             if (!empty($errors)) {
-                throw new Exception('Erreurs Dropbox : ' . implode(' | ', $errors));
+                throw new Exception('Erreurs pCloud : ' . implode(' | ', $errors));
             }
 
             return;
         }
 
         if (!is_readable($filepath)) {
-            throw new Exception('Fichier introuvable pour Dropbox : ' . $filepath);
+            throw new Exception('Fichier introuvable pour pCloud : ' . $filepath);
         }
 
         $settings = $this->get_settings();
         if (!$this->is_connected()) {
-            throw new Exception('Dropbox n\'est pas configuré.');
+            throw new Exception("pCloud n'est pas configuré.");
         }
 
         $contents = file_get_contents($filepath);
         if ($contents === false) {
-            throw new Exception('Impossible de lire le fichier à envoyer vers Dropbox.');
+            throw new Exception('Impossible de lire le fichier à envoyer vers pCloud.');
         }
 
-        $dropbox_path = $this->build_dropbox_path(basename($filepath), $settings['folder']);
+        $pcloud_path = $this->build_pcloud_path(basename($filepath), $settings['folder']);
         $headers = [
             'Authorization' => 'Bearer ' . $settings['access_token'],
             'Content-Type' => 'application/octet-stream',
-            'Dropbox-API-Arg' => wp_json_encode([
-                'path' => $dropbox_path,
-                'mode' => ['.tag' => 'overwrite'],
-                'mute' => false,
-                'strict_conflict' => false,
-            ]),
+            'X-PCloud-Path' => $pcloud_path,
+            'X-PCloud-Overwrite' => '1',
         ];
 
         $args = [
             'method' => 'POST',
             'headers' => $headers,
             'body' => $contents,
-            'timeout' => apply_filters('bjlg_dropbox_upload_timeout', 60, $dropbox_path),
+            'timeout' => apply_filters('bjlg_pcloud_upload_timeout', 60, $pcloud_path),
         ];
 
-        $response = call_user_func($this->request_handler, 'https://content.dropboxapi.com/2/files/upload', $args);
-
-        $this->guard_response($response, 'Envoi Dropbox échoué');
+        $response = call_user_func($this->request_handler, 'https://api.pcloud.com/uploadfile', $args);
+        $this->guard_response($response, 'Envoi pCloud échoué');
     }
 
     public function list_remote_backups() {
@@ -241,38 +231,40 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
 
         $settings = $this->get_settings();
         $path = $this->normalize_folder($settings['folder']);
-        $body = [
-            'path' => $path === '' ? '' : $path,
-            'recursive' => false,
-            'include_media_info' => false,
-            'include_deleted' => false,
-        ];
 
-        $response = $this->api_json('https://api.dropboxapi.com/2/files/list_folder', $body, $settings);
-        if (!isset($response['entries']) || !is_array($response['entries'])) {
+        try {
+            $response = $this->api_request('https://api.pcloud.com/listfolder', [
+                'path' => $path === '' ? '/' : $path,
+                'recursive' => 0,
+            ], $settings);
+        } catch (Exception $exception) {
+            return [];
+        }
+
+        if (!isset($response['metadata']['contents']) || !is_array($response['metadata']['contents'])) {
             return [];
         }
 
         $backups = [];
-        foreach ($response['entries'] as $entry) {
-            if (!is_array($entry) || ($entry['.tag'] ?? '') !== 'file') {
+        foreach ($response['metadata']['contents'] as $entry) {
+            if (!is_array($entry) || !empty($entry['isfolder'])) {
                 continue;
             }
 
-            $name = basename((string) ($entry['path_display'] ?? $entry['name'] ?? ''));
+            $name = (string) ($entry['name'] ?? '');
             if (!$this->is_backup_filename($name)) {
                 continue;
             }
 
-            $timestamp = isset($entry['server_modified']) ? strtotime($entry['server_modified']) : 0;
+            $timestamp = isset($entry['modified']) ? strtotime($entry['modified']) : 0;
             if (!is_int($timestamp) || $timestamp <= 0) {
                 $timestamp = $this->get_time();
             }
 
             $backups[] = [
-                'id' => (string) ($entry['id'] ?? ''),
+                'id' => (string) ($entry['fileid'] ?? ''),
                 'name' => $name,
-                'path' => (string) ($entry['path_display'] ?? ''),
+                'path' => (string) ($entry['path'] ?? ''),
                 'timestamp' => $timestamp,
                 'size' => isset($entry['size']) ? (int) $entry['size'] : 0,
             ];
@@ -311,9 +303,14 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
         $settings = $this->get_settings();
 
         foreach ($to_delete as $backup) {
+            $file_id = (string) ($backup['id'] ?? '');
+            if ($file_id === '') {
+                continue;
+            }
+
             try {
-                $this->api_json('https://api.dropboxapi.com/2/files/delete_v2', [
-                    'path' => (string) ($backup['path'] ?? ''),
+                $this->api_request('https://api.pcloud.com/deletefile', [
+                    'fileid' => $file_id,
                 ], $settings);
                 $result['deleted']++;
                 if (!empty($backup['name'])) {
@@ -369,7 +366,7 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
         update_option(self::OPTION_STATUS, array_merge($current, $status));
     }
 
-    private function build_dropbox_path($filename, $folder) {
+    private function build_pcloud_path($filename, $folder) {
         $folder = $this->normalize_folder($folder);
         $filename = ltrim($filename, '/');
 
@@ -417,11 +414,11 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
         $this->store_status([
             'last_result' => 'success',
             'tested_at' => $this->get_time(),
-            'message' => 'Envoi réalisé avec succès.',
+            'message' => 'Envoi pCloud réalisé avec succès.',
         ]);
     }
 
-    private function api_json($url, array $body, array $settings) {
+    private function api_request($url, array $body, array $settings) {
         $args = [
             'method' => 'POST',
             'headers' => [
@@ -429,23 +426,28 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
                 'Content-Type' => 'application/json',
             ],
             'body' => wp_json_encode($body),
-            'timeout' => apply_filters('bjlg_dropbox_request_timeout', 45, $url),
+            'timeout' => apply_filters('bjlg_pcloud_request_timeout', 45, $url),
         ];
 
         $response = call_user_func($this->request_handler, $url, $args);
         if (is_wp_error($response)) {
-            throw new Exception('Erreur de communication avec Dropbox : ' . $response->get_error_message());
+            throw new Exception('Erreur de communication avec pCloud : ' . $response->get_error_message());
         }
 
         $code = isset($response['response']['code']) ? (int) $response['response']['code'] : 0;
-        $raw = isset($response['body']) ? (string) $response['body'] : '';
         if ($code < 200 || $code >= 300) {
-            throw new Exception(sprintf('Dropbox a renvoyé un statut inattendu (%d) : %s', $code, $raw));
+            $raw = isset($response['body']) ? (string) $response['body'] : '';
+            throw new Exception(sprintf('pCloud a renvoyé un statut inattendu (%d) : %s', $code, $raw));
         }
 
-        $decoded = json_decode($raw, true);
+        $raw_body = isset($response['body']) ? (string) $response['body'] : '';
+        if ($raw_body === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw_body, true);
         if (!is_array($decoded)) {
-            throw new Exception('Réponse Dropbox invalide.');
+            throw new Exception('Réponse pCloud invalide.');
         }
 
         return $decoded;
@@ -501,7 +503,7 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
             return false;
         }
 
-        return (bool) preg_match('/\.zip(\.[A-Za-z0-9]+)?$/i', $name);
+        return (bool) preg_match('/\\.zip(\\.[A-Za-z0-9]+)?$/i', $name);
     }
 
     private function get_time() {

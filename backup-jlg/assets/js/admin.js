@@ -2014,7 +2014,8 @@ jQuery(document).ready(function($) {
             aws_s3: { label: 'Amazon S3', color: '#8b5cf6' },
             s3: { label: 'Amazon S3', color: '#8b5cf6' },
             dropbox: { label: 'Dropbox', color: '#2563eb' },
-            onedrive: { label: 'OneDrive', color: '#0ea5e9' }
+            onedrive: { label: 'OneDrive', color: '#0ea5e9' },
+            pcloud: { label: 'pCloud', color: '#22c55e' }
         };
 
         function createBadge(config, fallbackLabel, extraClasses) {
@@ -3613,6 +3614,131 @@ jQuery(document).ready(function($) {
                     $spinner.removeClass('is-active').hide();
                 }
             });
+    });
+
+    function bjlgSimpleDestinationTest($button, config) {
+        const $container = $button.closest(config.container);
+        if (!$container.length) {
+            return;
+        }
+
+        const $feedback = $container.find(config.feedback);
+        const $spinner = $container.find(config.spinner);
+
+        if ($feedback.length) {
+            $feedback.removeClass('notice notice-success notice-error').addClass('bjlg-hidden').hide().empty();
+        }
+
+        const payload = Object.assign({ action: config.action, nonce: bjlg_ajax.nonce }, typeof config.payload === 'function' ? config.payload($container) : {});
+
+        const originalText = $button.data('bjlg-original-text') || $button.text();
+        $button.data('bjlg-original-text', originalText);
+
+        $button.prop('disabled', true).text(config.testingLabel || 'Test en cours...');
+        if ($spinner.length) {
+            $spinner.addClass('is-active').show();
+        }
+
+        const setFeedback = function(type, message) {
+            if (!$feedback.length) {
+                return;
+            }
+
+            $feedback
+                .removeClass('bjlg-hidden notice-success notice-error')
+                .addClass('notice')
+                .addClass(type)
+                .text(message || '')
+                .show();
+        };
+
+        const reset = function() {
+            $button.prop('disabled', false).text(originalText);
+            if ($spinner.length) {
+                $spinner.removeClass('is-active').hide();
+            }
+        };
+
+        $.post(bjlg_ajax.ajax_url, payload)
+            .done(function(response) {
+                if (response && response.success) {
+                    const message = response.data && response.data.message ? response.data.message : config.successMessage;
+                    setFeedback('notice-success', message || config.successMessage || 'Connexion réussie.');
+                } else {
+                    const message = response && response.data && response.data.message ? response.data.message : config.errorMessage;
+                    setFeedback('notice-error', message || config.errorMessage || 'Le test a échoué.');
+                }
+            })
+            .fail(function(xhr) {
+                let message = config.errorMessage || 'Une erreur est survenue.';
+                if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                    message = xhr.responseJSON.data.message;
+                } else if (xhr && xhr.responseJSON && xhr.responseJSON.message) {
+                    message = xhr.responseJSON.message;
+                }
+                setFeedback('notice-error', message);
+            })
+            .always(reset);
+    }
+
+    $(document).on('click', '.bjlg-dropbox-test-connection', function(e) {
+        e.preventDefault();
+
+        bjlgSimpleDestinationTest($(this), {
+            container: '.bjlg-destination--dropbox',
+            feedback: '.bjlg-dropbox-test-feedback',
+            spinner: '.bjlg-dropbox-test-spinner',
+            action: 'bjlg_test_dropbox_connection',
+            testingLabel: 'Test en cours...',
+            successMessage: 'Connexion Dropbox réussie.',
+            errorMessage: 'Le test Dropbox a échoué.',
+            payload: function($container) {
+                return {
+                    dropbox_access_token: $container.find('input[name="dropbox_access_token"]').val() || '',
+                    dropbox_folder: $container.find('input[name="dropbox_folder"]').val() || ''
+                };
+            }
+        });
+    });
+
+    $(document).on('click', '.bjlg-onedrive-test-connection', function(e) {
+        e.preventDefault();
+
+        bjlgSimpleDestinationTest($(this), {
+            container: '.bjlg-destination--onedrive',
+            feedback: '.bjlg-onedrive-test-feedback',
+            spinner: '.bjlg-onedrive-test-spinner',
+            action: 'bjlg_test_onedrive_connection',
+            testingLabel: 'Test en cours...',
+            successMessage: 'Connexion OneDrive réussie.',
+            errorMessage: 'Le test OneDrive a échoué.',
+            payload: function($container) {
+                return {
+                    onedrive_access_token: $container.find('input[name="onedrive_access_token"]').val() || '',
+                    onedrive_folder: $container.find('input[name="onedrive_folder"]').val() || ''
+                };
+            }
+        });
+    });
+
+    $(document).on('click', '.bjlg-pcloud-test-connection', function(e) {
+        e.preventDefault();
+
+        bjlgSimpleDestinationTest($(this), {
+            container: '.bjlg-destination--pcloud',
+            feedback: '.bjlg-pcloud-test-feedback',
+            spinner: '.bjlg-pcloud-test-spinner',
+            action: 'bjlg_test_pcloud_connection',
+            testingLabel: 'Test en cours...',
+            successMessage: 'Connexion pCloud réussie.',
+            errorMessage: 'Le test pCloud a échoué.',
+            payload: function($container) {
+                return {
+                    pcloud_access_token: $container.find('input[name="pcloud_access_token"]').val() || '',
+                    pcloud_folder: $container.find('input[name="pcloud_folder"]').val() || ''
+                };
+            }
+        });
     });
 
     // --- TEST DE CONNEXION AMAZON S3 ---
