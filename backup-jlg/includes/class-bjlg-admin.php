@@ -30,6 +30,12 @@ class BJLG_Admin {
         if (class_exists(BJLG_AWS_S3::class)) {
             $this->destinations['aws_s3'] = new BJLG_AWS_S3();
         }
+        if (class_exists(BJLG_Azure_Blob::class)) {
+            $this->destinations['azure_blob'] = new BJLG_Azure_Blob();
+        }
+        if (class_exists(BJLG_Backblaze_B2::class)) {
+            $this->destinations['backblaze_b2'] = new BJLG_Backblaze_B2();
+        }
         if (class_exists(BJLG_SFTP::class)) {
             $this->destinations['sftp'] = new BJLG_SFTP();
         }

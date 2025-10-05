@@ -115,14 +115,31 @@ class BJLG_Scheduler {
             ]);
         }
 
+        $batch_size = $this->get_destination_batch_size();
+        $all_secondary = [];
+        foreach ($schedules as &$schedule) {
+            $batches = $this->normalize_destination_batches(
+                $schedule['secondary_destination_batches'] ?? [],
+                $schedule['secondary_destinations'] ?? [],
+                $batch_size
+            );
+            $schedule['secondary_destination_batches'] = $batches;
+            $schedule['secondary_destinations'] = BJLG_Settings::flatten_destination_batches($batches);
+            $all_secondary = array_merge($all_secondary, $schedule['secondary_destinations']);
+        }
+        unset($schedule);
+
+        $collection['schedules'] = $schedules;
+
         update_option('bjlg_schedule_settings', $collection);
 
         $primary = $this->get_primary_schedule($schedules);
+        $aggregated_secondary = array_values(array_unique($all_secondary));
 
         BJLG_Settings::get_instance()->update_backup_filters(
             $primary['include_patterns'],
             $primary['exclude_patterns'],
-            $primary['secondary_destinations'],
+            $aggregated_secondary,
             $primary['post_checks']
         );
 
@@ -346,6 +363,7 @@ class BJLG_Scheduler {
             'exclude_patterns' => $schedule['exclude_patterns'],
             'post_checks' => $schedule['post_checks'],
             'secondary_destinations' => $schedule['secondary_destinations'],
+            'secondary_destination_batches' => $schedule['secondary_destination_batches'] ?? [],
             'schedule_id' => $schedule['id'],
         ];
 
@@ -424,6 +442,7 @@ class BJLG_Scheduler {
             'exclude_patterns' => $schedule['exclude_patterns'],
             'post_checks' => $schedule['post_checks'],
             'secondary_destinations' => $schedule['secondary_destinations'],
+            'secondary_destination_batches' => $schedule['secondary_destination_batches'] ?? [],
             'schedule_id' => $schedule['id'],
         ];
 
@@ -546,6 +565,46 @@ class BJLG_Scheduler {
         }
 
         return $stats;
+    }
+
+    private function get_destination_batch_size() {
+        $size = (int) apply_filters('bjlg_scheduler_destination_batch_size', 2);
+
+        return max(1, $size);
+    }
+
+    private function normalize_destination_batches($batches, array $destinations, $batch_size) {
+        $sanitized_batches = BJLG_Settings::sanitize_destination_batches(
+            $batches,
+            BJLG_Settings::get_known_destination_ids()
+        );
+
+        if (!empty($sanitized_batches)) {
+            return $this->rebalance_destination_batches($sanitized_batches, $batch_size);
+        }
+
+        $sanitized_destinations = BJLG_Settings::sanitize_destination_list(
+            $destinations,
+            BJLG_Settings::get_known_destination_ids()
+        );
+
+        if (empty($sanitized_destinations)) {
+            return [];
+        }
+
+        return $this->rebalance_destination_batches([$sanitized_destinations], $batch_size);
+    }
+
+    private function rebalance_destination_batches(array $batches, $batch_size) {
+        $flattened = BJLG_Settings::flatten_destination_batches($batches);
+
+        if (empty($flattened)) {
+            return [];
+        }
+
+        $batch_size = max(1, (int) $batch_size);
+
+        return array_chunk($flattened, $batch_size);
     }
 
     private function get_primary_schedule(array $schedules): array {

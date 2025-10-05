@@ -69,6 +69,25 @@ class BJLG_Settings {
             'object_prefix' => '',
             'enabled' => false,
         ],
+        'azure_blob' => [
+            'account_name' => '',
+            'account_key' => '',
+            'container' => '',
+            'object_prefix' => '',
+            'endpoint_suffix' => 'core.windows.net',
+            'chunk_size_mb' => 4,
+            'use_https' => true,
+            'enabled' => false,
+        ],
+        'backblaze_b2' => [
+            'key_id' => '',
+            'application_key' => '',
+            'bucket_id' => '',
+            'bucket_name' => '',
+            'object_prefix' => '',
+            'chunk_size_mb' => 100,
+            'enabled' => false,
+        ],
         'sftp' => [
             'host' => '',
             'port' => 22,
@@ -1298,6 +1317,59 @@ class BJLG_Settings {
         return array_keys($normalized);
     }
 
+    public static function sanitize_destination_batches($batches, array $allowed_ids): array {
+        if (!is_array($batches)) {
+            return [];
+        }
+
+        $allowed = array_map('strval', $allowed_ids);
+        $sanitized = [];
+        foreach ($batches as $batch) {
+            if (!is_array($batch)) {
+                continue;
+            }
+
+            $clean_batch = [];
+            foreach ($batch as $destination) {
+                if (!is_scalar($destination)) {
+                    continue;
+                }
+
+                $slug = sanitize_key((string) $destination);
+                if ($slug === '' || !in_array($slug, $allowed, true)) {
+                    continue;
+                }
+
+                if (!in_array($slug, $clean_batch, true)) {
+                    $clean_batch[] = $slug;
+                }
+            }
+
+            if (!empty($clean_batch)) {
+                $sanitized[] = $clean_batch;
+            }
+        }
+
+        return $sanitized;
+    }
+
+    public static function flatten_destination_batches(array $batches): array {
+        $flattened = [];
+        foreach ($batches as $batch) {
+            if (!is_array($batch)) {
+                continue;
+            }
+
+            foreach ($batch as $destination) {
+                if (!in_array($destination, $flattened, true)) {
+                    $flattened[] = $destination;
+                }
+            }
+        }
+
+        return $flattened;
+    }
+
     public static function sanitize_post_checks($checks, array $defaults) {
         $normalized = [
             'checksum' => false,
@@ -1352,6 +1424,7 @@ class BJLG_Settings {
             'exclude_patterns' => [],
             'post_checks' => self::get_default_backup_post_checks(),
             'secondary_destinations' => [],
+            'secondary_destination_batches' => [],
         ];
     }
 
@@ -1465,6 +1538,15 @@ class BJLG_Settings {
             self::get_known_destination_ids()
         );
 
+        $destination_batches = self::sanitize_destination_batches(
+            $entry['secondary_destination_batches'] ?? $defaults['secondary_destination_batches'],
+            self::get_known_destination_ids()
+        );
+
+        if (empty($destination_batches) && !empty($secondary_destinations)) {
+            $destination_batches = [$secondary_destinations];
+        }
+
         return [
             'id' => $id,
             'label' => $label,
@@ -1479,6 +1561,7 @@ class BJLG_Settings {
             'exclude_patterns' => $exclude_patterns,
             'post_checks' => $post_checks,
             'secondary_destinations' => $secondary_destinations,
+            'secondary_destination_batches' => $destination_batches,
         ];
     }
 
@@ -1604,7 +1687,7 @@ class BJLG_Settings {
     }
 
     public static function get_known_destination_ids() {
-        $destinations = ['google_drive', 'aws_s3', 'sftp'];
+        $destinations = ['google_drive', 'aws_s3', 'azure_blob', 'backblaze_b2', 'sftp'];
 
         /** @var array<int, string> $filtered */
         $filtered = apply_filters('bjlg_known_destination_ids', $destinations);
