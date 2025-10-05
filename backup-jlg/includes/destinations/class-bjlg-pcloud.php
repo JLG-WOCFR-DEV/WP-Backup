@@ -11,7 +11,7 @@ if (!interface_exists(BJLG_Destination_Interface::class)) {
     return;
 }
 
-class BJLG_pCloud implements BJLG_Destination_Interface {
+class BJLG_PCloud implements BJLG_Destination_Interface {
 
     private const OPTION_SETTINGS = 'bjlg_pcloud_settings';
     private const OPTION_STATUS = 'bjlg_pcloud_status';
@@ -66,13 +66,13 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
 
         echo "<div class='bjlg-destination bjlg-destination--pcloud'>";
         echo "<h4><span class='dashicons dashicons-cloud' aria-hidden='true'></span> pCloud</h4>";
-        echo "<p class='description'>Connectez votre espace pCloud via un token API pour stocker vos archives.</p>";
+        echo "<p class='description'>Stockez vos sauvegardes WordPress dans un dossier pCloud dédié.</p>";
 
         echo "<table class='form-table'>";
-        echo "<tr><th scope='row'>Token d'accès</th><td><input type='password' name='pcloud_access_token' value='" . esc_attr($settings['access_token']) . "' class='regular-text' autocomplete='off' placeholder='pcloud-token-...'>";
-        echo "<p class='description'>Générez un token personnel pCloud avec accès en lecture/écriture.</p></td></tr>";
+        echo "<tr><th scope='row'>Access Token</th><td><input type='password' name='pcloud_access_token' value='" . esc_attr($settings['access_token']) . "' class='regular-text' autocomplete='off' placeholder='pcld_...'>";
+        echo "<p class='description'>Générez un token d'accès avec les permissions d'upload et de lecture.</p></td></tr>";
         echo "<tr><th scope='row'>Dossier cible</th><td><input type='text' name='pcloud_folder' value='" . esc_attr($settings['folder']) . "' class='regular-text' placeholder='/Backups/WP'>";
-        echo "<p class='description'>Chemin relatif dans votre espace pCloud. Laissez vide pour la racine.</p></td></tr>";
+        echo "<p class='description'>Chemin relatif dans votre espace pCloud. Exemple : <code>/Apps/Backup-JLG</code>.</p></td></tr>";
 
         $enabled_attr = $settings['enabled'] ? " checked='checked'" : '';
         echo "<tr><th scope='row'>Activer pCloud</th><td><label><input type='checkbox' name='pcloud_enabled' value='true'{$enabled_attr}> Activer l'envoi automatique vers pCloud.</label></td></tr>";
@@ -81,96 +81,22 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
         echo "<div class='notice bjlg-pcloud-test-feedback bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p class='bjlg-pcloud-test-actions'><button type='button' class='button bjlg-pcloud-test-connection'>Tester la connexion</button> <span class='spinner bjlg-pcloud-test-spinner' style='float:none;margin:0 0 0 8px;display:none;'></span></p>";
 
-        if ($status['last_result'] === 'success' && $status['tested_at'] > 0) {
+        if ($status['tested_at'] > 0) {
+            $icon = $status['last_result'] === 'success' ? 'dashicons-yes' : 'dashicons-warning';
+            $color = $status['last_result'] === 'success' ? '' : '#b32d2e';
             $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
-            echo "<p class='description'><span class='dashicons dashicons-yes'></span> Dernier test réussi le {$tested_at}.";
-            if ($status['message'] !== '') {
-                echo ' ' . esc_html($status['message']);
-            }
-            echo '</p>';
-        } elseif ($status['last_result'] === 'error') {
-            echo "<p class='description' style='color:#b32d2e;'><span class='dashicons dashicons-warning'></span> " . esc_html($status['message']) . "</p>";
+            $message = $status['message'] !== '' ? $status['message'] : ($status['last_result'] === 'success' ? 'Connexion vérifiée avec succès.' : 'Le dernier test a échoué.');
+            echo "<p class='description bjlg-pcloud-last-test' style='color:{$color};'><span class='dashicons {$icon}'></span> Dernier test le {$tested_at}. " . esc_html($message) . "</p>";
+        } else {
+            echo "<p class='description bjlg-pcloud-last-test bjlg-hidden'></p>";
         }
 
         if ($this->is_connected()) {
-            echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' class='bjlg-pcloud-disconnect-form'>";
-            echo "<input type='hidden' name='action' value='bjlg_pcloud_disconnect'>";
-            if (function_exists('wp_nonce_field')) {
-                wp_nonce_field('bjlg_pcloud_disconnect', 'bjlg_pcloud_nonce');
-            }
-            echo "<button type='submit' class='button'>Déconnecter pCloud</button></form>";
+            $disconnect_url = $this->get_disconnect_url();
+            echo "<p><a class='button button-secondary' href='" . esc_url($disconnect_url) . "'>Déconnecter pCloud</a></p>";
         }
 
         echo '</div>';
-    }
-
-    public function test_connection(?array $settings = null) {
-        $settings = $settings ? array_merge($this->get_default_settings(), $settings) : $this->get_settings();
-
-        if (empty($settings['access_token'])) {
-            throw new Exception("Token d'accès pCloud manquant.");
-        }
-
-        $path = $this->normalize_folder($settings['folder']);
-        $this->api_request('https://api.pcloud.com/listfolder', [
-            'path' => $path === '' ? '/' : $path,
-            'recursive' => 0,
-        ], $settings);
-
-        $this->store_status([
-            'last_result' => 'success',
-            'tested_at' => $this->get_time(),
-            'message' => 'Connexion pCloud vérifiée avec succès.',
-        ]);
-
-        return true;
-    }
-
-    public function handle_test_connection() {
-        if (!\bjlg_can_manage_plugin()) {
-            wp_send_json_error(['message' => 'Permission refusée.'], 403);
-        }
-
-        check_ajax_referer('bjlg_nonce', 'nonce');
-
-        $settings = [
-            'access_token' => isset($_POST['pcloud_access_token']) ? sanitize_text_field(wp_unslash($_POST['pcloud_access_token'])) : '',
-            'folder' => isset($_POST['pcloud_folder']) ? sanitize_text_field(wp_unslash($_POST['pcloud_folder'])) : '',
-            'enabled' => true,
-        ];
-
-        try {
-            $this->test_connection($settings);
-            wp_send_json_success(['message' => 'Connexion pCloud réussie.']);
-        } catch (Exception $exception) {
-            $this->store_status([
-                'last_result' => 'error',
-                'tested_at' => $this->get_time(),
-                'message' => $exception->getMessage(),
-            ]);
-
-            wp_send_json_error(['message' => $exception->getMessage()]);
-        }
-    }
-
-    public function handle_disconnect_request() {
-        if (!\bjlg_can_manage_plugin()) {
-            return;
-        }
-
-        if (isset($_POST['bjlg_pcloud_nonce'])) {
-            $nonce = wp_unslash($_POST['bjlg_pcloud_nonce']);
-            if (function_exists('wp_verify_nonce') && !wp_verify_nonce($nonce, 'bjlg_pcloud_disconnect')) {
-                return;
-            }
-        }
-
-        $this->disconnect();
-
-        if (function_exists('wp_safe_redirect')) {
-            wp_safe_redirect(admin_url('admin.php?page=backup-jlg&tab=settings'));
-            exit;
-        }
     }
 
     public function upload_file($filepath, $task_id) {
@@ -197,7 +123,7 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
 
         $settings = $this->get_settings();
         if (!$this->is_connected()) {
-            throw new Exception("pCloud n'est pas configuré.");
+            throw new Exception('pCloud n\'est pas configuré.');
         }
 
         $contents = file_get_contents($filepath);
@@ -205,19 +131,17 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
             throw new Exception('Impossible de lire le fichier à envoyer vers pCloud.');
         }
 
-        $pcloud_path = $this->build_pcloud_path(basename($filepath), $settings['folder']);
-        $headers = [
-            'Authorization' => 'Bearer ' . $settings['access_token'],
-            'Content-Type' => 'application/octet-stream',
-            'X-PCloud-Path' => $pcloud_path,
-            'X-PCloud-Overwrite' => '1',
-        ];
+        $remote_path = $this->build_remote_path(basename($filepath), $settings['folder']);
 
         $args = [
             'method' => 'POST',
-            'headers' => $headers,
+            'headers' => [
+                'Authorization' => 'Bearer ' . $settings['access_token'],
+                'Content-Type' => 'application/octet-stream',
+                'X-PCloud-Path' => $remote_path,
+            ],
             'body' => $contents,
-            'timeout' => apply_filters('bjlg_pcloud_upload_timeout', 60, $pcloud_path),
+            'timeout' => apply_filters('bjlg_pcloud_upload_timeout', 60, $remote_path),
         ];
 
         $response = call_user_func($this->request_handler, 'https://api.pcloud.com/uploadfile', $args);
@@ -231,16 +155,12 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
 
         $settings = $this->get_settings();
         $path = $this->normalize_folder($settings['folder']);
+        $body = [
+            'path' => $path === '' ? '/' : $path,
+            'recursive' => 0,
+        ];
 
-        try {
-            $response = $this->api_request('https://api.pcloud.com/listfolder', [
-                'path' => $path === '' ? '/' : $path,
-                'recursive' => 0,
-            ], $settings);
-        } catch (Exception $exception) {
-            return [];
-        }
-
+        $response = $this->api_json('https://api.pcloud.com/listfolder', $body, $settings);
         if (!isset($response['metadata']['contents']) || !is_array($response['metadata']['contents'])) {
             return [];
         }
@@ -251,18 +171,18 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
                 continue;
             }
 
-            $name = (string) ($entry['name'] ?? '');
+            $name = basename((string) ($entry['path'] ?? $entry['name'] ?? ''));
             if (!$this->is_backup_filename($name)) {
                 continue;
             }
 
-            $timestamp = isset($entry['modified']) ? strtotime($entry['modified']) : 0;
+            $timestamp = isset($entry['modified']) ? strtotime((string) $entry['modified']) : 0;
             if (!is_int($timestamp) || $timestamp <= 0) {
                 $timestamp = $this->get_time();
             }
 
             $backups[] = [
-                'id' => (string) ($entry['fileid'] ?? ''),
+                'id' => isset($entry['fileid']) ? (string) $entry['fileid'] : '',
                 'name' => $name,
                 'path' => (string) ($entry['path'] ?? ''),
                 'timestamp' => $timestamp,
@@ -303,15 +223,17 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
         $settings = $this->get_settings();
 
         foreach ($to_delete as $backup) {
-            $file_id = (string) ($backup['id'] ?? '');
-            if ($file_id === '') {
-                continue;
-            }
-
             try {
-                $this->api_request('https://api.pcloud.com/deletefile', [
-                    'fileid' => $file_id,
-                ], $settings);
+                $body = [];
+                if (!empty($backup['id'])) {
+                    $body['fileid'] = $backup['id'];
+                } elseif (!empty($backup['path'])) {
+                    $body['path'] = $backup['path'];
+                } else {
+                    continue;
+                }
+
+                $this->api_json('https://api.pcloud.com/deletefile', $body, $settings);
                 $result['deleted']++;
                 if (!empty($backup['name'])) {
                     $result['deleted_items'][] = $backup['name'];
@@ -322,6 +244,64 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
         }
 
         return $result;
+    }
+
+    public function handle_test_connection() {
+        if (!\bjlg_can_manage_plugin()) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $settings = [
+            'access_token' => isset($_POST['pcloud_access_token']) ? sanitize_text_field(wp_unslash($_POST['pcloud_access_token'])) : '',
+            'folder' => isset($_POST['pcloud_folder']) ? sanitize_text_field(wp_unslash($_POST['pcloud_folder'])) : '',
+            'enabled' => true,
+        ];
+
+        try {
+            $result = $this->test_connection($settings);
+            $this->store_status([
+                'last_result' => 'success',
+                'tested_at' => $result['tested_at'],
+                'message' => $result['message'],
+            ]);
+
+            wp_send_json_success([
+                'message' => $result['message'],
+                'status_message' => $result['message'],
+                'tested_at' => $result['tested_at'],
+                'tested_at_formatted' => gmdate('d/m/Y H:i:s', $result['tested_at']),
+            ]);
+        } catch (Exception $exception) {
+            $tested_at = $this->get_time();
+            $this->store_status([
+                'last_result' => 'error',
+                'tested_at' => $tested_at,
+                'message' => $exception->getMessage(),
+            ]);
+
+            wp_send_json_error([
+                'message' => $exception->getMessage(),
+                'status_message' => $exception->getMessage(),
+                'tested_at' => $tested_at,
+                'tested_at_formatted' => gmdate('d/m/Y H:i:s', $tested_at),
+            ], 400);
+        }
+    }
+
+    public function handle_disconnect_request() {
+        if (!\bjlg_can_manage_plugin()) {
+            wp_die('Permission refusée.');
+        }
+
+        check_admin_referer('bjlg_pcloud_disconnect');
+
+        $this->disconnect();
+
+        $redirect = isset($_REQUEST['_wp_http_referer']) ? esc_url_raw(wp_unslash($_REQUEST['_wp_http_referer'])) : admin_url('admin.php?page=backup-jlg&tab=settings');
+        wp_safe_redirect(add_query_arg('bjlg_pcloud_disconnected', '1', $redirect));
+        exit;
     }
 
     private function get_settings() {
@@ -366,29 +346,6 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
         update_option(self::OPTION_STATUS, array_merge($current, $status));
     }
 
-    private function build_pcloud_path($filename, $folder) {
-        $folder = $this->normalize_folder($folder);
-        $filename = ltrim($filename, '/');
-
-        if ($folder === '') {
-            return '/' . $filename;
-        }
-
-        return $folder . '/' . $filename;
-    }
-
-    private function normalize_folder($folder) {
-        $folder = trim((string) $folder);
-        if ($folder === '' || $folder === '/') {
-            return '';
-        }
-
-        $folder = str_replace('\\', '/', $folder);
-        $folder = '/' . trim($folder, '/');
-
-        return $folder;
-    }
-
     private function guard_response($response, $error_prefix) {
         if (is_wp_error($response)) {
             $this->store_status([
@@ -414,11 +371,11 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
         $this->store_status([
             'last_result' => 'success',
             'tested_at' => $this->get_time(),
-            'message' => 'Envoi pCloud réalisé avec succès.',
+            'message' => 'Envoi réalisé avec succès.',
         ]);
     }
 
-    private function api_request($url, array $body, array $settings) {
+    private function api_json($url, array $body, array $settings) {
         $args = [
             'method' => 'POST',
             'headers' => [
@@ -435,19 +392,19 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
         }
 
         $code = isset($response['response']['code']) ? (int) $response['response']['code'] : 0;
+        $raw = isset($response['body']) ? (string) $response['body'] : '';
         if ($code < 200 || $code >= 300) {
-            $raw = isset($response['body']) ? (string) $response['body'] : '';
             throw new Exception(sprintf('pCloud a renvoyé un statut inattendu (%d) : %s', $code, $raw));
         }
 
-        $raw_body = isset($response['body']) ? (string) $response['body'] : '';
-        if ($raw_body === '') {
-            return [];
-        }
-
-        $decoded = json_decode($raw_body, true);
+        $decoded = json_decode($raw, true);
         if (!is_array($decoded)) {
             throw new Exception('Réponse pCloud invalide.');
+        }
+
+        if (isset($decoded['error']) && (int) $decoded['error'] !== 0) {
+            $message = isset($decoded['error']) ? (string) $decoded['error'] : 'Erreur API pCloud';
+            throw new Exception($message);
         }
 
         return $decoded;
@@ -503,7 +460,56 @@ class BJLG_pCloud implements BJLG_Destination_Interface {
             return false;
         }
 
-        return (bool) preg_match('/\\.zip(\\.[A-Za-z0-9]+)?$/i', $name);
+        return (bool) preg_match('/\.zip(\.[A-Za-z0-9]+)?$/i', $name);
+    }
+
+    private function build_remote_path($filename, $folder) {
+        $folder = $this->normalize_folder($folder);
+        $filename = ltrim($filename, '/');
+
+        if ($folder === '') {
+            return '/' . $filename;
+        }
+
+        return $folder . '/' . $filename;
+    }
+
+    private function normalize_folder($folder) {
+        $folder = trim((string) $folder);
+        if ($folder === '' || $folder === '/') {
+            return '';
+        }
+
+        $folder = str_replace('\\', '/', $folder);
+        $folder = '/' . trim($folder, '/');
+
+        return $folder;
+    }
+
+    private function test_connection(array $settings) {
+        if ($settings['access_token'] === '') {
+            throw new Exception('Fournissez un token d\'accès pCloud.');
+        }
+
+        $body = [
+            'path' => $this->normalize_folder($settings['folder']) ?: '/',
+            'recursive' => 0,
+        ];
+
+        $this->api_json('https://api.pcloud.com/listfolder', $body, $settings);
+
+        return [
+            'message' => 'Connexion pCloud validée.',
+            'tested_at' => $this->get_time(),
+        ];
+    }
+
+    private function get_disconnect_url() {
+        $referer = isset($_SERVER['REQUEST_URI']) ? wp_unslash($_SERVER['REQUEST_URI']) : admin_url('admin.php?page=backup-jlg&tab=settings');
+
+        $url = wp_nonce_url(add_query_arg('action', 'bjlg_pcloud_disconnect', admin_url('admin-post.php')), 'bjlg_pcloud_disconnect');
+
+        return add_query_arg('_wp_http_referer', rawurlencode($referer), $url);
     }
 
     private function get_time() {

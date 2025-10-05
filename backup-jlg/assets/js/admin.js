@@ -2015,7 +2015,7 @@ jQuery(document).ready(function($) {
             s3: { label: 'Amazon S3', color: '#8b5cf6' },
             dropbox: { label: 'Dropbox', color: '#2563eb' },
             onedrive: { label: 'OneDrive', color: '#0ea5e9' },
-            pcloud: { label: 'pCloud', color: '#22c55e' }
+            pcloud: { label: 'pCloud', color: '#f97316' }
         };
 
         function createBadge(config, fallbackLabel, extraClasses) {
@@ -3616,129 +3616,180 @@ jQuery(document).ready(function($) {
             });
     });
 
-    function bjlgSimpleDestinationTest($button, config) {
-        const $container = $button.closest(config.container);
-        if (!$container.length) {
+    function updateLastTestUI($lastTest, status, data, fallbackMessage, $container) {
+        if (!$lastTest.length) {
             return;
         }
 
-        const $feedback = $container.find(config.feedback);
-        const $spinner = $container.find(config.spinner);
+        const testedAtFormatted = data && data.tested_at_formatted ? String(data.tested_at_formatted) : '';
+        const testedAtRaw = data && typeof data.tested_at !== 'undefined' ? Number(data.tested_at) : null;
+        const statusMessage = data && data.status_message ? String(data.status_message) : (fallbackMessage ? String(fallbackMessage) : '');
+        const parts = [];
 
-        if ($feedback.length) {
-            $feedback.removeClass('notice notice-success notice-error').addClass('bjlg-hidden').hide().empty();
+        if (testedAtFormatted) {
+            if (status === 'success') {
+                parts.push('Dernier test réussi le ' + testedAtFormatted + '.');
+            } else {
+                parts.push('Dernier test échoué le ' + testedAtFormatted + '.');
+            }
+        } else if (status === 'success') {
+            parts.push('Dernier test réussi.');
+        } else {
+            parts.push('Dernier test : échec.');
         }
 
-        const payload = Object.assign({ action: config.action, nonce: bjlg_ajax.nonce }, typeof config.payload === 'function' ? config.payload($container) : {});
-
-        const originalText = $button.data('bjlg-original-text') || $button.text();
-        $button.data('bjlg-original-text', originalText);
-
-        $button.prop('disabled', true).text(config.testingLabel || 'Test en cours...');
-        if ($spinner.length) {
-            $spinner.addClass('is-active').show();
+        if (statusMessage) {
+            parts.push(statusMessage);
         }
 
-        const setFeedback = function(type, message) {
-            if (!$feedback.length) {
+        const iconClass = status === 'success' ? 'dashicons dashicons-yes' : 'dashicons dashicons-warning';
+
+        $lastTest
+            .css('display', '')
+            .css('color', status === 'success' ? '' : '#b32d2e')
+            .removeClass('bjlg-hidden')
+            .empty()
+            .append($('<span/>', { class: iconClass, 'aria-hidden': 'true' }))
+            .append(document.createTextNode(' ' + parts.join(' ')))
+            .show();
+
+        if ($container && $container.length) {
+            if (testedAtRaw && Number.isFinite(testedAtRaw)) {
+                $lastTest.attr('data-bjlg-tested-at', testedAtRaw);
+                $container.attr('data-bjlg-tested-at', testedAtRaw);
+            } else {
+                $lastTest.removeAttr('data-bjlg-tested-at');
+                $container.removeAttr('data-bjlg-tested-at');
+            }
+        }
+    }
+
+    function registerSimpleDestinationTest(config) {
+        $(document).on('click', config.buttonSelector, function(e) {
+            e.preventDefault();
+
+            const $button = $(this);
+            const $container = $button.closest(config.containerSelector);
+            if (!$container.length) {
                 return;
             }
 
-            $feedback
-                .removeClass('bjlg-hidden notice-success notice-error')
-                .addClass('notice')
-                .addClass(type)
-                .text(message || '')
-                .show();
-        };
+            const $feedback = $container.find(config.feedbackSelector);
+            const $spinner = config.spinnerSelector ? $container.find(config.spinnerSelector) : $();
+            const $lastTest = config.lastTestSelector ? $container.find(config.lastTestSelector) : $();
 
-        const reset = function() {
-            $button.prop('disabled', false).text(originalText);
-            if ($spinner.length) {
-                $spinner.removeClass('is-active').hide();
+            if ($feedback.length) {
+                $feedback.removeClass('notice-success notice-error').hide().addClass('bjlg-hidden').empty();
             }
-        };
 
-        $.post(bjlg_ajax.ajax_url, payload)
-            .done(function(response) {
-                if (response && response.success) {
-                    const message = response.data && response.data.message ? response.data.message : config.successMessage;
-                    setFeedback('notice-success', message || config.successMessage || 'Connexion réussie.');
-                } else {
-                    const message = response && response.data && response.data.message ? response.data.message : config.errorMessage;
-                    setFeedback('notice-error', message || config.errorMessage || 'Le test a échoué.');
-                }
-            })
-            .fail(function(xhr) {
-                let message = config.errorMessage || 'Une erreur est survenue.';
-                if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
-                    message = xhr.responseJSON.data.message;
-                } else if (xhr && xhr.responseJSON && xhr.responseJSON.message) {
-                    message = xhr.responseJSON.message;
-                }
-                setFeedback('notice-error', message);
-            })
-            .always(reset);
+            const payload = {
+                action: config.action,
+                nonce: bjlg_ajax.nonce
+            };
+
+            if (Array.isArray(config.fields)) {
+                config.fields.forEach(function(field) {
+                    if (!field || !field.name) {
+                        return;
+                    }
+
+                    const selector = field.selector || 'input[name="' + field.name + '"]';
+                    payload[field.name] = $container.find(selector).val() || '';
+                });
+            }
+
+            if (!$button.data('bjlg-original-text')) {
+                $button.data('bjlg-original-text', $button.text());
+            }
+
+            $button.prop('disabled', true).text('Test en cours...');
+
+            if ($spinner.length) {
+                $spinner.addClass('is-active').show();
+            }
+
+            $.post(bjlg_ajax.ajax_url, payload)
+                .done(function(response) {
+                    const data = response && response.data ? response.data : {};
+                    const message = data.message ? String(data.message) : config.defaultSuccessMessage;
+
+                    showFeedback($feedback, 'success', message || config.defaultSuccessMessage);
+                    updateLastTestUI($lastTest, 'success', data, message || config.defaultSuccessMessage, $container);
+                })
+                .fail(function(xhr) {
+                    let message = config.defaultErrorMessage || 'Impossible de tester la connexion.';
+                    let data = null;
+
+                    if (xhr && xhr.responseJSON) {
+                        if (xhr.responseJSON.data) {
+                            data = xhr.responseJSON.data;
+                            if (data.message) {
+                                message = String(data.message);
+                            }
+                        } else if (xhr.responseJSON.message) {
+                            message = String(xhr.responseJSON.message);
+                        }
+                    } else if (xhr && xhr.responseText) {
+                        message = xhr.responseText;
+                    }
+
+                    showFeedback($feedback, 'error', message);
+                    updateLastTestUI($lastTest, 'error', data || {}, message, $container);
+                })
+                .always(function() {
+                    const original = $button.data('bjlg-original-text') || 'Tester la connexion';
+                    $button.prop('disabled', false).text(original);
+
+                    if ($spinner.length) {
+                        $spinner.removeClass('is-active').hide();
+                    }
+                });
+        });
     }
 
-    $(document).on('click', '.bjlg-dropbox-test-connection', function(e) {
-        e.preventDefault();
-
-        bjlgSimpleDestinationTest($(this), {
-            container: '.bjlg-destination--dropbox',
-            feedback: '.bjlg-dropbox-test-feedback',
-            spinner: '.bjlg-dropbox-test-spinner',
-            action: 'bjlg_test_dropbox_connection',
-            testingLabel: 'Test en cours...',
-            successMessage: 'Connexion Dropbox réussie.',
-            errorMessage: 'Le test Dropbox a échoué.',
-            payload: function($container) {
-                return {
-                    dropbox_access_token: $container.find('input[name="dropbox_access_token"]').val() || '',
-                    dropbox_folder: $container.find('input[name="dropbox_folder"]').val() || ''
-                };
-            }
-        });
+    registerSimpleDestinationTest({
+        buttonSelector: '.bjlg-dropbox-test-connection',
+        containerSelector: '.bjlg-destination--dropbox',
+        feedbackSelector: '.bjlg-dropbox-test-feedback',
+        spinnerSelector: '.bjlg-dropbox-test-spinner',
+        lastTestSelector: '.bjlg-dropbox-last-test',
+        action: 'bjlg_test_dropbox_connection',
+        fields: [
+            { name: 'dropbox_access_token', selector: 'input[name="dropbox_access_token"]' },
+            { name: 'dropbox_folder', selector: 'input[name="dropbox_folder"]' }
+        ],
+        defaultSuccessMessage: 'Connexion Dropbox vérifiée avec succès.',
+        defaultErrorMessage: 'Impossible de tester la connexion Dropbox.'
     });
 
-    $(document).on('click', '.bjlg-onedrive-test-connection', function(e) {
-        e.preventDefault();
-
-        bjlgSimpleDestinationTest($(this), {
-            container: '.bjlg-destination--onedrive',
-            feedback: '.bjlg-onedrive-test-feedback',
-            spinner: '.bjlg-onedrive-test-spinner',
-            action: 'bjlg_test_onedrive_connection',
-            testingLabel: 'Test en cours...',
-            successMessage: 'Connexion OneDrive réussie.',
-            errorMessage: 'Le test OneDrive a échoué.',
-            payload: function($container) {
-                return {
-                    onedrive_access_token: $container.find('input[name="onedrive_access_token"]').val() || '',
-                    onedrive_folder: $container.find('input[name="onedrive_folder"]').val() || ''
-                };
-            }
-        });
+    registerSimpleDestinationTest({
+        buttonSelector: '.bjlg-onedrive-test-connection',
+        containerSelector: '.bjlg-destination--onedrive',
+        feedbackSelector: '.bjlg-onedrive-test-feedback',
+        spinnerSelector: '.bjlg-onedrive-test-spinner',
+        lastTestSelector: '.bjlg-onedrive-last-test',
+        action: 'bjlg_test_onedrive_connection',
+        fields: [
+            { name: 'onedrive_access_token', selector: 'input[name="onedrive_access_token"]' },
+            { name: 'onedrive_folder', selector: 'input[name="onedrive_folder"]' }
+        ],
+        defaultSuccessMessage: 'Connexion OneDrive vérifiée avec succès.',
+        defaultErrorMessage: 'Impossible de tester la connexion OneDrive.'
     });
 
-    $(document).on('click', '.bjlg-pcloud-test-connection', function(e) {
-        e.preventDefault();
-
-        bjlgSimpleDestinationTest($(this), {
-            container: '.bjlg-destination--pcloud',
-            feedback: '.bjlg-pcloud-test-feedback',
-            spinner: '.bjlg-pcloud-test-spinner',
-            action: 'bjlg_test_pcloud_connection',
-            testingLabel: 'Test en cours...',
-            successMessage: 'Connexion pCloud réussie.',
-            errorMessage: 'Le test pCloud a échoué.',
-            payload: function($container) {
-                return {
-                    pcloud_access_token: $container.find('input[name="pcloud_access_token"]').val() || '',
-                    pcloud_folder: $container.find('input[name="pcloud_folder"]').val() || ''
-                };
-            }
-        });
+    registerSimpleDestinationTest({
+        buttonSelector: '.bjlg-pcloud-test-connection',
+        containerSelector: '.bjlg-destination--pcloud',
+        feedbackSelector: '.bjlg-pcloud-test-feedback',
+        spinnerSelector: '.bjlg-pcloud-test-spinner',
+        lastTestSelector: '.bjlg-pcloud-last-test',
+        action: 'bjlg_test_pcloud_connection',
+        fields: [
+            { name: 'pcloud_access_token', selector: 'input[name="pcloud_access_token"]' },
+            { name: 'pcloud_folder', selector: 'input[name="pcloud_folder"]' }
+        ],
+        defaultSuccessMessage: 'Connexion pCloud vérifiée avec succès.',
+        defaultErrorMessage: 'Impossible de tester la connexion pCloud.'
     });
 
     // --- TEST DE CONNEXION AMAZON S3 ---

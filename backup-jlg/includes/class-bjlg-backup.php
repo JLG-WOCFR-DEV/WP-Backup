@@ -1824,8 +1824,8 @@ class BJLG_Backup {
                 }
                 break;
             case 'pcloud':
-                if (class_exists(BJLG_pCloud::class)) {
-                    return new BJLG_pCloud();
+                if (class_exists(BJLG_PCloud::class)) {
+                    return new BJLG_PCloud();
                 }
                 break;
             case 'sftp':

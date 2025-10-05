@@ -65,6 +65,21 @@ class BJLG_Settings {
             'folder_id' => '',
             'enabled' => false,
         ],
+        'dropbox' => [
+            'access_token' => '',
+            'folder' => '',
+            'enabled' => false,
+        ],
+        'onedrive' => [
+            'access_token' => '',
+            'folder' => '',
+            'enabled' => false,
+        ],
+        'pcloud' => [
+            'access_token' => '',
+            'folder' => '',
+            'enabled' => false,
+        ],
         's3' => [
             'access_key' => '',
             'secret_key' => '',

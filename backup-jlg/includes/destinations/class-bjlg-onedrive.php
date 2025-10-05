@@ -84,15 +84,19 @@ class BJLG_OneDrive implements BJLG_Destination_Interface {
         echo "<div class='notice bjlg-onedrive-test-feedback bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p class='bjlg-onedrive-test-actions'><button type='button' class='button bjlg-onedrive-test-connection'>Tester la connexion</button> <span class='spinner bjlg-onedrive-test-spinner' style='float:none;margin:0 0 0 8px;display:none;'></span></p>";
 
-        if ($status['last_result'] === 'success' && $status['tested_at'] > 0) {
+        if ($status['tested_at'] > 0) {
+            $icon = $status['last_result'] === 'success' ? 'dashicons-yes' : 'dashicons-warning';
+            $color = $status['last_result'] === 'success' ? '' : '#b32d2e';
             $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
-            echo "<p class='description'><span class='dashicons dashicons-yes'></span> Dernier test réussi le {$tested_at}.";
-            if ($status['message'] !== '') {
-                echo ' ' . esc_html($status['message']);
-            }
-            echo '</p>';
-        } elseif ($status['last_result'] === 'error') {
-            echo "<p class='description' style='color:#b32d2e;'><span class='dashicons dashicons-warning'></span> " . esc_html($status['message']) . "</p>";
+            $message = $status['message'] !== '' ? $status['message'] : ($status['last_result'] === 'success' ? 'Connexion vérifiée avec succès.' : 'Le dernier test a échoué.');
+            echo "<p class='description bjlg-onedrive-last-test' style='color:{$color};'><span class='dashicons {$icon}'></span> Dernier test le {$tested_at}. " . esc_html($message) . "</p>";
+        } else {
+            echo "<p class='description bjlg-onedrive-last-test bjlg-hidden'></p>";
+        }
+
+        if ($this->is_connected()) {
+            $disconnect_url = $this->get_disconnect_url();
+            echo "<p><a class='button button-secondary' href='" . esc_url($disconnect_url) . "'>Déconnecter OneDrive</a></p>";
         }
 
         if ($this->is_connected()) {
@@ -519,5 +523,90 @@ class BJLG_OneDrive implements BJLG_Destination_Interface {
 
     private function get_time() {
         return (int) call_user_func($this->time_provider);
+    }
+
+    public function handle_test_connection() {
+        if (!\bjlg_can_manage_plugin()) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $settings = [
+            'access_token' => isset($_POST['onedrive_access_token']) ? sanitize_text_field(wp_unslash($_POST['onedrive_access_token'])) : '',
+            'folder' => isset($_POST['onedrive_folder']) ? sanitize_text_field(wp_unslash($_POST['onedrive_folder'])) : '',
+            'enabled' => true,
+        ];
+
+        try {
+            $result = $this->test_connection($settings);
+            $this->store_status([
+                'last_result' => 'success',
+                'tested_at' => $result['tested_at'],
+                'message' => $result['message'],
+            ]);
+
+            wp_send_json_success([
+                'message' => $result['message'],
+                'status_message' => $result['message'],
+                'tested_at' => $result['tested_at'],
+                'tested_at_formatted' => gmdate('d/m/Y H:i:s', $result['tested_at']),
+            ]);
+        } catch (Exception $exception) {
+            $tested_at = $this->get_time();
+            $this->store_status([
+                'last_result' => 'error',
+                'tested_at' => $tested_at,
+                'message' => $exception->getMessage(),
+            ]);
+
+            wp_send_json_error([
+                'message' => $exception->getMessage(),
+                'status_message' => $exception->getMessage(),
+                'tested_at' => $tested_at,
+                'tested_at_formatted' => gmdate('d/m/Y H:i:s', $tested_at),
+            ], 400);
+        }
+    }
+
+    public function handle_disconnect_request() {
+        if (!\bjlg_can_manage_plugin()) {
+            wp_die('Permission refusée.');
+        }
+
+        check_admin_referer('bjlg_onedrive_disconnect');
+
+        $this->disconnect();
+
+        $redirect = isset($_REQUEST['_wp_http_referer']) ? esc_url_raw(wp_unslash($_REQUEST['_wp_http_referer'])) : admin_url('admin.php?page=backup-jlg&tab=settings');
+        wp_safe_redirect(add_query_arg('bjlg_onedrive_disconnected', '1', $redirect));
+        exit;
+    }
+
+    private function test_connection(array $settings) {
+        if ($settings['access_token'] === '') {
+            throw new Exception('Fournissez un token d\'accès OneDrive.');
+        }
+
+        $this->api_request('https://graph.microsoft.com/v1.0/me/drive/root', $settings, 'GET');
+
+        $path = $this->normalize_folder($settings['folder']);
+        if ($path !== '') {
+            $endpoint = 'https://graph.microsoft.com/v1.0/me/drive/root:' . $this->encode_graph_path($path) . ':';
+            $this->api_request($endpoint, $settings, 'GET');
+        }
+
+        return [
+            'message' => 'Connexion OneDrive validée.',
+            'tested_at' => $this->get_time(),
+        ];
+    }
+
+    private function get_disconnect_url() {
+        $referer = isset($_SERVER['REQUEST_URI']) ? wp_unslash($_SERVER['REQUEST_URI']) : admin_url('admin.php?page=backup-jlg&tab=settings');
+
+        $url = wp_nonce_url(add_query_arg('action', 'bjlg_onedrive_disconnect', admin_url('admin-post.php')), 'bjlg_onedrive_disconnect');
+
+        return add_query_arg('_wp_http_referer', rawurlencode($referer), $url);
     }
 }

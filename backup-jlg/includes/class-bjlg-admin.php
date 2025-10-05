@@ -39,8 +39,8 @@ class BJLG_Admin {
         if (class_exists(BJLG_OneDrive::class)) {
             $this->destinations['onedrive'] = new BJLG_OneDrive();
         }
-        if (class_exists(BJLG_pCloud::class)) {
-            $this->destinations['pcloud'] = new BJLG_pCloud();
+        if (class_exists(BJLG_PCloud::class)) {
+            $this->destinations['pcloud'] = new BJLG_PCloud();
         }
         if (class_exists(BJLG_SFTP::class)) {
             $this->destinations['sftp'] = new BJLG_SFTP();
