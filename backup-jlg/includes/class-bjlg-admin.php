@@ -27,8 +27,17 @@ class BJLG_Admin {
         if (class_exists(BJLG_Google_Drive::class)) {
             $this->destinations['google_drive'] = new BJLG_Google_Drive();
         }
+        if (class_exists(BJLG_Dropbox::class)) {
+            $this->destinations['dropbox'] = new BJLG_Dropbox();
+        }
+        if (class_exists(BJLG_OneDrive::class)) {
+            $this->destinations['onedrive'] = new BJLG_OneDrive();
+        }
         if (class_exists(BJLG_AWS_S3::class)) {
             $this->destinations['aws_s3'] = new BJLG_AWS_S3();
+        }
+        if (class_exists(BJLG_Wasabi::class)) {
+            $this->destinations['wasabi'] = new BJLG_Wasabi();
         }
         if (class_exists(BJLG_SFTP::class)) {
             $this->destinations['sftp'] = new BJLG_SFTP();
@@ -1706,7 +1715,10 @@ class BJLG_Admin {
         if (empty($choices)) {
             $choices = [
                 'google_drive' => 'Google Drive',
+                'dropbox' => 'Dropbox',
+                'onedrive' => 'Microsoft OneDrive',
                 'aws_s3' => 'Amazon S3',
+                'wasabi' => 'Wasabi S3',
                 'sftp' => 'Serveur SFTP',
             ];
         }
