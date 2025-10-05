@@ -285,6 +285,8 @@ final class BJLG_BackupTest extends TestCase
 
         $zip = new ZipArchive();
         $this->assertTrue($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE));
+        $zip->addFromString('backup-manifest.json', json_encode(['contains' => ['db'], 'type' => 'full']));
+        $zip->addFromString('database.sql', "SELECT 1;\n");
         $zip->addFromString('file.txt', 'example');
         $zip->close();
 
@@ -296,9 +298,89 @@ final class BJLG_BackupTest extends TestCase
             $this->assertSame(hash_file('sha256', $zip_path), $results['checksum']);
             $this->assertSame('sha256', $results['checksum_algorithm']);
             $this->assertSame('passed', $results['dry_run']);
+            $this->assertSame('passed', $results['overall_status']);
+            $this->assertArrayHasKey('files', $results);
+            $this->assertArrayHasKey('backup-manifest.json', $results['files']);
+            $this->assertArrayHasKey('database.sql', $results['files']);
+            $this->assertSame('passed', $results['files']['backup-manifest.json']['status']);
+            $this->assertSame('passed', $results['files']['database.sql']['status']);
 
             $encryptedResults = $method->invoke($backup, $zip_path, ['checksum' => true, 'dry_run' => true], true);
             $this->assertSame('skipped', $encryptedResults['dry_run']);
+            $this->assertSame('skipped', $encryptedResults['overall_status']);
+            $this->assertSame('skipped', $encryptedResults['files']['backup-manifest.json']['status']);
+            $this->assertSame('skipped', $encryptedResults['files']['database.sql']['status']);
+        } finally {
+            @unlink($zip_path);
+        }
+    }
+
+    public function test_perform_post_backup_checks_detects_truncated_archive(): void
+    {
+        $zip_path = tempnam(sys_get_temp_dir(), 'bjlg-truncated');
+        $this->assertIsString($zip_path);
+        $zip_path .= '.zip';
+
+        $zip = new ZipArchive();
+        $this->assertTrue($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE));
+
+        $manifest = [
+            'contains' => ['db'],
+        ];
+
+        $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $sqlContent = "CREATE TABLE `wp_test` (id INT);\nINSERT INTO `wp_test` VALUES (1);\n";
+        $zip->addFromString('database.sql', $sqlContent);
+        $zip->close();
+
+        $truncatedZip = new class extends ZipArchive {
+            /** @var array<int, string> */
+            public $truncate = [];
+
+            #[\ReturnTypeWillChange]
+            public function getFromName($name, $length = 0, $flags = 0)
+            {
+                $data = parent::getFromName($name, $length, $flags);
+
+                if ($data !== false && in_array($name, $this->truncate, true)) {
+                    $cut = max(0, strlen($data) - 5);
+
+                    return substr($data, 0, $cut);
+                }
+
+                return $data;
+            }
+        };
+        $truncatedZip->truncate = ['database.sql'];
+
+        $backup = new class($truncatedZip) extends BJLG\BJLG_Backup {
+            private ZipArchive $zip;
+
+            public function __construct(ZipArchive $zip)
+            {
+                $this->zip = $zip;
+            }
+
+            protected function create_zip_archive()
+            {
+                return $this->zip;
+            }
+        };
+
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'perform_post_backup_checks');
+        $method->setAccessible(true);
+
+        try {
+            /** @var array<string, mixed> $results */
+            $results = $method->invoke($backup, $zip_path, ['checksum' => false, 'dry_run' => true], false);
+
+            $this->assertSame('passed', $results['dry_run']);
+            $this->assertSame('failed', $results['overall_status']);
+            $this->assertArrayHasKey('database.sql', $results['files']);
+            $this->assertSame('failed', $results['files']['database.sql']['status']);
+            $this->assertSame('passed', $results['files']['backup-manifest.json']['status']);
+            $this->assertSame(strlen($sqlContent), $results['files']['database.sql']['expected_size']);
+            $this->assertLessThan($results['files']['database.sql']['expected_size'], $results['files']['database.sql']['read_size']);
         } finally {
             @unlink($zip_path);
         }
