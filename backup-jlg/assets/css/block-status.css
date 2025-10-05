@@ -1,0 +1,226 @@
+.bjlg-block-status {
+    background: #ffffff;
+    border: 1px solid #dcdcde;
+    border-radius: 8px;
+    padding: 24px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    color: #1d2327;
+    font-family: inherit;
+}
+
+.bjlg-block-status--editor {
+    min-height: 160px;
+}
+
+.bjlg-block-status__header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    gap: 12px;
+}
+
+.bjlg-block-status__title {
+    font-size: 1.25rem;
+    margin: 0;
+}
+
+.bjlg-block-status__timestamp {
+    font-size: 0.875rem;
+    color: #50575e;
+}
+
+.bjlg-block-status__summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.bjlg-block-status__stat {
+    background: #f6f7f7;
+    border-radius: 6px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.bjlg-block-status__stat-label {
+    font-size: 0.875rem;
+    color: #50575e;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.bjlg-block-status__stat-value {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #1d2327;
+}
+
+.bjlg-block-status__stat-meta {
+    font-size: 0.875rem;
+    color: #646970;
+}
+
+.bjlg-block-status__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+.bjlg-block-status__button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 18px;
+    border-radius: 4px;
+    font-weight: 600;
+    background: #2271b1;
+    color: #ffffff;
+    text-decoration: none;
+}
+
+.bjlg-block-status__button:hover,
+.bjlg-block-status__button:focus {
+    background: #135e96;
+    color: #ffffff;
+}
+
+.bjlg-block-status__button--secondary {
+    background: #f3f4f5;
+    color: #1d2327;
+}
+
+.bjlg-block-status__button--secondary:hover,
+.bjlg-block-status__button--secondary:focus {
+    background: #e2e4e7;
+}
+
+.bjlg-block-status__alerts {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+.bjlg-block-status__alert {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    border-radius: 6px;
+    padding: 16px;
+    gap: 12px;
+}
+
+.bjlg-block-status__alert--info {
+    background: #f0f6fc;
+    border: 1px solid #8fbdf0;
+}
+
+.bjlg-block-status__alert--warning {
+    background: #fff4e5;
+    border: 1px solid #f0c88b;
+}
+
+.bjlg-block-status__alert--error {
+    background: #fdecea;
+    border: 1px solid #f18f81;
+}
+
+.bjlg-block-status__alert--success {
+    background: #edf7ed;
+    border: 1px solid #9fd89f;
+}
+
+.bjlg-block-status__alert-body {
+    flex: 1 1 auto;
+}
+
+.bjlg-block-status__alert-body strong {
+    display: block;
+    font-size: 1rem;
+    margin-bottom: 4px;
+}
+
+.bjlg-block-status__alert-link {
+    font-weight: 600;
+    color: #1d2327;
+    text-decoration: none;
+}
+
+.bjlg-block-status__alert-link:hover,
+.bjlg-block-status__alert-link:focus {
+    text-decoration: underline;
+}
+
+.bjlg-block-status__recent {
+    margin-top: 8px;
+}
+
+.bjlg-block-status__section-title {
+    margin: 0 0 12px 0;
+    font-size: 1.1rem;
+}
+
+.bjlg-block-status__backup-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 10px;
+}
+
+.bjlg-block-status__backup-item {
+    display: flex;
+    flex-direction: column;
+    background: #f6f7f7;
+    border-radius: 6px;
+    padding: 12px 16px;
+}
+
+.bjlg-block-status__backup-name {
+    font-weight: 600;
+}
+
+.bjlg-block-status__backup-meta {
+    font-size: 0.875rem;
+    color: #646970;
+}
+
+.bjlg-block-status__placeholder,
+.bjlg-block-status__error,
+.bjlg-block-status__notice,
+.bjlg-block-status__empty {
+    text-align: center;
+    color: #50575e;
+}
+
+.bjlg-block-status__placeholder {
+    display: grid;
+    gap: 12px;
+    justify-content: center;
+    align-items: center;
+    min-height: 140px;
+}
+
+.bjlg-block-status__error {
+    display: grid;
+    gap: 16px;
+    justify-items: center;
+}
+
+.bjlg-block-status__notice {
+    background: #f6f7f7;
+    border-radius: 6px;
+    padding: 16px;
+}
+
+@media (max-width: 600px) {
+    .bjlg-block-status {
+        padding: 16px;
+    }
+}

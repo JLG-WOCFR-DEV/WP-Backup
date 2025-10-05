@@ -1,0 +1,35 @@
+{
+    "$schema": "https://schemas.wp.org/trunk/block.json",
+    "apiVersion": 2,
+    "name": "backup-jlg/status",
+    "title": "État des sauvegardes JLG",
+    "category": "widgets",
+    "icon": "database",
+    "description": "Affiche un résumé des dernières sauvegardes JLG et les prochaines actions recommandées.",
+    "keywords": ["backup", "sauvegarde", "jlg"],
+    "supports": {
+        "html": false,
+        "align": ["wide", "full"],
+        "spacing": {
+            "margin": true,
+            "padding": true
+        }
+    },
+    "attributes": {
+        "showAlerts": {
+            "type": "boolean",
+            "default": true
+        },
+        "showRecentBackups": {
+            "type": "boolean",
+            "default": true
+        },
+        "showLaunchButton": {
+            "type": "boolean",
+            "default": true
+        }
+    },
+    "editorScript": "bjlg-block-status-editor",
+    "style": "bjlg-block-status-style",
+    "editorStyle": "bjlg-block-status-style"
+}

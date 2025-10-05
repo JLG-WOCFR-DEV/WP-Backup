@@ -131,6 +131,23 @@ Une fois l'autorisation OAuth terminée, rendez-vous dans **Backup JLG → Régl
    - Pour les sauvegardes chiffrées (`.enc`), fournissez le mot de passe exact (minimum 4 caractères). Les champs vides sont refusés
      afin de garantir la protection des archives.
 
+### Bloc éditeur « État des sauvegardes »
+
+> 💡 Ce bloc dynamique s’appuie sur les métriques du tableau de bord et l’API REST `backup-jlg/v1/backups` pour présenter un résumé "front-office" fidèle.
+
+1. Dans l’éditeur de blocs, ajoutez **Backup JLG → État des sauvegardes JLG**.
+2. Utilisez le panneau **Options du bloc** pour choisir :
+   - l’affichage du bouton **« Lancer une sauvegarde »** (ouvre la page d’administration correspondante),
+   - l’affichage des alertes (échecs récents, absence d’archives, etc.),
+   - l’affichage de la liste des **dernières archives générées**.
+3. Le bloc montre automatiquement :
+   - la dernière sauvegarde réussie et la prochaine exécution planifiée,
+   - la taille totale du stockage et le nombre d’archives,
+   - un CTA secondaire vers l’assistant de restauration.
+4. En cas d’erreur ou d’accès interdit, un message dédié apparaît et un bouton « Réessayer » permet de relancer le chargement.
+
+👉 Conseil : placez ce bloc sur une page interne destinée aux administrateurs afin qu’ils puissent lancer rapidement une sauvegarde ou consulter l’état du stockage sans ouvrir tout le tableau de bord.
+
 ### API REST
 
 #### Authentification
