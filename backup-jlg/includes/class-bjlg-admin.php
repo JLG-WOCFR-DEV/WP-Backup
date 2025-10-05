@@ -2026,6 +2026,10 @@ class BJLG_Admin {
         $recurrence = isset($schedule['recurrence']) ? (string) $schedule['recurrence'] : 'disabled';
         $day = isset($schedule['day']) ? (string) $schedule['day'] : 'sunday';
         $time = isset($schedule['time']) ? (string) $schedule['time'] : '23:59';
+        $day_of_month = isset($schedule['day_of_month']) ? (int) $schedule['day_of_month'] : 1;
+        if ($day_of_month < 1 || $day_of_month > 31) {
+            $day_of_month = 1;
+        }
         $previous_recurrence = isset($schedule['previous_recurrence']) ? (string) $schedule['previous_recurrence'] : '';
 
         $schedule_components = isset($schedule['components']) && is_array($schedule['components']) ? $schedule['components'] : [];
@@ -2043,8 +2047,10 @@ class BJLG_Admin {
         $exclude_text = esc_textarea(implode("\n", array_map('strval', $exclude_patterns)));
 
         $weekly_hidden = $recurrence !== 'weekly';
+        $monthly_hidden = $recurrence !== 'monthly';
         $time_hidden = $recurrence === 'disabled';
         $weekly_classes = 'bjlg-schedule-weekly-options' . ($weekly_hidden ? ' bjlg-hidden' : '');
+        $monthly_classes = 'bjlg-schedule-monthly-options' . ($monthly_hidden ? ' bjlg-hidden' : '');
         $time_classes = 'bjlg-schedule-time-options' . ($time_hidden ? ' bjlg-hidden' : '');
 
         $next_run_text = isset($next_run_summary['next_run_formatted']) && $next_run_summary['next_run_formatted'] !== ''
@@ -2062,10 +2068,14 @@ class BJLG_Admin {
         $label_id = 'bjlg-schedule-label-' . $field_prefix;
         $time_id_template = 'bjlg-schedule-time-%s';
         $time_description_id_template = 'bjlg-schedule-time-%s-description';
+        $day_of_month_id_template = 'bjlg-schedule-day-of-month-%s';
+        $day_of_month_description_id_template = 'bjlg-schedule-day-of-month-%s-description';
         $include_id_template = 'bjlg-schedule-include-%s';
         $exclude_id_template = 'bjlg-schedule-exclude-%s';
         $time_id = sprintf($time_id_template, $field_prefix);
         $time_description_id = sprintf($time_description_id_template, $field_prefix);
+        $day_of_month_id = sprintf($day_of_month_id_template, $field_prefix);
+        $day_of_month_description_id = sprintf($day_of_month_description_id_template, $field_prefix);
         $include_id = sprintf($include_id_template, $field_prefix);
         $exclude_id = sprintf($exclude_id_template, $field_prefix);
 
@@ -2141,6 +2151,27 @@ class BJLG_Admin {
                                     <option value="<?php echo esc_attr($day_key); ?>" <?php selected($day, $day_key); ?>><?php echo esc_html($day_name); ?></option>
                                 <?php endforeach; ?>
                             </select>
+                        </td>
+                    </tr>
+                    <tr class="<?php echo esc_attr($monthly_classes); ?>" aria-hidden="<?php echo esc_attr($monthly_hidden ? 'true' : 'false'); ?>">
+                        <th scope="row"><label for="<?php echo esc_attr($day_of_month_id); ?>" data-for-template="bjlg-schedule-day-of-month-%s">Jour du mois</label></th>
+                        <td>
+                            <input type="number"
+                                   id="<?php echo esc_attr($day_of_month_id); ?>"
+                                   class="small-text"
+                                   data-field="day_of_month"
+                                   data-id-template="bjlg-schedule-day-of-month-%s"
+                                   data-describedby-template="bjlg-schedule-day-of-month-%s-description"
+                                   name="schedules[<?php echo esc_attr($field_prefix); ?>][day_of_month]"
+                                   value="<?php echo esc_attr((string) $day_of_month); ?>"
+                                   min="1"
+                                   max="31"
+                                   aria-describedby="<?php echo esc_attr($day_of_month_description_id); ?>">
+                            <p id="<?php echo esc_attr($day_of_month_description_id); ?>"
+                               class="description"
+                               data-id-template="bjlg-schedule-day-of-month-%s-description">
+                                Choisissez un jour entre 1 et 31. Le dernier jour sera ajusté selon le mois.
+                            </p>
                         </td>
                     </tr>
                     <tr class="<?php echo esc_attr($time_classes); ?>" aria-hidden="<?php echo esc_attr($time_hidden ? 'true' : 'false'); ?>">
