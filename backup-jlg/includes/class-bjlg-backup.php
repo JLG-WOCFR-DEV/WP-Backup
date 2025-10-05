@@ -1808,14 +1808,19 @@ class BJLG_Backup {
                     return new BJLG_AWS_S3();
                 }
                 break;
-            case 'azure_blob':
-                if (class_exists(BJLG_Azure_Blob::class)) {
-                    return new BJLG_Azure_Blob();
+            case 'wasabi':
+                if (class_exists(BJLG_Wasabi::class)) {
+                    return new BJLG_Wasabi();
                 }
                 break;
-            case 'backblaze_b2':
-                if (class_exists(BJLG_Backblaze_B2::class)) {
-                    return new BJLG_Backblaze_B2();
+            case 'dropbox':
+                if (class_exists(BJLG_Dropbox::class)) {
+                    return new BJLG_Dropbox();
+                }
+                break;
+            case 'onedrive':
+                if (class_exists(BJLG_OneDrive::class)) {
+                    return new BJLG_OneDrive();
                 }
                 break;
             case 'sftp':
