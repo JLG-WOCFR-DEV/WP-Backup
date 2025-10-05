@@ -936,6 +936,11 @@ class BJLG_Backup {
             $effective_encryption = (bool) $task_data['encrypt'];
 
             $check_results = $this->perform_post_backup_checks($backup_filepath, $post_checks, $effective_encryption);
+
+            if (($check_results['overall_status'] ?? 'passed') === 'failed') {
+                $failure_message = $check_results['overall_message'] ?? 'Les vérifications post-sauvegarde ont échoué.';
+                throw new Exception($failure_message);
+            }
             $destination_results = $this->dispatch_to_destinations(
                 $backup_filepath,
                 $destination_queue,
@@ -1899,6 +1904,9 @@ class BJLG_Backup {
             'checksum' => '',
             'checksum_algorithm' => '',
             'dry_run' => 'disabled',
+            'files' => [],
+            'overall_status' => 'passed',
+            'overall_message' => 'Toutes les vérifications ont réussi.',
         ];
 
         if (!is_readable($filepath)) {
@@ -1916,26 +1924,193 @@ class BJLG_Backup {
             $results['checksum_algorithm'] = 'sha256';
         }
 
-        if (!empty($post_checks['dry_run'])) {
-            if ($encrypted) {
+        $log_file_check = function($filename, $status, $message = '', array $context = []) use (&$results) {
+            $entry = array_merge([
+                'status' => $status,
+                'message' => $message,
+            ], $context);
+
+            $results['files'][$filename] = $entry;
+
+            $history_status = 'info';
+            if ($status === 'passed') {
+                $history_status = 'success';
+            } elseif ($status === 'failed') {
+                $history_status = 'failure';
+            }
+
+            $log_prefix = 'Vérification post-sauvegarde';
+            $log_message = sprintf('%s [%s] : %s', $log_prefix, $filename, $status);
+            if ($message !== '') {
+                $log_message .= ' - ' . $message;
+            }
+
+            if ($status === 'failed') {
+                BJLG_Debug::log('ERREUR : ' . $log_message);
+            } else {
+                BJLG_Debug::log($log_message);
+            }
+
+            BJLG_History::log('backup_post_check', $history_status, $log_message);
+
+            if ($status === 'failed') {
+                $results['overall_status'] = 'failed';
+                if ($message !== '') {
+                    $results['overall_message'] = $message;
+                } else {
+                    $results['overall_message'] = sprintf('La vérification du fichier %s a échoué.', $filename);
+                }
+            }
+        };
+
+        if ($encrypted) {
+            if (!empty($post_checks['dry_run'])) {
                 BJLG_Debug::log('Vérification de restauration ignorée pour une archive chiffrée.');
                 $results['dry_run'] = 'skipped';
-            } else {
-                $zip = $this->create_zip_archive();
-                $open_result = $zip->open($filepath);
-                if ($open_result !== true) {
-                    throw new Exception('La vérification de restauration a échoué : archive invalide.');
-                }
+            }
 
+            $results['overall_status'] = 'skipped';
+            $results['overall_message'] = 'Archive chiffrée : vérifications impossibles.';
+
+            $skip_message = 'Archive chiffrée : vérification impossible.';
+            foreach (['backup-manifest.json', 'database.sql'] as $filename) {
+                $log_file_check($filename, 'skipped', $skip_message);
+            }
+
+            return $results;
+        }
+
+        $zip = $this->create_zip_archive();
+        $open_result = $zip->open($filepath);
+        if ($open_result !== true) {
+            throw new Exception('La vérification post-sauvegarde a échoué : ' . $this->describe_zip_error($open_result));
+        }
+
+        try {
+            if (!empty($post_checks['dry_run'])) {
                 if ($zip->numFiles < 1) {
-                    $zip->close();
                     throw new Exception('La vérification de restauration a échoué : archive vide.');
                 }
 
-                $zip->close();
                 BJLG_Debug::log('Vérification de restauration réussie pour ' . basename($filepath));
                 $results['dry_run'] = 'passed';
             }
+
+            $manifest_data = null;
+            $manifest_stat = $zip->statName('backup-manifest.json', ZipArchive::FL_UNCHANGED);
+
+            if ($manifest_stat === false) {
+                $log_file_check('backup-manifest.json', 'failed', "Fichier introuvable dans l'archive.");
+            } else {
+                $manifest_content = $zip->getFromName('backup-manifest.json');
+                $expected_size = isset($manifest_stat['size']) ? (int) $manifest_stat['size'] : null;
+                $read_size = is_string($manifest_content) ? strlen($manifest_content) : 0;
+
+                if ($manifest_content === false || $read_size === 0) {
+                    $log_file_check('backup-manifest.json', 'failed', 'Impossible de lire le manifeste de la sauvegarde.', [
+                        'expected_size' => $expected_size,
+                        'read_size' => $read_size,
+                    ]);
+                } elseif ($expected_size !== null && $expected_size !== $read_size) {
+                    $log_file_check('backup-manifest.json', 'failed', sprintf(
+                        'Taille lue (%d) différente de la taille attendue (%d).',
+                        $read_size,
+                        $expected_size
+                    ), [
+                        'expected_size' => $expected_size,
+                        'read_size' => $read_size,
+                    ]);
+                } else {
+                    $crc_valid = true;
+                    if (isset($manifest_stat['crc'])) {
+                        $expected_crc = sprintf('%u', $manifest_stat['crc']);
+                        $calculated_crc = sprintf('%u', crc32($manifest_content));
+                        $crc_valid = $expected_crc === $calculated_crc;
+                    }
+
+                    $decoded_manifest = json_decode($manifest_content, true);
+
+                    if (!$crc_valid) {
+                        $log_file_check('backup-manifest.json', 'failed', 'Somme de contrôle invalide pour le manifeste.', [
+                            'expected_size' => $expected_size,
+                            'read_size' => $read_size,
+                        ]);
+                    } elseif (!is_array($decoded_manifest)) {
+                        $log_file_check('backup-manifest.json', 'failed', 'JSON du manifeste invalide.', [
+                            'expected_size' => $expected_size,
+                            'read_size' => $read_size,
+                        ]);
+                    } else {
+                        $manifest_data = $decoded_manifest;
+                        $log_file_check('backup-manifest.json', 'passed', 'Manifeste valide.', [
+                            'expected_size' => $expected_size,
+                            'read_size' => $read_size,
+                        ]);
+                    }
+                }
+            }
+
+            $manifest_contains = [];
+            if (is_array($manifest_data) && isset($manifest_data['contains']) && is_array($manifest_data['contains'])) {
+                $manifest_contains = $manifest_data['contains'];
+            }
+
+            $expects_database = in_array('db', $manifest_contains, true);
+            $sql_stat = $zip->statName('database.sql', ZipArchive::FL_UNCHANGED);
+
+            if ($sql_stat === false) {
+                if ($expects_database) {
+                    $log_file_check('database.sql', 'failed', "Fichier introuvable alors que le manifeste annonce la base de données.");
+                } else {
+                    $log_file_check('database.sql', 'skipped', 'Aucun export de base de données attendu.');
+                }
+            } else {
+                $sql_content = $zip->getFromName('database.sql');
+                $expected_size = isset($sql_stat['size']) ? (int) $sql_stat['size'] : null;
+                $read_size = is_string($sql_content) ? strlen($sql_content) : 0;
+
+                if ($sql_content === false || $read_size === 0) {
+                    $log_file_check('database.sql', 'failed', 'Impossible de lire le dump SQL.', [
+                        'expected_size' => $expected_size,
+                        'read_size' => $read_size,
+                    ]);
+                } elseif ($expected_size !== null && $expected_size !== $read_size) {
+                    $log_file_check('database.sql', 'failed', sprintf(
+                        'Taille lue (%d) différente de la taille attendue (%d).',
+                        $read_size,
+                        $expected_size
+                    ), [
+                        'expected_size' => $expected_size,
+                        'read_size' => $read_size,
+                    ]);
+                } else {
+                    $crc_valid = true;
+                    if (isset($sql_stat['crc'])) {
+                        $expected_crc = sprintf('%u', $sql_stat['crc']);
+                        $calculated_crc = sprintf('%u', crc32($sql_content));
+                        $crc_valid = $expected_crc === $calculated_crc;
+                    }
+
+                    if (!$crc_valid) {
+                        $log_file_check('database.sql', 'failed', 'Somme de contrôle invalide pour le dump SQL.', [
+                            'expected_size' => $expected_size,
+                            'read_size' => $read_size,
+                        ]);
+                    } elseif (strpos($sql_content, "\0") !== false) {
+                        $log_file_check('database.sql', 'failed', 'Contenu SQL invalide (caractères binaires détectés).', [
+                            'expected_size' => $expected_size,
+                            'read_size' => $read_size,
+                        ]);
+                    } else {
+                        $log_file_check('database.sql', 'passed', 'Dump SQL valide.', [
+                            'expected_size' => $expected_size,
+                            'read_size' => $read_size,
+                        ]);
+                    }
+                }
+            }
+        } finally {
+            $zip->close();
         }
 
         return $results;
