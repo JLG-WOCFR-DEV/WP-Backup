@@ -30,6 +30,15 @@ class BJLG_Admin {
         if (class_exists(BJLG_AWS_S3::class)) {
             $this->destinations['aws_s3'] = new BJLG_AWS_S3();
         }
+        if (class_exists(BJLG_Wasabi::class)) {
+            $this->destinations['wasabi'] = new BJLG_Wasabi();
+        }
+        if (class_exists(BJLG_Dropbox::class)) {
+            $this->destinations['dropbox'] = new BJLG_Dropbox();
+        }
+        if (class_exists(BJLG_OneDrive::class)) {
+            $this->destinations['onedrive'] = new BJLG_OneDrive();
+        }
         if (class_exists(BJLG_SFTP::class)) {
             $this->destinations['sftp'] = new BJLG_SFTP();
         }

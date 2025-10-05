@@ -1790,6 +1790,21 @@ class BJLG_Backup {
                     return new BJLG_AWS_S3();
                 }
                 break;
+            case 'wasabi':
+                if (class_exists(BJLG_Wasabi::class)) {
+                    return new BJLG_Wasabi();
+                }
+                break;
+            case 'dropbox':
+                if (class_exists(BJLG_Dropbox::class)) {
+                    return new BJLG_Dropbox();
+                }
+                break;
+            case 'onedrive':
+                if (class_exists(BJLG_OneDrive::class)) {
+                    return new BJLG_OneDrive();
+                }
+                break;
             case 'sftp':
                 if (!class_exists(BJLG_SFTP::class)) {
                     break;

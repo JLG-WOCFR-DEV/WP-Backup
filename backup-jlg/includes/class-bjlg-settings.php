@@ -293,6 +293,51 @@ class BJLG_Settings {
                 BJLG_Debug::log('Réglages Amazon S3 sauvegardés.');
             }
 
+            // --- Réglages Wasabi ---
+            if (isset($_POST['wasabi_access_key']) || isset($_POST['wasabi_bucket'])) {
+                $wasabi_settings = [
+                    'access_key' => isset($_POST['wasabi_access_key']) ? sanitize_text_field(wp_unslash($_POST['wasabi_access_key'])) : '',
+                    'secret_key' => isset($_POST['wasabi_secret_key']) ? sanitize_text_field(wp_unslash($_POST['wasabi_secret_key'])) : '',
+                    'region' => isset($_POST['wasabi_region']) ? sanitize_text_field(wp_unslash($_POST['wasabi_region'])) : '',
+                    'bucket' => isset($_POST['wasabi_bucket']) ? sanitize_text_field(wp_unslash($_POST['wasabi_bucket'])) : '',
+                    'object_prefix' => isset($_POST['wasabi_object_prefix']) ? sanitize_text_field(wp_unslash($_POST['wasabi_object_prefix'])) : '',
+                    'enabled' => isset($_POST['wasabi_enabled']) ? $this->to_bool(wp_unslash($_POST['wasabi_enabled'])) : false,
+                ];
+
+                $wasabi_settings['object_prefix'] = trim($wasabi_settings['object_prefix']);
+
+                update_option('bjlg_wasabi_settings', $wasabi_settings);
+                $saved_settings['wasabi'] = $wasabi_settings;
+                BJLG_Debug::log('Réglages Wasabi sauvegardés.');
+            }
+
+            // --- Réglages Dropbox ---
+            if (isset($_POST['dropbox_access_token']) || isset($_POST['dropbox_folder'])) {
+                $dropbox_settings = [
+                    'access_token' => isset($_POST['dropbox_access_token']) ? sanitize_text_field(wp_unslash($_POST['dropbox_access_token'])) : '',
+                    'folder' => isset($_POST['dropbox_folder']) ? sanitize_text_field(wp_unslash($_POST['dropbox_folder'])) : '',
+                    'enabled' => isset($_POST['dropbox_enabled']) ? $this->to_bool(wp_unslash($_POST['dropbox_enabled'])) : false,
+                ];
+
+                update_option('bjlg_dropbox_settings', $dropbox_settings);
+                $saved_settings['dropbox'] = $dropbox_settings;
+                BJLG_Debug::log('Réglages Dropbox sauvegardés.');
+            }
+
+            // --- Réglages OneDrive ---
+            if (isset($_POST['onedrive_access_token']) || isset($_POST['onedrive_folder'])) {
+                $onedrive_settings = [
+                    'access_token' => isset($_POST['onedrive_access_token']) ? sanitize_text_field(wp_unslash($_POST['onedrive_access_token'])) : '',
+                    'folder' => isset($_POST['onedrive_folder']) ? sanitize_text_field(wp_unslash($_POST['onedrive_folder'])) : '',
+                    'enabled' => isset($_POST['onedrive_enabled']) ? $this->to_bool(wp_unslash($_POST['onedrive_enabled'])) : false,
+                ];
+
+                update_option('bjlg_onedrive_settings', $onedrive_settings);
+                $saved_settings['onedrive'] = $onedrive_settings;
+                BJLG_Debug::log('Réglages OneDrive sauvegardés.');
+            }
+
+
             // --- Réglages de Notifications ---
             $notification_request_fields = [
                 'notifications_enabled',
@@ -1604,7 +1649,7 @@ class BJLG_Settings {
     }
 
     public static function get_known_destination_ids() {
-        $destinations = ['google_drive', 'aws_s3', 'sftp'];
+        $destinations = ['google_drive', 'aws_s3', 'sftp', 'dropbox', 'onedrive', 'wasabi'];
 
         /** @var array<int, string> $filtered */
         $filtered = apply_filters('bjlg_known_destination_ids', $destinations);
