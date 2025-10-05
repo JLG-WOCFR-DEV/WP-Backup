@@ -215,6 +215,9 @@ final class BJLG_SchedulerTest extends TestCase
         $this->assertSame(['wp-content/uploads/*', 'custom/*'], $stored_schedule['include_patterns']);
         $this->assertSame(['*/cache/*', '*.tmp'], $stored_schedule['exclude_patterns']);
         $this->assertSame(['google_drive', 'aws_s3'], $stored_schedule['secondary_destinations']);
+        $this->assertSame([
+            ['google_drive', 'aws_s3'],
+        ], $stored_schedule['secondary_destination_batches']);
         $this->assertSame(
             ['checksum' => true, 'dry_run' => false],
             $stored_schedule['post_checks']

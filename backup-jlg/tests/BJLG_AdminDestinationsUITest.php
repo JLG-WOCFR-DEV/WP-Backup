@@ -7,6 +7,8 @@ use PHPUnit\Framework\TestCase;
 require_once __DIR__ . '/../includes/destinations/interface-bjlg-destination.php';
 require_once __DIR__ . '/../includes/destinations/class-bjlg-aws-s3.php';
 require_once __DIR__ . '/../includes/destinations/class-bjlg-google-drive.php';
+require_once __DIR__ . '/../includes/destinations/class-bjlg-azure-blob.php';
+require_once __DIR__ . '/../includes/destinations/class-bjlg-backblaze-b2.php';
 require_once __DIR__ . '/../includes/destinations/class-bjlg-sftp.php';
 require_once __DIR__ . '/../includes/class-bjlg-webhooks.php';
 require_once __DIR__ . '/../includes/class-bjlg-admin.php';

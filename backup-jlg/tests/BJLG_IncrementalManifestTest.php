@@ -195,6 +195,11 @@ final class BJLG_IncrementalManifestTest extends TestCase
 
         $GLOBALS['bjlg_test_options']['stylesheet'] = 'sample-theme';
         $GLOBALS['bjlg_test_options']['active_plugins'] = ['sample-plugin/sample-plugin.php'];
+        $GLOBALS['bjlg_test_options']['bjlg_incremental_settings'] = [
+            'max_incrementals' => 10,
+            'max_full_age_days' => 30,
+            'rotation_enabled' => true,
+        ];
         $GLOBALS['wp_version'] = '6.0.0';
 
         $this->createSampleContent();
@@ -315,6 +320,88 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $this->assertSame(realpath(BJLG_BACKUP_DIR . $full_backup['file']), realpath((string) $full_backup['path']));
     }
 
+    public function test_rotation_moves_old_incremental_into_synthetic_full(): void
+    {
+        $GLOBALS['bjlg_test_options']['bjlg_incremental_settings'] = [
+            'max_incrementals' => 2,
+            'max_full_age_days' => 30,
+            'rotation_enabled' => true,
+        ];
+
+        $handler = new BJLG\BJLG_Incremental();
+        $components = ['db'];
+
+        $fullPath = $this->createBackupFile('full');
+        $handler->update_manifest($fullPath, [
+            'path' => $fullPath,
+            'file' => basename($fullPath),
+            'components' => $components,
+            'size' => filesize($fullPath),
+            'timestamp' => time() - 5000,
+            'incremental' => false,
+            'destinations' => ['google_drive'],
+        ]);
+
+        $inc1Path = $this->createBackupFile('inc1');
+        $handler->update_manifest($inc1Path, [
+            'path' => $inc1Path,
+            'file' => basename($inc1Path),
+            'components' => $components,
+            'size' => filesize($inc1Path),
+            'timestamp' => time() - 4000,
+            'incremental' => true,
+            'destinations' => ['google_drive'],
+        ]);
+
+        $inc2Path = $this->createBackupFile('inc2');
+        $handler->update_manifest($inc2Path, [
+            'path' => $inc2Path,
+            'file' => basename($inc2Path),
+            'components' => $components,
+            'size' => filesize($inc2Path),
+            'timestamp' => time() - 3000,
+            'incremental' => true,
+            'destinations' => ['aws_s3'],
+        ]);
+
+        $inc3Path = $this->createBackupFile('inc3');
+        $handler->update_manifest($inc3Path, [
+            'path' => $inc3Path,
+            'file' => basename($inc3Path),
+            'components' => $components,
+            'size' => filesize($inc3Path),
+            'timestamp' => time() - 2000,
+            'incremental' => true,
+            'destinations' => ['sftp'],
+        ]);
+
+        $this->assertFileExists($this->manifestPath);
+        $manifest = json_decode((string) file_get_contents($this->manifestPath), true);
+
+        $this->assertIsArray($manifest);
+        $this->assertArrayHasKey('synthetic_full', $manifest);
+        $this->assertCount(1, $manifest['synthetic_full']);
+        $this->assertSame(basename($inc1Path), $manifest['synthetic_full'][0]['file']);
+        $this->assertSame(['google_drive'], $manifest['synthetic_full'][0]['destinations']);
+
+        $this->assertArrayHasKey('incremental_backups', $manifest);
+        $this->assertCount(2, $manifest['incremental_backups']);
+        $this->assertSame(basename($inc2Path), $manifest['incremental_backups'][0]['file']);
+        $this->assertSame(basename($inc3Path), $manifest['incremental_backups'][1]['file']);
+
+        $this->assertArrayHasKey('remote_purge_queue', $manifest);
+        $this->assertNotEmpty($manifest['remote_purge_queue']);
+        $this->assertSame(basename($inc1Path), $manifest['remote_purge_queue'][0]['file']);
+        $this->assertSame(['google_drive'], $manifest['remote_purge_queue'][0]['destinations']);
+
+        $chain = $handler->get_restore_chain();
+        $this->assertCount(4, $chain);
+        $this->assertSame(basename($fullPath), $chain[0]['file']);
+        $this->assertSame(basename($inc1Path), $chain[1]['file']);
+        $this->assertSame(basename($inc2Path), $chain[2]['file']);
+        $this->assertSame(basename($inc3Path), $chain[3]['file']);
+    }
+
     private function ensureWordPressDirectories(): void
     {
         $directories = [
@@ -346,15 +433,18 @@ final class BJLG_IncrementalManifestTest extends TestCase
             'components' => $components,
             'size' => file_exists($filepath) ? filesize($filepath) : 0,
             'timestamp' => time(),
+            'destinations' => [],
         ];
 
         $manifestData = [
             'full_backup' => $fullBackup,
             'incremental_backups' => [],
+            'synthetic_full' => [],
             'file_hashes' => [],
             'database_checksums' => [],
             'last_scan' => time(),
-            'version' => '2.0',
+            'remote_purge_queue' => [],
+            'version' => '2.1',
         ];
 
         file_put_contents($this->manifestPath, json_encode($manifestData));
@@ -386,5 +476,14 @@ final class BJLG_IncrementalManifestTest extends TestCase
         if (!file_exists($upload_file)) {
             file_put_contents($upload_file, 'Sample upload content');
         }
+    }
+
+    private function createBackupFile(string $prefix): string
+    {
+        $filepath = BJLG_BACKUP_DIR . $prefix . '-' . uniqid('', true) . '.zip';
+        file_put_contents($filepath, $prefix . ' backup');
+        $this->createdPaths[] = $filepath;
+
+        return $filepath;
     }
 }

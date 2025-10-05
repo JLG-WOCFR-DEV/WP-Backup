@@ -936,7 +936,12 @@ class BJLG_Backup {
             $effective_encryption = (bool) $task_data['encrypt'];
 
             $check_results = $this->perform_post_backup_checks($backup_filepath, $post_checks, $effective_encryption);
-            $destination_results = $this->dispatch_to_destinations($backup_filepath, $destination_queue, $task_id);
+            $destination_results = $this->dispatch_to_destinations(
+                $backup_filepath,
+                $destination_queue,
+                $task_id,
+                $task_data['secondary_destination_batches'] ?? []
+            );
 
             // Calculer les statistiques
             $file_size = filesize($backup_filepath);
@@ -1736,7 +1741,7 @@ class BJLG_Backup {
         return $results;
     }
 
-    private function dispatch_to_destinations($filepath, array $destinations, $task_id) {
+    private function dispatch_to_destinations($filepath, array $destinations, $task_id, array $batches = []) {
         $results = [
             'success' => [],
             'failures' => [],
@@ -1744,6 +1749,19 @@ class BJLG_Backup {
 
         if (empty($destinations)) {
             return $results;
+        }
+
+        if (!empty($batches)) {
+            $sanitized_batches = BJLG_Settings::sanitize_destination_batches(
+                $batches,
+                BJLG_Settings::get_known_destination_ids()
+            );
+            if (!empty($sanitized_batches)) {
+                $ordered = BJLG_Settings::flatten_destination_batches($sanitized_batches);
+                if (!empty($ordered)) {
+                    $destinations = $ordered;
+                }
+            }
         }
 
         foreach ($destinations as $destination_id) {
