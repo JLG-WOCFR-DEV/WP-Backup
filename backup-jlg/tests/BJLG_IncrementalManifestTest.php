@@ -393,6 +393,8 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $this->assertNotEmpty($manifest['remote_purge_queue']);
         $this->assertSame(basename($inc1Path), $manifest['remote_purge_queue'][0]['file']);
         $this->assertSame(['google_drive'], $manifest['remote_purge_queue'][0]['destinations']);
+        $this->assertSame('pending', $manifest['remote_purge_queue'][0]['status']);
+        $this->assertIsInt($manifest['remote_purge_queue'][0]['registered_at']);
 
         $chain = $handler->get_restore_chain();
         $this->assertCount(4, $chain);
@@ -400,6 +402,74 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $this->assertSame(basename($inc1Path), $chain[1]['file']);
         $this->assertSame(basename($inc2Path), $chain[2]['file']);
         $this->assertSame(basename($inc3Path), $chain[3]['file']);
+    }
+
+    public function test_mark_remote_purge_completed_updates_queue(): void
+    {
+        $GLOBALS['bjlg_test_options']['bjlg_incremental_settings'] = [
+            'max_incrementals' => 1,
+            'max_full_age_days' => 30,
+            'rotation_enabled' => true,
+        ];
+
+        $handler = new BJLG\BJLG_Incremental();
+        $components = ['db'];
+
+        $fullPath = $this->createBackupFile('full');
+        $handler->update_manifest($fullPath, [
+            'path' => $fullPath,
+            'file' => basename($fullPath),
+            'components' => $components,
+            'size' => filesize($fullPath),
+            'timestamp' => time() - 6000,
+            'incremental' => false,
+            'destinations' => ['google_drive'],
+        ]);
+
+        $inc1Path = $this->createBackupFile('inc1');
+        $handler->update_manifest($inc1Path, [
+            'path' => $inc1Path,
+            'file' => basename($inc1Path),
+            'components' => $components,
+            'size' => filesize($inc1Path),
+            'timestamp' => time() - 5000,
+            'incremental' => true,
+            'destinations' => ['google_drive', 'sftp'],
+        ]);
+
+        $inc2Path = $this->createBackupFile('inc2');
+        $handler->update_manifest($inc2Path, [
+            'path' => $inc2Path,
+            'file' => basename($inc2Path),
+            'components' => $components,
+            'size' => filesize($inc2Path),
+            'timestamp' => time() - 4000,
+            'incremental' => true,
+            'destinations' => ['sftp'],
+        ]);
+
+        $manifest = json_decode((string) file_get_contents($this->manifestPath), true);
+        $this->assertIsArray($manifest);
+        $this->assertArrayHasKey('remote_purge_queue', $manifest);
+        $this->assertCount(1, $manifest['remote_purge_queue']);
+
+        $entry = $manifest['remote_purge_queue'][0];
+        $this->assertSame(basename($inc1Path), $entry['file']);
+        $this->assertSame(['google_drive', 'sftp'], $entry['destinations']);
+
+        $this->assertTrue($handler->mark_remote_purge_completed(basename($inc1Path), ['sftp']));
+
+        $manifest = json_decode((string) file_get_contents($this->manifestPath), true);
+        $this->assertSame(['google_drive'], $manifest['remote_purge_queue'][0]['destinations']);
+        $this->assertSame('pending', $manifest['remote_purge_queue'][0]['status']);
+
+        $this->assertTrue($handler->mark_remote_purge_completed(basename($inc1Path), ['google_drive']));
+
+        $manifest = json_decode((string) file_get_contents($this->manifestPath), true);
+        $this->assertArrayHasKey('remote_purge_queue', $manifest);
+        $this->assertEmpty($manifest['remote_purge_queue']);
+
+        $this->assertFalse($handler->mark_remote_purge_completed(basename($inc1Path), ['google_drive']));
     }
 
     private function ensureWordPressDirectories(): void

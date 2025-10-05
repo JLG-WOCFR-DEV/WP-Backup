@@ -162,6 +162,9 @@ class BJLG_Incremental {
 
             $pending['destinations'] = $this->normalize_destinations($pending['destinations'] ?? []);
             $pending['registered_at'] = isset($pending['registered_at']) ? (int) $pending['registered_at'] : time();
+            if (!isset($pending['status']) || !is_string($pending['status']) || $pending['status'] === '') {
+                $pending['status'] = 'pending';
+            }
         }
         unset($pending);
     }
@@ -288,13 +291,93 @@ class BJLG_Incremental {
             'file' => $file,
             'destinations' => $destinations,
             'registered_at' => time(),
+            'status' => 'pending',
         ];
 
-        $this->last_backup_data['remote_purge_queue'][] = $entry;
+        $queue_entry = null;
+
+        foreach ($this->last_backup_data['remote_purge_queue'] as &$existing) {
+            if (!is_array($existing)) {
+                continue;
+            }
+
+            if (!isset($existing['file']) || $existing['file'] !== $file) {
+                continue;
+            }
+
+            $existing['destinations'] = $this->merge_destinations($existing['destinations'] ?? [], $destinations);
+            $existing['registered_at'] = $entry['registered_at'];
+            $existing['status'] = 'pending';
+            $queue_entry = $existing;
+            break;
+        }
+        unset($existing);
+
+        if ($queue_entry === null) {
+            $this->last_backup_data['remote_purge_queue'][] = $entry;
+            $queue_entry = end($this->last_backup_data['remote_purge_queue']);
+        }
 
         if (function_exists('do_action')) {
-            do_action('bjlg_incremental_remote_purge', $entry, $this->last_backup_data);
+            do_action('bjlg_incremental_remote_purge', $queue_entry, $this->last_backup_data);
         }
+    }
+
+    public function mark_remote_purge_completed($file, array $destinations = []) {
+        $file = basename((string) $file);
+        if ($file === '') {
+            return false;
+        }
+
+        $destinations = $this->normalize_destinations($destinations);
+        $modified = false;
+
+        foreach ($this->last_backup_data['remote_purge_queue'] as $index => &$entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            if (!isset($entry['file']) || $entry['file'] !== $file) {
+                continue;
+            }
+
+            $entry_destinations = $this->normalize_destinations($entry['destinations'] ?? []);
+
+            if (empty($destinations)) {
+                unset($this->last_backup_data['remote_purge_queue'][$index]);
+                $modified = true;
+                continue;
+            }
+
+            $remaining = array_values(array_diff($entry_destinations, $destinations));
+
+            if (count($remaining) === count($entry_destinations)) {
+                continue;
+            }
+
+            if (empty($remaining)) {
+                unset($this->last_backup_data['remote_purge_queue'][$index]);
+            } else {
+                $entry['destinations'] = $remaining;
+                $entry['status'] = 'pending';
+            }
+
+            $modified = true;
+        }
+        unset($entry);
+
+        if ($modified) {
+            $this->last_backup_data['remote_purge_queue'] = array_values($this->last_backup_data['remote_purge_queue']);
+            $this->save_manifest();
+
+            BJLG_Debug::log(sprintf(
+                'Purge distante synchronisée pour %s (%s).',
+                $file,
+                empty($destinations) ? 'toutes destinations' : implode(', ', $destinations)
+            ));
+        }
+
+        return $modified;
     }
     
     /**
