@@ -1823,6 +1823,11 @@ class BJLG_Backup {
                     return new BJLG_OneDrive();
                 }
                 break;
+            case 'pcloud':
+                if (class_exists(BJLG_pCloud::class)) {
+                    return new BJLG_pCloud();
+                }
+                break;
             case 'sftp':
                 if (!class_exists(BJLG_SFTP::class)) {
                     break;

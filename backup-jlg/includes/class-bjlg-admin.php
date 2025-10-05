@@ -39,6 +39,9 @@ class BJLG_Admin {
         if (class_exists(BJLG_OneDrive::class)) {
             $this->destinations['onedrive'] = new BJLG_OneDrive();
         }
+        if (class_exists(BJLG_pCloud::class)) {
+            $this->destinations['pcloud'] = new BJLG_pCloud();
+        }
         if (class_exists(BJLG_SFTP::class)) {
             $this->destinations['sftp'] = new BJLG_SFTP();
         }
@@ -1795,7 +1798,11 @@ class BJLG_Admin {
             $choices = [
                 'google_drive' => 'Google Drive',
                 'aws_s3' => 'Amazon S3',
+                'dropbox' => 'Dropbox',
+                'onedrive' => 'Microsoft OneDrive',
+                'pcloud' => 'pCloud',
                 'sftp' => 'Serveur SFTP',
+                'wasabi' => 'Wasabi',
             ];
         }
 

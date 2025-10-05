@@ -74,6 +74,21 @@ class BJLG_Settings {
             'object_prefix' => '',
             'enabled' => false,
         ],
+        'dropbox' => [
+            'access_token' => '',
+            'folder' => '',
+            'enabled' => false,
+        ],
+        'onedrive' => [
+            'access_token' => '',
+            'folder' => '',
+            'enabled' => false,
+        ],
+        'pcloud' => [
+            'access_token' => '',
+            'folder' => '',
+            'enabled' => false,
+        ],
         'azure_blob' => [
             'account_name' => '',
             'account_key' => '',
@@ -387,6 +402,19 @@ class BJLG_Settings {
                 update_option('bjlg_onedrive_settings', $onedrive_settings);
                 $saved_settings['onedrive'] = $onedrive_settings;
                 BJLG_Debug::log('Réglages OneDrive sauvegardés.');
+            }
+
+            // --- Réglages pCloud ---
+            if (isset($_POST['pcloud_access_token']) || isset($_POST['pcloud_folder'])) {
+                $pcloud_settings = [
+                    'access_token' => isset($_POST['pcloud_access_token']) ? sanitize_text_field(wp_unslash($_POST['pcloud_access_token'])) : '',
+                    'folder' => isset($_POST['pcloud_folder']) ? sanitize_text_field(wp_unslash($_POST['pcloud_folder'])) : '',
+                    'enabled' => isset($_POST['pcloud_enabled']) ? $this->to_bool(wp_unslash($_POST['pcloud_enabled'])) : false,
+                ];
+
+                update_option('bjlg_pcloud_settings', $pcloud_settings);
+                $saved_settings['pcloud'] = $pcloud_settings;
+                BJLG_Debug::log('Réglages pCloud sauvegardés.');
             }
 
 
@@ -1765,7 +1793,7 @@ class BJLG_Settings {
     }
 
     public static function get_known_destination_ids() {
-        $destinations = ['google_drive', 'aws_s3', 'sftp', 'dropbox', 'onedrive', 'wasabi'];
+        $destinations = ['google_drive', 'aws_s3', 'sftp', 'dropbox', 'onedrive', 'pcloud', 'wasabi'];
 
         /** @var array<int, string> $filtered */
         $filtered = apply_filters('bjlg_known_destination_ids', $destinations);
