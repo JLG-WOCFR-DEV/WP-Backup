@@ -1537,6 +1537,7 @@ class BJLG_Settings {
             'recurrence' => 'disabled',
             'previous_recurrence' => '',
             'day' => 'sunday',
+            'day_of_month' => 1,
             'time' => '23:59',
             'components' => ['db', 'plugins', 'themes', 'uploads'],
             'encrypt' => false,
@@ -1628,6 +1629,14 @@ class BJLG_Settings {
             $day = $defaults['day'];
         }
 
+        $day_of_month = $defaults['day_of_month'];
+        if (isset($entry['day_of_month'])) {
+            $maybe_day = filter_var($entry['day_of_month'], FILTER_VALIDATE_INT);
+            if ($maybe_day !== false) {
+                $day_of_month = max(1, min(31, (int) $maybe_day));
+            }
+        }
+
         $time = isset($entry['time']) ? sanitize_text_field($entry['time']) : $defaults['time'];
         if (!preg_match('/^([0-1]?\d|2[0-3]):([0-5]\d)$/', $time)) {
             $time = $defaults['time'];
@@ -1673,6 +1682,7 @@ class BJLG_Settings {
             'label' => $label,
             'recurrence' => $recurrence,
             'day' => $day,
+            'day_of_month' => $day_of_month,
             'time' => $time,
             'previous_recurrence' => $previous_recurrence,
             'components' => array_values($components),

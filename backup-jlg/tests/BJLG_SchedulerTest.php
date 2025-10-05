@@ -163,6 +163,7 @@ final class BJLG_SchedulerTest extends TestCase
                     'label' => 'Sauvegarde quotidienne',
                     'recurrence' => 'daily',
                     'day' => 'tuesday',
+                    'day_of_month' => '27',
                     'time' => '10:15',
                     'components' => ['db', 'plugins'],
                     'encrypt' => 'true',
@@ -189,6 +190,7 @@ final class BJLG_SchedulerTest extends TestCase
             $saved_schedule = $response->data['schedules'][0];
             $this->assertSame('daily', $saved_schedule['recurrence']);
             $this->assertSame('tuesday', $saved_schedule['day']);
+            $this->assertSame(27, $saved_schedule['day_of_month']);
             $this->assertSame('10:15', $saved_schedule['time']);
             $this->assertNotEmpty($saved_schedule['id']);
             $this->assertArrayHasKey('next_runs', $response->data);
@@ -208,6 +210,7 @@ final class BJLG_SchedulerTest extends TestCase
         $stored_schedule = $collection['schedules'][0];
         $this->assertSame('daily', $stored_schedule['recurrence']);
         $this->assertSame('tuesday', $stored_schedule['day']);
+        $this->assertSame(27, $stored_schedule['day_of_month']);
         $this->assertSame('10:15', $stored_schedule['time']);
         $this->assertSame(['db', 'plugins'], $stored_schedule['components']);
         $this->assertTrue($stored_schedule['encrypt']);
@@ -243,5 +246,78 @@ final class BJLG_SchedulerTest extends TestCase
         $this->assertSame([$stored_schedule['id']], $event['args']);
         $this->assertIsInt($event['timestamp']);
         $this->assertGreaterThan(0, $event['timestamp']);
+    }
+
+    public function test_calculate_first_run_respects_day_of_month(): void
+    {
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+        $method = new \ReflectionMethod(BJLG\BJLG_Scheduler::class, 'calculate_first_run');
+        $method->setAccessible(true);
+
+        update_option('timezone_string', 'UTC');
+
+        $schedule = [
+            'recurrence' => 'monthly',
+            'time' => '06:45',
+            'day_of_month' => 19,
+        ];
+
+        $timestamp = $method->invoke($scheduler, $schedule);
+        $this->assertIsInt($timestamp);
+
+        $timezone = new \DateTimeZone('UTC');
+        $now = new \DateTimeImmutable('now', $timezone);
+        $expected = $this->computeExpectedMonthlyTimestamp($now, 19, 6, 45);
+
+        $this->assertSame($expected, $timestamp);
+    }
+
+    public function test_calculate_first_run_clamps_day_of_month_when_needed(): void
+    {
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+        $method = new \ReflectionMethod(BJLG\BJLG_Scheduler::class, 'calculate_first_run');
+        $method->setAccessible(true);
+
+        update_option('timezone_string', 'UTC');
+
+        $schedule = [
+            'recurrence' => 'monthly',
+            'time' => '02:30',
+            'day_of_month' => 31,
+        ];
+
+        $timestamp = $method->invoke($scheduler, $schedule);
+        $this->assertIsInt($timestamp);
+
+        $timezone = new \DateTimeZone('UTC');
+        $now = new \DateTimeImmutable('now', $timezone);
+        $expected = $this->computeExpectedMonthlyTimestamp($now, 31, 2, 30);
+
+        $this->assertSame($expected, $timestamp);
+
+        $runDate = (new \DateTimeImmutable('@' . $timestamp))->setTimezone($timezone);
+        $this->assertSame(
+            min(31, (int) $runDate->format('t')),
+            (int) $runDate->format('j')
+        );
+        $this->assertSame('02:30', $runDate->format('H:i'));
+    }
+
+    private function computeExpectedMonthlyTimestamp(\DateTimeImmutable $now, int $dayOfMonth, int $hour, int $minute): int
+    {
+        $targetDay = min($dayOfMonth, (int) $now->format('t'));
+        $candidate = $now
+            ->setDate((int) $now->format('Y'), (int) $now->format('n'), $targetDay)
+            ->setTime($hour, $minute, 0);
+
+        if ($now >= $candidate) {
+            $nextMonth = $now->modify('first day of next month');
+            $nextTarget = min($dayOfMonth, (int) $nextMonth->format('t'));
+            $candidate = $nextMonth
+                ->setDate((int) $nextMonth->format('Y'), (int) $nextMonth->format('n'), $nextTarget)
+                ->setTime($hour, $minute, 0);
+        }
+
+        return $candidate->getTimestamp();
     }
 }

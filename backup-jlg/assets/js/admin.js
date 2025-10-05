@@ -688,6 +688,49 @@ jQuery(document).ready(function($) {
             return next;
         }
 
+        function clampDayOfMonth(value) {
+            if (value === undefined || value === null) {
+                return null;
+            }
+            const parsed = parseInt(value, 10);
+            if (!Number.isFinite(parsed)) {
+                return null;
+            }
+            return Math.min(Math.max(parsed, 1), 31);
+        }
+
+        function getScheduleDayOfMonth(schedule) {
+            if (schedule && Object.prototype.hasOwnProperty.call(schedule, 'day_of_month')) {
+                const normalized = clampDayOfMonth(schedule.day_of_month);
+                if (normalized !== null) {
+                    return normalized;
+                }
+            }
+
+            const fallback = clampDayOfMonth(defaultScheduleData.day_of_month);
+            if (fallback !== null) {
+                return fallback;
+            }
+
+            return 1;
+        }
+
+        function getDaysInMonth(year, monthIndex) {
+            return new Date(year, monthIndex + 1, 0).getDate();
+        }
+
+        function resolveMonthlyOccurrence(baseDate, dayOfMonth, hour, minute) {
+            const occurrence = new Date(baseDate.getTime());
+            occurrence.setHours(hour, minute, 0, 0);
+            occurrence.setDate(1);
+            const year = occurrence.getFullYear();
+            const monthIndex = occurrence.getMonth();
+            const daysInMonth = getDaysInMonth(year, monthIndex);
+            occurrence.setDate(Math.min(dayOfMonth, daysInMonth));
+            occurrence.setHours(hour, minute, 0, 0);
+            return occurrence;
+        }
+
         function computeFallbackNextTimestamp(schedule, referenceSeconds) {
             const recurrence = (schedule && schedule.recurrence ? schedule.recurrence : 'disabled').toString();
             if (recurrence === 'disabled') {
@@ -745,8 +788,13 @@ jQuery(document).ready(function($) {
             }
 
             if (recurrence === 'monthly') {
-                // Sans information dédiée, nous ne pouvons pas calculer précisément.
-                return null;
+                const dayOfMonth = getScheduleDayOfMonth(schedule);
+                let monthlyOccurrence = resolveMonthlyOccurrence(referenceDate, dayOfMonth, timeParts.hour, timeParts.minute);
+                if (monthlyOccurrence.getTime() / 1000 <= reference) {
+                    const nextBase = addMonths(monthlyOccurrence, 1);
+                    monthlyOccurrence = resolveMonthlyOccurrence(nextBase, dayOfMonth, timeParts.hour, timeParts.minute);
+                }
+                return Math.floor(monthlyOccurrence.getTime() / 1000);
             }
 
             return null;
@@ -784,14 +832,22 @@ jQuery(document).ready(function($) {
                 }
 
                 let occurrence = new Date(baseTimestamp * 1000);
+                const timeParts = parseTimeParts(schedule);
+                const dayOfMonth = getScheduleDayOfMonth(schedule);
+                if (recurrence === 'monthly') {
+                    occurrence = resolveMonthlyOccurrence(occurrence, dayOfMonth, timeParts.hour, timeParts.minute);
+                }
                 const interval = getIntervalMs(recurrence);
                 let guard = 0;
 
                 if (occurrence < start && (interval > 0 || recurrence === 'monthly')) {
                     while (occurrence < start && guard < 200) {
-                        occurrence = recurrence === 'monthly'
-                            ? addMonths(occurrence, 1)
-                            : new Date(occurrence.getTime() + interval);
+                        if (recurrence === 'monthly') {
+                            const nextBase = addMonths(occurrence, 1);
+                            occurrence = resolveMonthlyOccurrence(nextBase, dayOfMonth, timeParts.hour, timeParts.minute);
+                        } else {
+                            occurrence = new Date(occurrence.getTime() + interval);
+                        }
                         guard++;
                     }
                 }
@@ -806,7 +862,8 @@ jQuery(document).ready(function($) {
                     });
 
                     if (recurrence === 'monthly') {
-                        occurrence = addMonths(occurrence, 1);
+                        const nextBase = addMonths(occurrence, 1);
+                        occurrence = resolveMonthlyOccurrence(nextBase, dayOfMonth, timeParts.hour, timeParts.minute);
                     } else if (interval > 0) {
                         occurrence = new Date(occurrence.getTime() + interval);
                     } else {
@@ -1078,6 +1135,7 @@ jQuery(document).ready(function($) {
         function toggleScheduleRows($item) {
             const recurrence = ($item.find('[data-field="recurrence"]').val() || '').toString();
             const $weekly = $item.find('.bjlg-schedule-weekly-options');
+            const $monthly = $item.find('.bjlg-schedule-monthly-options');
             const $time = $item.find('.bjlg-schedule-time-options');
 
             if ($weekly.length) {
@@ -1085,6 +1143,14 @@ jQuery(document).ready(function($) {
                     $weekly.show().attr('aria-hidden', 'false');
                 } else {
                     $weekly.hide().attr('aria-hidden', 'true');
+                }
+            }
+
+            if ($monthly.length) {
+                if (recurrence === 'monthly') {
+                    $monthly.show().attr('aria-hidden', 'false');
+                } else {
+                    $monthly.hide().attr('aria-hidden', 'true');
                 }
             }
 
@@ -1271,6 +1337,11 @@ jQuery(document).ready(function($) {
             const recurrence = ($item.find('[data-field="recurrence"]').val() || 'disabled').toString();
             const day = ($item.find('[data-field="day"]').val() || 'sunday').toString();
             const time = ($item.find('[data-field="time"]').val() || '23:59').toString();
+            const dayOfMonthRaw = ($item.find('[data-field="day_of_month"]').val() || '').toString();
+            let dayOfMonth = clampDayOfMonth(dayOfMonthRaw);
+            if (dayOfMonth === null) {
+                dayOfMonth = getScheduleDayOfMonth({});
+            }
             const previousRecurrence = ($item.find('[data-field="previous_recurrence"]').val() || '').toString();
 
             const components = [];
@@ -1309,6 +1380,7 @@ jQuery(document).ready(function($) {
                 recurrence: recurrence,
                 previous_recurrence: previousRecurrence,
                 day: day,
+                day_of_month: dayOfMonth,
                 time: time,
                 components: components,
                 encrypt: encrypt,
@@ -1347,6 +1419,7 @@ jQuery(document).ready(function($) {
             $item.find('[data-field="recurrence"]').val(schedule && schedule.recurrence ? schedule.recurrence : 'disabled');
             $item.find('[data-field="day"]').val(schedule && schedule.day ? schedule.day : 'sunday');
             $item.find('[data-field="time"]').val(schedule && schedule.time ? schedule.time : '23:59');
+            $item.find('[data-field="day_of_month"]').val(getScheduleDayOfMonth(schedule));
 
             const components = Array.isArray(schedule && schedule.components) ? schedule.components : (defaultScheduleData.components || []);
             $item.find('[data-field="components"]').each(function() {
@@ -1786,7 +1859,7 @@ jQuery(document).ready(function($) {
             updateState(collectSchedulesForRequest(), state.nextRuns);
         });
 
-        $scheduleForm.on('change', '.bjlg-schedule-item [data-field="components"], .bjlg-schedule-item [data-field="encrypt"], .bjlg-schedule-item [data-field="incremental"], .bjlg-schedule-item [data-field="day"], .bjlg-schedule-item [data-field="time"], .bjlg-schedule-item [data-field="post_checks"], .bjlg-schedule-item [data-field="secondary_destinations"]', function() {
+        $scheduleForm.on('change', '.bjlg-schedule-item [data-field="components"], .bjlg-schedule-item [data-field="encrypt"], .bjlg-schedule-item [data-field="incremental"], .bjlg-schedule-item [data-field="day"], .bjlg-schedule-item [data-field="day_of_month"], .bjlg-schedule-item [data-field="time"], .bjlg-schedule-item [data-field="post_checks"], .bjlg-schedule-item [data-field="secondary_destinations"]', function() {
             updateScheduleSummaryForItem($(this).closest('.bjlg-schedule-item'));
             updateState(collectSchedulesForRequest(), state.nextRuns);
         });

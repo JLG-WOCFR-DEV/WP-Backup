@@ -289,14 +289,32 @@ class BJLG_Scheduler {
                 break;
 
             case 'monthly':
-                // Premier jour du mois à l'heure spécifiée
-                $first_of_month = $now->modify('first day of this month')->setTime($hour, $minute, 0);
+                $day_of_month = isset($schedule['day_of_month'])
+                    ? (int) $schedule['day_of_month']
+                    : 1;
+                $day_of_month = max(1, min(31, $day_of_month));
 
-                if ($now < $first_of_month) {
-                    $next_run_time = $first_of_month;
+                $current_year = (int) $now->format('Y');
+                $current_month = (int) $now->format('n');
+                $days_in_month = (int) $now->format('t');
+                $target_day = min($day_of_month, $days_in_month);
+
+                $candidate = $now
+                    ->setDate($current_year, $current_month, $target_day)
+                    ->setTime($hour, $minute, 0);
+
+                if ($now < $candidate) {
+                    $next_run_time = $candidate;
                 } else {
-                    // Premier jour du mois prochain
-                    $next_run_time = $first_of_month->modify('first day of next month')->setTime($hour, $minute, 0);
+                    $next_month = $now->modify('first day of next month');
+                    $next_year = (int) $next_month->format('Y');
+                    $next_month_number = (int) $next_month->format('n');
+                    $days_in_next_month = (int) $next_month->format('t');
+                    $next_target_day = min($day_of_month, $days_in_next_month);
+
+                    $next_run_time = $next_month
+                        ->setDate($next_year, $next_month_number, $next_target_day)
+                        ->setTime($hour, $minute, 0);
                 }
                 break;
 

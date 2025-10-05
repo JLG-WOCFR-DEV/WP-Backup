@@ -28,11 +28,11 @@ namespace BJLG {
 namespace {
     use PHPUnit\Framework\TestCase;
 
-    if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
-        class BJLG_Debug
-        {
-            /** @var array<int, string> */
-            public static $logs = [];
+if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
+    class BJLG_Debug
+    {
+        /** @var array<int, string> */
+        public static $logs = [];
 
             /**
              * @param mixed $message
@@ -2715,6 +2715,7 @@ namespace {
                     'label' => 'Sauvegarde hebdo',
                     'recurrence' => 'WEEKLY',
                     'day' => 'Friday',
+                    'day_of_month' => ' 45 ',
                     'time' => ' 05:30 ',
                     'components' => ['db', 'plugins', 'plugins', 'weird<script>'],
                     'encrypt' => '1',
@@ -2793,6 +2794,7 @@ namespace {
             $this->assertSame('Sauvegarde hebdo', $stored_schedule['label']);
             $this->assertSame('weekly', $stored_schedule['recurrence']);
             $this->assertSame('friday', $stored_schedule['day']);
+            $this->assertSame(31, $stored_schedule['day_of_month']);
             $this->assertSame('05:30', $stored_schedule['time']);
             $this->assertSame(['db', 'plugins'], $stored_schedule['components']);
             $this->assertTrue($stored_schedule['encrypt']);
@@ -2859,6 +2861,7 @@ namespace {
                         'label' => 'Planification existante',
                         'recurrence' => 'weekly',
                         'day' => 'monday',
+                        'day_of_month' => 1,
                         'time' => '01:00',
                         'components' => ['db', 'plugins'],
                         'encrypt' => false,
@@ -3468,6 +3471,10 @@ namespace {
     {
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
     }
+}
+
+if (!defined('BJLG_VERSION')) {
+    define('BJLG_VERSION', 'test-version');
 }
 
 }
