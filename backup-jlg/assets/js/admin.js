@@ -2991,6 +2991,8 @@ jQuery(document).ready(function($) {
         const fileInput = document.getElementById('bjlg-restore-file-input');
         const passwordInput = document.getElementById('bjlg-restore-password');
         const passwordHelp = document.getElementById('bjlg-restore-password-help');
+        const $sandboxToggle = $form.find('input[name="restore_to_sandbox"]');
+        const $sandboxPathInput = $form.find('input[name="sandbox_path"]');
         const passwordHelpDefaultText = passwordHelp
             ? (passwordHelp.getAttribute('data-default-text') || passwordHelp.textContent.trim())
             : '';
@@ -2999,6 +3001,29 @@ jQuery(document).ready(function($) {
             : '';
         const $errorNotice = $('#bjlg-restore-errors');
         const errorFieldClass = 'bjlg-input-error';
+
+        function syncSandboxState() {
+            if (!$sandboxPathInput.length) {
+                return;
+            }
+
+            const enabled = $sandboxToggle.length && $sandboxToggle.is(':checked');
+            $sandboxPathInput.prop('disabled', !enabled);
+
+            if (!enabled) {
+                $sandboxPathInput.removeClass(errorFieldClass).removeAttr('aria-invalid');
+            }
+        }
+
+        if ($form.data('bjlgSandboxBound') !== true) {
+            $form.data('bjlgSandboxBound', true);
+
+            if ($sandboxToggle.length) {
+                $sandboxToggle.on('change', syncSandboxState);
+            }
+        }
+
+        syncSandboxState();
 
         function setRestoreBusyState(isBusy) {
             const busyValue = isBusy ? 'true' : 'false';
@@ -3308,10 +3333,21 @@ jQuery(document).ready(function($) {
             $debugOutput.text('');
         }
 
+        const sandboxEnabled = $sandboxToggle.length && $sandboxToggle.is(':checked');
+        const sandboxPathValue = $sandboxPathInput.length && typeof $sandboxPathInput.val() === 'string'
+            ? $sandboxPathInput.val().trim()
+            : '';
+        const restoreEnvironment = sandboxEnabled ? 'sandbox' : 'production';
+
         const formData = new FormData();
         formData.append('action', 'bjlg_upload_restore_file');
         formData.append('nonce', bjlg_ajax.nonce);
         formData.append('restore_file', fileInput.files[0]);
+        formData.append('restore_environment', restoreEnvironment);
+
+        if (sandboxEnabled) {
+            formData.append('sandbox_path', sandboxPathValue);
+        }
 
         if ($debugOutput.length) {
             appendRestoreDebug(
@@ -3320,7 +3356,9 @@ jQuery(document).ready(function($) {
                     filename: fileInput.files[0].name,
                     size: fileInput.files[0].size,
                     type: fileInput.files[0].type || 'inconnu',
-                    create_backup_before_restore: createRestorePoint
+                    create_backup_before_restore: createRestorePoint,
+                    restore_environment: restoreEnvironment,
+                    sandbox_path: sandboxEnabled ? sandboxPathValue : ''
                 }
             );
         }
@@ -3336,7 +3374,7 @@ jQuery(document).ready(function($) {
             appendRestoreDebug('Réponse du serveur (téléversement)', response);
             if (response.success && response.data && response.data.filename) {
                 setRestoreStatusText('Fichier téléversé. Préparation de la restauration...');
-                runRestore(response.data.filename, createRestorePoint);
+                runRestore(response.data.filename, createRestorePoint, restoreEnvironment, sandboxPathValue);
             } else {
                 const payload = response && response.data ? response.data : {};
                 const message = payload && payload.message
@@ -3370,14 +3408,19 @@ jQuery(document).ready(function($) {
             $button.prop('disabled', false);
         });
 
-        function runRestore(filename, createRestorePointChecked) {
+        function runRestore(filename, createRestorePointChecked, environment, sandboxPath) {
             const requestData = {
                 action: 'bjlg_run_restore',
                 nonce: bjlg_ajax.nonce,
                 filename: filename,
                 create_backup_before_restore: createRestorePointChecked ? 1 : 0,
-                password: passwordInput ? passwordInput.value : ''
+                password: passwordInput ? passwordInput.value : '',
+                restore_environment: environment
             };
+
+            if (environment === 'sandbox') {
+                requestData.sandbox_path = sandboxPath;
+            }
 
             setRestoreBusyState(true);
             setRestoreStatusText('Initialisation de la restauration...');
