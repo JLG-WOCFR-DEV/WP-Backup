@@ -33,6 +33,11 @@ class BJLG_Settings {
             'password_protect' => false,
             'compression_level' => 6
         ],
+        'incremental' => [
+            'max_incrementals' => 10,
+            'max_full_age_days' => 30,
+            'rotation_enabled' => true,
+        ],
         'notifications' => [
             'enabled' => false,
             'email_recipients' => '',
@@ -189,6 +194,34 @@ class BJLG_Settings {
                 update_option('bjlg_cleanup_settings', $cleanup_settings);
                 $saved_settings['cleanup'] = $cleanup_settings;
                 BJLG_Debug::log("Réglages de nettoyage sauvegardés : " . print_r($cleanup_settings, true));
+            }
+
+            // --- Réglages des sauvegardes incrémentales ---
+            if (
+                isset($_POST['incremental_max_incrementals'])
+                || isset($_POST['incremental_max_age'])
+                || array_key_exists('incremental_rotation_enabled', $_POST)
+            ) {
+                $max_incrementals = isset($_POST['incremental_max_incrementals'])
+                    ? max(0, intval(wp_unslash($_POST['incremental_max_incrementals'])))
+                    : 10;
+                $max_age_days = isset($_POST['incremental_max_age'])
+                    ? max(0, intval(wp_unslash($_POST['incremental_max_age'])))
+                    : 30;
+                $rotation_enabled = array_key_exists('incremental_rotation_enabled', $_POST)
+                    ? $this->to_bool(wp_unslash($_POST['incremental_rotation_enabled']))
+                    : false;
+
+                $incremental_settings = [
+                    'max_incrementals' => $max_incrementals,
+                    'max_full_age_days' => $max_age_days,
+                    'rotation_enabled' => $rotation_enabled,
+                ];
+
+                update_option('bjlg_incremental_settings', $incremental_settings);
+                $saved_settings['incremental'] = $incremental_settings;
+
+                BJLG_Debug::log('Réglages incrémentaux sauvegardés : ' . print_r($incremental_settings, true));
             }
 
             // --- Réglages de la Marque Blanche ---

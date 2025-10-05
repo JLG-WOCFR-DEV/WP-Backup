@@ -15,6 +15,14 @@ if (!defined('ABSPATH')) {
 
 class BJLG_Incremental {
 
+    private const MANIFEST_VERSION = '2.1';
+
+    private const DEFAULT_INCREMENTAL_SETTINGS = [
+        'max_incrementals' => 10,
+        'max_full_age_days' => 30,
+        'rotation_enabled' => true,
+    ];
+
     private $manifest_file;
     private $last_backup_data;
     private $file_hash_cache = [];
@@ -52,7 +60,11 @@ class BJLG_Incremental {
         if (file_exists($this->manifest_file)) {
             $content = file_get_contents($this->manifest_file);
             $this->last_backup_data = json_decode($content, true);
-            
+
+            if (is_array($this->last_backup_data)) {
+                $this->upgrade_manifest_structure();
+            }
+
             // Validation de la structure
             if (!$this->validate_manifest()) {
                 $this->reset_manifest();
@@ -69,15 +81,220 @@ class BJLG_Incremental {
         if (!is_array($this->last_backup_data)) {
             return false;
         }
-        
-        $required_keys = ['full_backup', 'incremental_backups', 'file_hashes', 'database_checksums'];
+
+        $required_keys = ['full_backup', 'incremental_backups', 'synthetic_full', 'file_hashes', 'database_checksums', 'remote_purge_queue'];
         foreach ($required_keys as $key) {
             if (!isset($this->last_backup_data[$key])) {
                 return false;
             }
         }
-        
+
+        if (!is_array($this->last_backup_data['incremental_backups']) || !is_array($this->last_backup_data['synthetic_full'])) {
+            return false;
+        }
+
+        if (!is_array($this->last_backup_data['remote_purge_queue'])) {
+            return false;
+        }
+
         return true;
+    }
+
+    private function upgrade_manifest_structure() {
+        if (!is_array($this->last_backup_data)) {
+            return;
+        }
+
+        if (!isset($this->last_backup_data['incremental_backups']) || !is_array($this->last_backup_data['incremental_backups'])) {
+            $this->last_backup_data['incremental_backups'] = [];
+        }
+
+        if (!isset($this->last_backup_data['synthetic_full']) || !is_array($this->last_backup_data['synthetic_full'])) {
+            $this->last_backup_data['synthetic_full'] = [];
+        }
+
+        if (!isset($this->last_backup_data['remote_purge_queue']) || !is_array($this->last_backup_data['remote_purge_queue'])) {
+            $this->last_backup_data['remote_purge_queue'] = [];
+        }
+
+        if (!isset($this->last_backup_data['version']) || version_compare((string) $this->last_backup_data['version'], self::MANIFEST_VERSION, '<')) {
+            $this->last_backup_data['version'] = self::MANIFEST_VERSION;
+        }
+
+        if (!empty($this->last_backup_data['full_backup']) && is_array($this->last_backup_data['full_backup'])) {
+            if (!isset($this->last_backup_data['full_backup']['destinations']) || !is_array($this->last_backup_data['full_backup']['destinations'])) {
+                $this->last_backup_data['full_backup']['destinations'] = [];
+            }
+
+            $this->last_backup_data['full_backup']['destinations'] = $this->normalize_destinations($this->last_backup_data['full_backup']['destinations']);
+        }
+
+        foreach ($this->last_backup_data['incremental_backups'] as &$incremental) {
+            if (!is_array($incremental)) {
+                $incremental = [];
+            }
+
+            if (!isset($incremental['destinations']) || !is_array($incremental['destinations'])) {
+                $incremental['destinations'] = [];
+            }
+
+            $incremental['destinations'] = $this->normalize_destinations($incremental['destinations']);
+        }
+        unset($incremental);
+
+        foreach ($this->last_backup_data['synthetic_full'] as &$segment) {
+            if (!is_array($segment)) {
+                $segment = [];
+            }
+
+            if (!isset($segment['destinations']) || !is_array($segment['destinations'])) {
+                $segment['destinations'] = [];
+            }
+
+            $segment['destinations'] = $this->normalize_destinations($segment['destinations']);
+        }
+        unset($segment);
+
+        foreach ($this->last_backup_data['remote_purge_queue'] as &$pending) {
+            if (!is_array($pending)) {
+                $pending = [];
+            }
+
+            $pending['destinations'] = $this->normalize_destinations($pending['destinations'] ?? []);
+            $pending['registered_at'] = isset($pending['registered_at']) ? (int) $pending['registered_at'] : time();
+        }
+        unset($pending);
+    }
+
+    private function get_incremental_settings() {
+        $settings = get_option('bjlg_incremental_settings', self::DEFAULT_INCREMENTAL_SETTINGS);
+
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+
+        $settings = wp_parse_args($settings, self::DEFAULT_INCREMENTAL_SETTINGS);
+
+        $settings['max_incrementals'] = max(0, (int) ($settings['max_incrementals'] ?? 0));
+        $settings['max_full_age_days'] = max(0, (int) ($settings['max_full_age_days'] ?? 0));
+        $settings['rotation_enabled'] = !empty($settings['rotation_enabled']);
+
+        return $settings;
+    }
+
+    private function normalize_destinations($destinations) {
+        if (!is_array($destinations)) {
+            if ($destinations === null || $destinations === '') {
+                return [];
+            }
+
+            $destinations = [$destinations];
+        }
+
+        $normalized = [];
+
+        foreach ($destinations as $destination) {
+            if (!is_scalar($destination)) {
+                continue;
+            }
+
+            $slug = sanitize_key((string) $destination);
+            if ($slug === '') {
+                continue;
+            }
+
+            $normalized[$slug] = $slug;
+        }
+
+        return array_values($normalized);
+    }
+
+    private function merge_destinations(array $primary, array $secondary) {
+        $primary = $this->normalize_destinations($primary);
+        $secondary = $this->normalize_destinations($secondary);
+
+        return array_values(array_unique(array_merge($primary, $secondary)));
+    }
+
+    private function enforce_rotation() {
+        $settings = $this->get_incremental_settings();
+        $limit = isset($settings['max_incrementals']) ? (int) $settings['max_incrementals'] : 0;
+
+        if ($limit <= 0) {
+            return;
+        }
+
+        $rotation_enabled = !empty($settings['rotation_enabled']);
+
+        while (count($this->last_backup_data['incremental_backups']) > $limit) {
+            $oldest = array_shift($this->last_backup_data['incremental_backups']);
+
+            if (!$rotation_enabled) {
+                array_unshift($this->last_backup_data['incremental_backups'], $oldest);
+                break;
+            }
+
+            if (!is_array($oldest)) {
+                $oldest = [];
+            }
+
+            $this->merge_incremental_into_synthetic($oldest);
+        }
+    }
+
+    private function merge_incremental_into_synthetic(array $incremental) {
+        if (empty($this->last_backup_data['full_backup']) || !is_array($this->last_backup_data['full_backup'])) {
+            return;
+        }
+
+        $incremental['destinations'] = $this->normalize_destinations($incremental['destinations'] ?? []);
+        $incremental['merged_at'] = time();
+        $incremental['type'] = 'incremental';
+
+        $this->last_backup_data['synthetic_full'][] = $incremental;
+
+        if (!isset($this->last_backup_data['full_backup']['destinations']) || !is_array($this->last_backup_data['full_backup']['destinations'])) {
+            $this->last_backup_data['full_backup']['destinations'] = [];
+        }
+
+        $this->last_backup_data['full_backup']['destinations'] = $this->merge_destinations(
+            $this->last_backup_data['full_backup']['destinations'],
+            $incremental['destinations']
+        );
+
+        if (isset($incremental['size'])) {
+            $this->last_backup_data['full_backup']['size'] = (int) ($this->last_backup_data['full_backup']['size'] ?? 0) + (int) $incremental['size'];
+        }
+
+        if (isset($incremental['timestamp'])) {
+            $this->last_backup_data['full_backup']['timestamp'] = max(
+                (int) ($this->last_backup_data['full_backup']['timestamp'] ?? 0),
+                (int) $incremental['timestamp']
+            );
+        }
+
+        $this->register_remote_purge($incremental);
+    }
+
+    private function register_remote_purge(array $incremental) {
+        $destinations = $this->normalize_destinations($incremental['destinations'] ?? []);
+        $file = isset($incremental['file']) ? (string) $incremental['file'] : '';
+
+        if ($file === '' || empty($destinations)) {
+            return;
+        }
+
+        $entry = [
+            'file' => $file,
+            'destinations' => $destinations,
+            'registered_at' => time(),
+        ];
+
+        $this->last_backup_data['remote_purge_queue'][] = $entry;
+
+        if (function_exists('do_action')) {
+            do_action('bjlg_incremental_remote_purge', $entry, $this->last_backup_data);
+        }
     }
     
     /**
@@ -87,10 +304,12 @@ class BJLG_Incremental {
         $this->last_backup_data = [
             'full_backup' => null,
             'incremental_backups' => [],
+            'synthetic_full' => [],
             'file_hashes' => [],
             'database_checksums' => [],
             'last_scan' => null,
-            'version' => '2.0'
+            'remote_purge_queue' => [],
+            'version' => self::MANIFEST_VERSION
         ];
         $this->last_manifest_signature = null;
         if (!$this->save_manifest()) {
@@ -102,6 +321,7 @@ class BJLG_Incremental {
      * Sauvegarde le manifeste
      */
     private function save_manifest() {
+        $this->last_backup_data['version'] = self::MANIFEST_VERSION;
         $json = json_encode($this->last_backup_data, JSON_PRETTY_PRINT);
 
         if ($json === false) {
@@ -128,6 +348,7 @@ class BJLG_Incremental {
      * Détermine si une sauvegarde incrémentale est possible
      */
     public function can_do_incremental() {
+        $settings = $this->get_incremental_settings();
         // Vérifier qu'une sauvegarde complète existe
         if (empty($this->last_backup_data['full_backup'])) {
             BJLG_Debug::log("Pas de sauvegarde complète de référence.");
@@ -158,20 +379,33 @@ class BJLG_Incremental {
         }
 
         // Vérifier l'âge de la dernière sauvegarde complète
-        $full_backup_time = $this->last_backup_data['full_backup']['timestamp'];
-        $days_old = (time() - $full_backup_time) / DAY_IN_SECONDS;
-        
-        if ($days_old > 30) {
-            BJLG_Debug::log("La sauvegarde complète a plus de 30 jours, une nouvelle est recommandée.");
+        $full_backup_time = isset($this->last_backup_data['full_backup']['timestamp'])
+            ? (int) $this->last_backup_data['full_backup']['timestamp']
+            : 0;
+        $days_old = $full_backup_time > 0 ? (time() - $full_backup_time) / DAY_IN_SECONDS : 0;
+
+        $max_age = isset($settings['max_full_age_days']) ? (int) $settings['max_full_age_days'] : 0;
+        if ($max_age > 0 && $days_old > $max_age) {
+            BJLG_Debug::log(sprintf("La sauvegarde complète a plus de %d jours, une nouvelle est recommandée.", $max_age));
             return false;
         }
-        
+
         // Vérifier le nombre de sauvegardes incrémentales
-        if (count($this->last_backup_data['incremental_backups']) >= 10) {
-            BJLG_Debug::log("Limite de 10 sauvegardes incrémentales atteinte.");
-            return false;
+        $max_incrementals = isset($settings['max_incrementals']) ? (int) $settings['max_incrementals'] : 0;
+        $incremental_count = count($this->last_backup_data['incremental_backups']);
+
+        if ($max_incrementals > 0 && $incremental_count >= $max_incrementals) {
+            if (!empty($settings['rotation_enabled'])) {
+                BJLG_Debug::log(sprintf(
+                    'Limite de %d sauvegardes incrémentales atteinte : une rotation synthétique sera appliquée.',
+                    $max_incrementals
+                ));
+            } else {
+                BJLG_Debug::log(sprintf('Limite de %d sauvegardes incrémentales atteinte.', $max_incrementals));
+                return false;
+            }
         }
-        
+
         return true;
     }
     
@@ -343,7 +577,8 @@ class BJLG_Incremental {
             'path' => $backup_filepath,
             'timestamp' => $timestamp,
             'components' => $components,
-            'size' => $size
+            'size' => $size,
+            'destinations' => $this->normalize_destinations($details['destinations'] ?? [])
         ];
 
         $is_incremental = false;
@@ -373,12 +608,11 @@ class BJLG_Incremental {
         if ($is_incremental) {
             $this->last_backup_data['incremental_backups'][] = $backup_info;
 
-            if (count($this->last_backup_data['incremental_backups']) > 10) {
-                array_shift($this->last_backup_data['incremental_backups']);
-            }
+            $this->enforce_rotation();
         } else {
             $this->last_backup_data['full_backup'] = $backup_info;
             $this->last_backup_data['incremental_backups'] = [];
+            $this->last_backup_data['synthetic_full'] = [];
             $this->update_all_checksums();
         }
 
@@ -494,7 +728,8 @@ class BJLG_Incremental {
         if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée']);
         }
-        
+
+        $settings = $this->get_incremental_settings();
         $info = [
             'can_do_incremental' => $this->can_do_incremental(),
             'full_backup' => null,
@@ -512,32 +747,51 @@ class BJLG_Incremental {
                 'size' => size_format($this->last_backup_data['full_backup']['size']),
                 'age_days' => round((time() - $this->last_backup_data['full_backup']['timestamp']) / DAY_IN_SECONDS)
             ];
-            
-            $info['incremental_count'] = count($this->last_backup_data['incremental_backups']);
-            
+
+            $synthetic_count = isset($this->last_backup_data['synthetic_full']) && is_array($this->last_backup_data['synthetic_full'])
+                ? count($this->last_backup_data['synthetic_full'])
+                : 0;
+
+            $info['incremental_count'] = count($this->last_backup_data['incremental_backups']) + $synthetic_count;
+
             // Calculer la taille totale
             $total_size = $this->last_backup_data['full_backup']['size'];
+            if (!empty($this->last_backup_data['synthetic_full'])) {
+                foreach ($this->last_backup_data['synthetic_full'] as $segment) {
+                    $total_size += isset($segment['size']) ? (int) $segment['size'] : 0;
+                }
+            }
             foreach ($this->last_backup_data['incremental_backups'] as $inc) {
                 $total_size += $inc['size'];
             }
             $info['total_size'] = size_format($total_size);
-            
+
             // Dernière sauvegarde
             if (!empty($this->last_backup_data['incremental_backups'])) {
                 $last = end($this->last_backup_data['incremental_backups']);
                 $info['last_backup'] = date('d/m/Y H:i', $last['timestamp']);
+            } elseif (!empty($this->last_backup_data['synthetic_full'])) {
+                $last = end($this->last_backup_data['synthetic_full']);
+                if (isset($last['timestamp'])) {
+                    $info['last_backup'] = date('d/m/Y H:i', $last['timestamp']);
+                }
             } else {
                 $info['last_backup'] = $info['full_backup']['date'];
             }
-            
+
             // Recommandation pour la prochaine complète
-            $days_until_next = 30 - $info['full_backup']['age_days'];
-            if ($days_until_next > 0) {
-                $info['next_full_recommended'] = "Dans $days_until_next jour(s)";
+            $max_age_days = isset($settings['max_full_age_days']) ? (int) $settings['max_full_age_days'] : 0;
+            if ($max_age_days > 0) {
+                $days_until_next = $max_age_days - $info['full_backup']['age_days'];
+                if ($days_until_next > 0) {
+                    $info['next_full_recommended'] = "Dans $days_until_next jour(s)";
+                } else {
+                    $info['next_full_recommended'] = sprintf('Maintenant (plus de %d jours)', $max_age_days);
+                }
             } else {
-                $info['next_full_recommended'] = "Maintenant (plus de 30 jours)";
+                $info['next_full_recommended'] = 'Selon votre stratégie';
             }
-            
+
             // Espace économisé (estimation)
             $estimated_full_size = $this->last_backup_data['full_backup']['size'] * ($info['incremental_count'] + 1);
             $info['space_saved'] = size_format($estimated_full_size - $total_size);
@@ -671,12 +925,20 @@ class BJLG_Incremental {
         if ($this->last_backup_data['full_backup']) {
             $chain[] = $this->last_backup_data['full_backup'];
         }
-        
+
+        if (!empty($this->last_backup_data['synthetic_full']) && is_array($this->last_backup_data['synthetic_full'])) {
+            foreach ($this->last_backup_data['synthetic_full'] as $segment) {
+                if (is_array($segment)) {
+                    $chain[] = $segment;
+                }
+            }
+        }
+
         // Ajouter toutes les sauvegardes incrémentales dans l'ordre
         foreach ($this->last_backup_data['incremental_backups'] as $inc) {
             $chain[] = $inc;
         }
-        
+
         return $chain;
     }
     

@@ -959,6 +959,16 @@ class BJLG_Admin {
      */
     private function render_settings_section() {
         $cleanup_settings = get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
+        $incremental_defaults = [
+            'max_incrementals' => 10,
+            'max_full_age_days' => 30,
+            'rotation_enabled' => true,
+        ];
+        $incremental_settings = get_option('bjlg_incremental_settings', []);
+        if (!is_array($incremental_settings)) {
+            $incremental_settings = [];
+        }
+        $incremental_settings = wp_parse_args($incremental_settings, $incremental_defaults);
         $schedule_collection = $this->get_schedule_settings_for_display();
         $schedules = isset($schedule_collection['schedules']) && is_array($schedule_collection['schedules'])
             ? array_values($schedule_collection['schedules'])
@@ -1218,7 +1228,76 @@ class BJLG_Admin {
                         </td>
                     </tr>
                 </table>
-                
+
+                <h3><span class="dashicons dashicons-update" aria-hidden="true"></span> Sauvegardes incrémentales</h3>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><label for="bjlg-incremental-max-age">Age maximal de la sauvegarde complète</label></th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <div class="bjlg-form-field-group">
+                                    <div class="bjlg-form-field-control">
+                                        <input
+                                            id="bjlg-incremental-max-age"
+                                            name="incremental_max_age"
+                                            type="number"
+                                            class="small-text"
+                                            value="<?php echo esc_attr($incremental_settings['max_full_age_days']); ?>"
+                                            min="0"
+                                            aria-describedby="bjlg-incremental-max-age-description"
+                                        >
+                                    </div>
+                                    <div class="bjlg-form-field-actions">
+                                        <span class="bjlg-form-field-unit">jours</span>
+                                    </div>
+                                </div>
+                                <p id="bjlg-incremental-max-age-description" class="description">Au-delà de cette limite, une nouvelle sauvegarde complète est forcée. 0 = illimité.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="bjlg-incremental-max-count">Nombre d'incréments consécutifs</label></th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <div class="bjlg-form-field-group">
+                                    <div class="bjlg-form-field-control">
+                                        <input
+                                            id="bjlg-incremental-max-count"
+                                            name="incremental_max_incrementals"
+                                            type="number"
+                                            class="small-text"
+                                            value="<?php echo esc_attr($incremental_settings['max_incrementals']); ?>"
+                                            min="0"
+                                            aria-describedby="bjlg-incremental-max-count-description"
+                                        >
+                                    </div>
+                                    <div class="bjlg-form-field-actions">
+                                        <span class="bjlg-form-field-unit">incréments</span>
+                                    </div>
+                                </div>
+                                <p id="bjlg-incremental-max-count-description" class="description">0 = illimité. Au-delà, les incréments les plus anciens sont fusionnés automatiquement.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Rotation automatique</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <label>
+                                    <input
+                                        type="checkbox"
+                                        name="incremental_rotation_enabled"
+                                        value="1"
+                                        <?php checked(!empty($incremental_settings['rotation_enabled'])); ?>
+                                    >
+                                    Activer la fusion automatique en sauvegarde synthétique («&nbsp;synth full&nbsp;»)
+                                </label>
+                                <p class="description">Lorsque la limite d'incréments est atteinte, les plus anciens sont fusionnés dans la dernière complète sans lancer un nouvel export complet.</p>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+
                 <h3><span class="dashicons dashicons-admin-appearance" aria-hidden="true"></span> Marque Blanche</h3>
                 <table class="form-table">
                     <tr>
