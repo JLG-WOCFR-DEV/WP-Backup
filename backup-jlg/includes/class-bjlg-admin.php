@@ -1222,48 +1222,50 @@ class BJLG_Admin {
             </form>
             
             <h3><span class="dashicons dashicons-admin-links" aria-hidden="true"></span> Webhook</h3>
-            <p>Utilisez ce point de terminaison pour déclencher une sauvegarde à distance en toute sécurité :</p>
-            <div class="bjlg-webhook-url bjlg-mb-10">
-                <label for="bjlg-webhook-endpoint" class="bjlg-label-block bjlg-fw-600">Point de terminaison</label>
-                <div class="bjlg-form-field-group">
-                    <div class="bjlg-form-field-control">
-                        <input type="text" id="bjlg-webhook-endpoint" readonly value="<?php echo esc_url(BJLG_Webhooks::get_webhook_endpoint()); ?>" class="regular-text code">
-                    </div>
-                    <div class="bjlg-form-field-actions">
-                        <button class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-endpoint">Copier l'URL</button>
-                    </div>
-                </div>
-            </div>
-            <div class="bjlg-webhook-url bjlg-mb-10">
-                <label for="bjlg-webhook-key" class="bjlg-label-block bjlg-fw-600">Clé secrète</label>
-                <div class="bjlg-form-field-group bjlg-secret-field">
-                    <div class="bjlg-form-field-control">
-                        <input type="password"
-                               id="bjlg-webhook-key"
-                               readonly
-                               value="<?php echo esc_attr($webhook_key); ?>"
-                               class="regular-text code"
-                               data-lpignore="true">
-                    </div>
-                    <div class="bjlg-form-field-actions">
-                        <button type="button"
-                                class="button bjlg-toggle-secret"
-                                data-target="#bjlg-webhook-key"
-                                data-label-show="Afficher la clé secrète"
-                                data-label-hide="Masquer la clé secrète"
-                                aria-label="Afficher la clé secrète"
-                                aria-pressed="false">
-                            <span class="dashicons dashicons-visibility" aria-hidden="true"></span>
-                            <span class="screen-reader-text">Afficher la clé secrète</span>
-                        </button>
-                        <button class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-key">Copier la clé</button>
-                        <button class="button" id="bjlg-regenerate-webhook">Régénérer</button>
+            <form id="bjlg-webhook-tools" class="bjlg-webhook-form" aria-labelledby="bjlg-webhook-tools-title">
+                <p id="bjlg-webhook-tools-title">Utilisez ce point de terminaison pour déclencher une sauvegarde à distance en toute sécurité :</p>
+                <div class="bjlg-webhook-url bjlg-mb-10">
+                    <label for="bjlg-webhook-endpoint" class="bjlg-label-block bjlg-fw-600">Point de terminaison</label>
+                    <div class="bjlg-form-field-group">
+                        <div class="bjlg-form-field-control">
+                            <input type="text" id="bjlg-webhook-endpoint" readonly value="<?php echo esc_url(BJLG_Webhooks::get_webhook_endpoint()); ?>" class="regular-text code">
+                        </div>
+                        <div class="bjlg-form-field-actions">
+                            <button type="button" class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-endpoint">Copier l'URL</button>
+                        </div>
                     </div>
                 </div>
-            </div>
-            <p class="description">Envoyez une requête <strong>POST</strong> à l'URL ci-dessus en ajoutant l'en-tête <code><?php echo esc_html(BJLG_Webhooks::WEBHOOK_HEADER); ?></code> (ou <code>Authorization: Bearer &lt;clé&gt;</code>) contenant votre clé.</p>
-            <pre class="code"><code><?php echo esc_html(sprintf("curl -X POST %s \\n  -H 'Content-Type: application/json' \\n  -H '%s: %s'", BJLG_Webhooks::get_webhook_endpoint(), BJLG_Webhooks::WEBHOOK_HEADER, $webhook_key)); ?></code></pre>
-            <p class="description"><strong>Compatibilité :</strong> L'ancien format <code><?php echo esc_html(add_query_arg(BJLG_Webhooks::WEBHOOK_QUERY_VAR, 'VOTRE_CLE', home_url('/'))); ?></code> reste supporté provisoirement mais sera retiré après la période de transition.</p>
+                <div class="bjlg-webhook-url bjlg-mb-10">
+                    <label for="bjlg-webhook-key" class="bjlg-label-block bjlg-fw-600">Clé secrète</label>
+                    <div class="bjlg-form-field-group bjlg-secret-field">
+                        <div class="bjlg-form-field-control">
+                            <input type="password"
+                                   id="bjlg-webhook-key"
+                                   readonly
+                                   value="<?php echo esc_attr($webhook_key); ?>"
+                                   class="regular-text code"
+                                   data-lpignore="true">
+                        </div>
+                        <div class="bjlg-form-field-actions">
+                            <button type="button"
+                                    class="button bjlg-toggle-secret"
+                                    data-target="#bjlg-webhook-key"
+                                    data-label-show="Afficher la clé secrète"
+                                    data-label-hide="Masquer la clé secrète"
+                                    aria-label="Afficher la clé secrète"
+                                    aria-pressed="false">
+                                <span class="dashicons dashicons-visibility" aria-hidden="true"></span>
+                                <span class="screen-reader-text">Afficher la clé secrète</span>
+                            </button>
+                            <button type="button" class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-key">Copier la clé</button>
+                            <button type="button" class="button" id="bjlg-regenerate-webhook">Régénérer</button>
+                        </div>
+                    </div>
+                </div>
+                <p class="description">Envoyez une requête <strong>POST</strong> à l'URL ci-dessus en ajoutant l'en-tête <code><?php echo esc_html(BJLG_Webhooks::WEBHOOK_HEADER); ?></code> (ou <code>Authorization: Bearer &lt;clé&gt;</code>) contenant votre clé.</p>
+                <pre class="code"><code><?php echo esc_html(sprintf("curl -X POST %s \\n  -H 'Content-Type: application/json' \\n  -H '%s: %s'", BJLG_Webhooks::get_webhook_endpoint(), BJLG_Webhooks::WEBHOOK_HEADER, $webhook_key)); ?></code></pre>
+                <p class="description"><strong>Compatibilité :</strong> L'ancien format <code><?php echo esc_html(add_query_arg(BJLG_Webhooks::WEBHOOK_QUERY_VAR, 'VOTRE_CLE', home_url('/'))); ?></code> reste supporté provisoirement mais sera retiré après la période de transition.</p>
+            </form>
 
             <form class="bjlg-settings-form">
                 <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
