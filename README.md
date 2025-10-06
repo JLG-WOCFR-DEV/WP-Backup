@@ -5,8 +5,35 @@ Backup JLG est un plugin WordPress complet de sauvegarde et restauration qui com
 ## 🎯 Objectifs du plugin
 - Garantir des sauvegardes fiables (fichiers + base de données) avec chiffrement côté serveur.
 - Accélérer les opérations grâce au traitement parallèle, à la compression optimisée et aux sauvegardes incrémentales.
-- Offrir une automatisation avancée (planification, notifications, webhooks et API REST complète).
+- Offrir une automatisation avancée (planification, API REST complète, webhooks et rotation automatique).
 - Faciliter la restauration, le diagnostic et le support via une interface WordPress moderne et des outils de debug intégrés.
+
+## 🧩 Fonctionnalités existantes
+
+### Sauvegarde & restauration
+- Assistant de sauvegarde manuel avec modèles réutilisables, sélection fine des composants, filtres d’inclusion/exclusion, vérification d’intégrité et envoi multi-destination.【F:backup-jlg/includes/class-bjlg-admin.php†L332-L507】【F:backup-jlg/includes/class-bjlg-backup.php†L944-L1006】【F:backup-jlg/includes/class-bjlg-backup.php†L2119-L2166】
+- Chiffrement AES-256 avec gestion de clé, génération sécurisée et API Ajax pour tester/déverrouiller les archives.【F:backup-jlg/includes/class-bjlg-encryption.php†L17-L155】
+- Sauvegardes incrémentales pilotées par manifeste (rotation configurable, suivi des destinations distantes, analyse des changements) et mise à jour automatique à chaque archive.【F:backup-jlg/includes/class-bjlg-incremental.php†L16-L156】【F:backup-jlg/includes/class-bjlg-backup.php†L964-L995】
+- Restauration dans l’environnement de production ou en sandbox isolée via l’interface ou l’API REST, avec vérifications d’éligibilité des utilisateurs.【F:backup-jlg/includes/class-bjlg-rest-api.php†L192-L216】【F:backup-jlg/includes/class-bjlg-restore.php†L22-L263】【F:backup-jlg/includes/class-bjlg-restore.php†L1057-L1092】
+
+### Automatisation & pilotage
+- Planification avancée : intervalles personnalisés, duplication, lancement immédiat, gestion des destinations secondaires et synchronisation Cron.【F:backup-jlg/includes/class-bjlg-scheduler.php†L35-L207】
+- Nettoyage automatique quotidien avec rotation des logs, purge locale/distante, suppression de fichiers temporaires et historique configurable, déclenchable aussi à la demande.【F:backup-jlg/includes/class-bjlg-cleanup.php†L41-L142】
+- Table d’audit dédiée consignant chaque action (succès/échec), intégrée au tableau de bord et exposée via l’API.【F:backup-jlg/includes/class-bjlg-history.php†L16-L117】【F:backup-jlg/includes/class-bjlg-rest-api.php†L233-L284】
+- Bilan de santé complet (Cron, stockage, versions, extensions critiques) pour diagnostiquer l’environnement avant ou après une sauvegarde.【F:backup-jlg/includes/class-bjlg-health-check.php†L17-L152】
+- Gestion fine des téléchargements : génération de liens éphémères sécurisés pour les archives, journalisation et contrôle d’accès frontend/backoffice.【F:backup-jlg/includes/class-bjlg-actions.php†L16-L200】
+
+### Sécurité
+- Chiffrement optionnel des archives, HMAC d’intégrité et possibilité de protéger par mot de passe via l’interface d’administration.【F:backup-jlg/includes/class-bjlg-encryption.php†L17-L155】
+- Rate limiting des appels REST basé sur IP/API key/JWT pour bloquer les abus et journaliser les dépassements.【F:backup-jlg/includes/class-bjlg-rate-limiter.php†L18-L62】【F:backup-jlg/includes/class-bjlg-rest-api.php†L220-L349】
+- Gestion des clés API (création, rotation, révocation, attribution à un utilisateur précis) avec logs dédiés et nonce personnalisé.【F:backup-jlg/includes/class-bjlg-api-keys.php†L13-L172】
+- Webhook entrant sécurisé (clé secrète, anti-rejeu, limitation) et webhooks sortants pour être notifié des succès/échecs.【F:backup-jlg/includes/class-bjlg-webhooks.php†L17-L196】【F:backup-jlg/includes/class-bjlg-webhooks.php†L420-L475】
+
+### API & intégrations
+- API REST riche couvrant la gestion complète des sauvegardes, restaurations, historiques, statistiques, paramètres et planifications, avec pagination/validation détaillées.【F:backup-jlg/includes/class-bjlg-rest-api.php†L54-L319】
+- Téléchargements REST protégés par jetons temporaires et routage dédié pour la restauration distante.【F:backup-jlg/includes/class-bjlg-rest-api.php†L178-L219】【F:backup-jlg/includes/class-bjlg-actions.php†L66-L200】
+- Destinations distantes prêtes à l’emploi : Google Drive, Amazon S3, Wasabi, Dropbox, OneDrive, pCloud et SFTP, sélectionnables dans l’interface et depuis l’automatisation.【F:backup-jlg/includes/class-bjlg-admin.php†L480-L499】【F:backup-jlg/includes/class-bjlg-backup.php†L2175-L2214】
+- Tableau de bord récapitulatif (cartes, tendances, alertes) alimenté par les services avancés du plugin, exportable vers un bloc Gutenberg public si nécessaire.【F:backup-jlg/includes/class-bjlg-admin.php†L146-L309】【F:backup-jlg/includes/class-bjlg-blocks.php†L67-L200】
 
 ## ⚙️ Dépendances et prérequis
 - PHP ≥ 7.4 avec les fonctions `shell_exec` et `proc_open` disponibles pour tirer parti des optimisations (le plugin fonctionne sans, mais en mode dégradé).
@@ -46,9 +73,9 @@ Les dépendances sont installées dans `vendor-bjlg/` afin de ne pas entrer en c
 
 ## 🚀 Exemples d’utilisation
 ### Interface WordPress
-- Créer une sauvegarde manuelle via *Backup JLG → Sauvegarde & Restauration* en sélectionnant les composants (base, plugins, thèmes, uploads).
-- Planifier des sauvegardes récurrentes et recevoir des notifications (Email, Slack, Discord, Telegram, SMS) depuis l’onglet *Réglages*.
-- Restaurer une sauvegarde existante ou importer un fichier `.zip` directement depuis l’écran principal.
+- Créez une sauvegarde manuelle via *Backup JLG → Sauvegarde & Restauration*, appliquez vos modèles puis suivez la progression en temps réel.
+- Planifiez plusieurs scénarios récurrents (fréquences, destinations secondaires, filtres) depuis *Réglages → Planification*.
+- Consultez l’historique complet, déclenchez un nettoyage ou lancez une restauration (production ou sandbox) directement depuis le tableau de bord.
 
 ### API REST
 ```bash
@@ -76,20 +103,15 @@ curl -H "X-API-Key: bjlg_xxxxx" \
 
 Vous pouvez toujours demander la génération immédiate d’un lien signé en ajoutant `with_token=1` à vos requêtes `GET /backups` ou `GET /backups/{id}`.
 
-### WP-CLI (si activé)
-```bash
-wp backup-jlg backup --components=db,uploads --encrypt
-wp backup-jlg restore --file=/chemin/vers/sauvegarde.zip
-```
-
 ## 🧪 Commandes Composer utiles
 - `composer test` : exécute la suite PHPUnit située dans le plugin.
 - `composer cs` : lance PHP_CodeSniffer avec la norme WordPress.
 - `composer cs-fix` : corrige automatiquement les violations de style détectées.
 
 ## ⚠️ Limitations connues
-- Le multi-threading et les benchmarks automatiques nécessitent des fonctions systèmes (`shell_exec`, `proc_open`) souvent désactivées sur les hébergements mutualisés ; le plugin bascule alors en traitement séquentiel.
-- L’intégration Google Drive et certaines notifications externes requièrent l’installation des dépendances Composer et la configuration d’identifiants tiers.
+- Le multi-threading et les benchmarks automatiques nécessitent des fonctions systèmes (`shell_exec`, `proc_open`) souvent désactivées sur les hébergements mutualisés ; le plugin bascule alors en traitement séquentiel.【F:backup-jlg/includes/class-bjlg-performance.php†L57-L109】
+- Les destinations distantes supplémentaires prévues (Azure Blob, Backblaze B2) disposent déjà de paramètres, mais ne sont pas encore exposées dans l’interface ni instanciées par défaut.【F:backup-jlg/includes/class-bjlg-settings.php†L107-L124】【F:backup-jlg/includes/class-bjlg-backup.php†L2175-L2214】
+- Les notifications externes configurables dans les réglages sont limitées aux webhooks tant que l’envoi email/webhook tiers n’est pas implémenté dans le noyau du plugin.【F:backup-jlg/includes/class-bjlg-settings.php†L41-L54】【F:backup-jlg/includes/class-bjlg-webhooks.php†L24-L29】
 - Les environnements WordPress multisite ne sont pas officiellement supportés : réaliser des tests approfondis avant déploiement.
 - Les performances optimales supposent des limites PHP élevées (mémoire, temps d’exécution) ; sur des valeurs faibles les sauvegardes de sites volumineux peuvent échouer.
 
