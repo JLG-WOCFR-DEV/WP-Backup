@@ -1172,16 +1172,14 @@ jQuery(document).ready(function($) {
             if (typeof value !== 'string') {
                 return [];
             }
-            return value.split(/[
-,]+/).map(function(entry) {
+            return value.split(/[\r\n,]+/).map(function(entry) {
                 return entry.trim();
             }).filter(Boolean);
         }
 
         function patternsToTextarea(value) {
             if (Array.isArray(value)) {
-                return value.join('
-');
+                return value.join('\n');
             }
             if (typeof value === 'string') {
                 return value;
