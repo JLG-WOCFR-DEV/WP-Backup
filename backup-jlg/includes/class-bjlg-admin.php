@@ -120,9 +120,23 @@ class BJLG_Admin {
      */
     public function render_admin_page() {
         $active_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'backup_restore';
-        $page_url = admin_url('admin.php?page=backup-jlg');
-        
+        $page_url = add_query_arg(
+            [
+                'page' => 'backup-jlg',
+            ],
+            admin_url('admin.php')
+        );
+
         $tabs = apply_filters('bjlg_admin_tabs', []);
+        if (!is_array($tabs) || empty($tabs)) {
+            $tabs = $this->get_default_tabs([]);
+        }
+
+        if (!array_key_exists($active_tab, $tabs)) {
+            $active_tab = array_key_exists('backup_restore', $tabs)
+                ? 'backup_restore'
+                : (string) array_key_first($tabs);
+        }
         $metrics = $this->advanced_admin ? $this->advanced_admin->get_dashboard_metrics() : [];
 
         ?>
@@ -135,7 +149,7 @@ class BJLG_Admin {
 
             <nav class="nav-tab-wrapper">
                 <?php foreach ($tabs as $tab_key => $tab_label): ?>
-                    <a href="<?php echo esc_url(add_query_arg('tab', $tab_key, $page_url)); ?>" 
+                    <a href="<?php echo esc_url(add_query_arg(['tab' => $tab_key], $page_url)); ?>"
                        class="nav-tab <?php echo $active_tab == $tab_key ? 'nav-tab-active' : ''; ?>">
                         <?php echo esc_html($tab_label); ?>
                     </a>
