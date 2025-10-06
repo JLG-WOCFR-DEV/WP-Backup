@@ -36,3 +36,34 @@
 4. **Ajouter un déclencheur de sauvegarde pré-mise à jour** (hook `upgrader_pre_install` ou équivalent) pour automatiser les snapshots avant chaque update, comme le proposent UpdraftPlus Premium ou Jetpack Backup.
 5. **Étendre la prise en charge multisite** : support natif de WordPress multisite et mutualisation des historiques/API pour piloter plusieurs environnements depuis une seule instance, indispensable pour rivaliser avec les consoles agence.【F:README.md†L111-L116】【F:backup-jlg/includes/class-bjlg-rest-api.php†L54-L319】
 6. **Renforcer la supervision proactive** : compléter le bilan de santé et l’audit SQL existants par des métriques d’usage (quota distant, temps moyen de restauration) exposées via API/webhooks afin de fournir les garanties de service attendues sur les offres premium.【F:backup-jlg/includes/class-bjlg-health-check.php†L17-L152】【F:backup-jlg/includes/class-bjlg-history.php†L8-L158】
+
+## Focus UX/UI, navigation mobile, accessibilité et apparence WordPress
+
+### Options produit
+
+- **Cadence de sauvegarde limitée** : le planificateur ne propose que des fréquences horaires à mensuelles. Ajouter des pas de 5/15 minutes ou un CRON personnalisé alignerait la granularité sur les suites pro qui déclenchent avant des opérations sensibles.【F:backup-jlg/includes/class-bjlg-settings.php†L18-L59】
+- **Canaux d’alerte à finaliser** : seuls les formulaires d’email, Slack et Discord existent côté réglages, sans SMS, Teams ou webhook sortant réellement câblés. Étendre les destinations et brancher l’envoi réel rapprocherait l’expérience des offres omnicanales.【F:backup-jlg/includes/class-bjlg-settings.php†L41-L55】【F:backup-jlg/includes/class-bjlg-webhooks.php†L24-L29】
+- **Connecteurs cloud incohérents** : Azure Blob et Backblaze B2 disposent des champs de configuration mais ne sont ni listés dans les onglets ni instanciés automatiquement. Offrir un onboarding guidé avec tests de connexion imiterait les connecteurs « plug & play » des solutions premium.【F:backup-jlg/includes/class-bjlg-settings.php†L96-L125】【F:backup-jlg/includes/class-bjlg-admin.php†L480-L507】
+- **Absence d’automatisation pré-update** : la page d’administration ne déclare aucun hook dédié aux mises à jour de plugins/thèmes, ce qui empêche de proposer une option « sauvegarde avant update » pourtant standard en pro.【F:backup-jlg/includes/class-bjlg-admin.php†L146-L170】
+
+### Expérience UX/UI dans l’admin
+
+- **Monopage dense** : tout l’écosystème (création, historique, restauration, réglages) vit sur une unique page avec onglets. Fragmenter en sous-pages ou wizards allègerait la charge cognitive et faciliterait la délégation par rôle.【F:backup-jlg/includes/class-bjlg-admin.php†L103-L170】
+- **Composants 100 % maison** : les cartes, timelines et formulaires reposent sur des styles personnalisés (grid, cards, boutons) qui ne s’appuient pas sur les composants WP modernes (`<wp-components>`). Migrer vers `@wordpress/components` apporterait cohérence visuelle et accessibilité native.【F:backup-jlg/assets/css/admin.css†L1-L118】【F:backup-jlg/assets/js/admin.js†L4-L205】
+- **Parcours onboarding statique** : l’onboarding injecte du texte mais aucun call-to-action contextuel ou checklist interactive, ce qui limite l’accompagnement. Ajouter une checklist avec suivi d’étapes (comme Jetpack) aiderait l’adoption.【F:backup-jlg/assets/js/admin.js†L90-L157】
+
+### Navigation mobile
+
+- **Onglets horizontaux non repliés** : la navigation reste une simple liste d’onglets WordPress sans adaptation mobile dédiée (sélecteur, hamburger, overflow auto). Sur smartphone, basculer vers un menu déroulant ou un `wp.components.TabPanel` améliorerait l’ergonomie.【F:backup-jlg/includes/class-bjlg-admin.php†L136-L143】【F:backup-jlg/assets/css/admin.css†L760-L766】
+- **Listes plus accessibles mais perfectibles** : les tables deviennent des cartes empilées sous 782 px, mais le tri/filtre reste dispersé en toolbar horizontale. Proposer un panneau latéral « Filtres » ou un mode plein écran simplifierait la navigation tactile.【F:backup-jlg/assets/css/admin.css†L900-L1139】
+
+### Accessibilité
+
+- **Feedback silencieux** : plusieurs mises à jour AJAX s’affichent dans des `<div>` sans rôle annoncé (ex. actions dans le bloc éditorial), ce qui rend les changements invisibles pour les lecteurs d’écran. Ajouter `role="status"` ou gérer le focus sur les confirmations rapprocherait les standards pro.【F:backup-jlg/assets/js/block-status.js†L63-L114】
+- **Couleurs non testées** : les alertes et cartes reposent sur des contrastes pastel personnalisés sans référence aux palettes WordPress, risquant un contraste insuffisant en mode sombre ou daltonien. Utiliser les variables CSS `--wp-admin-theme-color` et proposer un mode haute visibilité améliorerait l’AA.【F:backup-jlg/assets/css/admin.css†L35-L118】【F:backup-jlg/assets/css/block-status.css†L1-L78】
+- **Focus management** : après une action (ex. création de preset), le script injecte du contenu mais ne renvoie pas le focus sur le message de succès, obligeant la navigation clavier à repartir du début. Implémenter `focus()` ciblé ou des annonces `wp.a11y.speak()` suivrait les pratiques pro.【F:backup-jlg/assets/js/admin.js†L205-L318】
+
+### Apparence dans WordPress & éditeur visuel
+
+- **Styles figés dans le bloc** : la feuille `block-status.css` impose couleurs, rayons et boutons custom qui ne respectent pas la typographie ni les variables du thème, d’où un rendu potentiellement dissonant côté front ou éditeur visuel. Supporter les presets `color`, `typography` et les variables globales assurerait une meilleure intégration.【F:backup-jlg/assets/css/block-status.css†L1-L86】【F:backup-jlg/block.json†L11-L27】
+- **Éditeur sans prévisualisation dynamique** : le bloc charge un snapshot via `apiFetch` mais n’expose pas de skeleton ni de message clair lors du chargement/erreur, contrairement aux blocs pro qui affichent placeholders et liens de correction. Ajouter un état `Spinner` accessible et des actions de rechargement guiderait l’éditeur.【F:backup-jlg/assets/js/block-status.js†L8-L62】【F:backup-jlg/assets/js/block-status.js†L115-L184】
