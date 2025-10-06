@@ -1,5 +1,7 @@
 # Comparaison avec les solutions de sauvegarde professionnelles
 
+Ce document positionne Backup JLG face aux offres haut de gamme (UpdraftPlus Premium, BlogVault, Jetpack Backup, ManageWP…) en s’appuyant exclusivement sur les capacités observables dans le code du plugin. L’objectif est double : valoriser les forces existantes et identifier les écarts fonctionnels qui freinent encore l’adoption par des équipes habituées aux solutions managées.
+
 ## Points forts actuels
 
 - **Parcours de sauvegarde assisté et personnalisable** : formulaires avec modèles, filtres d’inclusion/exclusion, vérification post-sauvegarde et routage multi-destination reproduisent des workflows avancés que l’on retrouve chez UpdraftPlus ou BlogVault.【F:backup-jlg/includes/class-bjlg-admin.php†L332-L507】【F:backup-jlg/includes/class-bjlg-backup.php†L944-L1006】【F:backup-jlg/includes/class-bjlg-backup.php†L2119-L2166】
@@ -22,11 +24,14 @@
 
 | Domaine | Backup JLG | Pratiques des solutions pro |
 | --- | --- | --- |
-| **Sauvegardes** | Full + incrémental pilotés par manifeste, compression ajustable et optimisation parallèle configurable.【F:backup-jlg/includes/class-bjlg-backup.php†L944-L1006】【F:backup-jlg/includes/class-bjlg-incremental.php†L16-L156】【F:backup-jlg/includes/class-bjlg-performance.php†L18-L140】 | Déclenchement continu (quasi temps réel) et stockage immédiatement externalisé pour réduire le RPO.
-| **Restauration** | Mode production et sandbox avec promotion contrôlée et bilan de santé préalable.【F:backup-jlg/includes/class-bjlg-restore.php†L44-L207】【F:backup-jlg/includes/class-bjlg-health-check.php†L17-L152】 | Restauration instantanée vers cloud privé ou staging isolé fourni par l’éditeur.
-| **Sécurité** | Chiffrement AES-256, tokens éphémères et rate limiting API.【F:backup-jlg/includes/class-bjlg-encryption.php†L17-L155】【F:backup-jlg/includes/class-bjlg-actions.php†L16-L200】【F:backup-jlg/includes/class-bjlg-rate-limiter.php†L18-L62】 | Chiffrement + stockage hors site chiffré à gestion automatique de la clé et contrôles RBAC avancés.
-| **Observabilité** | Tableau de bord, historique SQL dédié et API REST complète.【F:backup-jlg/includes/class-bjlg-admin.php†L146-L309】【F:backup-jlg/includes/class-bjlg-history.php†L8-L158】【F:backup-jlg/includes/class-bjlg-rest-api.php†L54-L319】 | Supervision centralisée multi-sites, SLA et alertes proactives multi-canales.
-| **Intégrations** | Connecteurs prêts pour Drive, S3, Wasabi, Dropbox, OneDrive, pCloud et SFTP ; Azure/B2 préparés côté paramètres.【F:backup-jlg/includes/class-bjlg-admin.php†L480-L499】【F:backup-jlg/includes/class-bjlg-backup.php†L2119-L2166】【F:backup-jlg/includes/class-bjlg-settings.php†L96-L161】 | Catalogue complet (Azure, B2, Glacier, etc.) avec gestion automatique des quotas et monitoring d’API.
+| **Sauvegardes** | Full + incrémental pilotés par manifeste, compression ajustable et optimisation parallèle configurable.【F:backup-jlg/includes/class-bjlg-backup.php†L944-L1006】【F:backup-jlg/includes/class-bjlg-incremental.php†L16-L156】【F:backup-jlg/includes/class-bjlg-performance.php†L18-L140】 | Déclenchement continu (quasi temps réel) et stockage immédiatement externalisé pour réduire le RPO.|
+| **Restauration** | Mode production et sandbox avec promotion contrôlée et bilan de santé préalable.【F:backup-jlg/includes/class-bjlg-restore.php†L44-L207】【F:backup-jlg/includes/class-bjlg-health-check.php†L17-L152】 | Restauration instantanée vers cloud privé ou staging isolé fourni par l’éditeur.|
+| **Sécurité** | Chiffrement AES-256, tokens éphémères et rate limiting API.【F:backup-jlg/includes/class-bjlg-encryption.php†L17-L155】【F:backup-jlg/includes/class-bjlg-actions.php†L16-L200】【F:backup-jlg/includes/class-bjlg-rate-limiter.php†L18-L62】 | Chiffrement + stockage hors site chiffré à gestion automatique de la clé et contrôles RBAC avancés.|
+| **Observabilité** | Tableau de bord, historique SQL dédié et API REST complète.【F:backup-jlg/includes/class-bjlg-admin.php†L146-L309】【F:backup-jlg/includes/class-bjlg-history.php†L8-L158】【F:backup-jlg/includes/class-bjlg-rest-api.php†L54-L319】 | Supervision centralisée multi-sites, SLA et alertes proactives multi-canales.|
+| **Notifications** | Préférences pour email/Slack/Discord et webhooks internes déjà câblés, mais sans livraison effective vers les canaux externes listés.【F:backup-jlg/includes/class-bjlg-settings.php†L41-L55】【F:backup-jlg/includes/class-bjlg-webhooks.php†L24-L29】 | Alerte en temps réel multi-canale (email, SMS, chatops) avec escalade et fenêtres de maintenance.|
+| **Pilotage stockage** | Indicateurs locaux (taille du répertoire, dernières archives) agrégés pour le tableau de bord.【F:backup-jlg/includes/class-bjlg-admin-advanced.php†L30-L186】 | Quotas et consommation rapprochés du stockage distant, alertes de dépassement et remédiation automatique.|
+| **Intégrations** | Connecteurs prêts pour Drive, S3, Wasabi, Dropbox, OneDrive, pCloud et SFTP ; Azure/B2 préparés côté paramètres mais non exposés par défaut dans l’interface.【F:backup-jlg/includes/class-bjlg-admin.php†L373-L540】【F:backup-jlg/includes/class-bjlg-settings.php†L96-L125】【F:backup-jlg/includes/class-bjlg-admin.php†L1862-L1905】 | Catalogue complet (Azure, B2, Glacier, etc.) avec gestion automatique des quotas et monitoring d’API.|
+| **Expérience admin** | Administration mono-page par onglets avec composants CSS maison et onboarding statique.【F:backup-jlg/includes/class-bjlg-admin.php†L121-L170】【F:backup-jlg/assets/css/admin.css†L741-L980】【F:backup-jlg/assets/js/admin.js†L80-L199】 | Consoles modulaires multi-pages, composants `@wordpress/components`, checklists interactives et vues adaptées mobile.|
 
 ## Recommandations prioritaires
 
@@ -36,6 +41,28 @@
 4. **Ajouter un déclencheur de sauvegarde pré-mise à jour** (hook `upgrader_pre_install` ou équivalent) pour automatiser les snapshots avant chaque update, comme le proposent UpdraftPlus Premium ou Jetpack Backup.
 5. **Étendre la prise en charge multisite** : support natif de WordPress multisite et mutualisation des historiques/API pour piloter plusieurs environnements depuis une seule instance, indispensable pour rivaliser avec les consoles agence.【F:README.md†L111-L116】【F:backup-jlg/includes/class-bjlg-rest-api.php†L54-L319】
 6. **Renforcer la supervision proactive** : compléter le bilan de santé et l’audit SQL existants par des métriques d’usage (quota distant, temps moyen de restauration) exposées via API/webhooks afin de fournir les garanties de service attendues sur les offres premium.【F:backup-jlg/includes/class-bjlg-health-check.php†L17-L152】【F:backup-jlg/includes/class-bjlg-history.php†L8-L158】
+
+## Axes d'amélioration alignés sur les offres pro
+
+### Quick wins (0–3 mois)
+
+- **Finaliser les canaux de notification** : implémenter l’envoi email et chatops en s’appuyant sur les préférences existantes et sur les hooks déjà en place (`bjlg_backup_complete`, `bjlg_backup_failed`).【F:backup-jlg/includes/class-bjlg-settings.php†L41-L55】【F:backup-jlg/includes/class-bjlg-webhooks.php†L24-L29】 Cela rapprocherait Backup JLG des alertes temps réel proposées par les acteurs pro.
+- **Automatiser la purge distante** : créer un worker (cron ou queue) qui consomme l’action `bjlg_incremental_remote_purge` afin de synchroniser la rotation locale et le nettoyage côté cloud sans intervention humaine.【F:backup-jlg/includes/class-bjlg-incremental.php†L279-L324】
+- **Exposer Azure Blob et Backblaze B2 dans l’UI** : ajouter ces destinations aux listes proposées par défaut et fournir un test de connexion guidé pour sécuriser l’onboarding.【F:backup-jlg/includes/class-bjlg-settings.php†L107-L125】【F:backup-jlg/includes/class-bjlg-admin.php†L1862-L1905】
+- **Élargir la granularité de planification** : proposer des fréquences 5/15 minutes ou un champ Cron personnalisé au-delà des valeurs `hourly…monthly` afin d’aligner les intervalles sur les sauvegardes pré-update automatisées.【F:backup-jlg/includes/class-bjlg-settings.php†L18-L55】【F:backup-jlg/includes/class-bjlg-scheduler.php†L62-L79】
+- **Visibilité sur le stockage distant** : enrichir les métriques du tableau de bord (actuellement centrées sur le répertoire local) avec des appels API vers les destinations configurées pour suivre l’usage réel et alerter avant saturation.【F:backup-jlg/includes/class-bjlg-admin-advanced.php†L60-L181】
+
+### Initiatives moyen terme (3–6 mois)
+
+- **Parcours admin modulaires** : éclater la mono-page actuelle en sous-pages dédiées (monitoring, restauration, automatisation) et migrer progressivement vers `@wordpress/components` pour gagner en accessibilité native et en cohérence mobile.【F:backup-jlg/includes/class-bjlg-admin.php†L121-L170】【F:backup-jlg/assets/css/admin.css†L741-L980】
+- **Onboarding piloté** : transformer la liste statique actuelle en checklist interactive avec suivi d’étapes, rappelant les assistants guidés des suites pro.【F:backup-jlg/assets/js/admin.js†L90-L199】
+- **Pré-sauvegarde avant mises à jour** : brancher un déclencheur automatique sur `upgrader_pre_install`/`automatic_updates_complete` pour créer un snapshot avant toute mise à jour de plugin ou de thème, fonctionnalité différenciante dans les offres managées.【F:backup-jlg/includes/class-bjlg-admin.php†L121-L170】
+
+### Paris long terme (>6 mois)
+
+- **Support WordPress multisite & gestion centralisée** : adapter les contrôles de capacité et l’API pour piloter plusieurs sites depuis une seule console, en réponse aux besoins des agences.【F:README.md†L111-L116】【F:backup-jlg/includes/class-bjlg-rest-api.php†L54-L319】
+- **Observabilité orientée SLA** : compléter le module d’agrégation par des métriques de performance (durée moyenne, RTO/RPO mesurés, disponibilité des destinations) et exposer ces données via API/webhooks pour faciliter la contractualisation SLA.【F:backup-jlg/includes/class-bjlg-admin-advanced.php†L30-L186】【F:backup-jlg/includes/class-bjlg-rest-api.php†L178-L319】
+- **Résilience managée** : proposer un service de stockage managé multi-région (ou un partenariat cloud) qui réplique automatiquement les archives pour offrir la même garantie que les solutions SaaS premium.【F:backup-jlg/includes/class-bjlg-backup.php†L2186-L2233】
 
 ## Focus UX/UI, navigation mobile, accessibilité et apparence WordPress
 

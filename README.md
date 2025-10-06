@@ -108,6 +108,9 @@ Vous pouvez toujours demander la génération immédiate d’un lien signé en a
 - `composer cs` : lance PHP_CodeSniffer avec la norme WordPress.
 - `composer cs-fix` : corrige automatiquement les violations de style détectées.
 
+## 🔍 Comparaison avec les offres professionnelles
+- Consultez [docs/comparaison-pro.md](docs/comparaison-pro.md) pour une analyse détaillée des forces de Backup JLG face aux solutions de sauvegarde managées et pour une feuille de route d’améliorations priorisées.【F:docs/comparaison-pro.md†L1-L126】
+
 ## ⚠️ Limitations connues
 - Le multi-threading et les benchmarks automatiques nécessitent des fonctions systèmes (`shell_exec`, `proc_open`) souvent désactivées sur les hébergements mutualisés ; le plugin bascule alors en traitement séquentiel.【F:backup-jlg/includes/class-bjlg-performance.php†L57-L109】
 - Les destinations distantes supplémentaires prévues (Azure Blob, Backblaze B2) disposent déjà de paramètres, mais ne sont pas encore exposées dans l’interface ni instanciées par défaut.【F:backup-jlg/includes/class-bjlg-settings.php†L107-L124】【F:backup-jlg/includes/class-bjlg-backup.php†L2175-L2214】
