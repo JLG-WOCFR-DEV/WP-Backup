@@ -203,6 +203,14 @@ class BJLG_Restore {
                 'sandbox' => $sandbox_context,
             ]);
         } catch (Throwable $throwable) {
+            if ($throwable instanceof \RuntimeException && $throwable->getMessage() === 'JSON response') {
+                throw $throwable;
+            }
+
+            if (class_exists('WPDieException') && $throwable instanceof \WPDieException) {
+                throw $throwable;
+            }
+
             $error_message = 'Promotion sandbox échouée : ' . $throwable->getMessage();
             BJLG_History::log('restore_sandbox_publish', 'failure', $error_message);
 

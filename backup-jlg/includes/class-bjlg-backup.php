@@ -1247,20 +1247,76 @@ class BJLG_Backup {
      */
     private function create_insert_statement($table, $rows) {
         if (empty($rows)) return '';
-        
+
+        $buffer = '';
+
+        $this->stream_insert_statement(
+            $table,
+            $rows,
+            static function (string $chunk) use (&$buffer) {
+                $buffer .= $chunk;
+            }
+        );
+
+        return $buffer;
+    }
+
+    /**
+     * Écrit une instruction INSERT directement dans une ressource.
+     *
+     * @param resource $handle
+     * @param string   $table
+     * @param array<int, array<string, mixed>> $rows
+     * @return void
+     */
+    private function write_insert_statement($handle, $table, $rows)
+    {
+        if (!is_resource($handle) || empty($rows)) {
+            return;
+        }
+
+        $this->stream_insert_statement(
+            $table,
+            $rows,
+            static function (string $chunk) use ($handle) {
+                fwrite($handle, $chunk);
+            }
+        );
+    }
+
+    /**
+     * Génère une instruction INSERT en streaming pour limiter l'utilisation mémoire.
+     *
+     * @param string   $table
+     * @param array<int, array<string, mixed>> $rows
+     * @param callable $writer
+     * @return void
+     */
+    private function stream_insert_statement($table, $rows, callable $writer)
+    {
+        if (empty($rows)) {
+            return;
+        }
+
         $columns = array_keys($rows[0]);
         $columns_str = '`' . implode('`, `', $columns) . '`';
-        
-        $values = [];
+
+        $writer("INSERT INTO `{$table}` ({$columns_str}) VALUES\n");
+
+        $is_first = true;
+
         foreach ($rows as $row) {
             $row_values = [];
             foreach ($row as $value) {
                 $row_values[] = $this->format_sql_value($value);
             }
-            $values[] = '(' . implode(', ', $row_values) . ')';
+
+            $prefix = $is_first ? '' : ",\n";
+            $writer($prefix . '(' . implode(', ', $row_values) . ')');
+            $is_first = false;
         }
 
-        return "INSERT INTO `{$table}` ({$columns_str}) VALUES\n" . implode(",\n", $values) . ";\n\n";
+        $writer(";\n\n");
     }
 
     /**
@@ -1366,19 +1422,30 @@ class BJLG_Backup {
                 break;
             }
 
-            fwrite($handle, $this->create_insert_statement($table, $rows));
+            $this->write_insert_statement($handle, $table, $rows);
 
             $last_row = end($rows);
             $current_value = $last_row[$primary_key['column']] ?? null;
-
-            if ($current_value === null || $current_value === $last_value) {
+            if ($current_value === null) {
                 break;
             }
 
             if ($primary_key['numeric']) {
-                $last_value = (int) $current_value;
+                $current_numeric = (int) $current_value;
+
+                if ($last_value !== null && $current_numeric <= (int) $last_value) {
+                    break;
+                }
+
+                $last_value = $current_numeric;
             } else {
-                $last_value = (string) $current_value;
+                $current_string = (string) $current_value;
+
+                if ($last_value !== null && strcmp($current_string, (string) $last_value) <= 0) {
+                    break;
+                }
+
+                $last_value = $current_string;
             }
         } while (true);
     }
@@ -1415,13 +1482,13 @@ class BJLG_Backup {
                         $buffer[] = $row;
 
                         if (count($buffer) >= $batch_size) {
-                            fwrite($handle, $this->create_insert_statement($table, $buffer));
+                            $this->write_insert_statement($handle, $table, $buffer);
                             $buffer = [];
                         }
                     }
 
                     if (!empty($buffer)) {
-                        fwrite($handle, $this->create_insert_statement($table, $buffer));
+                        $this->write_insert_statement($handle, $table, $buffer);
                     }
                 } finally {
                     $result->free();
@@ -1438,7 +1505,7 @@ class BJLG_Backup {
         }
 
         foreach (array_chunk($rows, $batch_size) as $chunk) {
-            fwrite($handle, $this->create_insert_statement($table, $chunk));
+            $this->write_insert_statement($handle, $table, $chunk);
         }
     }
 
@@ -2351,8 +2418,7 @@ class BJLG_Backup {
                     );
                     
                     if ($rows) {
-                        $insert = $this->create_insert_statement($table, $rows);
-                        fwrite($handle, $insert);
+                        $this->write_insert_statement($handle, $table, $rows);
                     }
                 }
             }
