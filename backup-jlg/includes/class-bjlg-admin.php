@@ -840,6 +840,15 @@ class BJLG_Admin {
             <h2>Restaurer depuis un fichier</h2>
             <p>Si vous avez un fichier de sauvegarde sur votre ordinateur, vous pouvez le téléverser ici pour lancer une restauration.</p>
             <form id="bjlg-restore-form" method="post" enctype="multipart/form-data">
+                <div class="bjlg-restore-username-field bjlg-screen-reader-only">
+                    <label class="bjlg-screen-reader-only" for="bjlg-restore-username">Nom d'utilisateur</label>
+                    <input type="text"
+                           id="bjlg-restore-username"
+                           name="username"
+                           class="regular-text bjlg-screen-reader-only"
+                           autocomplete="username"
+                           aria-label="Nom d'utilisateur">
+                </div>
                 <table class="form-table">
                     <tbody>
                         <tr>
