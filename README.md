@@ -118,6 +118,12 @@ Vous pouvez toujours demander la génération immédiate d’un lien signé en a
 - Les environnements WordPress multisite ne sont pas officiellement supportés : réaliser des tests approfondis avant déploiement.
 - Les performances optimales supposent des limites PHP élevées (mémoire, temps d’exécution) ; sur des valeurs faibles les sauvegardes de sites volumineux peuvent échouer.
 
+## 🔮 Améliorations proposées
+- **Finaliser les alertes multi-canales** : brancher l’envoi effectif des emails et des webhooks Slack/Discord configurés dans les réglages de notification, en capitalisant sur les hooks déjà prévus (`bjlg_backup_complete`, `bjlg_backup_failed`).【F:backup-jlg/includes/class-bjlg-settings.php†L41-L55】【F:backup-jlg/includes/class-bjlg-webhooks.php†L24-L30】
+- **Automatiser la purge distante** : ajouter un worker (Cron ou queue) qui consomme l’action `bjlg_incremental_remote_purge` afin de vider réellement les archives obsolètes sur les destinations cloud suivies par le manifeste incrémental.【F:backup-jlg/includes/class-bjlg-incremental.php†L279-L324】
+- **Affiner la planification** : proposer des pas plus fins (5/15 minutes) ou un champ Cron avancé au-delà des valeurs `hourly` → `monthly` exposées dans les réglages, et étendre `add_custom_schedules()` pour les supporter nativement.【F:backup-jlg/includes/class-bjlg-settings.php†L18-L55】【F:backup-jlg/includes/class-bjlg-scheduler.php†L62-L78】
+- **Suivre le stockage distant** : compléter les métriques du tableau de bord (actuellement centrées sur le répertoire local) avec les quotas et consommations renvoyés par chaque destination distante afin d’anticiper les alertes de capacité.【F:backup-jlg/includes/class-bjlg-admin-advanced.php†L60-L185】
+
 ## 📄 Licence
 Backup JLG est distribué sous licence [GPL v2 ou ultérieure](https://www.gnu.org/licenses/gpl-2.0.html). Toute contribution doit respecter les termes de cette licence.
 
