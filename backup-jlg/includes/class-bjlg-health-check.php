@@ -32,6 +32,7 @@ class BJLG_Health_Check {
         // --- Nouvelles vérifications ---
         $checks['php_version'] = $this->check_php_version();
         $checks['wordpress_version'] = $this->check_wordpress_version();
+        $checks['auth_keys'] = $this->check_auth_constants();
         $checks['database_size'] = $this->check_database_size();
         $checks['zip_extension'] = $this->check_zip_extension();
         $checks['encryption_support'] = $this->check_encryption_support();
@@ -315,26 +316,62 @@ XML;
     private function check_wordpress_version() {
         global $wp_version;
         $minimum_version = '5.0';
-        
-        if (version_compare($wp_version, $minimum_version, '<')) {
+
+        $current_version = is_string($wp_version) && $wp_version !== '' ? $wp_version : null;
+
+        if (null === $current_version) {
+            $message = "Version WordPress indisponible dans cet environnement - impossible de vérifier les mises à jour.";
+
+            return [
+                'status'  => 'info',
+                'message' => function_exists('__') ? __($message, 'backup-jlg') : $message,
+            ];
+        }
+
+        if (version_compare($current_version, $minimum_version, '<')) {
             return [
                 'status' => 'error',
-                'message' => "WordPress $wp_version - Mise à jour requise ! Minimum : WordPress 5.0"
+                'message' => "WordPress $current_version - Mise à jour requise ! Minimum : WordPress 5.0"
             ];
         }
-        
+
         // Vérifier si c'est la dernière version
-        $update_data = wp_get_update_data();
-        if ($update_data['counts']['total'] > 0) {
-            return [
-                'status' => 'warning',
-                'message' => "WordPress $wp_version - Une mise à jour est disponible."
-            ];
+        if (function_exists('wp_get_update_data')) {
+            $update_data = wp_get_update_data();
+            if (!empty($update_data['counts']['total'])) {
+                return [
+                    'status' => 'warning',
+                    'message' => "WordPress $current_version - Une mise à jour est disponible."
+                ];
+            }
         }
-        
+
         return [
             'status' => 'success',
-            'message' => "WordPress $wp_version - À jour."
+            'message' => "WordPress $current_version - À jour."
+        ];
+    }
+
+    /**
+     * Vérifie la disponibilité des constantes d'authentification.
+     *
+     * @return array
+     */
+    private function check_auth_constants() {
+        if (!defined('AUTH_KEY') || '' === AUTH_KEY) {
+            $warning_message = 'AUTH_KEY est manquant ou vide - certaines fonctionnalités de sécurité seront désactivées.';
+
+            return [
+                'status'  => 'warning',
+                'message' => function_exists('__') ? __($warning_message, 'backup-jlg') : $warning_message,
+            ];
+        }
+
+        $success_message = 'Clés d’authentification WordPress configurées.';
+
+        return [
+            'status'  => 'success',
+            'message' => function_exists('__') ? __($success_message, 'backup-jlg') : $success_message,
         ];
     }
     
