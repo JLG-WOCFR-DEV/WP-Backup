@@ -948,6 +948,33 @@ class BJLG_Backup {
                 $task_data['secondary_destination_batches'] ?? []
             );
 
+            $destination_failure_notice = '';
+            if (!empty($destination_results['failures'])) {
+                $failure_messages = [];
+
+                foreach ($destination_results['failures'] as $destination_id => $error_message) {
+                    $label = BJLG_Settings::get_destination_label($destination_id);
+                    if ($label === '') {
+                        $label = is_scalar($destination_id) ? (string) $destination_id : 'destination inconnue';
+                    }
+
+                    $clean_message = is_string($error_message) && $error_message !== ''
+                        ? $error_message
+                        : 'Service non connecté.';
+
+                    $failure_messages[] = sprintf('%s : %s', $label, $clean_message);
+                }
+
+                if (!empty($failure_messages)) {
+                    $summary = 'Envoi vers services externes non réalisé - ' . implode(' | ', $failure_messages);
+                    $hint = 'Connectez les services nécessaires dans le menu Destinations.';
+                    $destination_failure_notice = $summary . '. ' . $hint;
+
+                    BJLG_Debug::warning($destination_failure_notice);
+                    $this->update_task_progress($task_id, 99, 'warning', $destination_failure_notice);
+                }
+            }
+
             // Calculer les statistiques
             $file_size = filesize($backup_filepath);
             $duration = time() - $task_data['start_time'];
@@ -1001,6 +1028,9 @@ class BJLG_Backup {
             }
             if (!empty($destination_results['failures'])) {
                 $success_message .= ' (Envois distants partiels)';
+            }
+            if ($destination_failure_notice !== '') {
+                $success_message .= ' ' . $destination_failure_notice;
             }
 
             $this->update_task_progress($task_id, 100, 'complete', $success_message);
@@ -2374,6 +2404,23 @@ class BJLG_Backup {
             $task_data['status'] = $status;
             $task_data['status_text'] = $status_text;
             self::save_task_state($task_id, $task_data);
+
+            $display_progress = is_numeric($progress) ? $progress . '%' : (string) $progress;
+            $clean_text = is_string($status_text) ? $status_text : '';
+            if (function_exists('wp_strip_all_tags')) {
+                $clean_text = wp_strip_all_tags($clean_text);
+            }
+            if ($clean_text === '') {
+                $clean_text = '(aucun message)';
+            }
+
+            BJLG_Debug::debug(sprintf(
+                'Tâche %s -> progression %s | statut %s | message : %s',
+                $task_id,
+                $display_progress,
+                $status,
+                $clean_text
+            ));
         }
     }
 
