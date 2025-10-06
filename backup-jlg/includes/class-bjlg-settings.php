@@ -1844,6 +1844,46 @@ class BJLG_Settings {
     }
 
     /**
+     * Retourne un libellé lisible pour une destination donnée.
+     */
+    public static function get_destination_label($destination_id) {
+        if (!is_scalar($destination_id)) {
+            return '';
+        }
+
+        $slug = sanitize_key((string) $destination_id);
+        if ($slug === '') {
+            return '';
+        }
+
+        $default_labels = [
+            'google_drive' => 'Google Drive',
+            'aws_s3' => 'Amazon S3',
+            'dropbox' => 'Dropbox',
+            'onedrive' => 'Microsoft OneDrive',
+            'pcloud' => 'pCloud',
+            'sftp' => 'Serveur SFTP',
+            'wasabi' => 'Wasabi',
+            'azure_blob' => 'Azure Blob Storage',
+            'backblaze_b2' => 'Backblaze B2',
+        ];
+
+        $label = isset($default_labels[$slug]) ? $default_labels[$slug] : '';
+
+        /** @var string|false $filtered */
+        $filtered = apply_filters('bjlg_destination_label', $label, $slug);
+        if (is_string($filtered) && $filtered !== '') {
+            return $filtered;
+        }
+
+        if ($label !== '') {
+            return $label;
+        }
+
+        return ucwords(str_replace(['_', '-'], ' ', $slug));
+    }
+
+    /**
      * Convertit une valeur en booléen normalisé.
      *
      * @param mixed $value
