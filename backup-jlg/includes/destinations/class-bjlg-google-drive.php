@@ -119,7 +119,11 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         echo "<h4><span class='dashicons dashicons-google' aria-hidden='true'></span> Google Drive</h4>";
 
         if (!$this->sdk_available) {
-            echo "<p class='description'>Le SDK Google n'est pas disponible. Installez les dépendances via Composer pour activer cette destination.</p></div>";
+            $message = esc_html__(
+                "Le SDK Google n'est pas disponible. Installez les dépendances via Composer pour activer cette destination.",
+                'backup-jlg'
+            );
+            echo "<p class='description'>{$message}</p></div>";
             return;
         }
 

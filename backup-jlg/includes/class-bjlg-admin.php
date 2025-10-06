@@ -12,12 +12,42 @@ class BJLG_Admin {
 
     private $destinations = [];
     private $advanced_admin;
+    private $google_drive_notice;
 
     public function __construct() {
         $this->load_destinations();
         $this->advanced_admin = class_exists(BJLG_Admin_Advanced::class) ? new BJLG_Admin_Advanced() : null;
         add_action('admin_menu', [$this, 'create_admin_page']);
         add_filter('bjlg_admin_tabs', [$this, 'get_default_tabs']);
+    }
+
+    /**
+     * Détermine si Google Drive est indisponible faute de SDK.
+     */
+    private function is_google_drive_unavailable() {
+        $google_drive_destination = isset($this->destinations['google_drive'])
+            ? $this->destinations['google_drive']
+            : null;
+
+        if (!is_object($google_drive_destination) || !method_exists($google_drive_destination, 'is_sdk_available')) {
+            return false;
+        }
+
+        return !$google_drive_destination->is_sdk_available();
+    }
+
+    /**
+     * Retourne le message à afficher quand le SDK Google Drive est manquant.
+     */
+    private function get_google_drive_unavailable_notice() {
+        if ($this->google_drive_notice === null) {
+            $this->google_drive_notice = esc_html__(
+                "Le SDK Google n'est pas disponible. Installez les dépendances via Composer pour activer cette destination.",
+                'backup-jlg'
+            );
+        }
+
+        return $this->google_drive_notice;
     }
 
     /**
@@ -341,10 +371,7 @@ class BJLG_Admin {
         $include_text = esc_textarea(implode("\n", array_map('strval', (array) $include_patterns)));
         $exclude_text = esc_textarea(implode("\n", array_map('strval', (array) $exclude_patterns)));
         $destination_choices = $this->get_destination_choices();
-        $google_drive_destination = isset($this->destinations['google_drive']) ? $this->destinations['google_drive'] : null;
-        $google_drive_unavailable = is_object($google_drive_destination)
-            && method_exists($google_drive_destination, 'is_sdk_available')
-            && !$google_drive_destination->is_sdk_available();
+        $google_drive_unavailable = $this->is_google_drive_unavailable();
         $presets = BJLG_Settings::get_backup_presets();
         $presets_json = !empty($presets) ? wp_json_encode(array_values($presets)) : '';
         ?>
@@ -500,7 +527,7 @@ class BJLG_Admin {
                                                         <?php echo esc_html($destination_label); ?>
                                                     </label>
                                                     <?php if ($is_unavailable): ?>
-                                                        <p class="description bjlg-destination-unavailable">Le SDK Google n'est pas disponible. Installez les dépendances via Composer pour activer cette destination.</p>
+                                                        <p class="description bjlg-destination-unavailable"><?php echo esc_html($this->get_google_drive_unavailable_notice()); ?></p>
                                                     <?php endif; ?>
                                                 </div>
                                             <?php endforeach; ?>
@@ -2068,10 +2095,7 @@ class BJLG_Admin {
             ? $schedule['secondary_destinations']
             : [];
 
-        $google_drive_destination = isset($this->destinations['google_drive']) ? $this->destinations['google_drive'] : null;
-        $google_drive_unavailable = is_object($google_drive_destination)
-            && method_exists($google_drive_destination, 'is_sdk_available')
-            && !$google_drive_destination->is_sdk_available();
+        $google_drive_unavailable = $this->is_google_drive_unavailable();
 
         $encrypt_enabled = !empty($schedule['encrypt']);
         $incremental_enabled = !empty($schedule['incremental']);
@@ -2324,7 +2348,7 @@ class BJLG_Admin {
                                             <?php echo esc_html($destination_label); ?>
                                         </label>
                                         <?php if ($is_unavailable): ?>
-                                            <p class="description bjlg-destination-unavailable">Le SDK Google n'est pas disponible. Installez les dépendances via Composer pour activer cette destination.</p>
+                                            <p class="description bjlg-destination-unavailable"><?php echo esc_html($this->get_google_drive_unavailable_notice()); ?></p>
                                         <?php endif; ?>
                                     </div>
                                 <?php endforeach; ?>
