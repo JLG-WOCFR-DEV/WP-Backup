@@ -4233,6 +4233,48 @@ jQuery(document).ready(function($) {
         });
     });
 
+    // --- AFFICHER / MASQUER LES SECRETS ---
+    $('body').on('click', '.bjlg-toggle-secret', function(e) {
+        e.preventDefault();
+
+        const $button = $(this);
+        const targetSelector = $button.data('target');
+        if (!targetSelector) {
+            return;
+        }
+
+        const $input = $(targetSelector);
+        if (!$input.length) {
+            return;
+        }
+
+        const currentType = ($input.attr('type') || '').toLowerCase();
+        const isHidden = currentType !== 'text';
+        $input.attr('type', isHidden ? 'text' : 'password');
+
+        const showLabel = $button.data('labelShow');
+        const hideLabel = $button.data('labelHide');
+        const nextLabel = isHidden ? hideLabel : showLabel;
+        if (typeof nextLabel === 'string' && nextLabel.length) {
+            $button.attr('aria-label', nextLabel);
+            const $srOnly = $button.find('.screen-reader-text');
+            if ($srOnly.length) {
+                $srOnly.text(nextLabel);
+            }
+        }
+
+        const $icon = $button.find('.dashicons');
+        if ($icon.length) {
+            if (isHidden) {
+                $icon.removeClass('dashicons-visibility').addClass('dashicons-hidden');
+            } else {
+                $icon.removeClass('dashicons-hidden').addClass('dashicons-visibility');
+            }
+        }
+
+        $button.attr('aria-pressed', isHidden ? 'true' : 'false');
+    });
+
     // --- COPIE RAPIDE POUR LES CHAMPS WEBHOOK ---
     $('body').on('click', '.bjlg-copy-field', function(e) {
         e.preventDefault();

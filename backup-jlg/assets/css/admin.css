@@ -858,6 +858,44 @@
     align-items: center;
 }
 
+.bjlg-secret-field {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.bjlg-secret-field .regular-text {
+    max-width: 100%;
+}
+
+.bjlg-toggle-secret {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    padding: 0 6px;
+}
+
+.bjlg-toggle-secret .dashicons {
+    margin: 0;
+}
+
+.bjlg-destination-option-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.bjlg-destination-option {
+    display: block;
+}
+
+.bjlg-destination-unavailable {
+    margin: 0;
+    color: #d63638;
+}
+
 .bjlg-form-field-unit {
     display: inline-flex;
     align-items: center;
@@ -1049,6 +1087,12 @@
     }
 
     .bjlg-field-control {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .bjlg-field-control fieldset {
         display: flex;
         flex-direction: column;
         gap: 12px;
