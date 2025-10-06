@@ -94,6 +94,10 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         return 'Google Drive';
     }
 
+    public function is_sdk_available() {
+        return (bool) $this->sdk_available;
+    }
+
     public function is_connected() {
         $token = $this->get_stored_token();
 
