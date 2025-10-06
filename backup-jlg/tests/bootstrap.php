@@ -110,6 +110,18 @@ if (!function_exists('esc_attr')) {
     }
 }
 
+if (!function_exists('disabled')) {
+    function disabled($disabled, $current = true, $echo = true) {
+        $result = $disabled == $current ? 'disabled="disabled"' : '';
+
+        if ($echo) {
+            echo $result;
+        }
+
+        return $result;
+    }
+}
+
 if (!function_exists('esc_url')) {
     function esc_url($url) {
         return htmlspecialchars((string) $url, ENT_QUOTES, 'UTF-8');

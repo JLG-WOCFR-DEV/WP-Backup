@@ -606,6 +606,7 @@ final class BJLG_BackupDatabaseTest extends TestCase
 
     /**
      * @runInSeparateProcess
+     * @preserveGlobalState disabled
      */
     public function test_backup_database_respects_incremental_table_changes(): void
     {
@@ -779,5 +780,41 @@ final class BJLG_BackupDatabaseTest extends TestCase
             BJLG_Incremental::$checkedTables = [];
             BJLG_Incremental::$latestInstance = null;
         }
+    }
+
+    public function test_write_insert_statement_streams_rows_into_resource(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'write_insert_statement');
+        $method->setAccessible(true);
+
+        $handle = fopen('php://temp', 'w+');
+        $this->assertIsResource($handle);
+
+        $rows = [
+            [
+                'id' => 1,
+                'name' => 'First',
+                'enabled' => true,
+            ],
+            [
+                'id' => 2,
+                'name' => 'Second',
+                'enabled' => false,
+            ],
+        ];
+
+        $method->invoke($backup, $handle, 'wp_stream_test', $rows);
+
+        rewind($handle);
+        $contents = stream_get_contents($handle);
+        fclose($handle);
+
+        $this->assertIsString($contents);
+        $this->assertStringContainsString('INSERT INTO `wp_stream_test` (`id`, `name`, `enabled`)', $contents);
+        $this->assertStringContainsString("(1, 'First', 1)", $contents);
+        $this->assertStringContainsString("(2, 'Second', 0)", $contents);
+        $this->assertStringContainsString(";\n\n", $contents);
     }
 }

@@ -139,6 +139,7 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
                 'Authorization' => 'Bearer ' . $settings['access_token'],
                 'Content-Type' => 'application/octet-stream',
                 'X-PCloud-Path' => $remote_path,
+                'X-PCloud-Overwrite' => '1',
             ],
             'body' => $contents,
             'timeout' => apply_filters('bjlg_pcloud_upload_timeout', 60, $remote_path),
