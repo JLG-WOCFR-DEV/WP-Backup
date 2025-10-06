@@ -12,12 +12,42 @@ class BJLG_Admin {
 
     private $destinations = [];
     private $advanced_admin;
+    private $google_drive_notice;
 
     public function __construct() {
         $this->load_destinations();
         $this->advanced_admin = class_exists(BJLG_Admin_Advanced::class) ? new BJLG_Admin_Advanced() : null;
         add_action('admin_menu', [$this, 'create_admin_page']);
         add_filter('bjlg_admin_tabs', [$this, 'get_default_tabs']);
+    }
+
+    /**
+     * Détermine si Google Drive est indisponible faute de SDK.
+     */
+    private function is_google_drive_unavailable() {
+        $google_drive_destination = isset($this->destinations['google_drive'])
+            ? $this->destinations['google_drive']
+            : null;
+
+        if (!is_object($google_drive_destination) || !method_exists($google_drive_destination, 'is_sdk_available')) {
+            return false;
+        }
+
+        return !$google_drive_destination->is_sdk_available();
+    }
+
+    /**
+     * Retourne le message à afficher quand le SDK Google Drive est manquant.
+     */
+    private function get_google_drive_unavailable_notice() {
+        if ($this->google_drive_notice === null) {
+            $this->google_drive_notice = esc_html__(
+                "Le SDK Google n'est pas disponible. Installez les dépendances via Composer pour activer cette destination.",
+                'backup-jlg'
+            );
+        }
+
+        return $this->google_drive_notice;
     }
 
     /**
@@ -341,6 +371,7 @@ class BJLG_Admin {
         $include_text = esc_textarea(implode("\n", array_map('strval', (array) $include_patterns)));
         $exclude_text = esc_textarea(implode("\n", array_map('strval', (array) $exclude_patterns)));
         $destination_choices = $this->get_destination_choices();
+        $google_drive_unavailable = $this->is_google_drive_unavailable();
         $presets = BJLG_Settings::get_backup_presets();
         $presets_json = !empty($presets) ? wp_json_encode(array_values($presets)) : '';
         ?>
@@ -482,15 +513,24 @@ class BJLG_Admin {
                                 <div class="bjlg-field-control">
                                     <fieldset>
                                         <?php if (!empty($destination_choices)): ?>
-                                            <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
-                                                <label style="display:block; margin-bottom:4px;">
-                                                    <input type="checkbox"
-                                                           name="secondary_destinations[]"
-                                                           value="<?php echo esc_attr($destination_id); ?>"
-                                                           <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>>
-                                                <?php echo esc_html($destination_label); ?>
-                                            </label>
-                                        <?php endforeach; ?>
+                                            <?php foreach ($destination_choices as $destination_id => $destination_label):
+                                                $is_google_drive = $destination_id === 'google_drive';
+                                                $is_unavailable = $is_google_drive && $google_drive_unavailable;
+                                                ?>
+                                                <div class="bjlg-destination-option-group">
+                                                    <label class="bjlg-destination-option">
+                                                        <input type="checkbox"
+                                                               name="secondary_destinations[]"
+                                                               value="<?php echo esc_attr($destination_id); ?>"
+                                                               <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>
+                                                               <?php disabled($is_unavailable); ?>>
+                                                        <?php echo esc_html($destination_label); ?>
+                                                    </label>
+                                                    <?php if ($is_unavailable): ?>
+                                                        <p class="description bjlg-destination-unavailable"><?php echo esc_html($this->get_google_drive_unavailable_notice()); ?></p>
+                                                    <?php endif; ?>
+                                                </div>
+                                            <?php endforeach; ?>
                                     <?php else: ?>
                                         <p class="description">Aucune destination distante n'est encore configurée.</p>
                                     <?php endif; ?>
@@ -1196,11 +1236,26 @@ class BJLG_Admin {
             </div>
             <div class="bjlg-webhook-url bjlg-mb-10">
                 <label for="bjlg-webhook-key" class="bjlg-label-block bjlg-fw-600">Clé secrète</label>
-                <div class="bjlg-form-field-group">
+                <div class="bjlg-form-field-group bjlg-secret-field">
                     <div class="bjlg-form-field-control">
-                        <input type="text" id="bjlg-webhook-key" readonly value="<?php echo esc_attr($webhook_key); ?>" class="regular-text code">
+                        <input type="password"
+                               id="bjlg-webhook-key"
+                               readonly
+                               value="<?php echo esc_attr($webhook_key); ?>"
+                               class="regular-text code"
+                               data-lpignore="true">
                     </div>
                     <div class="bjlg-form-field-actions">
+                        <button type="button"
+                                class="button bjlg-toggle-secret"
+                                data-target="#bjlg-webhook-key"
+                                data-label-show="Afficher la clé secrète"
+                                data-label-hide="Masquer la clé secrète"
+                                aria-label="Afficher la clé secrète"
+                                aria-pressed="false">
+                            <span class="dashicons dashicons-visibility" aria-hidden="true"></span>
+                            <span class="screen-reader-text">Afficher la clé secrète</span>
+                        </button>
                         <button class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-key">Copier la clé</button>
                         <button class="button" id="bjlg-regenerate-webhook">Régénérer</button>
                     </div>
@@ -2040,6 +2095,8 @@ class BJLG_Admin {
             ? $schedule['secondary_destinations']
             : [];
 
+        $google_drive_unavailable = $this->is_google_drive_unavailable();
+
         $encrypt_enabled = !empty($schedule['encrypt']);
         $incremental_enabled = !empty($schedule['incremental']);
 
@@ -2276,15 +2333,24 @@ class BJLG_Admin {
                         <th scope="row">Destinations secondaires</th>
                         <td>
                             <?php if (!empty($destination_choices)): ?>
-                                <?php foreach ($destination_choices as $destination_id => $destination_label): ?>
-                                    <label class="bjlg-label-block">
-                                        <input type="checkbox"
-                                               data-field="secondary_destinations"
-                                               name="schedules[<?php echo esc_attr($field_prefix); ?>][secondary_destinations][]"
-                                               value="<?php echo esc_attr($destination_id); ?>"
-                                               <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>>
-                                        <?php echo esc_html($destination_label); ?>
-                                    </label>
+                                <?php foreach ($destination_choices as $destination_id => $destination_label):
+                                    $is_google_drive = $destination_id === 'google_drive';
+                                    $is_unavailable = $is_google_drive && $google_drive_unavailable;
+                                    ?>
+                                    <div class="bjlg-destination-option-group">
+                                        <label class="bjlg-label-block bjlg-destination-option">
+                                            <input type="checkbox"
+                                                   data-field="secondary_destinations"
+                                                   name="schedules[<?php echo esc_attr($field_prefix); ?>][secondary_destinations][]"
+                                                   value="<?php echo esc_attr($destination_id); ?>"
+                                                   <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>
+                                                   <?php disabled($is_unavailable); ?>>
+                                            <?php echo esc_html($destination_label); ?>
+                                        </label>
+                                        <?php if ($is_unavailable): ?>
+                                            <p class="description bjlg-destination-unavailable"><?php echo esc_html($this->get_google_drive_unavailable_notice()); ?></p>
+                                        <?php endif; ?>
+                                    </div>
                                 <?php endforeach; ?>
                                 <p class="description">En cas d'échec de la première destination, les suivantes seront tentées.</p>
                             <?php else: ?>
