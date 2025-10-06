@@ -51,7 +51,7 @@
 .bjlg-dashboard-overview__header {
     display: flex;
     flex-wrap: wrap;
-    align-items: baseline;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 8px;
     margin-bottom: 16px;
@@ -61,11 +61,24 @@
     margin: 0;
     border: 0;
     padding: 0;
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 .bjlg-dashboard-overview__timestamp {
     font-size: 0.9em;
     color: #50575e;
+    flex: 0 1 auto;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+@media (max-width: 782px) {
+    .bjlg-dashboard-overview__timestamp {
+        margin-left: 0;
+        width: 100%;
+        white-space: normal;
+    }
 }
 
 .bjlg-alerts {
