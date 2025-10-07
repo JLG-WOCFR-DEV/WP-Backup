@@ -1,6 +1,9 @@
 <?php
 namespace BJLG;
 
+use WP_REST_Request;
+use WP_REST_Response;
+
 if (!defined('ABSPATH')) {
     exit;
 }
@@ -9,6 +12,8 @@ if (!defined('ABSPATH')) {
  * Gère la création et l'affichage de l'interface d'administration du plugin.
  */
 class BJLG_Admin {
+
+    private const DASHBOARD_RECENT_BACKUPS_LIMIT = 3;
 
     private $destinations = [];
     private $advanced_admin;
@@ -19,6 +24,8 @@ class BJLG_Admin {
         $this->advanced_admin = class_exists(BJLG_Admin_Advanced::class) ? new BJLG_Admin_Advanced() : null;
         add_action('admin_menu', [$this, 'create_admin_page']);
         add_filter('bjlg_admin_tabs', [$this, 'get_default_tabs']);
+        add_action('wp_dashboard_setup', [$this, 'register_dashboard_widget']);
+        add_action('admin_enqueue_scripts', [$this, 'enqueue_dashboard_widget_assets']);
     }
 
     /**
@@ -109,7 +116,7 @@ class BJLG_Admin {
     public function create_admin_page() {
         $wl_settings = get_option('bjlg_whitelabel_settings', []);
         $plugin_name = !empty($wl_settings['plugin_name']) ? $wl_settings['plugin_name'] : 'Backup - JLG';
-        
+
         add_menu_page(
             $plugin_name,
             $plugin_name,
@@ -118,6 +125,41 @@ class BJLG_Admin {
             [$this, 'render_admin_page'],
             'dashicons-database-export',
             81
+        );
+    }
+
+    /**
+     * Register the dashboard widget shown on the main WordPress dashboard.
+     */
+    public function register_dashboard_widget() {
+        if (!function_exists('bjlg_can_manage_plugin') || !bjlg_can_manage_plugin()) {
+            return;
+        }
+
+        wp_add_dashboard_widget(
+            'bjlg_dashboard_status',
+            __('Sauvegardes - aperçu', 'backup-jlg'),
+            [$this, 'render_dashboard_widget']
+        );
+    }
+
+    /**
+     * Enqueue assets required for the dashboard widget.
+     */
+    public function enqueue_dashboard_widget_assets($hook_suffix) {
+        if ($hook_suffix !== 'index.php') {
+            return;
+        }
+
+        if (!function_exists('bjlg_can_manage_plugin') || !bjlg_can_manage_plugin()) {
+            return;
+        }
+
+        wp_enqueue_style(
+            'bjlg-dashboard-widget',
+            BJLG_PLUGIN_URL . 'assets/css/dashboard-widget.css',
+            [],
+            BJLG_VERSION
         );
     }
     
@@ -403,6 +445,221 @@ class BJLG_Admin {
             </div>
         </section>
         <?php
+    }
+
+    /**
+     * Render the dashboard widget content displayed on the WordPress dashboard.
+     */
+    public function render_dashboard_widget() {
+        $snapshot = $this->get_dashboard_widget_snapshot();
+
+        if (empty($snapshot['ok'])) {
+            $message = !empty($snapshot['error']) ? $snapshot['error'] : __('Impossible de charger les informations de sauvegarde pour le moment.', 'backup-jlg');
+            echo '<p>' . esc_html($message) . '</p>';
+            return;
+        }
+
+        $summary = $snapshot['summary'];
+        $alerts = $snapshot['alerts'];
+        $backups = $snapshot['backups'];
+        $actions = $snapshot['actions'];
+        $generated_at = $snapshot['generated_at'];
+
+        ?>
+        <div class="bjlg-dashboard-widget" role="region" aria-live="polite" aria-atomic="true">
+            <header class="bjlg-dashboard-widget__header">
+                <h3 class="bjlg-dashboard-widget__title"><?php esc_html_e('Vue d’ensemble des sauvegardes', 'backup-jlg'); ?></h3>
+                <?php if (!empty($generated_at)): ?>
+                    <span class="bjlg-dashboard-widget__timestamp"><?php echo esc_html(sprintf(__('Actualisé le %s', 'backup-jlg'), $generated_at)); ?></span>
+                <?php endif; ?>
+            </header>
+
+            <div class="bjlg-dashboard-widget__summary" role="status" aria-live="polite" aria-atomic="true">
+                <div class="bjlg-dashboard-widget__stat">
+                    <span class="bjlg-dashboard-widget__stat-label"><?php esc_html_e('Dernière sauvegarde', 'backup-jlg'); ?></span>
+                    <span class="bjlg-dashboard-widget__stat-value"><?php echo esc_html($summary['history_last_backup'] ?? __('Aucune sauvegarde effectuée', 'backup-jlg')); ?></span>
+                    <?php if (!empty($summary['history_last_backup_relative'])): ?>
+                        <span class="bjlg-dashboard-widget__stat-meta"><?php echo esc_html($summary['history_last_backup_relative']); ?></span>
+                    <?php endif; ?>
+                </div>
+                <div class="bjlg-dashboard-widget__stat">
+                    <span class="bjlg-dashboard-widget__stat-label"><?php esc_html_e('Prochaine sauvegarde planifiée', 'backup-jlg'); ?></span>
+                    <span class="bjlg-dashboard-widget__stat-value"><?php echo esc_html($summary['scheduler_next_run'] ?? __('Non planifié', 'backup-jlg')); ?></span>
+                    <?php if (!empty($summary['scheduler_next_run_relative'])): ?>
+                        <span class="bjlg-dashboard-widget__stat-meta"><?php echo esc_html($summary['scheduler_next_run_relative']); ?></span>
+                    <?php endif; ?>
+                </div>
+                <div class="bjlg-dashboard-widget__stat">
+                    <span class="bjlg-dashboard-widget__stat-label"><?php esc_html_e('Archives stockées', 'backup-jlg'); ?></span>
+                    <span class="bjlg-dashboard-widget__stat-value"><?php echo esc_html(number_format_i18n($summary['storage_backup_count'] ?? 0)); ?></span>
+                    <?php if (!empty($summary['storage_total_size_human'])): ?>
+                        <span class="bjlg-dashboard-widget__stat-meta"><?php echo esc_html($summary['storage_total_size_human']); ?></span>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <?php if (!empty($actions['backup']['url'])): ?>
+                <div class="bjlg-dashboard-widget__actions">
+                    <a class="bjlg-dashboard-widget__button" href="<?php echo esc_url($actions['backup']['url']); ?>">
+                        <?php echo esc_html($actions['backup']['label']); ?>
+                    </a>
+                    <?php if (!empty($actions['restore']['url'])): ?>
+                        <a class="bjlg-dashboard-widget__button bjlg-dashboard-widget__button--secondary" href="<?php echo esc_url($actions['restore']['url']); ?>">
+                            <?php echo esc_html($actions['restore']['label']); ?>
+                        </a>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
+
+            <?php if (!empty($alerts)): ?>
+                <div class="bjlg-dashboard-widget__alerts">
+                    <?php foreach (array_slice($alerts, 0, 3) as $alert): ?>
+                        <?php
+                        $type = isset($alert['type']) && in_array($alert['type'], ['info', 'success', 'warning', 'error'], true)
+                            ? $alert['type']
+                            : 'info';
+                        ?>
+                        <div class="bjlg-dashboard-widget__alert bjlg-dashboard-widget__alert--<?php echo esc_attr($type); ?>">
+                            <div class="bjlg-dashboard-widget__alert-body">
+                                <?php if (!empty($alert['title'])): ?>
+                                    <strong><?php echo esc_html($alert['title']); ?></strong>
+                                <?php endif; ?>
+                                <?php if (!empty($alert['message'])): ?>
+                                    <p><?php echo esc_html($alert['message']); ?></p>
+                                <?php endif; ?>
+                            </div>
+                            <?php if (!empty($alert['action']['label']) && !empty($alert['action']['url'])): ?>
+                                <a class="bjlg-dashboard-widget__alert-link" href="<?php echo esc_url($alert['action']['url']); ?>">
+                                    <?php echo esc_html($alert['action']['label']); ?>
+                                </a>
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+            <div class="bjlg-dashboard-widget__recent">
+                <h4 class="bjlg-dashboard-widget__section-title"><?php esc_html_e('Dernières archives', 'backup-jlg'); ?></h4>
+                <?php if (!empty($backups)): ?>
+                    <ul class="bjlg-dashboard-widget__backup-list">
+                        <?php foreach ($backups as $backup): ?>
+                            <li class="bjlg-dashboard-widget__backup-item">
+                                <span class="bjlg-dashboard-widget__backup-name"><?php echo esc_html($backup['filename']); ?></span>
+                                <span class="bjlg-dashboard-widget__backup-meta">
+                                    <?php echo esc_html($backup['created_at_relative']); ?>
+                                    <?php if (!empty($backup['size'])): ?>
+                                        · <?php echo esc_html($backup['size']); ?>
+                                    <?php endif; ?>
+                                </span>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php else: ?>
+                    <p class="bjlg-dashboard-widget__empty"><?php esc_html_e('Aucune sauvegarde récente disponible.', 'backup-jlg'); ?></p>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * Build the data displayed inside the dashboard widget.
+     */
+    private function get_dashboard_widget_snapshot(): array {
+        if (!function_exists('bjlg_can_manage_plugin') || !bjlg_can_manage_plugin()) {
+            return [
+                'ok' => false,
+                'error' => __('Vous n’avez pas l’autorisation de consulter ces informations.', 'backup-jlg'),
+            ];
+        }
+
+        if (!$this->advanced_admin) {
+            return [
+                'ok' => false,
+                'error' => __('Les métriques du tableau de bord ne sont pas disponibles.', 'backup-jlg'),
+            ];
+        }
+
+        $metrics = $this->advanced_admin->get_dashboard_metrics();
+        $summary = $metrics['summary'] ?? [];
+        $alerts = $metrics['alerts'] ?? [];
+        $generated_at = $metrics['generated_at'] ?? '';
+
+        return [
+            'ok' => true,
+            'summary' => $summary,
+            'alerts' => $alerts,
+            'generated_at' => $generated_at,
+            'backups' => $this->get_recent_backups(self::DASHBOARD_RECENT_BACKUPS_LIMIT),
+            'actions' => $this->get_dashboard_widget_actions(),
+        ];
+    }
+
+    /**
+     * Provide action links used in the dashboard widget.
+     */
+    private function get_dashboard_widget_actions(): array {
+        $backup_tab_url = add_query_arg(
+            [
+                'page' => 'backup-jlg',
+                'tab' => 'backup_restore',
+            ],
+            admin_url('admin.php')
+        );
+
+        return [
+            'backup' => [
+                'label' => __('Lancer une sauvegarde', 'backup-jlg'),
+                'url' => $backup_tab_url . '#bjlg-backup-creation-form',
+            ],
+            'restore' => [
+                'label' => __('Restaurer une archive', 'backup-jlg'),
+                'url' => $backup_tab_url . '#bjlg-restore-form',
+            ],
+        ];
+    }
+
+    /**
+     * Retrieve the most recent backups to display in the dashboard widget.
+     */
+    private function get_recent_backups(int $limit): array {
+        if (!function_exists('rest_do_request')) {
+            return [];
+        }
+
+        $limit = max(1, $limit);
+        $request = new WP_REST_Request('GET', '/backup-jlg/v1/backups');
+        $request->set_param('per_page', $limit);
+
+        $response = rest_do_request($request);
+
+        if (!($response instanceof WP_REST_Response)) {
+            return [];
+        }
+
+        $data = $response->get_data();
+
+        if (!is_array($data) || empty($data['backups']) || !is_array($data['backups'])) {
+            return [];
+        }
+
+        $now = current_time('timestamp');
+        $prepared = [];
+
+        foreach ($data['backups'] as $backup) {
+            if (!is_array($backup)) {
+                continue;
+            }
+
+            $created_at = isset($backup['created_at']) ? strtotime((string) $backup['created_at']) : false;
+            $prepared[] = [
+                'filename' => $backup['filename'] ?? '',
+                'size' => $backup['size_formatted'] ?? '',
+                'created_at_relative' => $created_at ? sprintf(__('il y a %s', 'backup-jlg'), human_time_diff($created_at, $now)) : '',
+            ];
+        }
+
+        return $prepared;
     }
 
     /**
