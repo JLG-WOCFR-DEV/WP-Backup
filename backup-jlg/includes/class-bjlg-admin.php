@@ -2216,6 +2216,8 @@ class BJLG_Admin {
                         <td>
                             <select data-field="recurrence" name="schedules[<?php echo esc_attr($field_prefix); ?>][recurrence]">
                                 <option value="disabled" <?php selected($recurrence, 'disabled'); ?>>Désactivée</option>
+                                <option value="every_five_minutes" <?php selected($recurrence, 'every_five_minutes'); ?>>Toutes les 5 minutes</option>
+                                <option value="every_fifteen_minutes" <?php selected($recurrence, 'every_fifteen_minutes'); ?>>Toutes les 15 minutes</option>
                                 <option value="hourly" <?php selected($recurrence, 'hourly'); ?>>Toutes les heures</option>
                                 <option value="twice_daily" <?php selected($recurrence, 'twice_daily'); ?>>Deux fois par jour</option>
                                 <option value="daily" <?php selected($recurrence, 'daily'); ?>>Journalière</option>

@@ -477,6 +477,8 @@ jQuery(document).ready(function($) {
 
         const recurrenceLabels = {
             disabled: 'Désactivée',
+            every_five_minutes: 'Toutes les 5 minutes',
+            every_fifteen_minutes: 'Toutes les 15 minutes',
             hourly: 'Toutes les heures',
             twice_daily: 'Deux fois par jour',
             daily: 'Journalière',
@@ -669,6 +671,10 @@ jQuery(document).ready(function($) {
 
         function getIntervalMs(recurrence) {
             switch ((recurrence || '').toString()) {
+                case 'every_five_minutes':
+                    return 5 * 60 * 1000;
+                case 'every_fifteen_minutes':
+                    return 15 * 60 * 1000;
                 case 'hourly':
                     return 60 * 60 * 1000;
                 case 'twice_daily':
@@ -740,6 +746,16 @@ jQuery(document).ready(function($) {
             const reference = Number.isFinite(referenceSeconds) ? referenceSeconds : Math.floor(Date.now() / 1000);
             const referenceDate = new Date(reference * 1000);
             const timeParts = parseTimeParts(schedule);
+
+            if (recurrence === 'every_five_minutes' || recurrence === 'every_fifteen_minutes') {
+                const intervalMinutes = recurrence === 'every_five_minutes' ? 5 : 15;
+                const occurrence = new Date(referenceDate.getTime());
+                occurrence.setHours(timeParts.hour, timeParts.minute, 0, 0);
+                while (occurrence.getTime() / 1000 <= reference) {
+                    occurrence.setMinutes(occurrence.getMinutes() + intervalMinutes);
+                }
+                return Math.floor(occurrence.getTime() / 1000);
+            }
 
             if (recurrence === 'hourly') {
                 const occurrence = new Date(referenceDate.getTime());

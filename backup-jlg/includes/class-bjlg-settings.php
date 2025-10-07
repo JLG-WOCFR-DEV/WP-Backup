@@ -15,7 +15,16 @@ class BJLG_Settings {
     /** @var self|null */
     private static $instance = null;
 
-    private const VALID_SCHEDULE_RECURRENCES = ['disabled', 'hourly', 'twice_daily', 'daily', 'weekly', 'monthly'];
+    private const VALID_SCHEDULE_RECURRENCES = [
+        'disabled',
+        'every_five_minutes',
+        'every_fifteen_minutes',
+        'hourly',
+        'twice_daily',
+        'daily',
+        'weekly',
+        'monthly'
+    ];
     private const VALID_SCHEDULE_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
     private $default_settings = [

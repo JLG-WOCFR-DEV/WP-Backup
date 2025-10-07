@@ -60,6 +60,16 @@ class BJLG_Scheduler {
      * Ajoute des intervalles de planification personnalisés
      */
     public function add_custom_schedules($schedules) {
+        $schedules['every_five_minutes'] = [
+            'interval' => 5 * MINUTE_IN_SECONDS,
+            'display' => __('Toutes les 5 minutes', 'backup-jlg')
+        ];
+
+        $schedules['every_fifteen_minutes'] = [
+            'interval' => 15 * MINUTE_IN_SECONDS,
+            'display' => __('Toutes les 15 minutes', 'backup-jlg')
+        ];
+
         $schedules['weekly'] = [
             'interval' => WEEK_IN_SECONDS,
             'display' => __('Une fois par semaine', 'backup-jlg')
@@ -231,6 +241,22 @@ class BJLG_Scheduler {
         $recurrence = $schedule['recurrence'] ?? 'disabled';
 
         switch ($recurrence) {
+            case 'every_five_minutes':
+            case 'every_fifteen_minutes':
+                $interval_minutes = $recurrence === 'every_five_minutes' ? 5 : 15;
+                $interval_seconds = $interval_minutes * MINUTE_IN_SECONDS;
+                $base_time = $now->setTime($hour, $minute, 0);
+                $base_timestamp = $base_time->getTimestamp();
+                $current_timestamp = $now->getTimestamp();
+
+                if ($current_timestamp >= $base_timestamp) {
+                    $steps = (int) floor(($current_timestamp - $base_timestamp) / $interval_seconds) + 1;
+                    $base_timestamp += $steps * $interval_seconds;
+                }
+
+                $next_run_time = (new \DateTimeImmutable('@' . $base_timestamp))->setTimezone($timezone);
+                break;
+
             case 'hourly':
                 // Prochaine heure pile dans le fuseau WordPress
                 $next_run_time = $now->setTime((int) $now->format('H'), 0, 0)->modify('+1 hour');

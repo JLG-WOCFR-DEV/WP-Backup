@@ -248,6 +248,64 @@ final class BJLG_SchedulerTest extends TestCase
         $this->assertGreaterThan(0, $event['timestamp']);
     }
 
+    public function test_handle_save_schedule_accepts_fifteen_minute_recurrence(): void
+    {
+        $_POST = [
+            'nonce' => 'test-nonce',
+            'schedules' => [
+                [
+                    'id' => '',
+                    'label' => 'Sauvegarde rapide',
+                    'recurrence' => 'every_fifteen_minutes',
+                    'day' => 'monday',
+                    'day_of_month' => '10',
+                    'time' => '00:05',
+                    'components' => ['db'],
+                    'encrypt' => 'false',
+                    'incremental' => 'false',
+                    'include_patterns' => '',
+                    'exclude_patterns' => '',
+                    'post_checks' => [],
+                    'secondary_destinations' => [],
+                ],
+            ],
+        ];
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+        $capturedSchedule = null;
+
+        try {
+            $scheduler->handle_save_schedule();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertArrayHasKey('schedules', $response->data);
+            $this->assertCount(1, $response->data['schedules']);
+
+            $capturedSchedule = $response->data['schedules'][0];
+            $this->assertSame('every_fifteen_minutes', $capturedSchedule['recurrence']);
+            $this->assertSame('Sauvegarde rapide', $capturedSchedule['label']);
+
+            $this->assertArrayHasKey('next_runs', $response->data);
+            $this->assertArrayHasKey($capturedSchedule['id'], $response->data['next_runs']);
+            $this->assertNotEmpty($response->data['next_runs'][$capturedSchedule['id']]['next_run']);
+        }
+
+        $this->assertIsArray($capturedSchedule);
+
+        $events = $GLOBALS['bjlg_test_scheduled_events']['recurring'][BJLG\BJLG_Scheduler::SCHEDULE_HOOK] ?? [];
+        $this->assertNotEmpty($events, 'Expected at least one cron event to be scheduled.');
+
+        $matching = array_values(array_filter(
+            $events,
+            static function (array $event) use ($capturedSchedule): bool {
+                return in_array($capturedSchedule['id'], $event['args'], true);
+            }
+        ));
+
+        $this->assertNotEmpty($matching, 'Expected cron event arguments to include the schedule identifier.');
+        $this->assertSame('every_fifteen_minutes', $matching[0]['recurrence']);
+    }
+
     public function test_calculate_first_run_respects_day_of_month(): void
     {
         $scheduler = BJLG\BJLG_Scheduler::instance();
