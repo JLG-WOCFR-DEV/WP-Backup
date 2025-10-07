@@ -195,6 +195,7 @@ final class BJLG_Plugin {
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
             'class-bjlg-notification-transport.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-purge-worker.php',
+            'class-bjlg-update-guard.php',
             'class-bjlg-performance.php', 'class-bjlg-rate-limiter.php', 'class-bjlg-rest-api.php',
             'class-bjlg-api-keys.php', 'class-bjlg-admin-advanced.php', 'class-bjlg-admin.php', 'class-bjlg-actions.php',
             'destinations/interface-bjlg-destination.php', 'destinations/abstract-class-bjlg-s3-compatible.php',
@@ -232,6 +233,7 @@ final class BJLG_Plugin {
         new BJLG\BJLG_Settings();
         new BJLG\BJLG_API_Keys();
         new BJLG\BJLG_Remote_Purge_Worker();
+        new BJLG\BJLG_Update_Guard();
     }
 
     public function enqueue_admin_assets($hook) {

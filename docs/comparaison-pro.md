@@ -10,12 +10,12 @@ Ce document positionne Backup JLG face aux offres haut de gamme (UpdraftPlus Pr
 - **Sécurité d’accès** : rate limiting, gestion de clés API et webhooks signés se rapprochent des contrôles d’accès « agency-grade » de ManageWP ou BlogVault.【F:backup-jlg/includes/class-bjlg-rate-limiter.php†L18-L62】【F:backup-jlg/includes/class-bjlg-api-keys.php†L13-L172】【F:backup-jlg/includes/class-bjlg-webhooks.php†L18-L328】
 - **Restauration production/sandbox orchestrée** : la possibilité de préparer, nettoyer et promouvoir des sandboxes permet de tester les archives avant promotion, une approche voisine des workflows de restauration sécurisés proposés par BlogVault Staging.【F:backup-jlg/includes/class-bjlg-restore.php†L44-L207】【F:backup-jlg/includes/class-bjlg-restore.php†L503-L616】
 - **Distribution sécurisée des exports** : tokens de téléchargement temporaires, contrôles d’accès et journalisation détaillée renforcent la conformité et la traçabilité attendues sur les offres managées.【F:backup-jlg/includes/class-bjlg-actions.php†L16-L200】【F:backup-jlg/includes/class-bjlg-history.php†L8-L158】
+- **Snapshots pré-mise à jour** : un gardien dédié déclenche automatiquement une sauvegarde complète avant chaque update de plugin ou de thème via `upgrader_pre_install`, limitant les régressions comme le proposent Jetpack Backup ou BlogVault.【F:backup-jlg/includes/class-bjlg-update-guard.php†L10-L166】
 
 ## Écarts observés face aux offres pro
 
 - **Notifications multi-canales incomplètes** : l’interface propose email/Slack/Discord mais seul le webhook interne est implémenté, là où les solutions commerciales poussent des alertes temps réel sur plusieurs canaux.【F:backup-jlg/includes/class-bjlg-settings.php†L41-L54】【F:backup-jlg/includes/class-bjlg-webhooks.php†L24-L29】
 - **Nettoyage distant** : la rotation incrémentale enregistre les suppressions à propager mais aucun worker natif ne consomme la file d’attente, à la différence des solutions SaaS qui purgent automatiquement les copies distantes.【F:backup-jlg/includes/class-bjlg-incremental.php†L279-L347】
-- **Pilotage avant mise à jour** : il n’existe pas encore de déclencheur automatique avant une mise à jour de plugin/thème, une fonctionnalité courante des offres professionnelles pour éviter les régressions.
 - **Couverture multisite et gestion centralisée** : le plugin reste officiellement mono-site tandis que les suites pro gèrent la supervision multi-projets depuis une même console (ManageWP, BlogVault Agency).【F:README.md†L111-L116】
 - **Stockage isolé managé** : Backup JLG délègue la résilience au stockage choisi par l’utilisateur ; les solutions SaaS haut de gamme répliquent automatiquement les archives sur une infrastructure managée avec redondance géographique, fonctionnalité encore absente nativement.
 
@@ -36,7 +36,7 @@ Ce document positionne Backup JLG face aux offres haut de gamme (UpdraftPlus Pr
 
 1. **Implémenter l’envoi réel des notifications** (emails, Slack/Discord) en s’appuyant sur les réglages existants et sur les hooks `bjlg_backup_complete`/`bjlg_backup_failed`, afin d’égaler les alertes omnicanales des solutions gérées.【F:backup-jlg/includes/class-bjlg-settings.php†L41-L54】【F:backup-jlg/includes/class-bjlg-webhooks.php†L24-L29】
 2. **Créer un orchestrateur de purge distante** qui consomme l’action `bjlg_incremental_remote_purge` et déclenche les API des stockages concernés, assurant une rotation complète sans intervention manuelle.【F:backup-jlg/includes/class-bjlg-incremental.php†L279-L347】
-3. **Ajouter un déclencheur de sauvegarde pré-mise à jour** (hook `upgrader_pre_install` ou équivalent) pour automatiser les snapshots avant chaque update, comme le proposent UpdraftPlus Premium ou Jetpack Backup.
+3. **Rendre le snapshot pré-update configurable côté interface** (activation, composants dédiés, rappel) pour s’aligner totalement sur les offres qui laissent aux administrateurs la main sur ce déclencheur automatique.【F:backup-jlg/includes/class-bjlg-update-guard.php†L27-L166】
 4. **Étendre la prise en charge multisite** : support natif de WordPress multisite et mutualisation des historiques/API pour piloter plusieurs environnements depuis une seule instance, indispensable pour rivaliser avec les consoles agence.【F:README.md†L111-L116】【F:backup-jlg/includes/class-bjlg-rest-api.php†L54-L319】
 5. **Renforcer la supervision proactive** : compléter le bilan de santé et l’audit SQL existants par des métriques d’usage (quota distant, temps moyen de restauration) exposées via API/webhooks afin de fournir les garanties de service attendues sur les offres premium.【F:backup-jlg/includes/class-bjlg-health-check.php†L17-L152】【F:backup-jlg/includes/class-bjlg-history.php†L8-L158】
 
@@ -53,7 +53,7 @@ Ce document positionne Backup JLG face aux offres haut de gamme (UpdraftPlus Pr
 
 - **Parcours admin modulaires** : éclater la mono-page actuelle en sous-pages dédiées (monitoring, restauration, automatisation) et migrer progressivement vers `@wordpress/components` pour gagner en accessibilité native et en cohérence mobile.【F:backup-jlg/includes/class-bjlg-admin.php†L121-L170】【F:backup-jlg/assets/css/admin.css†L741-L980】
 - **Onboarding piloté** : transformer la liste statique actuelle en checklist interactive avec suivi d’étapes, rappelant les assistants guidés des suites pro.【F:backup-jlg/assets/js/admin.js†L90-L199】
-- **Pré-sauvegarde avant mises à jour** : brancher un déclencheur automatique sur `upgrader_pre_install`/`automatic_updates_complete` pour créer un snapshot avant toute mise à jour de plugin ou de thème, fonctionnalité différenciante dans les offres managées.【F:backup-jlg/includes/class-bjlg-admin.php†L121-L170】
+- **Snapshot pré-update opérationnel** : le gardien dédié déclenche désormais la sauvegarde juste avant chaque mise à jour grâce au hook `upgrader_pre_install`, reproduisant les garde-fous observés sur les suites pro.【F:backup-jlg/includes/class-bjlg-update-guard.php†L27-L166】
 
 ### Paris long terme (>6 mois)
 
@@ -68,7 +68,7 @@ Ce document positionne Backup JLG face aux offres haut de gamme (UpdraftPlus Pr
 - **Cadence de sauvegarde étendue mais perfectible** : le planificateur propose désormais des fréquences de 5 à 15 minutes en plus des intervalles horaires à mensuels, mais un champ Cron personnalisé permettrait d’adresser les scénarios d’orchestration avancés.【F:backup-jlg/includes/class-bjlg-settings.php†L18-L72】【F:backup-jlg/includes/class-bjlg-scheduler.php†L47-L119】
 - **Canaux d’alerte à finaliser** : seuls les formulaires d’email, Slack et Discord existent côté réglages, sans SMS, Teams ou webhook sortant réellement câblés. Étendre les destinations et brancher l’envoi réel rapprocherait l’expérience des offres omnicanales.【F:backup-jlg/includes/class-bjlg-settings.php†L41-L55】【F:backup-jlg/includes/class-bjlg-webhooks.php†L24-L29】
 - **Connecteurs cloud élargis** : Azure Blob et Backblaze B2 rejoignent Drive, S3, Wasabi, Dropbox, OneDrive, pCloud et SFTP dans les onglets d’administration, confirmant l’alignement du catalogue avec les offres pro.【F:backup-jlg/includes/class-bjlg-admin.php†L62-L78】【F:backup-jlg/includes/class-bjlg-admin.php†L373-L540】【F:backup-jlg/includes/destinations/class-bjlg-azure-blob.php†L71-L118】【F:backup-jlg/includes/destinations/class-bjlg-backblaze-b2.php†L76-L154】
-- **Absence d’automatisation pré-update** : la page d’administration ne déclare aucun hook dédié aux mises à jour de plugins/thèmes, ce qui empêche de proposer une option « sauvegarde avant update » pourtant standard en pro.【F:backup-jlg/includes/class-bjlg-admin.php†L146-L170】
+- **Gardien pré-update intégré** : la logique embarquée dans `BJLG_Update_Guard` déclenche automatiquement la sauvegarde avant chaque mise à jour, sans intervention manuelle, comblant l’un des manques pointés lors du benchmark pro.【F:backup-jlg/includes/class-bjlg-update-guard.php†L27-L166】
 
 ### Expérience UX/UI dans l’admin
 
