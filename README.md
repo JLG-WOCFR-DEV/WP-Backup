@@ -32,7 +32,7 @@ Backup JLG est un plugin WordPress complet de sauvegarde et restauration qui com
 ### API & intégrations
 - API REST riche couvrant la gestion complète des sauvegardes, restaurations, historiques, statistiques, paramètres et planifications, avec pagination/validation détaillées.【F:backup-jlg/includes/class-bjlg-rest-api.php†L54-L319】
 - Téléchargements REST protégés par jetons temporaires et routage dédié pour la restauration distante.【F:backup-jlg/includes/class-bjlg-rest-api.php†L178-L219】【F:backup-jlg/includes/class-bjlg-actions.php†L66-L200】
-- Destinations distantes prêtes à l’emploi : Google Drive, Amazon S3, Wasabi, Dropbox, OneDrive, pCloud et SFTP, sélectionnables dans l’interface et depuis l’automatisation.【F:backup-jlg/includes/class-bjlg-admin.php†L480-L499】【F:backup-jlg/includes/class-bjlg-backup.php†L2175-L2214】
+- Destinations distantes prêtes à l’emploi : Google Drive, Amazon S3, Wasabi, Dropbox, OneDrive, pCloud, Azure Blob, Backblaze B2 et SFTP, sélectionnables dans l’interface et depuis l’automatisation.【F:backup-jlg/includes/class-bjlg-admin.php†L62-L78】【F:backup-jlg/includes/class-bjlg-backup.php†L2175-L2214】
 - Tableau de bord récapitulatif (cartes, tendances, alertes) alimenté par les services avancés du plugin, exportable vers un bloc Gutenberg public si nécessaire.【F:backup-jlg/includes/class-bjlg-admin.php†L146-L309】【F:backup-jlg/includes/class-bjlg-blocks.php†L67-L200】
 
 ## ⚙️ Dépendances et prérequis
@@ -113,7 +113,6 @@ Vous pouvez toujours demander la génération immédiate d’un lien signé en a
 
 ## ⚠️ Limitations connues
 - Le multi-threading et les benchmarks automatiques nécessitent des fonctions systèmes (`shell_exec`, `proc_open`) souvent désactivées sur les hébergements mutualisés ; le plugin bascule alors en traitement séquentiel.【F:backup-jlg/includes/class-bjlg-performance.php†L57-L109】
-- Les destinations distantes supplémentaires prévues (Azure Blob, Backblaze B2) disposent déjà de paramètres, mais ne sont pas encore exposées dans l’interface ni instanciées par défaut.【F:backup-jlg/includes/class-bjlg-settings.php†L107-L124】【F:backup-jlg/includes/class-bjlg-backup.php†L2175-L2214】
 - Les notifications externes configurables dans les réglages sont limitées aux webhooks tant que l’envoi email/webhook tiers n’est pas implémenté dans le noyau du plugin.【F:backup-jlg/includes/class-bjlg-settings.php†L41-L54】【F:backup-jlg/includes/class-bjlg-webhooks.php†L24-L29】
 - Les environnements WordPress multisite ne sont pas officiellement supportés : réaliser des tests approfondis avant déploiement.
 - Les performances optimales supposent des limites PHP élevées (mémoire, temps d’exécution) ; sur des valeurs faibles les sauvegardes de sites volumineux peuvent échouer.

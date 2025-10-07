@@ -36,5 +36,9 @@ final class BJLG_AdminDestinationsUITest extends TestCase
         $this->assertStringContainsString("name='s3_access_key'", $html);
         $this->assertStringContainsString('bjlg-s3-test-connection', $html);
         $this->assertStringContainsString("name='s3_kms_key_id'", $html);
+        $this->assertStringContainsString('Azure Blob Storage', $html);
+        $this->assertStringContainsString("name='azure_account_name'", $html);
+        $this->assertStringContainsString('Backblaze B2', $html);
+        $this->assertStringContainsString("name='b2_key_id'", $html);
     }
 }

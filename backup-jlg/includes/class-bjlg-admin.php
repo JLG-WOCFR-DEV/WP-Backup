@@ -66,6 +66,12 @@ class BJLG_Admin {
         if (class_exists(BJLG_Dropbox::class)) {
             $this->destinations['dropbox'] = new BJLG_Dropbox();
         }
+        if (class_exists(BJLG_Azure_Blob::class)) {
+            $this->destinations['azure_blob'] = new BJLG_Azure_Blob();
+        }
+        if (class_exists(BJLG_Backblaze_B2::class)) {
+            $this->destinations['backblaze_b2'] = new BJLG_Backblaze_B2();
+        }
         if (class_exists(BJLG_OneDrive::class)) {
             $this->destinations['onedrive'] = new BJLG_OneDrive();
         }
@@ -1902,6 +1908,8 @@ class BJLG_Admin {
                 'google_drive' => 'Google Drive',
                 'aws_s3' => 'Amazon S3',
                 'dropbox' => 'Dropbox',
+                'azure_blob' => 'Azure Blob Storage',
+                'backblaze_b2' => 'Backblaze B2',
                 'onedrive' => 'Microsoft OneDrive',
                 'pcloud' => 'pCloud',
                 'sftp' => 'Serveur SFTP',
