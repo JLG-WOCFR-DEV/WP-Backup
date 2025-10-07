@@ -183,14 +183,25 @@ class BJLG_Scheduler {
                 continue;
             }
 
-            $first_timestamp = $this->calculate_first_run($schedule);
+            if (($schedule['recurrence'] ?? '') === 'custom') {
+                $first_timestamp = $this->calculate_first_run($schedule);
 
-            if (!$first_timestamp) {
-                BJLG_Debug::log('ERREUR : Impossible de calculer le prochain déclenchement pour la planification ' . $schedule['id'] . '.');
-                continue;
+                if (!$first_timestamp) {
+                    BJLG_Debug::log('ERREUR : Impossible de calculer le prochain déclenchement pour la planification ' . $schedule['id'] . '.');
+                    continue;
+                }
+
+                $result = wp_schedule_single_event($first_timestamp, self::SCHEDULE_HOOK, [$schedule['id']]);
+            } else {
+                $first_timestamp = $this->calculate_first_run($schedule);
+
+                if (!$first_timestamp) {
+                    BJLG_Debug::log('ERREUR : Impossible de calculer le prochain déclenchement pour la planification ' . $schedule['id'] . '.');
+                    continue;
+                }
+
+                $result = wp_schedule_event($first_timestamp, $schedule['recurrence'], self::SCHEDULE_HOOK, [$schedule['id']]);
             }
-
-            $result = wp_schedule_event($first_timestamp, $schedule['recurrence'], self::SCHEDULE_HOOK, [$schedule['id']]);
 
             if ($result) {
                 $scheduled_any = true;
@@ -222,7 +233,7 @@ class BJLG_Scheduler {
     /**
      * Calcule le timestamp de la première exécution
      */
-    private function calculate_first_run(array $schedule) {
+    private function calculate_first_run(array $schedule, ?int $from_timestamp = null) {
         $time_str = $schedule['time'] ?? '23:59';
         list($hour, $minute) = array_map('intval', explode(':', $time_str));
 
@@ -236,7 +247,9 @@ class BJLG_Scheduler {
             $timezone = new \DateTimeZone($timezone_string);
         }
 
-        $now = new \DateTimeImmutable('now', $timezone);
+        $now = $from_timestamp !== null
+            ? (new \DateTimeImmutable('@' . $from_timestamp))->setTimezone($timezone)
+            : new \DateTimeImmutable('now', $timezone);
 
         $recurrence = $schedule['recurrence'] ?? 'disabled';
 
@@ -344,6 +357,14 @@ class BJLG_Scheduler {
                 }
                 break;
 
+            case 'custom':
+                $expression = isset($schedule['custom_cron']) ? (string) $schedule['custom_cron'] : '';
+                $next_run_time = $this->calculate_custom_cron_next_run($expression, $now);
+                if (!$next_run_time instanceof \DateTimeImmutable) {
+                    return false;
+                }
+                break;
+
             default:
                 return false;
         }
@@ -372,6 +393,211 @@ class BJLG_Scheduler {
      */
     private function format_gmt_datetime($timestamp) {
         return gmdate('Y-m-d H:i:s', $timestamp);
+    }
+
+    private function calculate_custom_cron_next_run($expression, \DateTimeImmutable $now) {
+        $expression = trim((string) $expression);
+        if ($expression === '') {
+            return null;
+        }
+
+        $parts = preg_split('/\s+/', $expression);
+        if (!is_array($parts) || count($parts) !== 5) {
+            return null;
+        }
+
+        list($minute_field, $hour_field, $dom_field, $month_field, $dow_field) = $parts;
+
+        $month_names = [
+            'jan' => 1,
+            'feb' => 2,
+            'mar' => 3,
+            'apr' => 4,
+            'may' => 5,
+            'jun' => 6,
+            'jul' => 7,
+            'aug' => 8,
+            'sep' => 9,
+            'oct' => 10,
+            'nov' => 11,
+            'dec' => 12,
+        ];
+        $dow_names = [
+            'sun' => 0,
+            'mon' => 1,
+            'tue' => 2,
+            'wed' => 3,
+            'thu' => 4,
+            'fri' => 5,
+            'sat' => 6,
+        ];
+
+        $minutes = $this->parse_cron_field($minute_field, 0, 59);
+        $hours = $this->parse_cron_field($hour_field, 0, 23);
+        $months = $this->parse_cron_field($month_field, 1, 12, $month_names);
+        $dom_any = $this->is_cron_field_wildcard($dom_field);
+        $dow_any = $this->is_cron_field_wildcard($dow_field);
+        $dom_values = $dom_any ? [] : $this->parse_cron_field($dom_field, 1, 31);
+        $dow_values = $dow_any ? [] : $this->parse_cron_field($dow_field, 0, 6, $dow_names);
+
+        if (empty($minutes) || empty($hours) || empty($months)) {
+            return null;
+        }
+
+        if (!$dom_any && empty($dom_values)) {
+            return null;
+        }
+
+        if (!$dow_any && empty($dow_values)) {
+            return null;
+        }
+
+        $candidate = $now->setTime((int) $now->format('H'), (int) $now->format('i'), 0)->modify('+1 minute');
+
+        for ($i = 0; $i < 525600; $i++) {
+            $minute = (int) $candidate->format('i');
+            if (!in_array($minute, $minutes, true)) {
+                $candidate = $candidate->modify('+1 minute');
+                continue;
+            }
+
+            $hour = (int) $candidate->format('H');
+            if (!in_array($hour, $hours, true)) {
+                $candidate = $candidate->modify('+1 minute');
+                continue;
+            }
+
+            $month = (int) $candidate->format('n');
+            if (!in_array($month, $months, true)) {
+                $candidate = $candidate->modify('+1 minute');
+                continue;
+            }
+
+            if ($this->cron_day_matches($candidate, $dom_values, $dow_values, $dom_any, $dow_any)) {
+                return $candidate;
+            }
+
+            $candidate = $candidate->modify('+1 minute');
+        }
+
+        return null;
+    }
+
+    private function parse_cron_field($field, $min, $max, array $names = []) {
+        $field = strtolower(trim((string) $field));
+        if ($field === '' || $field === '*' || $field === '?') {
+            return range($min, $max);
+        }
+
+        $values = [];
+        $segments = explode(',', $field);
+
+        foreach ($segments as $segment) {
+            $segment = trim($segment);
+            if ($segment === '') {
+                continue;
+            }
+
+            $step = 1;
+            if (strpos($segment, '/') !== false) {
+                list($segment, $step_part) = explode('/', $segment, 2);
+                $step = max(1, (int) $step_part);
+            }
+
+            if ($segment === '' || $segment === '*' || $segment === '?') {
+                $start = $min;
+                $end = $max;
+            } elseif (strpos($segment, '-') !== false) {
+                list($start_token, $end_token) = explode('-', $segment, 2);
+                $start = $this->cron_value_from_token($start_token, $names, $min, $max);
+                $end = $this->cron_value_from_token($end_token, $names, $min, $max);
+                if ($start === null || $end === null) {
+                    continue;
+                }
+                if ($end < $start) {
+                    $tmp = $start;
+                    $start = $end;
+                    $end = $tmp;
+                }
+            } else {
+                $start = $this->cron_value_from_token($segment, $names, $min, $max);
+                if ($start === null) {
+                    continue;
+                }
+                $end = $start;
+            }
+
+            for ($value = $start; $value <= $end; $value++) {
+                if (($value - $start) % $step === 0) {
+                    $values[$value] = $value;
+                }
+            }
+        }
+
+        ksort($values);
+
+        return array_values($values);
+    }
+
+    private function cron_value_from_token($token, array $names, $min, $max) {
+        $token = strtolower(trim((string) $token));
+        if ($token === '') {
+            return null;
+        }
+
+        if (isset($names[$token])) {
+            $value = (int) $names[$token];
+        } elseif (preg_match('/^-?\d+$/', $token)) {
+            $value = (int) $token;
+        } else {
+            return null;
+        }
+
+        if ($max === 6 && $value === 7) {
+            $value = 0;
+        }
+
+        if ($value < $min || $value > $max) {
+            return null;
+        }
+
+        return $value;
+    }
+
+    private function cron_day_matches(\DateTimeImmutable $candidate, array $dom_values, array $dow_values, $dom_any, $dow_any) {
+        $day = (int) $candidate->format('j');
+        $dow = (int) $candidate->format('w');
+
+        if ($dom_any && $dow_any) {
+            return true;
+        }
+
+        $dom_match = $dom_any ? false : in_array($day, $dom_values, true);
+        $dow_match = $dow_any ? false : in_array($dow, $dow_values, true);
+
+        if ($dom_any) {
+            return $dow_match;
+        }
+
+        if ($dow_any) {
+            return $dom_match;
+        }
+
+        return $dom_match || $dow_match;
+    }
+
+    private function is_cron_field_wildcard($field) {
+        $field = strtolower(trim((string) $field));
+
+        return $field === '' || $field === '*' || $field === '?';
+    }
+
+    private function schedule_custom_follow_up(array $schedule) {
+        $next_timestamp = $this->calculate_first_run($schedule, time());
+
+        if ($next_timestamp) {
+            wp_schedule_single_event($next_timestamp, self::SCHEDULE_HOOK, [$schedule['id']]);
+        }
     }
 
     /**
@@ -439,6 +665,10 @@ class BJLG_Scheduler {
             BJLG_Debug::log("ERREUR : $error_message Task ID: $task_id.");
             BJLG_History::log('scheduled_backup', 'failure', $error_message);
             wp_send_json_error(['message' => $error_message]);
+        }
+
+        if (($schedule['recurrence'] ?? '') === 'custom') {
+            $this->schedule_custom_follow_up($schedule);
         }
 
         $next_runs = $this->get_next_runs_summary($collection['schedules']);
@@ -509,6 +739,10 @@ class BJLG_Scheduler {
 
         BJLG_Debug::log(sprintf('Sauvegarde planifiée déclenchée automatiquement (%s) - Task ID: %s', $schedule['id'], $task_id));
         BJLG_History::log('scheduled_backup', 'info', sprintf('Planification "%s" exécutée automatiquement.', $schedule['label'] ?? $schedule['id']));
+
+        if (($schedule['recurrence'] ?? '') === 'custom') {
+            $this->schedule_custom_follow_up($schedule);
+        }
     }
     
     /**

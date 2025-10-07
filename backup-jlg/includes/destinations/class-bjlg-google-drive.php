@@ -388,6 +388,111 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         return $result;
     }
 
+    public function delete_remote_backup_by_name($filename) {
+        $outcome = [
+            'success' => false,
+            'message' => '',
+        ];
+
+        if (!$this->sdk_available || !$this->is_connected()) {
+            $outcome['message'] = __('Google Drive n\'est pas configuré.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $filename = basename((string) $filename);
+        if ($filename === '') {
+            $outcome['message'] = __('Nom de fichier invalide.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        try {
+            $service = $this->create_drive_service();
+            $backups = $this->fetch_remote_backups($service);
+            foreach ($backups as $backup) {
+                if (($backup['name'] ?? '') !== $filename) {
+                    continue;
+                }
+
+                $this->delete_remote_backup($service, $backup);
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log(sprintf('Purge distante Google Drive réussie pour %s.', $filename));
+                }
+
+                $outcome['success'] = true;
+
+                return $outcome;
+            }
+
+            $outcome['message'] = __('Sauvegarde distante introuvable sur Google Drive.', 'backup-jlg');
+        } catch (Exception $exception) {
+            $outcome['message'] = $exception->getMessage();
+        }
+
+        return $outcome;
+    }
+
+    public function get_storage_usage() {
+        $defaults = [
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+
+        if (!$this->sdk_available || !$this->is_connected()) {
+            return $defaults;
+        }
+
+        try {
+            $service = $this->create_drive_service();
+            $about = $service->about->get(['fields' => 'storageQuota']);
+
+            $quota_data = [];
+            if (is_object($about) && method_exists($about, 'getStorageQuota')) {
+                $quota = $about->getStorageQuota();
+                if (is_object($quota)) {
+                    $quota_data = [
+                        'limit' => method_exists($quota, 'getLimit') ? (int) $quota->getLimit() : null,
+                        'usage' => method_exists($quota, 'getUsage') ? (int) $quota->getUsage() : null,
+                        'usageInDrive' => method_exists($quota, 'getUsageInDrive') ? (int) $quota->getUsageInDrive() : null,
+                    ];
+                }
+            } elseif (is_array($about) && isset($about['storageQuota'])) {
+                $quota_data = $about['storageQuota'];
+            }
+
+            $used = null;
+            if (isset($quota_data['usageInDrive'])) {
+                $used = (int) $quota_data['usageInDrive'];
+            } elseif (isset($quota_data['usage'])) {
+                $used = (int) $quota_data['usage'];
+            }
+
+            $limit = isset($quota_data['limit']) ? (int) $quota_data['limit'] : null;
+            if ($limit === 0) {
+                $limit = null; // quota illimité
+            }
+
+            $free = null;
+            if ($limit !== null && $used !== null) {
+                $free = max(0, $limit - $used);
+            }
+
+            return [
+                'used_bytes' => $used,
+                'quota_bytes' => $limit,
+                'free_bytes' => $free,
+            ];
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('Impossible de récupérer le quota Google Drive : ' . $exception->getMessage());
+            }
+
+            return $defaults;
+        }
+    }
+
     private function create_drive_service() {
         $client = $this->build_configured_client();
         return call_user_func($this->drive_factory, $client);

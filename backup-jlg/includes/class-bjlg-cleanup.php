@@ -388,45 +388,7 @@ class BJLG_Cleanup {
             return $provided;
         }
 
-        switch ($destination_id) {
-            case 'google_drive':
-                if (class_exists(BJLG_Google_Drive::class)) {
-                    return new BJLG_Google_Drive();
-                }
-                break;
-            case 'aws_s3':
-                if (class_exists(BJLG_AWS_S3::class)) {
-                    return new BJLG_AWS_S3();
-                }
-                break;
-            case 'wasabi':
-                if (class_exists(BJLG_Wasabi::class)) {
-                    return new BJLG_Wasabi();
-                }
-                break;
-            case 'dropbox':
-                if (class_exists(BJLG_Dropbox::class)) {
-                    return new BJLG_Dropbox();
-                }
-                break;
-            case 'onedrive':
-                if (class_exists(BJLG_OneDrive::class)) {
-                    return new BJLG_OneDrive();
-                }
-                break;
-            case 'pcloud':
-                if (class_exists(BJLG_PCloud::class)) {
-                    return new BJLG_PCloud();
-                }
-                break;
-            case 'sftp':
-                if (class_exists(BJLG_SFTP::class)) {
-                    return new BJLG_SFTP();
-                }
-                break;
-        }
-
-        return null;
+        return BJLG_Destination_Factory::create($destination_id);
     }
 
     /**

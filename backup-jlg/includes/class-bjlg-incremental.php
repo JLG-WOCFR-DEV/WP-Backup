@@ -165,6 +165,22 @@ class BJLG_Incremental {
             if (!isset($pending['status']) || !is_string($pending['status']) || $pending['status'] === '') {
                 $pending['status'] = 'pending';
             }
+            $pending['attempts'] = isset($pending['attempts']) ? max(0, (int) $pending['attempts']) : 0;
+            $pending['last_attempt_at'] = isset($pending['last_attempt_at']) ? (int) $pending['last_attempt_at'] : 0;
+            $pending['last_error'] = isset($pending['last_error']) ? (string) $pending['last_error'] : '';
+            if (!isset($pending['errors']) || !is_array($pending['errors'])) {
+                $pending['errors'] = [];
+            }
+
+            $normalized_errors = [];
+            foreach ($pending['errors'] as $destination => $message) {
+                if (!is_string($destination)) {
+                    $destination = (string) $destination;
+                }
+                $normalized_errors[$destination] = is_string($message) ? $message : (string) $message;
+            }
+
+            $pending['errors'] = $normalized_errors;
         }
         unset($pending);
     }
@@ -217,6 +233,32 @@ class BJLG_Incremental {
         $secondary = $this->normalize_destinations($secondary);
 
         return array_values(array_unique(array_merge($primary, $secondary)));
+    }
+
+    /**
+     * @param mixed $errors
+     * @return array<string,string>
+     */
+    private function normalize_error_list($errors) {
+        if (!is_array($errors)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($errors as $destination => $message) {
+            if (!is_string($destination)) {
+                $destination = (string) $destination;
+            }
+
+            if ($destination === '') {
+                continue;
+            }
+
+            $normalized[$destination] = is_string($message) ? $message : (string) $message;
+        }
+
+        return $normalized;
     }
 
     private function enforce_rotation() {
@@ -292,6 +334,10 @@ class BJLG_Incremental {
             'destinations' => $destinations,
             'registered_at' => time(),
             'status' => 'pending',
+            'attempts' => 0,
+            'last_attempt_at' => 0,
+            'last_error' => '',
+            'errors' => [],
         ];
 
         $queue_entry = null;
@@ -308,6 +354,8 @@ class BJLG_Incremental {
             $existing['destinations'] = $this->merge_destinations($existing['destinations'] ?? [], $destinations);
             $existing['registered_at'] = $entry['registered_at'];
             $existing['status'] = 'pending';
+            $existing['last_error'] = '';
+            $existing['errors'] = [];
             $queue_entry = $existing;
             break;
         }
@@ -375,6 +423,86 @@ class BJLG_Incremental {
                 $file,
                 empty($destinations) ? 'toutes destinations' : implode(', ', $destinations)
             ));
+        }
+
+        return $modified;
+    }
+
+    /**
+     * Retourne la file de purge distante.
+     *
+     * @return array<int, array<string,mixed>>
+     */
+    public function get_remote_purge_queue() {
+        $queue = [];
+
+        foreach ($this->last_backup_data['remote_purge_queue'] as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $queue[] = [
+                'file' => isset($entry['file']) ? (string) $entry['file'] : '',
+                'destinations' => $this->normalize_destinations($entry['destinations'] ?? []),
+                'status' => isset($entry['status']) ? (string) $entry['status'] : 'pending',
+                'registered_at' => isset($entry['registered_at']) ? (int) $entry['registered_at'] : 0,
+                'attempts' => isset($entry['attempts']) ? (int) $entry['attempts'] : 0,
+                'last_attempt_at' => isset($entry['last_attempt_at']) ? (int) $entry['last_attempt_at'] : 0,
+                'last_error' => isset($entry['last_error']) ? (string) $entry['last_error'] : '',
+                'errors' => $this->normalize_error_list($entry['errors'] ?? []),
+            ];
+        }
+
+        return $queue;
+    }
+
+    /**
+     * Met à jour une entrée de purge distante.
+     *
+     * @param string              $file
+     * @param array<string,mixed> $data
+     */
+    public function update_remote_purge_entry($file, array $data) {
+        $file = basename((string) $file);
+        if ($file === '') {
+            return false;
+        }
+
+        $modified = false;
+
+        foreach ($this->last_backup_data['remote_purge_queue'] as &$entry) {
+            if (!is_array($entry) || !isset($entry['file']) || $entry['file'] !== $file) {
+                continue;
+            }
+
+            if (isset($data['status'])) {
+                $status = sanitize_key((string) $data['status']);
+                $entry['status'] = $status !== '' ? $status : 'pending';
+            }
+
+            if (array_key_exists('last_error', $data)) {
+                $entry['last_error'] = (string) $data['last_error'];
+            }
+
+            if (array_key_exists('errors', $data)) {
+                $entry['errors'] = $this->normalize_error_list($data['errors']);
+            }
+
+            if (isset($data['attempts'])) {
+                $entry['attempts'] = max(0, (int) $data['attempts']);
+            }
+
+            if (isset($data['last_attempt_at'])) {
+                $entry['last_attempt_at'] = max(0, (int) $data['last_attempt_at']);
+            }
+
+            $modified = true;
+            break;
+        }
+        unset($entry);
+
+        if ($modified) {
+            $this->save_manifest();
         }
 
         return $modified;

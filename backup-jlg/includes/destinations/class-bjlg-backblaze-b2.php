@@ -256,6 +256,83 @@ class BJLG_Backblaze_B2 implements BJLG_Destination_Interface {
         return $result;
     }
 
+    public function delete_remote_backup_by_name($filename) {
+        $outcome = [
+            'success' => false,
+            'message' => '',
+        ];
+
+        if (!$this->is_connected()) {
+            $outcome['message'] = __('Backblaze B2 n\'est pas configuré.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $filename = basename((string) $filename);
+        if ($filename === '') {
+            $outcome['message'] = __('Nom de fichier invalide.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        try {
+            $backups = $this->list_remote_backups();
+            foreach ($backups as $backup) {
+                if (($backup['name'] ?? '') !== $filename) {
+                    continue;
+                }
+
+                $this->delete_remote_backup($backup);
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log(sprintf('Purge distante Backblaze réussie pour %s.', $filename));
+                }
+
+                $outcome['success'] = true;
+
+                return $outcome;
+            }
+
+            $outcome['message'] = __('Sauvegarde distante introuvable sur Backblaze B2.', 'backup-jlg');
+        } catch (Exception $exception) {
+            $outcome['message'] = $exception->getMessage();
+        }
+
+        return $outcome;
+    }
+
+    public function get_storage_usage() {
+        $defaults = [
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+
+        if (!$this->is_connected()) {
+            return $defaults;
+        }
+
+        try {
+            $backups = $this->list_remote_backups();
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('Impossible de récupérer les métriques Backblaze : ' . $exception->getMessage());
+            }
+
+            return $defaults;
+        }
+
+        $used = 0;
+        foreach ($backups as $backup) {
+            $used += isset($backup['size']) ? (int) $backup['size'] : 0;
+        }
+
+        return [
+            'used_bytes' => $used,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+    }
+
     public function test_connection(?array $settings = null) {
         $settings = $settings ? $this->merge_settings($settings) : $this->get_settings();
         $this->assert_settings_complete($settings);

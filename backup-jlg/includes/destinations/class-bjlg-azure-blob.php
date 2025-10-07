@@ -321,6 +321,75 @@ class BJLG_Azure_Blob implements BJLG_Destination_Interface {
         return $result;
     }
 
+    public function delete_remote_backup_by_name($filename) {
+        $outcome = [
+            'success' => false,
+            'message' => '',
+        ];
+
+        if (!$this->is_connected()) {
+            $outcome['message'] = __('Azure Blob Storage n\'est pas configuré.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $filename = basename((string) $filename);
+        if ($filename === '') {
+            $outcome['message'] = __('Nom de fichier invalide.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $settings = $this->get_settings();
+        $object_key = $this->build_object_key($filename, $settings['object_prefix']);
+
+        try {
+            $this->perform_request('DELETE', $object_key, '', [], $settings);
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log(sprintf('Purge distante Azure Blob réussie pour %s.', $object_key));
+            }
+
+            $outcome['success'] = true;
+        } catch (Exception $exception) {
+            $outcome['message'] = $exception->getMessage();
+        }
+
+        return $outcome;
+    }
+
+    public function get_storage_usage() {
+        $defaults = [
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+
+        if (!$this->is_connected()) {
+            return $defaults;
+        }
+
+        try {
+            $backups = $this->list_remote_backups();
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('Impossible de récupérer les métriques Azure Blob : ' . $exception->getMessage());
+            }
+
+            return $defaults;
+        }
+
+        $used = 0;
+        foreach ($backups as $backup) {
+            $used += isset($backup['size']) ? (int) $backup['size'] : 0;
+        }
+
+        return [
+            'used_bytes' => $used,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+    }
+
     public function test_connection(?array $settings = null) {
         $settings = $settings ? $this->merge_settings($settings) : $this->get_settings();
         $this->assert_settings_complete($settings);

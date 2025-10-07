@@ -247,6 +247,97 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
         return $result;
     }
 
+    public function delete_remote_backup_by_name($filename) {
+        $outcome = [
+            'success' => false,
+            'message' => '',
+        ];
+
+        if (!$this->is_connected()) {
+            $outcome['message'] = __('pCloud n\'est pas configuré.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $filename = basename((string) $filename);
+        if ($filename === '') {
+            $outcome['message'] = __('Nom de fichier invalide.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $settings = $this->get_settings();
+
+        try {
+            $backups = $this->list_remote_backups();
+            foreach ($backups as $backup) {
+                if (($backup['name'] ?? '') !== $filename) {
+                    continue;
+                }
+
+                $body = [];
+                if (!empty($backup['id'])) {
+                    $body['fileid'] = $backup['id'];
+                } elseif (!empty($backup['path'])) {
+                    $body['path'] = $backup['path'];
+                }
+
+                if (empty($body)) {
+                    continue;
+                }
+
+                $this->api_json('https://api.pcloud.com/deletefile', $body, $settings);
+
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log(sprintf('Purge distante pCloud réussie pour %s.', $filename));
+                }
+
+                $outcome['success'] = true;
+
+                return $outcome;
+            }
+
+            $outcome['message'] = __('Sauvegarde distante introuvable sur pCloud.', 'backup-jlg');
+        } catch (Exception $exception) {
+            $outcome['message'] = $exception->getMessage();
+        }
+
+        return $outcome;
+    }
+
+    public function get_storage_usage() {
+        $defaults = [
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+
+        if (!$this->is_connected()) {
+            return $defaults;
+        }
+
+        try {
+            $backups = $this->list_remote_backups();
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('Impossible de récupérer les métriques pCloud : ' . $exception->getMessage());
+            }
+
+            return $defaults;
+        }
+
+        $used = 0;
+        foreach ($backups as $backup) {
+            $used += isset($backup['size']) ? (int) $backup['size'] : 0;
+        }
+
+        return [
+            'used_bytes' => $used,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+    }
+
     public function handle_test_connection() {
         if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.'], 403);

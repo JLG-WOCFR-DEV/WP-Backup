@@ -437,6 +437,16 @@ final class BJLG_BackupTest extends TestCase
             {
                 return ['deleted' => 0, 'errors' => [], 'inspected' => 0, 'deleted_items' => []];
             }
+
+            public function delete_remote_backup_by_name($filename)
+            {
+                return ['success' => false, 'message' => ''];
+            }
+
+            public function get_storage_usage()
+            {
+                return ['used_bytes' => null, 'quota_bytes' => null, 'free_bytes' => null];
+            }
         };
 
         $secondary = new class implements BJLG_Destination_Interface {
@@ -478,6 +488,16 @@ final class BJLG_BackupTest extends TestCase
             public function prune_remote_backups($retain_by_number, $retain_by_age_days)
             {
                 return ['deleted' => 0, 'errors' => [], 'inspected' => 0, 'deleted_items' => []];
+            }
+
+            public function delete_remote_backup_by_name($filename)
+            {
+                return ['success' => true, 'message' => ''];
+            }
+
+            public function get_storage_usage()
+            {
+                return ['used_bytes' => 0, 'quota_bytes' => null, 'free_bytes' => null];
             }
         };
 

@@ -324,6 +324,101 @@ class BJLG_OneDrive implements BJLG_Destination_Interface {
         return $result;
     }
 
+    public function delete_remote_backup_by_name($filename) {
+        $outcome = [
+            'success' => false,
+            'message' => '',
+        ];
+
+        if (!$this->is_connected()) {
+            $outcome['message'] = __('OneDrive n\'est pas configuré.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $filename = basename((string) $filename);
+        if ($filename === '') {
+            $outcome['message'] = __('Nom de fichier invalide.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $settings = $this->get_settings();
+
+        try {
+            $backups = $this->list_remote_backups();
+            foreach ($backups as $backup) {
+                if (($backup['name'] ?? '') !== $filename) {
+                    continue;
+                }
+
+                $identifier = $backup['id'] ?? '';
+                if ($identifier === '') {
+                    continue;
+                }
+
+                $endpoint = 'https://graph.microsoft.com/v1.0/me/drive/items/' . rawurlencode($identifier);
+                $this->api_request($endpoint, $settings, 'DELETE');
+
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log(sprintf('Purge distante OneDrive réussie pour %s.', $filename));
+                }
+
+                $outcome['success'] = true;
+
+                return $outcome;
+            }
+
+            $outcome['message'] = __('Sauvegarde distante introuvable sur OneDrive.', 'backup-jlg');
+        } catch (Exception $exception) {
+            $outcome['message'] = $exception->getMessage();
+        }
+
+        return $outcome;
+    }
+
+    public function get_storage_usage() {
+        $defaults = [
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+
+        if (!$this->is_connected()) {
+            return $defaults;
+        }
+
+        try {
+            $settings = $this->get_settings();
+            $drive = $this->api_request('https://graph.microsoft.com/v1.0/me/drive', $settings, 'GET');
+            $quota = isset($drive['quota']) && is_array($drive['quota']) ? $drive['quota'] : [];
+
+            $used = isset($quota['used']) ? (int) $quota['used'] : null;
+            $total = isset($quota['total']) ? (int) $quota['total'] : null;
+            if ($total === 0) {
+                $total = null;
+            }
+
+            $remaining = isset($quota['remaining']) ? (int) $quota['remaining'] : null;
+
+            if ($remaining === null && $total !== null && $used !== null) {
+                $remaining = max(0, $total - $used);
+            }
+
+            return [
+                'used_bytes' => $used,
+                'quota_bytes' => $total,
+                'free_bytes' => $remaining,
+            ];
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('Impossible de récupérer le quota OneDrive : ' . $exception->getMessage());
+            }
+
+            return $defaults;
+        }
+    }
+
     private function get_settings() {
         $stored = get_option(self::OPTION_SETTINGS, []);
         if (!is_array($stored)) {
