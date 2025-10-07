@@ -7,6 +7,84 @@ jQuery(document).ready(function($) {
             return;
         }
 
+        const wpGlobal = window.wp || {};
+        const i18n = wpGlobal.i18n || null;
+        const a11y = wpGlobal.a11y || null;
+        const $liveRegion = $('#bjlg-dashboard-live-region');
+
+        const __ = function(text) {
+            if (i18n && typeof i18n.__ === 'function') {
+                return i18n.__(text, 'backup-jlg');
+            }
+            return text;
+        };
+
+        const sprintf = function() {
+            if (i18n && typeof i18n.sprintf === 'function') {
+                return i18n.sprintf.apply(i18n, arguments);
+            }
+            const args = Array.prototype.slice.call(arguments);
+            let format = args.shift();
+            args.forEach(function(arg) {
+                format = format.replace(/%s/, String(arg));
+            });
+            return format;
+        };
+
+        const announce = function(message, priority) {
+            if (!message) {
+                return;
+            }
+            if (a11y && typeof a11y.speak === 'function') {
+                a11y.speak(message, priority || 'polite');
+            }
+            if ($liveRegion.length) {
+                $liveRegion.text(message);
+            }
+        };
+
+        const buildAnnouncement = function(metrics) {
+            metrics = metrics || {};
+            const summary = metrics.summary || {};
+            const alerts = Array.isArray(metrics.alerts) ? metrics.alerts : [];
+            const parts = [];
+
+            const lastBackup = summary.history_last_backup_relative || summary.history_last_backup;
+            if (lastBackup) {
+                parts.push(sprintf(__('Dernière sauvegarde : %s', 'backup-jlg'), lastBackup));
+            }
+
+            const nextRun = summary.scheduler_next_run_relative || summary.scheduler_next_run;
+            if (nextRun) {
+                parts.push(sprintf(__('Prochaine sauvegarde planifiée : %s', 'backup-jlg'), nextRun));
+            }
+
+            if (summary.storage_backup_count !== undefined && summary.storage_backup_count !== null) {
+                parts.push(sprintf(__('Archives stockées : %s', 'backup-jlg'), formatNumber(summary.storage_backup_count)));
+            }
+
+            if (summary.scheduler_success_rate) {
+                parts.push(sprintf(__('Taux de succès planificateur : %s', 'backup-jlg'), summary.scheduler_success_rate));
+            }
+
+            if (alerts.length) {
+                const alert = alerts[0];
+                const label = alert.title || alert.message;
+                if (label) {
+                    parts.push(sprintf(__('Alerte active : %s', 'backup-jlg'), label));
+                }
+            }
+
+            if (!parts.length) {
+                return '';
+            }
+
+            return sprintf(__('Tableau de bord mis à jour. %s', 'backup-jlg'), parts.join(' • '));
+        };
+
+        let readyForAnnouncements = false;
+        let lastAnnouncement = '';
+
         const parseJSON = function(raw) {
             if (typeof raw !== 'string' || raw.trim() === '') {
                 return null;
@@ -441,6 +519,9 @@ jQuery(document).ready(function($) {
         updateActions(state.metrics);
         updateCharts();
 
+        lastAnnouncement = buildAnnouncement(state.metrics);
+        readyForAnnouncements = true;
+
         window.bjlgDashboard = window.bjlgDashboard || {};
         window.bjlgDashboard.updateMetrics = function(nextMetrics) {
             if (!nextMetrics || typeof nextMetrics !== 'object') {
@@ -453,6 +534,12 @@ jQuery(document).ready(function($) {
             updateOnboarding(state.metrics.onboarding || []);
             updateActions(state.metrics);
             updateCharts();
+
+            const announcement = buildAnnouncement(state.metrics);
+            if (readyForAnnouncements && announcement && announcement !== lastAnnouncement) {
+                announce(announcement);
+            }
+            lastAnnouncement = announcement || '';
 
             try {
                 $overview.attr('data-bjlg-dashboard', JSON.stringify(state.metrics));

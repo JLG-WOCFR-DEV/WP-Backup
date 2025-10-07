@@ -122,7 +122,7 @@ class BJLG_Blocks {
                 <?php endif; ?>
             </header>
 
-            <div class="bjlg-block-status__summary">
+            <div class="bjlg-block-status__summary" role="status" aria-live="polite" aria-atomic="true">
                 <div class="bjlg-block-status__stat">
                     <span class="bjlg-block-status__stat-label"><?php esc_html_e('Dernière sauvegarde', 'backup-jlg'); ?></span>
                     <span class="bjlg-block-status__stat-value"><?php echo esc_html($snapshot['summary']['history_last_backup'] ?? __('N/A', 'backup-jlg')); ?></span>
@@ -160,7 +160,7 @@ class BJLG_Blocks {
             <?php endif; ?>
 
             <?php if (!empty($attributes['showAlerts']) && !empty($snapshot['alerts'])): ?>
-                <div class="bjlg-block-status__alerts">
+                <div class="bjlg-block-status__alerts" role="status" aria-live="polite" aria-atomic="true">
                     <?php foreach ($snapshot['alerts'] as $alert): ?>
                         <div class="bjlg-block-status__alert bjlg-block-status__alert--<?php echo esc_attr($alert['type'] ?? 'info'); ?>">
                             <div class="bjlg-block-status__alert-body">
