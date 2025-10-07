@@ -264,6 +264,77 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         return $result;
     }
 
+    public function delete_remote_backup_by_name($filename) {
+        $result = [
+            'success' => false,
+            'message' => '',
+        ];
+
+        $filename = basename((string) $filename);
+        if ($filename === '') {
+            $result['message'] = __('Nom de fichier invalide.', 'backup-jlg');
+
+            return $result;
+        }
+
+        if (!$this->is_connected()) {
+            $result['message'] = __('Amazon S3 n\'est pas configuré.', 'backup-jlg');
+
+            return $result;
+        }
+
+        $settings = $this->get_settings();
+        $object_key = $this->build_object_key($filename, $settings['object_prefix']);
+
+        try {
+            $this->perform_request('DELETE', $object_key, '', [], $settings);
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log(sprintf('Purge distante Amazon S3 réussie pour %s.', $object_key));
+            }
+
+            $result['success'] = true;
+        } catch (Exception $exception) {
+            $result['message'] = $exception->getMessage();
+        }
+
+        return $result;
+    }
+
+    public function get_storage_usage() {
+        $defaults = [
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+
+        if (!$this->is_connected()) {
+            return $defaults;
+        }
+
+        $settings = $this->get_settings();
+
+        try {
+            $backups = $this->fetch_remote_backups($settings);
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log(sprintf('Impossible de récupérer les métriques distantes Amazon S3 : %s', $exception->getMessage()));
+            }
+
+            return $defaults;
+        }
+
+        $used = 0;
+        foreach ($backups as $backup) {
+            $used += isset($backup['size']) ? (int) $backup['size'] : 0;
+        }
+
+        return [
+            'used_bytes' => $used,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+    }
+
     private function fetch_remote_backups(array $settings) {
         $backups = [];
 

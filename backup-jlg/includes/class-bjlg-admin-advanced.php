@@ -63,6 +63,7 @@ class BJLG_Admin_Advanced {
                 'total_size_human' => size_format(0),
                 'backup_count' => 0,
                 'latest_backup' => null,
+                'remote_destinations' => [],
             ],
             'alerts' => [],
             'onboarding' => $this->get_onboarding_resources(),
@@ -181,6 +182,8 @@ class BJLG_Admin_Advanced {
             }
         }
 
+        $metrics['storage']['remote_destinations'] = $this->collect_remote_storage_metrics();
+
         $metrics['summary'] = $this->build_summary($metrics);
         $metrics['alerts'] = $this->build_alerts($metrics);
 
@@ -222,6 +225,114 @@ class BJLG_Admin_Advanced {
         }
 
         return $summary;
+    }
+
+    private function collect_remote_storage_metrics(): array {
+        if (!class_exists(BJLG_Destination_Factory::class)) {
+            return [];
+        }
+
+        $destinations = [];
+        $known_ids = BJLG_Settings::get_known_destination_ids();
+
+        foreach ($known_ids as $destination_id) {
+            $destination = BJLG_Destination_Factory::create($destination_id);
+            if (!$destination instanceof BJLG_Destination_Interface) {
+                continue;
+            }
+
+            $connected = $destination->is_connected();
+            $entry = [
+                'id' => $destination_id,
+                'name' => $destination->get_name(),
+                'connected' => $connected,
+                'used_bytes' => null,
+                'quota_bytes' => null,
+                'free_bytes' => null,
+                'used_human' => '',
+                'quota_human' => '',
+                'free_human' => '',
+                'backups_count' => 0,
+                'errors' => [],
+            ];
+
+            $usage = [];
+            if ($connected) {
+                try {
+                    $usage = $destination->get_storage_usage();
+                } catch (\Throwable $exception) {
+                    $entry['errors'][] = $exception->getMessage();
+                }
+            }
+
+            if (is_array($usage)) {
+                if (isset($usage['used_bytes'])) {
+                    $entry['used_bytes'] = $this->sanitize_metric_value($usage['used_bytes']);
+                }
+                if (isset($usage['quota_bytes'])) {
+                    $entry['quota_bytes'] = $this->sanitize_metric_value($usage['quota_bytes']);
+                }
+                if (isset($usage['free_bytes'])) {
+                    $entry['free_bytes'] = $this->sanitize_metric_value($usage['free_bytes']);
+                }
+            }
+
+            $backups = [];
+            if ($connected) {
+                try {
+                    $backups = $destination->list_remote_backups();
+                } catch (\Throwable $exception) {
+                    $entry['errors'][] = $exception->getMessage();
+                }
+            }
+
+            if (is_array($backups)) {
+                $entry['backups_count'] = count($backups);
+
+                if ($entry['used_bytes'] === null) {
+                    $total = 0;
+                    foreach ($backups as $backup) {
+                        $total += isset($backup['size']) ? (int) $backup['size'] : 0;
+                    }
+                    $entry['used_bytes'] = $total;
+                }
+            }
+
+            if ($entry['used_bytes'] !== null) {
+                $entry['used_human'] = size_format((int) $entry['used_bytes']);
+            }
+
+            if ($entry['quota_bytes'] !== null) {
+                $entry['quota_human'] = size_format((int) $entry['quota_bytes']);
+            }
+
+            if ($entry['free_bytes'] === null && $entry['quota_bytes'] !== null && $entry['used_bytes'] !== null) {
+                $free = max(0, (int) $entry['quota_bytes'] - (int) $entry['used_bytes']);
+                $entry['free_bytes'] = $free;
+            }
+
+            if ($entry['free_bytes'] !== null) {
+                $entry['free_human'] = size_format((int) $entry['free_bytes']);
+            }
+
+            $destinations[] = $entry;
+        }
+
+        return $destinations;
+    }
+
+    private function sanitize_metric_value($value) {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_numeric($value)) {
+            $int_value = (int) $value;
+
+            return $int_value >= 0 ? $int_value : null;
+        }
+
+        return null;
     }
 
     /**

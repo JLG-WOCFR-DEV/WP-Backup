@@ -328,6 +328,106 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
         return $result;
     }
 
+    public function delete_remote_backup_by_name($filename) {
+        $outcome = [
+            'success' => false,
+            'message' => '',
+        ];
+
+        if (!$this->is_connected()) {
+            $outcome['message'] = __('Dropbox n\'est pas configuré.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $filename = basename((string) $filename);
+        if ($filename === '') {
+            $outcome['message'] = __('Nom de fichier invalide.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $settings = $this->get_settings();
+
+        try {
+            $backups = $this->list_remote_backups();
+            foreach ($backups as $backup) {
+                if (($backup['name'] ?? '') !== $filename) {
+                    continue;
+                }
+
+                $path = $backup['path'] ?? '';
+                if ($path === '') {
+                    continue;
+                }
+
+                $this->api_json('https://api.dropboxapi.com/2/files/delete_v2', [
+                    'path' => $path,
+                ], $settings);
+
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log(sprintf('Purge distante Dropbox réussie pour %s.', $filename));
+                }
+
+                $outcome['success'] = true;
+
+                return $outcome;
+            }
+
+            $outcome['message'] = __('Sauvegarde distante introuvable sur Dropbox.', 'backup-jlg');
+        } catch (Exception $exception) {
+            $outcome['message'] = $exception->getMessage();
+        }
+
+        return $outcome;
+    }
+
+    public function get_storage_usage() {
+        $defaults = [
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+
+        if (!$this->is_connected()) {
+            return $defaults;
+        }
+
+        try {
+            $settings = $this->get_settings();
+            $usage = $this->api_json('https://api.dropboxapi.com/2/users/get_space_usage', [], $settings);
+
+            $used = isset($usage['used']) ? (int) $usage['used'] : null;
+            $quota = null;
+            if (isset($usage['allocation']) && is_array($usage['allocation'])) {
+                $allocation = $usage['allocation'];
+                if (isset($allocation['allocated'])) {
+                    $quota = (int) $allocation['allocated'];
+                    if ($quota === 0) {
+                        $quota = null;
+                    }
+                }
+            }
+
+            $free = null;
+            if ($quota !== null && $used !== null) {
+                $free = max(0, $quota - $used);
+            }
+
+            return [
+                'used_bytes' => $used,
+                'quota_bytes' => $quota,
+                'free_bytes' => $free,
+            ];
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('Impossible de récupérer le quota Dropbox : ' . $exception->getMessage());
+            }
+
+            return $defaults;
+        }
+    }
+
     private function get_settings() {
         $stored = get_option(self::OPTION_SETTINGS, []);
         if (!is_array($stored)) {

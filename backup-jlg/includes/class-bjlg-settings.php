@@ -23,7 +23,8 @@ class BJLG_Settings {
         'twice_daily',
         'daily',
         'weekly',
-        'monthly'
+        'monthly',
+        'custom'
     ];
     private const VALID_SCHEDULE_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
@@ -1548,6 +1549,7 @@ class BJLG_Settings {
             'day' => 'sunday',
             'day_of_month' => 1,
             'time' => '23:59',
+            'custom_cron' => '',
             'components' => ['db', 'plugins', 'themes', 'uploads'],
             'encrypt' => false,
             'incremental' => false,
@@ -1651,6 +1653,11 @@ class BJLG_Settings {
             $time = $defaults['time'];
         }
 
+        $custom_cron = '';
+        if (isset($entry['custom_cron'])) {
+            $custom_cron = self::sanitize_cron_expression($entry['custom_cron']);
+        }
+
         $previous_recurrence = '';
         if (isset($entry['previous_recurrence'])) {
             $maybe_previous = sanitize_key((string) $entry['previous_recurrence']);
@@ -1694,6 +1701,7 @@ class BJLG_Settings {
             'day_of_month' => $day_of_month,
             'time' => $time,
             'previous_recurrence' => $previous_recurrence,
+            'custom_cron' => $recurrence === 'custom' ? $custom_cron : '',
             'components' => array_values($components),
             'encrypt' => self::to_bool_static($entry['encrypt'] ?? $defaults['encrypt']),
             'incremental' => self::to_bool_static($entry['incremental'] ?? $defaults['incremental']),
@@ -1988,6 +1996,27 @@ class BJLG_Settings {
         }
 
         return $sanitized;
+    }
+
+    private static function sanitize_cron_expression($expression): string {
+        if (!is_string($expression)) {
+            if (is_array($expression)) {
+                $expression = implode(' ', $expression);
+            } else {
+                $expression = (string) $expression;
+            }
+        }
+
+        $expression = trim(preg_replace('/\s+/', ' ', $expression));
+        if ($expression === '') {
+            return '';
+        }
+
+        if (!preg_match('/^[\d\*\-,\/A-Za-z]+(\s+[\d\*\-,\/A-Za-z]+){4}$/', $expression)) {
+            return '';
+        }
+
+        return strtolower($expression);
     }
     
     /**

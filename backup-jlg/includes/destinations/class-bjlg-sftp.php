@@ -258,6 +258,83 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
         return $result;
     }
 
+    public function delete_remote_backup_by_name($filename) {
+        $outcome = [
+            'success' => false,
+            'message' => '',
+        ];
+
+        if (!class_exists(PhpseclibSFTP::class) || !$this->is_connected()) {
+            $outcome['message'] = __('Le connecteur SFTP n\'est pas disponible.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $filename = basename((string) $filename);
+        if ($filename === '') {
+            $outcome['message'] = __('Nom de fichier invalide.', 'backup-jlg');
+
+            return $outcome;
+        }
+
+        $settings = $this->get_settings();
+
+        try {
+            $backups = $this->list_remote_backups();
+            foreach ($backups as $backup) {
+                if (($backup['name'] ?? '') !== $filename) {
+                    continue;
+                }
+
+                $connection = $this->connect($settings);
+                $this->delete_remote_backup($connection, $backup);
+
+                $outcome['success'] = true;
+
+                return $outcome;
+            }
+
+            $outcome['message'] = __('Sauvegarde distante introuvable sur le serveur SFTP.', 'backup-jlg');
+        } catch (Exception $exception) {
+            $outcome['message'] = $exception->getMessage();
+        }
+
+        return $outcome;
+    }
+
+    public function get_storage_usage() {
+        $defaults = [
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+
+        if (!class_exists(PhpseclibSFTP::class) || !$this->is_connected()) {
+            return $defaults;
+        }
+
+        try {
+            $backups = $this->list_remote_backups();
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('Impossible de récupérer les métriques SFTP : ' . $exception->getMessage());
+            }
+
+            return $defaults;
+        }
+
+        $used = 0;
+        foreach ($backups as $backup) {
+            $used += isset($backup['size']) ? (int) $backup['size'] : 0;
+        }
+
+        return [
+            'used_bytes' => $used,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+    }
+
     private function fetch_remote_backups(PhpseclibSFTP $connection, array $settings): array {
         $remote_path = $this->normalize_remote_path($settings['remote_path']);
         $target = $remote_path !== '' ? $remote_path : '.';

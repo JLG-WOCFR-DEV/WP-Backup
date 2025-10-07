@@ -620,6 +620,81 @@ abstract class BJLG_S3_Compatible_Destination implements BJLG_Destination_Interf
     }
 
     /**
+     * {@inheritdoc}
+     */
+    public function delete_remote_backup_by_name($filename) {
+        $result = [
+            'success' => false,
+            'message' => '',
+        ];
+
+        $filename = basename((string) $filename);
+        if ($filename === '') {
+            $result['message'] = __('Nom de fichier invalide.', 'backup-jlg');
+
+            return $result;
+        }
+
+        if (!$this->is_connected()) {
+            $result['message'] = sprintf(__('%s n\'est pas configuré.', 'backup-jlg'), $this->get_service_name());
+
+            return $result;
+        }
+
+        $settings = $this->get_settings();
+        $object_key = $this->build_object_key($filename, $settings['object_prefix']);
+
+        try {
+            $this->perform_request('DELETE', $object_key, '', [], $settings);
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log(sprintf('Purge distante : %s supprimé sur %s.', $object_key, $this->get_log_label()));
+            }
+
+            $result['success'] = true;
+        } catch (Exception $exception) {
+            $result['message'] = $exception->getMessage();
+        }
+
+        return $result;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function get_storage_usage() {
+        $defaults = [
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+
+        if (!$this->is_connected()) {
+            return $defaults;
+        }
+
+        try {
+            $backups = $this->list_remote_backups();
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log(sprintf('Impossible de récupérer les métriques distantes %s : %s', $this->get_log_label(), $exception->getMessage()));
+            }
+
+            return $defaults;
+        }
+
+        $used = 0;
+        foreach ($backups as $backup) {
+            $used += isset($backup['size']) ? (int) $backup['size'] : 0;
+        }
+
+        return [
+            'used_bytes' => $used,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+        ];
+    }
+
+    /**
      * @param array<string, mixed> $settings
      * @return array<string, mixed>
      */
