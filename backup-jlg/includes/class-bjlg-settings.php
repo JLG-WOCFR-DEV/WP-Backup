@@ -403,6 +403,55 @@ class BJLG_Settings {
                 BJLG_Debug::log('Réglages Wasabi sauvegardés.');
             }
 
+            // --- Réglages Azure Blob Storage ---
+            if (
+                isset($_POST['azure_blob_account_name'])
+                || isset($_POST['azure_blob_account_key'])
+                || isset($_POST['azure_blob_container'])
+            ) {
+                $azure_settings = [
+                    'account_name' => isset($_POST['azure_blob_account_name']) ? sanitize_text_field(wp_unslash($_POST['azure_blob_account_name'])) : '',
+                    'account_key' => isset($_POST['azure_blob_account_key']) ? sanitize_text_field(wp_unslash($_POST['azure_blob_account_key'])) : '',
+                    'container' => isset($_POST['azure_blob_container']) ? sanitize_text_field(wp_unslash($_POST['azure_blob_container'])) : '',
+                    'object_prefix' => isset($_POST['azure_blob_object_prefix']) ? sanitize_text_field(wp_unslash($_POST['azure_blob_object_prefix'])) : '',
+                    'endpoint_suffix' => isset($_POST['azure_blob_endpoint_suffix']) ? sanitize_text_field(wp_unslash($_POST['azure_blob_endpoint_suffix'])) : 'core.windows.net',
+                    'chunk_size_mb' => isset($_POST['azure_blob_chunk_size_mb']) ? max(1, intval(wp_unslash($_POST['azure_blob_chunk_size_mb']))) : 4,
+                    'use_https' => isset($_POST['azure_blob_use_https']) ? $this->to_bool(wp_unslash($_POST['azure_blob_use_https'])) : true,
+                    'enabled' => isset($_POST['azure_blob_enabled']) ? $this->to_bool(wp_unslash($_POST['azure_blob_enabled'])) : false,
+                ];
+
+                $azure_settings['object_prefix'] = trim($azure_settings['object_prefix']);
+                $azure_settings['endpoint_suffix'] = trim($azure_settings['endpoint_suffix']);
+
+                update_option('bjlg_azure_blob_settings', $azure_settings);
+                $saved_settings['azure_blob'] = $azure_settings;
+                BJLG_Debug::log('Réglages Azure Blob Storage sauvegardés.');
+            }
+
+            // --- Réglages Backblaze B2 ---
+            if (
+                isset($_POST['backblaze_b2_key_id'])
+                || isset($_POST['backblaze_b2_application_key'])
+                || isset($_POST['backblaze_b2_bucket_id'])
+                || isset($_POST['backblaze_b2_bucket_name'])
+            ) {
+                $backblaze_settings = [
+                    'key_id' => isset($_POST['backblaze_b2_key_id']) ? sanitize_text_field(wp_unslash($_POST['backblaze_b2_key_id'])) : '',
+                    'application_key' => isset($_POST['backblaze_b2_application_key']) ? sanitize_text_field(wp_unslash($_POST['backblaze_b2_application_key'])) : '',
+                    'bucket_id' => isset($_POST['backblaze_b2_bucket_id']) ? sanitize_text_field(wp_unslash($_POST['backblaze_b2_bucket_id'])) : '',
+                    'bucket_name' => isset($_POST['backblaze_b2_bucket_name']) ? sanitize_text_field(wp_unslash($_POST['backblaze_b2_bucket_name'])) : '',
+                    'object_prefix' => isset($_POST['backblaze_b2_object_prefix']) ? sanitize_text_field(wp_unslash($_POST['backblaze_b2_object_prefix'])) : '',
+                    'chunk_size_mb' => isset($_POST['backblaze_b2_chunk_size_mb']) ? max(1, intval(wp_unslash($_POST['backblaze_b2_chunk_size_mb']))) : 100,
+                    'enabled' => isset($_POST['backblaze_b2_enabled']) ? $this->to_bool(wp_unslash($_POST['backblaze_b2_enabled'])) : false,
+                ];
+
+                $backblaze_settings['object_prefix'] = trim($backblaze_settings['object_prefix']);
+
+                update_option('bjlg_backblaze_b2_settings', $backblaze_settings);
+                $saved_settings['backblaze_b2'] = $backblaze_settings;
+                BJLG_Debug::log('Réglages Backblaze B2 sauvegardés.');
+            }
+
             // --- Réglages Dropbox ---
             if (isset($_POST['dropbox_access_token']) || isset($_POST['dropbox_folder'])) {
                 $dropbox_settings = [
@@ -1835,7 +1884,7 @@ class BJLG_Settings {
     }
 
     public static function get_known_destination_ids() {
-        $destinations = ['google_drive', 'aws_s3', 'sftp', 'dropbox', 'onedrive', 'pcloud', 'wasabi'];
+        $destinations = ['google_drive', 'aws_s3', 'sftp', 'dropbox', 'onedrive', 'pcloud', 'wasabi', 'azure_blob', 'backblaze_b2'];
 
         /** @var array<int, string> $filtered */
         $filtered = apply_filters('bjlg_known_destination_ids', $destinations);
