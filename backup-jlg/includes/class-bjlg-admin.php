@@ -156,42 +156,72 @@ class BJLG_Admin {
             <nav class="nav-tab-wrapper">
                 <?php foreach ($tabs as $tab_key => $tab_label): ?>
                     <a href="<?php echo esc_url(add_query_arg(['tab' => $tab_key], $page_url)); ?>"
-                       class="nav-tab <?php echo $active_tab == $tab_key ? 'nav-tab-active' : ''; ?>">
+                       class="nav-tab <?php echo $active_tab == $tab_key ? 'nav-tab-active' : ''; ?>"
+                       data-tab="<?php echo esc_attr($tab_key); ?>">
                         <?php echo esc_html($tab_label); ?>
                     </a>
                 <?php endforeach; ?>
             </nav>
 
-            <div class="bjlg-tab-content">
+            <div class="bjlg-tab-content" data-active-tab="<?php echo esc_attr($active_tab); ?>">
                 <?php $this->render_dashboard_overview($metrics); ?>
-                <?php
-                switch ($active_tab) {
-                    case 'history':
-                        $this->render_history_section();
-                        break;
-                    case 'health_check':
-                        $this->render_health_check_section();
-                        break;
-                    case 'settings':
-                        $this->render_settings_section();
-                        break;
-                    case 'logs':
-                        $this->render_logs_section();
-                        break;
-                    case 'api':
-                        $this->render_api_section();
-                        break;
-                    case 'backup_restore':
-                    default:
-                        $this->render_backup_creation_section();
-                        $this->render_backup_list_section();
-                        $this->render_restore_section();
-                        break;
-                }
-                ?>
+                <?php foreach ($tabs as $tab_key => $tab_label): ?>
+                    <section class="bjlg-tab-panel"
+                             data-tab="<?php echo esc_attr($tab_key); ?>"<?php echo $active_tab === $tab_key ? '' : ' hidden'; ?>>
+                        <?php $this->render_tab_panel($tab_key, $active_tab); ?>
+                    </section>
+                <?php endforeach; ?>
             </div>
         </div>
         <?php
+    }
+
+    /**
+     * Affiche le contenu d'un onglet.
+     */
+    private function render_tab_panel($tab_key, $active_tab) {
+        $panels = $this->get_tab_renderers();
+
+        if (isset($panels[$tab_key]) && is_callable($panels[$tab_key])) {
+            call_user_func($panels[$tab_key]);
+            return;
+        }
+
+        /**
+         * Permet d'afficher le contenu des onglets personnalisés.
+         *
+         * @param string $tab_key    Clé de l'onglet à afficher.
+         * @param string $active_tab Onglet actuellement actif.
+         */
+        do_action('bjlg_render_admin_tab', $tab_key, $active_tab);
+    }
+
+    /**
+     * Retourne les callbacks de rendu pour chaque onglet.
+     */
+    private function get_tab_renderers() {
+        return [
+            'backup_restore' => function () {
+                $this->render_backup_creation_section();
+                $this->render_backup_list_section();
+                $this->render_restore_section();
+            },
+            'history' => function () {
+                $this->render_history_section();
+            },
+            'health_check' => function () {
+                $this->render_health_check_section();
+            },
+            'settings' => function () {
+                $this->render_settings_section();
+            },
+            'logs' => function () {
+                $this->render_logs_section();
+            },
+            'api' => function () {
+                $this->render_api_section();
+            },
+        ];
     }
 
     /**
