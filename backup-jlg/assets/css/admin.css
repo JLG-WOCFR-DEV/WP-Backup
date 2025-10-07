@@ -1066,6 +1066,22 @@
     display: block;
 }
 
+.bjlg-checkbox-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.bjlg-checkbox-list li + li {
+    margin-top: 0.5rem;
+}
+
+.bjlg-checkbox-list label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .bjlg-screen-reader-only {
     position: absolute !important;
     width: 1px !important;

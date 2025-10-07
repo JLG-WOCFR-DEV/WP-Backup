@@ -211,17 +211,27 @@ class BJLG_Notifications {
         $subject = '[Backup JLG] ' . $payload['title'];
         $body = implode("\n", $payload['lines']);
 
-        if ($this->is_channel_enabled('email')) {
-            $this->send_email($subject, $body);
+        $channels = $this->prepare_channels_payload($payload['title'], $payload['lines']);
+
+        if (empty($channels)) {
+            BJLG_Debug::log('Notification ignorée car aucun canal valide n\'est disponible.');
+            return;
         }
 
-        if ($this->is_channel_enabled('slack')) {
-            $this->send_slack_message($payload['title'], $payload['lines']);
-        }
+        $entry = [
+            'event' => $event,
+            'title' => $payload['title'],
+            'subject' => $subject,
+            'lines' => $payload['lines'],
+            'body' => $body,
+            'context' => $payload['context'],
+            'channels' => $channels,
+            'created_at' => time(),
+        ];
 
-        if ($this->is_channel_enabled('discord')) {
-            $this->send_discord_message($payload['title'], $payload['lines']);
-        }
+        BJLG_Notification_Queue::enqueue($entry);
+
+        BJLG_Debug::log(sprintf('Notification "%s" mise en file d\'attente.', $event));
     }
 
     /**
@@ -318,113 +328,70 @@ class BJLG_Notifications {
     }
 
     /**
-     * Envoie un e-mail de notification.
-     */
-    private function send_email($subject, $body) {
-        $recipients = $this->extract_email_recipients($this->settings['email_recipients']);
-        if (empty($recipients)) {
-            BJLG_Debug::log('Notification email ignorée : aucun destinataire valide.');
-            return;
-        }
-
-        $headers = ['Content-Type: text/plain; charset=UTF-8'];
-        $sent = wp_mail($recipients, $subject, $body, $headers);
-
-        if ($sent) {
-            BJLG_Debug::log('Notification email envoyée.');
-        } else {
-            BJLG_Debug::log("Échec de l'envoi de la notification email.");
-        }
-    }
-
-    /**
-     * Envoie un message au webhook Slack configuré.
-     */
-    private function send_slack_message($title, $lines) {
-        $url = $this->settings['channels']['slack']['webhook_url'] ?? '';
-        if (!$this->is_valid_url($url)) {
-            BJLG_Debug::log('Notification Slack ignorée : URL invalide.');
-            return;
-        }
-
-        $message = sprintf("*%s*\n%s", $title, implode("\n", $lines));
-
-        $response = wp_remote_post($url, [
-            'headers' => ['Content-Type' => 'application/json; charset=utf-8'],
-            'body' => wp_json_encode(['text' => $message]),
-            'timeout' => 15,
-        ]);
-
-        if (is_wp_error($response)) {
-            BJLG_Debug::log("Erreur lors de l'envoi Slack : " . $response->get_error_message());
-            return;
-        }
-
-        $code = wp_remote_retrieve_response_code($response);
-        if ($code >= 200 && $code < 300) {
-            BJLG_Debug::log('Notification Slack envoyée.');
-        } else {
-            BJLG_Debug::log('Échec de la notification Slack. Code HTTP : ' . $code);
-        }
-    }
-
-    /**
-     * Envoie un message au webhook Discord configuré.
-     */
-    private function send_discord_message($title, $lines) {
-        $url = $this->settings['channels']['discord']['webhook_url'] ?? '';
-        if (!$this->is_valid_url($url)) {
-            BJLG_Debug::log('Notification Discord ignorée : URL invalide.');
-            return;
-        }
-
-        $content = sprintf("**%s**\n%s", $title, implode("\n", $lines));
-
-        $response = wp_remote_post($url, [
-            'headers' => ['Content-Type' => 'application/json; charset=utf-8'],
-            'body' => wp_json_encode(['content' => $content]),
-            'timeout' => 15,
-        ]);
-
-        if (is_wp_error($response)) {
-            BJLG_Debug::log("Erreur lors de l'envoi Discord : " . $response->get_error_message());
-            return;
-        }
-
-        $code = wp_remote_retrieve_response_code($response);
-        if ($code >= 200 && $code < 300) {
-            BJLG_Debug::log('Notification Discord envoyée.');
-        } else {
-            BJLG_Debug::log('Échec de la notification Discord. Code HTTP : ' . $code);
-        }
-    }
-
-    /**
-     * Extrait les destinataires valides depuis la chaîne fournie.
+     * Prépare les canaux à utiliser pour une notification donnée.
      *
-     * @param string $raw
+     * @param string   $title
+     * @param string[] $lines
      *
-     * @return string[]
+     * @return array<string,array<string,mixed>>
      */
-    private function extract_email_recipients($raw) {
-        if (!is_string($raw)) {
-            return [];
-        }
+    private function prepare_channels_payload($title, $lines) {
+        $channels = [];
 
-        $parts = preg_split('/[,\n]+/', $raw);
-        if (!$parts) {
-            return [];
-        }
-
-        $valid = [];
-        foreach ($parts as $part) {
-            $email = sanitize_email(trim($part));
-            if ($email !== '' && is_email($email)) {
-                $valid[] = $email;
+        if ($this->is_channel_enabled('email')) {
+            $recipients = BJLG_Notification_Transport::normalize_email_recipients($this->settings['email_recipients']);
+            if (!empty($recipients)) {
+                $channels['email'] = [
+                    'enabled' => true,
+                    'recipients' => $recipients,
+                    'status' => 'pending',
+                    'attempts' => 0,
+                ];
+            } else {
+                BJLG_Debug::log('Canal email ignoré : aucun destinataire valide.');
             }
         }
 
-        return array_values(array_unique($valid));
+        if ($this->is_channel_enabled('slack')) {
+            $url = $this->settings['channels']['slack']['webhook_url'] ?? '';
+            if (BJLG_Notification_Transport::is_valid_url($url)) {
+                $channels['slack'] = [
+                    'enabled' => true,
+                    'webhook_url' => $url,
+                    'status' => 'pending',
+                    'attempts' => 0,
+                ];
+            } else {
+                BJLG_Debug::log('Canal Slack ignoré : URL invalide.');
+            }
+        }
+
+        if ($this->is_channel_enabled('discord')) {
+            $url = $this->settings['channels']['discord']['webhook_url'] ?? '';
+            if (BJLG_Notification_Transport::is_valid_url($url)) {
+                $channels['discord'] = [
+                    'enabled' => true,
+                    'webhook_url' => $url,
+                    'status' => 'pending',
+                    'attempts' => 0,
+                ];
+            } else {
+                BJLG_Debug::log('Canal Discord ignoré : URL invalide.');
+            }
+        }
+
+        /**
+         * Permet d'ajouter ou de modifier les canaux en file d'attente.
+         */
+        $channels = apply_filters('bjlg_notification_channels_payload', $channels, $title, $lines, $this->settings);
+
+        if (!is_array($channels)) {
+            return [];
+        }
+
+        return array_filter($channels, static function ($channel) {
+            return is_array($channel) && !empty($channel['enabled']);
+        });
     }
 
     /**
@@ -449,15 +416,4 @@ class BJLG_Notifications {
         return array_values(array_unique($sanitized));
     }
 
-    /**
-     * Vérifie si une URL peut être utilisée pour l'appel HTTP.
-     */
-    private function is_valid_url($url) {
-        if (!is_string($url) || trim($url) === '') {
-            return false;
-        }
-
-        $validated = wp_http_validate_url($url);
-        return $validated !== false && filter_var($validated, FILTER_VALIDATE_URL);
-    }
 }
