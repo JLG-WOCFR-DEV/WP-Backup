@@ -19,6 +19,8 @@ jQuery(document).ready(function($) {
                 return;
             }
 
+            const activatedPanels = [];
+
             $tabs.each(function() {
                 const $tab = $(this);
                 const isActive = $tab.data('tab') === tabKey;
@@ -29,10 +31,18 @@ jQuery(document).ready(function($) {
                 const $panel = $(this);
                 const matches = $panel.data('tab') === tabKey;
                 if (matches) {
+                    const wasHidden = $panel.attr('hidden') !== undefined;
                     $panel.removeAttr('hidden');
+                    activatedPanels.push({ panel: $panel, wasHidden: wasHidden });
                 } else {
                     $panel.attr('hidden', 'hidden');
                 }
+            });
+
+            activatedPanels.forEach(function(entry) {
+                entry.panel.trigger('bjlg:activate', {
+                    wasHidden: entry.wasHidden
+                });
             });
 
             if (updateUrl && window.history && typeof window.history.replaceState === 'function') {
@@ -2203,494 +2213,515 @@ jQuery(document).ready(function($) {
             return;
         }
 
-        const restSettings = (typeof bjlg_ajax === 'object' && bjlg_ajax) ? bjlg_ajax : {};
-        const normalizedRoot = typeof restSettings.rest_root === 'string'
-            ? restSettings.rest_root.replace(/\/?$/, '/')
-            : '';
-        let backupsEndpoint = typeof restSettings.rest_backups === 'string' && restSettings.rest_backups
-            ? restSettings.rest_backups
-            : '';
-
-        if (!backupsEndpoint && normalizedRoot && typeof restSettings.rest_namespace === 'string') {
-            const namespace = restSettings.rest_namespace.replace(/^\//, '').replace(/\/$/, '');
-            backupsEndpoint = normalizedRoot + namespace + '/backups';
-        }
-
-        const $tableBody = $('#bjlg-backup-table-body');
-        const $pagination = $('#bjlg-backup-pagination');
-        const $feedback = $('#bjlg-backup-list-feedback');
-        const $summary = $('#bjlg-backup-summary');
-        const $filterType = $('#bjlg-backup-filter-type');
-        const $perPage = $('#bjlg-backup-per-page');
-        const $refreshButton = $('#bjlg-backup-refresh');
-
-        const defaultPage = parseInt($section.data('default-page'), 10);
-        const defaultPerPage = parseInt($section.data('default-per-page'), 10);
-
-        const state = {
-            page: Number.isFinite(defaultPage) ? defaultPage : 1,
-            perPage: Number.isFinite(defaultPerPage) ? defaultPerPage : 10,
-            type: ($filterType.val() || 'all'),
-            sort: 'date_desc',
-            loading: false
-        };
-
-        if (!$perPage.val() || parseInt($perPage.val(), 10) !== state.perPage) {
-            $perPage.val(String(state.perPage));
-        }
-
-        const typeLabels = {
-            full: { label: 'Complète', color: '#34d399' },
-            incremental: { label: 'Incrémentale', color: '#60a5fa' },
-            'pre-restore': { label: 'Pré-restauration', color: '#f59e0b' },
-            standard: { label: 'Standard', color: '#9ca3af' }
-        };
-
-        const componentLabels = {
-            db: { label: 'Base de données', color: '#6366f1' },
-            plugins: { label: 'Extensions', color: '#f59e0b' },
-            themes: { label: 'Thèmes', color: '#10b981' },
-            uploads: { label: 'Médias', color: '#3b82f6' }
-        };
-
-        const destinationLabels = {
-            local: { label: 'Local', color: '#6b7280' },
-            local_storage: { label: 'Local', color: '#6b7280' },
-            filesystem: { label: 'Local', color: '#6b7280' },
-            google_drive: { label: 'Google Drive', color: '#facc15' },
-            'google-drive': { label: 'Google Drive', color: '#facc15' },
-            gdrive: { label: 'Google Drive', color: '#facc15' },
-            aws_s3: { label: 'Amazon S3', color: '#8b5cf6' },
-            s3: { label: 'Amazon S3', color: '#8b5cf6' },
-            dropbox: { label: 'Dropbox', color: '#2563eb' },
-            onedrive: { label: 'OneDrive', color: '#0ea5e9' },
-            pcloud: { label: 'pCloud', color: '#f97316' }
-        };
-
-        function createBadge(config, fallbackLabel, extraClasses) {
-            const label = config && config.label ? config.label : fallbackLabel;
-            const background = config && config.color ? config.color : '#4b5563';
-            const $badge = $('<span/>', {
-                class: ['bjlg-badge'].concat(extraClasses || []).join(' '),
-                text: label
-            });
-
-            $badge.css({
-                display: 'inline-flex',
-                'align-items': 'center',
-                'justify-content': 'center',
-                'border-radius': '4px',
-                padding: '2px 6px',
-                'font-size': '0.8em',
-                'font-weight': '600',
-                color: '#ffffff',
-                'background-color': background,
-                'margin-right': '4px',
-                'margin-top': '2px'
-            });
-
-            return $badge;
-        }
-
-        function clearFeedback() {
-            if ($feedback.length) {
-                $feedback.hide().removeClass('notice-success notice-warning notice-info notice-error').empty();
-            }
-        }
-
-        function showError(message) {
-            if ($feedback.length) {
-                $feedback
-                    .attr('class', 'notice notice-error')
-                    .text(message)
-                    .show();
-            }
-        }
-
-        function setControlsDisabled(disabled) {
-            const value = !!disabled;
-            const ariaValue = value ? 'true' : 'false';
-            $filterType.prop('disabled', value);
-            $perPage.prop('disabled', value);
-            $refreshButton.prop('disabled', value);
-            $pagination.find('a')
-                .prop('disabled', value)
-                .attr('aria-disabled', ariaValue)
-                .toggleClass('disabled', value);
-        }
-
-        function renderLoadingRow() {
-            if (!$tableBody.length) {
-                return;
-            }
-            $tableBody.empty();
-            const $row = $('<tr/>', { class: 'bjlg-backup-loading-row' });
-            const $cell = $('<td/>', { colspan: 5 });
-            $('<span/>', { class: 'spinner is-active', 'aria-hidden': 'true' }).appendTo($cell);
-            $('<span/>').text('Chargement des sauvegardes...').appendTo($cell);
-            $row.append($cell);
-            $tableBody.append($row);
-        }
-
-        function renderEmptyRow() {
-            if (!$tableBody.length) {
-                return;
-            }
-            $tableBody.empty();
-            const $row = $('<tr/>', { class: 'bjlg-backup-empty-row' });
-            const $cell = $('<td/>', { colspan: 5, text: 'Aucune sauvegarde trouvée pour ces critères.' });
-            $row.append($cell);
-            $tableBody.append($row);
-        }
-
-        function renderErrorRow(message) {
-            if (!$tableBody.length) {
-                return;
-            }
-            $tableBody.empty();
-            const $row = $('<tr/>', { class: 'bjlg-backup-error-row' });
-            const $cell = $('<td/>', { colspan: 5 });
-            $('<strong/>').text('Erreur : ').appendTo($cell);
-            $('<span/>').text(message).appendTo($cell);
-            $row.append($cell);
-            $tableBody.append($row);
-        }
-
-        function formatSize(backup) {
-            if (backup && typeof backup.size_formatted === 'string' && backup.size_formatted.trim() !== '') {
-                return backup.size_formatted;
-            }
-
-            const size = backup && Number.isFinite(backup.size) ? backup.size : null;
-            if (!Number.isFinite(size) || size < 0) {
-                return '—';
-            }
-
-            const units = ['o', 'Ko', 'Mo', 'Go', 'To', 'Po'];
-            let index = 0;
-            let value = size;
-            while (value >= 1024 && index < units.length - 1) {
-                value /= 1024;
-                index += 1;
-            }
-
-            const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
-            return `${rounded} ${units[index]}`;
-        }
-
-        function formatDate(isoString) {
-            if (typeof isoString !== 'string' || isoString.trim() === '') {
-                return '—';
-            }
-
-            const date = new Date(isoString);
-            if (Number.isNaN(date.getTime())) {
-                return isoString;
-            }
-
-            try {
-                return new Intl.DateTimeFormat(undefined, {
-                    dateStyle: 'medium',
-                    timeStyle: 'short'
-                }).format(date);
-            } catch (error) {
-                return date.toLocaleString();
-            }
-        }
-
-        function normalizeComponents(backup) {
-            if (backup && Array.isArray(backup.components) && backup.components.length) {
-                return backup.components;
-            }
-            if (backup && backup.manifest && Array.isArray(backup.manifest.contains) && backup.manifest.contains.length) {
-                return backup.manifest.contains;
-            }
-            return [];
-        }
-
-        function normalizeDestinations(backup) {
-            if (!backup) {
-                return [];
-            }
-
-            const manifest = backup.manifest || {};
-            if (Array.isArray(backup.destinations) && backup.destinations.length) {
-                return backup.destinations;
-            }
-            if (Array.isArray(manifest.destinations) && manifest.destinations.length) {
-                return manifest.destinations;
-            }
-            if (typeof manifest.destination === 'string' && manifest.destination.trim() !== '') {
-                return [manifest.destination];
-            }
-            return ['local'];
-        }
-
-        function renderBackups(backups) {
-            if (!$tableBody.length) {
-                return;
-            }
-
-            $tableBody.empty();
-
-            if (!Array.isArray(backups) || backups.length === 0) {
-                renderEmptyRow();
-                return;
-            }
-
-            backups.forEach(function(backup) {
-                const $row = $('<tr/>', { class: 'bjlg-card-row' });
-
-                const $nameCell = $('<td/>', { class: 'bjlg-card-cell', 'data-label': 'Nom du fichier' });
-                $('<strong/>').text(backup && backup.filename ? backup.filename : 'Sauvegarde inconnue').appendTo($nameCell);
-
-                const $badgeContainer = $('<div/>', { class: 'bjlg-badge-group', style: 'margin-top:6px; display:flex; flex-wrap:wrap;' });
-                const typeKey = backup && typeof backup.type === 'string' ? backup.type.toLowerCase() : 'standard';
-                const typeConfig = typeLabels[typeKey] || typeLabels.standard;
-                createBadge(typeConfig, typeConfig.label, ['bjlg-badge-type']).appendTo($badgeContainer);
-
-                if (backup && backup.is_encrypted) {
-                    const encryptedConfig = { label: 'Chiffré', color: '#a78bfa' };
-                    createBadge(encryptedConfig, 'Chiffré', ['bjlg-badge-encrypted']).appendTo($badgeContainer);
-                }
-
-                const destinations = normalizeDestinations(backup);
-                const uniqueDestinations = Array.from(new Set(destinations.filter(function(item) {
-                    return typeof item === 'string' && item.trim() !== '';
-                }).map(function(item) {
-                    return item.toLowerCase();
-                })));
-
-                uniqueDestinations.forEach(function(destinationKey) {
-                    const config = destinationLabels[destinationKey] || { label: destinationKey, color: '#4b5563' };
-                    createBadge(config, config.label, ['bjlg-badge-destination']).appendTo($badgeContainer);
-                });
-
-                $nameCell.append($badgeContainer);
-                $row.append($nameCell);
-
-                const $componentsCell = $('<td/>', { class: 'bjlg-card-cell', 'data-label': 'Composants' });
-                const components = normalizeComponents(backup);
-
-                if (components.length === 0) {
-                    $componentsCell.text('—');
-                } else {
-                    const $componentsWrapper = $('<div/>', { style: 'display:flex; flex-wrap:wrap;' });
-                    components.forEach(function(componentKeyRaw) {
-                        const componentKey = typeof componentKeyRaw === 'string' ? componentKeyRaw.toLowerCase() : '';
-                        const config = componentLabels[componentKey] || { label: componentKey || 'Inconnu', color: '#9ca3af' };
-                        createBadge(config, config.label, ['bjlg-badge-component']).appendTo($componentsWrapper);
-                    });
-                    $componentsCell.append($componentsWrapper);
-                }
-
-                $row.append($componentsCell);
-
-                const $sizeCell = $('<td/>', { class: 'bjlg-card-cell', 'data-label': 'Taille' });
-                $sizeCell.text(formatSize(backup));
-                $row.append($sizeCell);
-
-                const $dateCell = $('<td/>', { class: 'bjlg-card-cell', 'data-label': 'Date' });
-                const dateString = backup && backup.created_at ? backup.created_at : (backup && backup.modified_at ? backup.modified_at : null);
-                $dateCell.text(formatDate(dateString));
-                $row.append($dateCell);
-
-                const $actionsCell = $('<td/>', { class: 'bjlg-card-cell bjlg-card-actions-cell', 'data-label': 'Actions' });
-                const $actionsWrapper = $('<div/>', { class: 'bjlg-card-actions' });
-
-                const filename = backup && backup.filename ? backup.filename : '';
-
-                $('<button/>', {
-                    class: 'button button-primary bjlg-restore-button',
-                    text: 'Restaurer',
-                    'data-filename': filename
-                }).appendTo($actionsWrapper);
-
-                $('<button/>', {
-                    class: 'button bjlg-download-button',
-                    text: 'Télécharger',
-                    type: 'button',
-                    'data-filename': filename
-                }).appendTo($actionsWrapper);
-
-                $('<button/>', {
-                    class: 'button button-link-delete bjlg-delete-button',
-                    text: 'Supprimer',
-                    'data-filename': filename
-                }).appendTo($actionsWrapper);
-
-                $actionsCell.append($actionsWrapper);
-                $row.append($actionsCell);
-
-                $tableBody.append($row);
-            });
-        }
-
-        function renderPagination(pagination) {
-            if (!$pagination.length) {
-                return;
-            }
-
-            $pagination.empty();
-
-            if (!pagination) {
-                return;
-            }
-
-            const pagesRaw = parseInt(pagination.pages, 10);
-            if (!Number.isFinite(pagesRaw) || pagesRaw <= 0) {
-                return;
-            }
-
-            const totalPages = Math.max(1, pagesRaw);
-            const currentPage = Math.min(Math.max(1, state.page), totalPages);
-
-            const $links = $('<span/>', { class: 'pagination-links' });
-
-            function appendNav(label, targetPage, disabled, className) {
-                const classes = [className || '', 'button'].join(' ').trim();
-                if (disabled) {
-                    $('<span/>', {
-                        class: `tablenav-pages-navspan ${className || ''} disabled`,
-                        text: label,
-                        'aria-hidden': 'true'
-                    }).appendTo($links);
+        const initialize = function() {
+                if ($section.data('bjlgBackupListReady')) {
                     return;
                 }
-
-                $('<a/>', {
-                    href: '#',
-                    text: label,
-                    class: `${classes} bjlg-backup-page-button`,
-                    'data-page': targetPage,
-                    'aria-label': `Aller à la page ${targetPage}`
-                }).appendTo($links);
+                $section.data('bjlgBackupListReady', true);
+    
+                const restSettings = (typeof bjlg_ajax === 'object' && bjlg_ajax) ? bjlg_ajax : {};
+                const normalizedRoot = typeof restSettings.rest_root === 'string'
+                    ? restSettings.rest_root.replace(/\/?$/, '/')
+                    : '';
+            let backupsEndpoint = typeof restSettings.rest_backups === 'string' && restSettings.rest_backups
+                ? restSettings.rest_backups
+                : '';
+    
+            if (!backupsEndpoint && normalizedRoot && typeof restSettings.rest_namespace === 'string') {
+                const namespace = restSettings.rest_namespace.replace(/^\//, '').replace(/\/$/, '');
+                backupsEndpoint = normalizedRoot + namespace + '/backups';
             }
-
-            appendNav('«', 1, currentPage === 1, 'first-page');
-            appendNav('‹', currentPage - 1, currentPage === 1, 'prev-page');
-
-            $('<span/>', {
-                class: 'tablenav-paging-text',
-                text: `${currentPage} / ${totalPages}`
-            }).appendTo($links);
-
-            appendNav('›', currentPage + 1, currentPage >= totalPages, 'next-page');
-            appendNav('»', totalPages, currentPage >= totalPages, 'last-page');
-
-            $pagination.append($links);
-        }
-
-        function updateSummary(pagination, displayedCount) {
-            if (!$summary.length) {
-                return;
+    
+            const $tableBody = $('#bjlg-backup-table-body');
+            const $pagination = $('#bjlg-backup-pagination');
+            const $feedback = $('#bjlg-backup-list-feedback');
+            const $summary = $('#bjlg-backup-summary');
+            const $filterType = $('#bjlg-backup-filter-type');
+            const $perPage = $('#bjlg-backup-per-page');
+            const $refreshButton = $('#bjlg-backup-refresh');
+    
+            const defaultPage = parseInt($section.data('default-page'), 10);
+            const defaultPerPage = parseInt($section.data('default-per-page'), 10);
+    
+            const state = {
+                page: Number.isFinite(defaultPage) ? defaultPage : 1,
+                perPage: Number.isFinite(defaultPerPage) ? defaultPerPage : 10,
+                type: ($filterType.val() || 'all'),
+                sort: 'date_desc',
+                loading: false
+            };
+    
+            if (!$perPage.val() || parseInt($perPage.val(), 10) !== state.perPage) {
+                $perPage.val(String(state.perPage));
             }
-
-            if (!pagination) {
-                $summary.text('');
-                return;
+    
+            const typeLabels = {
+                full: { label: 'Complète', color: '#34d399' },
+                incremental: { label: 'Incrémentale', color: '#60a5fa' },
+                'pre-restore': { label: 'Pré-restauration', color: '#f59e0b' },
+                standard: { label: 'Standard', color: '#9ca3af' }
+            };
+    
+            const componentLabels = {
+                db: { label: 'Base de données', color: '#6366f1' },
+                plugins: { label: 'Extensions', color: '#f59e0b' },
+                themes: { label: 'Thèmes', color: '#10b981' },
+                uploads: { label: 'Médias', color: '#3b82f6' }
+            };
+    
+            const destinationLabels = {
+                local: { label: 'Local', color: '#6b7280' },
+                local_storage: { label: 'Local', color: '#6b7280' },
+                filesystem: { label: 'Local', color: '#6b7280' },
+                google_drive: { label: 'Google Drive', color: '#facc15' },
+                'google-drive': { label: 'Google Drive', color: '#facc15' },
+                gdrive: { label: 'Google Drive', color: '#facc15' },
+                aws_s3: { label: 'Amazon S3', color: '#8b5cf6' },
+                s3: { label: 'Amazon S3', color: '#8b5cf6' },
+                dropbox: { label: 'Dropbox', color: '#2563eb' },
+                onedrive: { label: 'OneDrive', color: '#0ea5e9' },
+                pcloud: { label: 'pCloud', color: '#f97316' }
+            };
+    
+            function createBadge(config, fallbackLabel, extraClasses) {
+                const label = config && config.label ? config.label : fallbackLabel;
+                const background = config && config.color ? config.color : '#4b5563';
+                const $badge = $('<span/>', {
+                    class: ['bjlg-badge'].concat(extraClasses || []).join(' '),
+                    text: label
+                });
+    
+                $badge.css({
+                    display: 'inline-flex',
+                    'align-items': 'center',
+                    'justify-content': 'center',
+                    'border-radius': '4px',
+                    padding: '2px 6px',
+                    'font-size': '0.8em',
+                    'font-weight': '600',
+                    color: '#ffffff',
+                    'background-color': background,
+                    'margin-right': '4px',
+                    'margin-top': '2px'
+                });
+    
+                return $badge;
             }
-
-            const total = Number.isFinite(pagination.total) ? pagination.total : parseInt(pagination.total, 10);
-            const totalCount = Number.isFinite(total) ? total : 0;
-
-            if (totalCount === 0) {
-                $summary.text('Total : 0 sauvegarde');
-                return;
+    
+            function clearFeedback() {
+                if ($feedback.length) {
+                    $feedback.hide().removeClass('notice-success notice-warning notice-info notice-error').empty();
+                }
             }
-
-            const page = Math.max(1, state.page);
-            const perPage = Math.max(1, state.perPage);
-            const start = (page - 1) * perPage + 1;
-            const end = start + Math.max(0, displayedCount - 1);
-            const cappedEnd = Math.min(end, totalCount);
-
-            $summary.text(`Affichage ${start}-${cappedEnd} sur ${totalCount} sauvegarde${totalCount > 1 ? 's' : ''}`);
-        }
-
-        function requestBackups() {
-            if (!backupsEndpoint) {
-                renderErrorRow("L'API REST des sauvegardes est indisponible.");
-                showError("Impossible de contacter l'API des sauvegardes. Vérifiez la configuration REST.");
-                return;
+    
+            function showError(message) {
+                if ($feedback.length) {
+                    $feedback
+                        .attr('class', 'notice notice-error')
+                        .text(message)
+                        .show();
+                }
             }
-
-            state.loading = true;
-            clearFeedback();
-            setControlsDisabled(true);
-            renderLoadingRow();
-
-            $.ajax({
-                url: backupsEndpoint,
-                method: 'GET',
-                dataType: 'json',
-                data: {
-                    page: state.page,
-                    per_page: state.perPage,
-                    type: state.type,
-                    sort: state.sort
-                },
-                beforeSend: function(xhr) {
-                    if (restSettings.rest_nonce) {
-                        xhr.setRequestHeader('X-WP-Nonce', restSettings.rest_nonce);
+    
+            function setControlsDisabled(disabled) {
+                const value = !!disabled;
+                const ariaValue = value ? 'true' : 'false';
+                $filterType.prop('disabled', value);
+                $perPage.prop('disabled', value);
+                $refreshButton.prop('disabled', value);
+                $pagination.find('a')
+                    .prop('disabled', value)
+                    .attr('aria-disabled', ariaValue)
+                    .toggleClass('disabled', value);
+            }
+    
+            function renderLoadingRow() {
+                if (!$tableBody.length) {
+                    return;
+                }
+                $tableBody.empty();
+                const $row = $('<tr/>', { class: 'bjlg-backup-loading-row' });
+                const $cell = $('<td/>', { colspan: 5 });
+                $('<span/>', { class: 'spinner is-active', 'aria-hidden': 'true' }).appendTo($cell);
+                $('<span/>').text('Chargement des sauvegardes...').appendTo($cell);
+                $row.append($cell);
+                $tableBody.append($row);
+            }
+    
+            function renderEmptyRow() {
+                if (!$tableBody.length) {
+                    return;
+                }
+                $tableBody.empty();
+                const $row = $('<tr/>', { class: 'bjlg-backup-empty-row' });
+                const $cell = $('<td/>', { colspan: 5, text: 'Aucune sauvegarde trouvée pour ces critères.' });
+                $row.append($cell);
+                $tableBody.append($row);
+            }
+    
+            function renderErrorRow(message) {
+                if (!$tableBody.length) {
+                    return;
+                }
+                $tableBody.empty();
+                const $row = $('<tr/>', { class: 'bjlg-backup-error-row' });
+                const $cell = $('<td/>', { colspan: 5 });
+                $('<strong/>').text('Erreur : ').appendTo($cell);
+                $('<span/>').text(message).appendTo($cell);
+                $row.append($cell);
+                $tableBody.append($row);
+            }
+    
+            function formatSize(backup) {
+                if (backup && typeof backup.size_formatted === 'string' && backup.size_formatted.trim() !== '') {
+                    return backup.size_formatted;
+                }
+    
+                const size = backup && Number.isFinite(backup.size) ? backup.size : null;
+                if (!Number.isFinite(size) || size < 0) {
+                    return '—';
+                }
+    
+                const units = ['o', 'Ko', 'Mo', 'Go', 'To', 'Po'];
+                let index = 0;
+                let value = size;
+                while (value >= 1024 && index < units.length - 1) {
+                    value /= 1024;
+                    index += 1;
+                }
+    
+                const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+                return `${rounded} ${units[index]}`;
+            }
+    
+            function formatDate(isoString) {
+                if (typeof isoString !== 'string' || isoString.trim() === '') {
+                    return '—';
+                }
+    
+                const date = new Date(isoString);
+                if (Number.isNaN(date.getTime())) {
+                    return isoString;
+                }
+    
+                try {
+                    return new Intl.DateTimeFormat(undefined, {
+                        dateStyle: 'medium',
+                        timeStyle: 'short'
+                    }).format(date);
+                } catch (error) {
+                    return date.toLocaleString();
+                }
+            }
+    
+            function normalizeComponents(backup) {
+                if (backup && Array.isArray(backup.components) && backup.components.length) {
+                    return backup.components;
+                }
+                if (backup && backup.manifest && Array.isArray(backup.manifest.contains) && backup.manifest.contains.length) {
+                    return backup.manifest.contains;
+                }
+                return [];
+            }
+    
+            function normalizeDestinations(backup) {
+                if (!backup) {
+                    return [];
+                }
+    
+                const manifest = backup.manifest || {};
+                if (Array.isArray(backup.destinations) && backup.destinations.length) {
+                    return backup.destinations;
+                }
+                if (Array.isArray(manifest.destinations) && manifest.destinations.length) {
+                    return manifest.destinations;
+                }
+                if (typeof manifest.destination === 'string' && manifest.destination.trim() !== '') {
+                    return [manifest.destination];
+                }
+                return ['local'];
+            }
+    
+            function renderBackups(backups) {
+                if (!$tableBody.length) {
+                    return;
+                }
+    
+                $tableBody.empty();
+    
+                if (!Array.isArray(backups) || backups.length === 0) {
+                    renderEmptyRow();
+                    return;
+                }
+    
+                backups.forEach(function(backup) {
+                    const $row = $('<tr/>', { class: 'bjlg-card-row' });
+    
+                    const $nameCell = $('<td/>', { class: 'bjlg-card-cell', 'data-label': 'Nom du fichier' });
+                    $('<strong/>').text(backup && backup.filename ? backup.filename : 'Sauvegarde inconnue').appendTo($nameCell);
+    
+                    const $badgeContainer = $('<div/>', { class: 'bjlg-badge-group', style: 'margin-top:6px; display:flex; flex-wrap:wrap;' });
+                    const typeKey = backup && typeof backup.type === 'string' ? backup.type.toLowerCase() : 'standard';
+                    const typeConfig = typeLabels[typeKey] || typeLabels.standard;
+                    createBadge(typeConfig, typeConfig.label, ['bjlg-badge-type']).appendTo($badgeContainer);
+    
+                    if (backup && backup.is_encrypted) {
+                        const encryptedConfig = { label: 'Chiffré', color: '#a78bfa' };
+                        createBadge(encryptedConfig, 'Chiffré', ['bjlg-badge-encrypted']).appendTo($badgeContainer);
                     }
+    
+                    const destinations = normalizeDestinations(backup);
+                    const uniqueDestinations = Array.from(new Set(destinations.filter(function(item) {
+                        return typeof item === 'string' && item.trim() !== '';
+                    }).map(function(item) {
+                        return item.toLowerCase();
+                    })));
+    
+                    uniqueDestinations.forEach(function(destinationKey) {
+                        const config = destinationLabels[destinationKey] || { label: destinationKey, color: '#4b5563' };
+                        createBadge(config, config.label, ['bjlg-badge-destination']).appendTo($badgeContainer);
+                    });
+    
+                    $nameCell.append($badgeContainer);
+                    $row.append($nameCell);
+    
+                    const $componentsCell = $('<td/>', { class: 'bjlg-card-cell', 'data-label': 'Composants' });
+                    const components = normalizeComponents(backup);
+    
+                    if (components.length === 0) {
+                        $componentsCell.text('—');
+                    } else {
+                        const $componentsWrapper = $('<div/>', { style: 'display:flex; flex-wrap:wrap;' });
+                        components.forEach(function(componentKeyRaw) {
+                            const componentKey = typeof componentKeyRaw === 'string' ? componentKeyRaw.toLowerCase() : '';
+                            const config = componentLabels[componentKey] || { label: componentKey || 'Inconnu', color: '#9ca3af' };
+                            createBadge(config, config.label, ['bjlg-badge-component']).appendTo($componentsWrapper);
+                        });
+                        $componentsCell.append($componentsWrapper);
+                    }
+    
+                    $row.append($componentsCell);
+    
+                    const $sizeCell = $('<td/>', { class: 'bjlg-card-cell', 'data-label': 'Taille' });
+                    $sizeCell.text(formatSize(backup));
+                    $row.append($sizeCell);
+    
+                    const $dateCell = $('<td/>', { class: 'bjlg-card-cell', 'data-label': 'Date' });
+                    const dateString = backup && backup.created_at ? backup.created_at : (backup && backup.modified_at ? backup.modified_at : null);
+                    $dateCell.text(formatDate(dateString));
+                    $row.append($dateCell);
+    
+                    const $actionsCell = $('<td/>', { class: 'bjlg-card-cell bjlg-card-actions-cell', 'data-label': 'Actions' });
+                    const $actionsWrapper = $('<div/>', { class: 'bjlg-card-actions' });
+    
+                    const filename = backup && backup.filename ? backup.filename : '';
+    
+                    $('<button/>', {
+                        class: 'button button-primary bjlg-restore-button',
+                        text: 'Restaurer',
+                        'data-filename': filename
+                    }).appendTo($actionsWrapper);
+    
+                    $('<button/>', {
+                        class: 'button bjlg-download-button',
+                        text: 'Télécharger',
+                        type: 'button',
+                        'data-filename': filename
+                    }).appendTo($actionsWrapper);
+    
+                    $('<button/>', {
+                        class: 'button button-link-delete bjlg-delete-button',
+                        text: 'Supprimer',
+                        'data-filename': filename
+                    }).appendTo($actionsWrapper);
+    
+                    $actionsCell.append($actionsWrapper);
+                    $row.append($actionsCell);
+    
+                    $tableBody.append($row);
+                });
+            }
+    
+            function renderPagination(pagination) {
+                if (!$pagination.length) {
+                    return;
                 }
-            })
-            .done(function(response) {
-                const backups = response && Array.isArray(response.backups) ? response.backups : [];
-                renderBackups(backups);
-                renderPagination(response ? response.pagination : null);
-                updateSummary(response ? response.pagination : null, backups.length);
-            })
-            .fail(function(jqXHR) {
-                let message = "Impossible de récupérer les sauvegardes.";
-                if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.message) {
-                    message = jqXHR.responseJSON.message;
-                } else if (jqXHR && typeof jqXHR.responseText === 'string' && jqXHR.responseText.trim() !== '') {
-                    message = jqXHR.responseText;
+    
+                $pagination.empty();
+    
+                if (!pagination) {
+                    return;
                 }
-                renderErrorRow(message);
-                showError(message);
-                updateSummary(null, 0);
-            })
-            .always(function() {
-                state.loading = false;
-                setControlsDisabled(false);
+    
+                const pagesRaw = parseInt(pagination.pages, 10);
+                if (!Number.isFinite(pagesRaw) || pagesRaw <= 0) {
+                    return;
+                }
+    
+                const totalPages = Math.max(1, pagesRaw);
+                const currentPage = Math.min(Math.max(1, state.page), totalPages);
+    
+                const $links = $('<span/>', { class: 'pagination-links' });
+    
+                function appendNav(label, targetPage, disabled, className) {
+                    const classes = [className || '', 'button'].join(' ').trim();
+                    if (disabled) {
+                        $('<span/>', {
+                            class: `tablenav-pages-navspan ${className || ''} disabled`,
+                            text: label,
+                            'aria-hidden': 'true'
+                        }).appendTo($links);
+                        return;
+                    }
+    
+                    $('<a/>', {
+                        href: '#',
+                        text: label,
+                        class: `${classes} bjlg-backup-page-button`,
+                        'data-page': targetPage,
+                        'aria-label': `Aller à la page ${targetPage}`
+                    }).appendTo($links);
+                }
+    
+                appendNav('«', 1, currentPage === 1, 'first-page');
+                appendNav('‹', currentPage - 1, currentPage === 1, 'prev-page');
+    
+                $('<span/>', {
+                    class: 'tablenav-paging-text',
+                    text: `${currentPage} / ${totalPages}`
+                }).appendTo($links);
+    
+                appendNav('›', currentPage + 1, currentPage >= totalPages, 'next-page');
+                appendNav('»', totalPages, currentPage >= totalPages, 'last-page');
+    
+                $pagination.append($links);
+            }
+    
+            function updateSummary(pagination, displayedCount) {
+                if (!$summary.length) {
+                    return;
+                }
+    
+                if (!pagination) {
+                    $summary.text('');
+                    return;
+                }
+    
+                const total = Number.isFinite(pagination.total) ? pagination.total : parseInt(pagination.total, 10);
+                const totalCount = Number.isFinite(total) ? total : 0;
+    
+                if (totalCount === 0) {
+                    $summary.text('Total : 0 sauvegarde');
+                    return;
+                }
+    
+                const page = Math.max(1, state.page);
+                const perPage = Math.max(1, state.perPage);
+                const start = (page - 1) * perPage + 1;
+                const end = start + Math.max(0, displayedCount - 1);
+                const cappedEnd = Math.min(end, totalCount);
+    
+                $summary.text(`Affichage ${start}-${cappedEnd} sur ${totalCount} sauvegarde${totalCount > 1 ? 's' : ''}`);
+            }
+    
+            function requestBackups() {
+                if (!backupsEndpoint) {
+                    renderErrorRow("L'API REST des sauvegardes est indisponible.");
+                    showError("Impossible de contacter l'API des sauvegardes. Vérifiez la configuration REST.");
+                    return;
+                }
+    
+                state.loading = true;
+                clearFeedback();
+                setControlsDisabled(true);
+                renderLoadingRow();
+    
+                $.ajax({
+                    url: backupsEndpoint,
+                    method: 'GET',
+                    dataType: 'json',
+                    data: {
+                        page: state.page,
+                        per_page: state.perPage,
+                        type: state.type,
+                        sort: state.sort
+                    },
+                    beforeSend: function(xhr) {
+                        if (restSettings.rest_nonce) {
+                            xhr.setRequestHeader('X-WP-Nonce', restSettings.rest_nonce);
+                        }
+                    }
+                })
+                .done(function(response) {
+                    const backups = response && Array.isArray(response.backups) ? response.backups : [];
+                    renderBackups(backups);
+                    renderPagination(response ? response.pagination : null);
+                    updateSummary(response ? response.pagination : null, backups.length);
+                })
+                .fail(function(jqXHR) {
+                    let message = "Impossible de récupérer les sauvegardes.";
+                    if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.message) {
+                        message = jqXHR.responseJSON.message;
+                    } else if (jqXHR && typeof jqXHR.responseText === 'string' && jqXHR.responseText.trim() !== '') {
+                        message = jqXHR.responseText;
+                    }
+                    renderErrorRow(message);
+                    showError(message);
+                    updateSummary(null, 0);
+                })
+                .always(function() {
+                    state.loading = false;
+                    setControlsDisabled(false);
+                });
+            }
+    
+            $filterType.on('change', function() {
+                state.type = $(this).val() || 'all';
+                state.page = 1;
+                requestBackups();
             });
+    
+            $perPage.on('change', function() {
+                const selected = parseInt($(this).val(), 10);
+                state.perPage = Number.isFinite(selected) ? selected : state.perPage;
+                state.page = 1;
+                requestBackups();
+            });
+    
+            $refreshButton.on('click', function(e) {
+                e.preventDefault();
+                requestBackups();
+            });
+    
+            $pagination.on('click', '.bjlg-backup-page-button', function(e) {
+                e.preventDefault();
+                if (state.loading) {
+                    return;
+                }
+                const target = parseInt($(this).data('page'), 10);
+                if (!Number.isFinite(target) || target === state.page) {
+                    return;
+                }
+                state.page = Math.max(1, target);
+                requestBackups();
+            });
+    
+            requestBackups();
+        };
+
+        if ($section.is(':hidden')) {
+            const $panel = $section.closest('.bjlg-tab-panel');
+            if ($panel.length) {
+                const onActivate = function() {
+                    $panel.off('bjlg:activate.backupList', onActivate);
+                    initialize();
+                };
+                $panel.on('bjlg:activate.backupList', onActivate);
+            }
+            return;
         }
 
-        $filterType.on('change', function() {
-            state.type = $(this).val() || 'all';
-            state.page = 1;
-            requestBackups();
-        });
-
-        $perPage.on('change', function() {
-            const selected = parseInt($(this).val(), 10);
-            state.perPage = Number.isFinite(selected) ? selected : state.perPage;
-            state.page = 1;
-            requestBackups();
-        });
-
-        $refreshButton.on('click', function(e) {
-            e.preventDefault();
-            requestBackups();
-        });
-
-        $pagination.on('click', '.bjlg-backup-page-button', function(e) {
-            e.preventDefault();
-            if (state.loading) {
-                return;
-            }
-            const target = parseInt($(this).data('page'), 10);
-            if (!Number.isFinite(target) || target === state.page) {
-                return;
-            }
-            state.page = Math.max(1, target);
-            requestBackups();
-        });
-
-        requestBackups();
+        initialize();
     })();
 
     function bjlgParseBackupPatternInput(value) {
