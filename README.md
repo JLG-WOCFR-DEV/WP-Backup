@@ -124,6 +124,10 @@ Vous pouvez toujours demander la génération immédiate d’un lien signé en a
 - **Affiner la planification** : les pas 5/15 minutes sont maintenant disponibles en complément des intervalles horaires à mensuels ; un champ Cron avancé resterait utile pour les scénarios d’orchestration sur mesure.【F:backup-jlg/includes/class-bjlg-settings.php†L18-L72】【F:backup-jlg/includes/class-bjlg-scheduler.php†L47-L119】
 - **Suivre le stockage distant** : compléter les métriques du tableau de bord (actuellement centrées sur le répertoire local) avec les quotas et consommations renvoyés par chaque destination distante afin d’anticiper les alertes de capacité.【F:backup-jlg/includes/class-bjlg-admin-advanced.php†L60-L185】
 
+### 📊 Suivi de la feuille de route
+
+Pour connaître l’état d’avancement, les dépendances et les prochaines étapes de chaque axe stratégique (notifications, purge distante, planification avancée, supervision du stockage, multisite, etc.), consultez le tableau de synthèse dans [`docs/roadmap-suivi.md`](docs/roadmap-suivi.md). Ce document est mis à jour à mesure que les chantiers progressent et s’appuie sur les mêmes références techniques que la comparaison avec les offres professionnelles.【F:docs/roadmap-suivi.md†L1-L94】【F:docs/comparaison-pro.md†L94-L159】
+
 ## 📄 Licence
 Backup JLG est distribué sous licence [GPL v2 ou ultérieure](https://www.gnu.org/licenses/gpl-2.0.html). Toute contribution doit respecter les termes de cette licence.
 
