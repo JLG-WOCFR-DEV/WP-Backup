@@ -85,7 +85,12 @@
             return null;
         }
 
-        return wp.element.createElement('div', { className: 'bjlg-block-status__alerts' },
+        return wp.element.createElement('div', {
+            className: 'bjlg-block-status__alerts',
+            role: 'status',
+            'aria-live': 'polite',
+            'aria-atomic': 'true'
+        },
             alerts.map((alert, index) => wp.element.createElement('div', {
                 key: alert.id || index,
                 className: 'bjlg-block-status__alert bjlg-block-status__alert--' + formatAlertType(alert.type),
@@ -176,7 +181,12 @@
                     wp.i18n.sprintf(__('Actualisé le %s', 'backup-jlg'), data.generated_at)
                 ) : null
             ),
-            wp.element.createElement('div', { className: 'bjlg-block-status__summary' },
+            wp.element.createElement('div', {
+                className: 'bjlg-block-status__summary',
+                role: 'status',
+                'aria-live': 'polite',
+                'aria-atomic': 'true'
+            },
                 wp.element.createElement(SummaryStat, {
                     label: __('Dernière sauvegarde', 'backup-jlg'),
                     value: summary.history_last_backup,

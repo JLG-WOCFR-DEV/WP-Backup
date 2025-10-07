@@ -219,7 +219,9 @@ class BJLG_Admin {
                 <?php endif; ?>
             </header>
 
-            <div class="bjlg-dashboard-actions" data-role="actions">
+            <div id="bjlg-dashboard-live-region" class="screen-reader-text" role="status" aria-live="polite" aria-atomic="true"></div>
+
+            <div class="bjlg-dashboard-actions" data-role="actions" role="region" aria-live="polite" aria-atomic="true">
                 <article class="bjlg-action-card" data-action="backup">
                     <div class="bjlg-action-card__content">
                         <h3 class="bjlg-action-card__title"><?php esc_html_e('Lancer une sauvegarde', 'backup-jlg'); ?></h3>
@@ -254,7 +256,7 @@ class BJLG_Admin {
                 </article>
             </div>
 
-            <div class="bjlg-alerts" data-role="alerts">
+            <div class="bjlg-alerts" data-role="alerts" role="status" aria-live="polite" aria-atomic="true">
                 <?php foreach ($alerts as $alert): ?>
                     <div class="bjlg-alert bjlg-alert--<?php echo esc_attr($alert['type'] ?? 'info'); ?>">
                         <div class="bjlg-alert__content">
@@ -316,7 +318,7 @@ class BJLG_Admin {
                 </article>
             </div>
 
-            <div class="bjlg-onboarding" data-role="onboarding">
+            <div class="bjlg-onboarding" data-role="onboarding" role="region" aria-live="polite" aria-atomic="true">
                 <h3 class="bjlg-onboarding__title"><?php esc_html_e('Bien démarrer', 'backup-jlg'); ?></h3>
                 <ul class="bjlg-onboarding__list">
                     <?php foreach ($onboarding as $resource): ?>
