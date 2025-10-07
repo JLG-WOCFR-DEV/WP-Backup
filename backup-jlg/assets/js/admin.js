@@ -1,5 +1,80 @@
 jQuery(document).ready(function($) {
 
+    // --- ADMIN TABS ---
+    (function setupAdminTabs() {
+        const $wrap = $('.bjlg-wrap');
+        if (!$wrap.length) {
+            return;
+        }
+
+        const $tabs = $wrap.find('.nav-tab-wrapper .nav-tab');
+        const $panels = $wrap.find('.bjlg-tab-panel');
+
+        if (!$tabs.length || !$panels.length) {
+            return;
+        }
+
+        const activateTab = function(tabKey, updateUrl) {
+            if (!tabKey) {
+                return;
+            }
+
+            $tabs.each(function() {
+                const $tab = $(this);
+                const isActive = $tab.data('tab') === tabKey;
+                $tab.toggleClass('nav-tab-active', isActive);
+            });
+
+            $panels.each(function() {
+                const $panel = $(this);
+                const matches = $panel.data('tab') === tabKey;
+                if (matches) {
+                    $panel.removeAttr('hidden');
+                } else {
+                    $panel.attr('hidden', 'hidden');
+                }
+            });
+
+            if (updateUrl && window.history && typeof window.history.replaceState === 'function') {
+                try {
+                    const currentUrl = new URL(window.location.href);
+                    currentUrl.searchParams.set('tab', tabKey);
+                    window.history.replaceState({}, '', currentUrl.toString());
+                } catch (error) {
+                    const baseUrl = window.location.href.split('#')[0];
+                    const hasQuery = baseUrl.indexOf('?') !== -1;
+                    let newUrl;
+
+                    if (hasQuery) {
+                        if (baseUrl.indexOf('tab=') !== -1) {
+                            newUrl = baseUrl.replace(/([?&])tab=[^&#]*/, '$1tab=' + encodeURIComponent(tabKey));
+                        } else {
+                            newUrl = baseUrl + '&tab=' + encodeURIComponent(tabKey);
+                        }
+                    } else {
+                        newUrl = baseUrl + '?tab=' + encodeURIComponent(tabKey);
+                    }
+
+                    window.history.replaceState({}, '', newUrl);
+                }
+            }
+        };
+
+        $tabs.on('click', function(event) {
+            const tabKey = $(this).data('tab');
+            if (!tabKey) {
+                return;
+            }
+            event.preventDefault();
+            activateTab(tabKey, true);
+        });
+
+        const initialTab = $tabs.filter('.nav-tab-active').data('tab') || $tabs.first().data('tab');
+        if (initialTab) {
+            activateTab(initialTab, false);
+        }
+    })();
+
     // --- DASHBOARD OVERVIEW ---
     (function setupDashboardOverview() {
         const $overview = $('.bjlg-dashboard-overview');
