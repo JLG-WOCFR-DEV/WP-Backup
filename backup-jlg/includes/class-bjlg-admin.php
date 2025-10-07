@@ -1519,13 +1519,36 @@ class BJLG_Admin {
                         <th scope="row">Événements surveillés</th>
                         <td>
                             <div class="bjlg-field-control">
-                                <fieldset>
-                                    <label><input type="checkbox" name="notify_backup_complete" <?php checked(!empty($notification_settings['events']['backup_complete'])); ?>> Sauvegarde terminée</label><br>
-                                    <label><input type="checkbox" name="notify_backup_failed" <?php checked(!empty($notification_settings['events']['backup_failed'])); ?>> Échec de sauvegarde</label><br>
-                                    <label><input type="checkbox" name="notify_cleanup_complete" <?php checked(!empty($notification_settings['events']['cleanup_complete'])); ?>> Nettoyage finalisé</label><br>
-                                    <label><input type="checkbox" name="notify_storage_warning" <?php checked(!empty($notification_settings['events']['storage_warning'])); ?>> Alerte de stockage</label>
+                                <fieldset aria-describedby="bjlg-notifications-events-description">
+                                    <legend class="screen-reader-text"><?php esc_html_e('Événements surveillés', 'backup-jlg'); ?></legend>
+                                    <ul class="bjlg-checkbox-list" role="list">
+                                        <li>
+                                            <label for="bjlg-notify-backup-complete">
+                                                <input type="checkbox" id="bjlg-notify-backup-complete" name="notify_backup_complete" <?php checked(!empty($notification_settings['events']['backup_complete'])); ?>>
+                                                <span><?php esc_html_e('Sauvegarde terminée', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                        <li>
+                                            <label for="bjlg-notify-backup-failed">
+                                                <input type="checkbox" id="bjlg-notify-backup-failed" name="notify_backup_failed" <?php checked(!empty($notification_settings['events']['backup_failed'])); ?>>
+                                                <span><?php esc_html_e('Échec de sauvegarde', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                        <li>
+                                            <label for="bjlg-notify-cleanup-complete">
+                                                <input type="checkbox" id="bjlg-notify-cleanup-complete" name="notify_cleanup_complete" <?php checked(!empty($notification_settings['events']['cleanup_complete'])); ?>>
+                                                <span><?php esc_html_e('Nettoyage finalisé', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                        <li>
+                                            <label for="bjlg-notify-storage-warning">
+                                                <input type="checkbox" id="bjlg-notify-storage-warning" name="notify_storage_warning" <?php checked(!empty($notification_settings['events']['storage_warning'])); ?>>
+                                                <span><?php esc_html_e('Alerte de stockage', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                    </ul>
                                 </fieldset>
-                                <p class="description">Choisissez quels événements déclenchent un envoi de notification.</p>
+                                <p id="bjlg-notifications-events-description" class="description"><?php esc_html_e('Choisissez quels événements déclenchent un envoi de notification.', 'backup-jlg'); ?></p>
                             </div>
                         </td>
                     </tr>
@@ -1541,12 +1564,30 @@ class BJLG_Admin {
                         <th scope="row">Canaux disponibles</th>
                         <td>
                             <div class="bjlg-field-control">
-                                <fieldset>
-                                    <label><input type="checkbox" name="channel_email" <?php checked(!empty($notification_settings['channels']['email']['enabled'])); ?>> E-mail</label><br>
-                                    <label><input type="checkbox" name="channel_slack" <?php checked(!empty($notification_settings['channels']['slack']['enabled'])); ?>> Slack</label><br>
-                                    <label><input type="checkbox" name="channel_discord" <?php checked(!empty($notification_settings['channels']['discord']['enabled'])); ?>> Discord</label>
+                                <fieldset aria-describedby="bjlg-notifications-channels-description">
+                                    <legend class="screen-reader-text"><?php esc_html_e('Canaux de notification actifs', 'backup-jlg'); ?></legend>
+                                    <ul class="bjlg-checkbox-list" role="list">
+                                        <li>
+                                            <label for="bjlg-channel-email">
+                                                <input type="checkbox" id="bjlg-channel-email" name="channel_email" <?php checked(!empty($notification_settings['channels']['email']['enabled'])); ?>>
+                                                <span><?php esc_html_e('E-mail', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                        <li>
+                                            <label for="bjlg-channel-slack">
+                                                <input type="checkbox" id="bjlg-channel-slack" name="channel_slack" <?php checked(!empty($notification_settings['channels']['slack']['enabled'])); ?>>
+                                                <span><?php esc_html_e('Slack', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                        <li>
+                                            <label for="bjlg-channel-discord">
+                                                <input type="checkbox" id="bjlg-channel-discord" name="channel_discord" <?php checked(!empty($notification_settings['channels']['discord']['enabled'])); ?>>
+                                                <span><?php esc_html_e('Discord', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                    </ul>
                                 </fieldset>
-                                <p class="description">Activez les canaux qui doivent recevoir vos notifications.</p>
+                                <p id="bjlg-notifications-channels-description" class="description"><?php esc_html_e('Activez les canaux qui doivent recevoir vos notifications.', 'backup-jlg'); ?></p>
                             </div>
                         </td>
                     </tr>
