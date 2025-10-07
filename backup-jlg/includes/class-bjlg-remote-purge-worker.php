@@ -119,12 +119,16 @@ class BJLG_Remote_Purge_Worker {
         $success = [];
         $errors = [];
 
+        $destination_names = [];
+
         foreach ($destinations as $destination_id) {
             $destination = BJLG_Destination_Factory::create($destination_id);
             if (!$destination instanceof BJLG_Destination_Interface) {
                 $errors[$destination_id] = sprintf(__('Destination inconnue : %s', 'backup-jlg'), $destination_id);
                 continue;
             }
+
+            $destination_names[$destination_id] = $destination->get_name();
 
             $result = $destination->delete_remote_backup_by_name($file);
             $was_successful = is_array($result) ? !empty($result['success']) : false;
@@ -142,14 +146,27 @@ class BJLG_Remote_Purge_Worker {
 
                 $errors[$destination_id] = $message;
 
+                $destination_label = $destination->get_name();
                 if (class_exists(BJLG_Debug::class)) {
-                    BJLG_Debug::log(sprintf('Purge distante %s (%s) : %s', $destination->get_name(), $destination_id, $message));
+                    BJLG_Debug::log(sprintf('Purge distante %s (%s) : %s', $destination_label, $destination_id, $message));
                 }
             }
         }
 
         if (!empty($success)) {
             $incremental->mark_remote_purge_completed($file, $success);
+            $success_labels = [];
+            foreach ($success as $destination_id) {
+                $label = $destination_names[$destination_id] ?? $destination_id;
+                $success_labels[] = $label;
+            }
+
+            $message = sprintf(
+                __('Purge distante réussie pour %1$s via %2$s.', 'backup-jlg'),
+                $file,
+                implode(', ', $success_labels)
+            );
+            $this->log_history('success', $message);
         }
 
         $remaining = array_values(array_diff($destinations, $success));
@@ -160,6 +177,17 @@ class BJLG_Remote_Purge_Worker {
                 'errors' => $errors,
                 'last_error' => implode(' | ', array_values($errors)),
             ]);
+
+            foreach ($errors as $destination_id => $error_message) {
+                $label = $destination_names[$destination_id] ?? $destination_id;
+                $history_message = sprintf(
+                    __('Purge distante échouée pour %1$s via %2$s : %3$s', 'backup-jlg'),
+                    $file,
+                    $label,
+                    $error_message
+                );
+                $this->log_history('failure', $history_message);
+            }
         } elseif (empty($remaining)) {
             // Tout est supprimé, s'assurer que l'entrée ne laisse pas d'erreur résiduelle.
             $incremental->update_remote_purge_entry($file, [
@@ -182,5 +210,15 @@ class BJLG_Remote_Purge_Worker {
 
     private function unlock() {
         delete_transient(self::LOCK_TRANSIENT);
+    }
+
+    private function log_history($status, $message) {
+        if (!is_string($message) || trim($message) === '') {
+            return;
+        }
+
+        if (class_exists(BJLG_History::class)) {
+            BJLG_History::log('remote_purge', $status, $message);
+        }
     }
 }
