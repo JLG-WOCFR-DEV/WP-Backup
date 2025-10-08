@@ -44,6 +44,25 @@ if (!function_exists('bjlg_get_required_capability')) {
     }
 }
 
+if (!function_exists('bjlg_permission_is_role')) {
+    /**
+     * Determines whether the provided permission name maps to a role.
+     *
+     * @param string $permission
+     *
+     * @return bool
+     */
+    function bjlg_permission_is_role($permission) {
+        if (!is_string($permission) || $permission === '') {
+            return false;
+        }
+
+        $wp_roles = function_exists('wp_roles') ? wp_roles() : null;
+
+        return $wp_roles && class_exists('WP_Roles') && $wp_roles instanceof \WP_Roles && $wp_roles->is_role($permission);
+    }
+}
+
 if (!function_exists('bjlg_can_manage_plugin')) {
     /**
      * Checks whether a user (or the current user) can access the plugin features.
@@ -57,8 +76,7 @@ if (!function_exists('bjlg_can_manage_plugin')) {
             $permission = BJLG_DEFAULT_CAPABILITY;
         }
 
-        $wp_roles = function_exists('wp_roles') ? wp_roles() : null;
-        $is_role = $wp_roles && class_exists('WP_Roles') && $wp_roles instanceof \WP_Roles && $wp_roles->is_role($permission);
+        $is_role = bjlg_permission_is_role($permission);
 
         if ($is_role) {
             if ($user === null) {
@@ -106,8 +124,7 @@ if (!function_exists('bjlg_map_required_capability')) {
         }
 
         $permission = bjlg_get_required_capability();
-        $wp_roles = function_exists('wp_roles') ? wp_roles() : null;
-        $is_role = $wp_roles && class_exists('WP_Roles') && $wp_roles instanceof \WP_Roles && $wp_roles->is_role($permission);
+        $is_role = bjlg_permission_is_role($permission);
 
         if ($is_role) {
             $user = is_numeric($user_id) ? get_user_by('id', (int) $user_id) : null;
