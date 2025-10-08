@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Démo de presets UI</title>
+    <link rel="stylesheet" href="ui-presets.css" />
+    <style>
+      body {
+        background: radial-gradient(circle at top, rgba(15, 23, 42, 0.75), rgba(15, 23, 42, 0.95));
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Démo des presets UI</h1>
+        <p class="intro">
+          Chaque section applique un attribut <code>data-preset</code> pour charger instantanément les couleurs,
+          typographies, ombres et interactions associées. Les composants de base (boutons, formulaires,
+          cartes, modales) réagissent automatiquement aux variables des thèmes.
+        </p>
+      </header>
+
+      <section class="preset" data-preset="minimal-focus" style="background: var(--color-background); color: var(--color-text);">
+        <div class="preset__header">
+          <h2 class="preset__title">Minimal Focus</h2>
+          <span class="preset__subtitle">Headless UI vibes</span>
+        </div>
+        <div class="preset__grid">
+          <article class="preset__card">
+            <h3>Boutons</h3>
+            <div class="preset__btn-row">
+              <button class="primary">Action principale</button>
+              <button class="secondary">Option</button>
+              <button class="ghost">Ghost</button>
+            </div>
+          </article>
+          <article class="preset__card">
+            <h3>Formulaire</h3>
+            <form>
+              <label for="mf-email">Email</label>
+              <input id="mf-email" type="email" placeholder="vous@example.com" />
+              <label for="mf-select">Type de sauvegarde</label>
+              <select id="mf-select">
+                <option>Incrémentale</option>
+                <option>Complète</option>
+                <option>Base de données seule</option>
+              </select>
+            </form>
+          </article>
+          <article class="preset__card">
+            <h3>Tags</h3>
+            <div class="tag-list">
+              <span class="pill">Accessibilité</span>
+              <span class="pill">Focus visible</span>
+              <span class="pill">Sans distraction</span>
+            </div>
+          </article>
+          <article class="preset__card">
+            <h3>Modale</h3>
+            <div class="modal">
+              <h4 class="modal__title">Confirmer la rotation</h4>
+              <p>Voulez-vous vraiment purger les sauvegardes plus anciennes que 30 jours&nbsp;?</p>
+              <div class="modal__footer">
+                <button class="secondary">Annuler</button>
+                <button class="primary">Confirmer</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="preset" data-preset="modern-contrast" style="background: var(--color-background); color: var(--color-text);">
+        <div class="preset__header">
+          <h2 class="preset__title">Modern Contrast</h2>
+          <span class="preset__subtitle">Shadcn UI mood</span>
+        </div>
+        <div class="preset__grid">
+          <article class="preset__card">
+            <h3>Boutons</h3>
+            <div class="preset__btn-row">
+              <button class="primary">Créer un plan</button>
+              <button class="secondary">Dupliquer</button>
+              <button class="ghost">Voir l'historique</button>
+            </div>
+          </article>
+          <article class="preset__card">
+            <h3>Formulaire</h3>
+            <form>
+              <label for="mc-name">Nom du preset</label>
+              <input id="mc-name" type="text" placeholder="Plan nocturne" />
+              <label for="mc-frequency">Fréquence</label>
+              <select id="mc-frequency">
+                <option>Quotidienne</option>
+                <option>Hebdomadaire</option>
+                <option>Mensuelle</option>
+              </select>
+            </form>
+          </article>
+          <article class="preset__card">
+            <h3>Interactions</h3>
+            <ul>
+              <li>Hover luminescent</li>
+              <li>Gradient interne</li>
+              <li>Ombres profondes</li>
+            </ul>
+          </article>
+          <article class="preset__card">
+            <h3>Modale latérale</h3>
+            <div class="modal">
+              <h4 class="modal__title">Journal des webhooks</h4>
+              <p>3 webhooks envoyés au cours des 24 dernières heures. Aucun échec.</p>
+              <div class="modal__footer">
+                <button class="secondary">Exporter</button>
+                <button class="primary">Rejouer</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="preset" data-preset="systemic-elevation" style="background: var(--color-background); color: var(--color-text);">
+        <div class="preset__header">
+          <h2 class="preset__title">Systemic Elevation</h2>
+          <span class="preset__subtitle">Radix UI energy</span>
+        </div>
+        <div class="preset__grid">
+          <article class="preset__card">
+            <h3>Boutons</h3>
+            <div class="preset__btn-row">
+              <button class="primary">Tester le chiffrement</button>
+              <button class="secondary">Voir le manifeste</button>
+              <button class="ghost">Historique</button>
+            </div>
+          </article>
+          <article class="preset__card">
+            <h3>Formulaire</h3>
+            <form>
+              <label for="se-email">Envoyer le rapport à</label>
+              <input id="se-email" type="email" placeholder="ops@example.com" />
+              <label for="se-status">État</label>
+              <select id="se-status">
+                <option>Succès</option>
+                <option>Avertissement</option>
+                <option>Échec</option>
+              </select>
+            </form>
+          </article>
+          <article class="preset__card">
+            <h3>Accessibilité</h3>
+            <div class="tag-list">
+              <span class="pill">Multi focus ring</span>
+              <span class="pill">Motion mindful</span>
+              <span class="pill">Slots ready</span>
+            </div>
+          </article>
+          <article class="preset__card">
+            <h3>Modale</h3>
+            <div class="modal">
+              <h4 class="modal__title">Détails de l'incident</h4>
+              <p>La synchronisation distante a pris 3 minutes supplémentaires. Aucun retry nécessaire.</p>
+              <div class="modal__footer">
+                <button class="secondary">Fermer</button>
+                <button class="primary">Notifier l'équipe</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="preset" data-preset="classy-utility" style="background: var(--color-background); color: var(--color-text);">
+        <div class="preset__header">
+          <h2 class="preset__title">Classy Utility</h2>
+          <span class="preset__subtitle">Bootstrap touch</span>
+        </div>
+        <div class="preset__grid">
+          <article class="preset__card">
+            <h3>Boutons</h3>
+            <div class="preset__btn-row">
+              <button class="primary">Sauvegarder</button>
+              <button class="secondary">Aperçu</button>
+              <button class="ghost">Logs</button>
+            </div>
+          </article>
+          <article class="preset__card">
+            <h3>Formulaire</h3>
+            <form>
+              <label for="cu-label">Destination</label>
+              <input id="cu-label" type="text" placeholder="Google Drive" />
+              <label for="cu-mode">Mode</label>
+              <select id="cu-mode">
+                <option>Automatique</option>
+                <option>Planifié</option>
+                <option>Manuel</option>
+              </select>
+            </form>
+          </article>
+          <article class="preset__card">
+            <h3>Chips</h3>
+            <div class="tag-list">
+              <span class="pill">Primary</span>
+              <span class="pill">Warning</span>
+              <span class="pill">Danger</span>
+            </div>
+          </article>
+          <article class="preset__card">
+            <h3>Modale</h3>
+            <div class="modal">
+              <h4 class="modal__title">Rotation automatique</h4>
+              <p>Les archives supérieures à 12 versions seront supprimées.</p>
+              <div class="modal__footer">
+                <button class="secondary">Annuler</button>
+                <button class="primary">Appliquer</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="preset" data-preset="vibrant-clarity" style="background: var(--color-background); color: var(--color-text);">
+        <div class="preset__header">
+          <h2 class="preset__title">Vibrant Clarity</h2>
+          <span class="preset__subtitle">Semantic UI spirit</span>
+        </div>
+        <div class="preset__grid">
+          <article class="preset__card">
+            <h3>Boutons</h3>
+            <div class="preset__btn-row">
+              <button class="primary">Publier</button>
+              <button class="secondary">Prévisualiser</button>
+              <button class="ghost">Archiver</button>
+            </div>
+          </article>
+          <article class="preset__card">
+            <h3>Formulaire</h3>
+            <form>
+              <label for="vc-title">Titre</label>
+              <input id="vc-title" type="text" placeholder="Audit mensuel" />
+              <label for="vc-notes">Notes</label>
+              <textarea id="vc-notes" rows="3" placeholder="Lister les tâches critiques"></textarea>
+            </form>
+          </article>
+          <article class="preset__card">
+            <h3>Alertes</h3>
+            <div class="tag-list">
+              <span class="pill">Positive</span>
+              <span class="pill">Warning</span>
+              <span class="pill">Negative</span>
+            </div>
+          </article>
+          <article class="preset__card">
+            <h3>Modale</h3>
+            <div class="modal">
+              <h4 class="modal__title">Rapport généré</h4>
+              <p>Le rapport Semantic est prêt à être partagé avec votre équipe.</p>
+              <div class="modal__footer">
+                <button class="secondary">Télécharger</button>
+                <button class="primary">Partager</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="preset" data-preset="motion-canvas" style="background: var(--color-background); color: var(--color-text);">
+        <div class="preset__header">
+          <h2 class="preset__title">Motion Canvas</h2>
+          <span class="preset__subtitle">Anime.js flair</span>
+        </div>
+        <div class="preset__grid">
+          <article class="preset__card">
+            <h3>Boutons</h3>
+            <div class="preset__btn-row">
+              <button class="primary">Lancer la démo</button>
+              <button class="secondary">Paramètres</button>
+              <button class="ghost">Mode réduit</button>
+            </div>
+          </article>
+          <article class="preset__card">
+            <h3>Formulaire</h3>
+            <form>
+              <label for="mo-scene">Scène animée</label>
+              <input id="mo-scene" type="text" placeholder="Timeline héro" />
+              <label for="mo-intensity">Intensité</label>
+              <select id="mo-intensity">
+                <option>Légère</option>
+                <option>Standard</option>
+                <option>Explosive</option>
+              </select>
+            </form>
+          </article>
+          <article class="preset__card">
+            <h3>Effets</h3>
+            <ul>
+              <li>Motion path</li>
+              <li>Stagger</li>
+              <li>Scroll trigger</li>
+            </ul>
+          </article>
+          <article class="preset__card">
+            <h3>Modale immersive</h3>
+            <div class="modal">
+              <h4 class="modal__title">Projection en cours</h4>
+              <p>Les animations Anime.js se synchronisent avec le défilement utilisateur.</p>
+              <div class="modal__footer">
+                <button class="secondary">Suspendre</button>
+                <button class="primary">Continuer</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
