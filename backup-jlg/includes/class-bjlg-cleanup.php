@@ -555,23 +555,35 @@ class BJLG_Cleanup {
         $backups = glob(BJLG_BACKUP_DIR . '*.zip*');
 
         if (!empty($backups)) {
-            $stats['total_backups'] = count($backups);
-
             $sizes = [];
             $dates = [];
+            $processed_backups = 0;
 
             foreach ($backups as $backup) {
-                $size = filesize($backup);
-                $date = filemtime($backup);
+                $size = @filesize($backup);
+                if ($size === false) {
+                    BJLG_Debug::log(sprintf('Impossible de lire la taille de la sauvegarde %s.', $backup));
+                    continue;
+                }
 
-                $sizes[] = $size;
-                $dates[] = $date;
-                $stats['total_size'] += $size;
+                $date = @filemtime($backup);
+                if ($date === false) {
+                    BJLG_Debug::log(sprintf('Impossible de lire la date de la sauvegarde %s.', $backup));
+                    continue;
+                }
+
+                $processed_backups++;
+                $sizes[] = (float) $size;
+                $dates[] = (int) $date;
+                $stats['total_size'] += (float) $size;
             }
 
-            $stats['average_size'] = $stats['total_size'] / $stats['total_backups'];
-            $stats['oldest_backup'] = min($dates);
-            $stats['newest_backup'] = max($dates);
+            if ($processed_backups > 0) {
+                $stats['total_backups'] = $processed_backups;
+                $stats['average_size'] = $stats['total_size'] / $processed_backups;
+                $stats['oldest_backup'] = min($dates);
+                $stats['newest_backup'] = max($dates);
+            }
         }
 
         return $stats;

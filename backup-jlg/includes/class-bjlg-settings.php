@@ -315,15 +315,17 @@ class BJLG_Settings {
                 || isset($_POST['incremental_max_age'])
                 || array_key_exists('incremental_rotation_enabled', $_POST)
             ) {
+                $current_incremental = $this->get_section_settings_with_defaults('incremental');
+
                 $max_incrementals = isset($_POST['incremental_max_incrementals'])
                     ? max(0, intval(wp_unslash($_POST['incremental_max_incrementals'])))
-                    : 10;
+                    : (isset($current_incremental['max_incrementals']) ? max(0, intval($current_incremental['max_incrementals'])) : 10);
                 $max_age_days = isset($_POST['incremental_max_age'])
                     ? max(0, intval(wp_unslash($_POST['incremental_max_age'])))
-                    : 30;
+                    : (isset($current_incremental['max_full_age_days']) ? max(0, intval($current_incremental['max_full_age_days'])) : 30);
                 $rotation_enabled = array_key_exists('incremental_rotation_enabled', $_POST)
                     ? $this->to_bool(wp_unslash($_POST['incremental_rotation_enabled']))
-                    : false;
+                    : (!empty($current_incremental['rotation_enabled']));
 
                 $incremental_settings = [
                     'max_incrementals' => $max_incrementals,
@@ -910,11 +912,26 @@ class BJLG_Settings {
             'bjlg_cleanup_settings',
             'bjlg_whitelabel_settings',
             'bjlg_encryption_settings',
+            'bjlg_incremental_settings',
             'bjlg_notification_settings',
             'bjlg_performance_settings',
             'bjlg_gdrive_settings',
+            'bjlg_dropbox_settings',
+            'bjlg_onedrive_settings',
+            'bjlg_pcloud_settings',
+            'bjlg_s3_settings',
+            'bjlg_wasabi_settings',
+            'bjlg_azure_blob_settings',
+            'bjlg_backblaze_b2_settings',
+            'bjlg_sftp_settings',
             'bjlg_webhook_settings',
             'bjlg_schedule_settings',
+            'bjlg_advanced_settings',
+            'bjlg_backup_include_patterns',
+            'bjlg_backup_exclude_patterns',
+            'bjlg_backup_secondary_destinations',
+            'bjlg_backup_post_checks',
+            'bjlg_backup_presets',
             'bjlg_required_capability'
         ];
         
@@ -1074,6 +1091,24 @@ class BJLG_Settings {
 
                 return $sanitized;
 
+            case 'bjlg_incremental_settings':
+                $defaults = $this->default_settings['incremental'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['max_incrementals'])) {
+                        $sanitized['max_incrementals'] = max(0, intval($value['max_incrementals']));
+                    }
+                    if (isset($value['max_full_age_days'])) {
+                        $sanitized['max_full_age_days'] = max(0, intval($value['max_full_age_days']));
+                    }
+                    if (isset($value['rotation_enabled'])) {
+                        $sanitized['rotation_enabled'] = $this->to_bool($value['rotation_enabled']);
+                    }
+                }
+
+                return $sanitized;
+
             case 'bjlg_notification_settings':
                 $defaults = [
                     'enabled' => false,
@@ -1170,6 +1205,236 @@ class BJLG_Settings {
 
                 return $sanitized;
 
+            case 'bjlg_dropbox_settings':
+                $defaults = $this->default_settings['dropbox'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['access_token'])) {
+                        $sanitized['access_token'] = sanitize_text_field((string) $value['access_token']);
+                    }
+                    if (isset($value['folder'])) {
+                        $sanitized['folder'] = sanitize_text_field((string) $value['folder']);
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                return $sanitized;
+
+            case 'bjlg_onedrive_settings':
+                $defaults = $this->default_settings['onedrive'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['access_token'])) {
+                        $sanitized['access_token'] = sanitize_text_field((string) $value['access_token']);
+                    }
+                    if (isset($value['folder'])) {
+                        $sanitized['folder'] = sanitize_text_field((string) $value['folder']);
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                return $sanitized;
+
+            case 'bjlg_pcloud_settings':
+                $defaults = $this->default_settings['pcloud'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['access_token'])) {
+                        $sanitized['access_token'] = sanitize_text_field((string) $value['access_token']);
+                    }
+                    if (isset($value['folder'])) {
+                        $sanitized['folder'] = sanitize_text_field((string) $value['folder']);
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                return $sanitized;
+
+            case 'bjlg_s3_settings':
+                $defaults = $this->default_settings['s3'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['access_key'])) {
+                        $sanitized['access_key'] = sanitize_text_field((string) $value['access_key']);
+                    }
+                    if (isset($value['secret_key'])) {
+                        $sanitized['secret_key'] = sanitize_text_field((string) $value['secret_key']);
+                    }
+                    if (isset($value['region'])) {
+                        $sanitized['region'] = sanitize_text_field((string) $value['region']);
+                    }
+                    if (isset($value['bucket'])) {
+                        $sanitized['bucket'] = sanitize_text_field((string) $value['bucket']);
+                    }
+                    if (isset($value['server_side_encryption'])) {
+                        $sanitized['server_side_encryption'] = sanitize_text_field((string) $value['server_side_encryption']);
+                    }
+                    if (isset($value['kms_key_id'])) {
+                        $sanitized['kms_key_id'] = sanitize_text_field((string) $value['kms_key_id']);
+                    }
+                    if (isset($value['object_prefix'])) {
+                        $sanitized['object_prefix'] = sanitize_text_field((string) $value['object_prefix']);
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                if (!in_array($sanitized['server_side_encryption'], ['AES256', 'aws:kms'], true)) {
+                    $sanitized['server_side_encryption'] = '';
+                }
+
+                if ($sanitized['server_side_encryption'] !== 'aws:kms') {
+                    $sanitized['kms_key_id'] = '';
+                }
+
+                $sanitized['object_prefix'] = trim($sanitized['object_prefix']);
+
+                return $sanitized;
+
+            case 'bjlg_wasabi_settings':
+                $defaults = $this->default_settings['wasabi'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['access_key'])) {
+                        $sanitized['access_key'] = sanitize_text_field((string) $value['access_key']);
+                    }
+                    if (isset($value['secret_key'])) {
+                        $sanitized['secret_key'] = sanitize_text_field((string) $value['secret_key']);
+                    }
+                    if (isset($value['region'])) {
+                        $sanitized['region'] = sanitize_text_field((string) $value['region']);
+                    }
+                    if (isset($value['bucket'])) {
+                        $sanitized['bucket'] = sanitize_text_field((string) $value['bucket']);
+                    }
+                    if (isset($value['object_prefix'])) {
+                        $sanitized['object_prefix'] = sanitize_text_field((string) $value['object_prefix']);
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                $sanitized['object_prefix'] = trim($sanitized['object_prefix']);
+
+                return $sanitized;
+
+            case 'bjlg_azure_blob_settings':
+                $defaults = $this->default_settings['azure_blob'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['account_name'])) {
+                        $sanitized['account_name'] = sanitize_text_field((string) $value['account_name']);
+                    }
+                    if (isset($value['account_key'])) {
+                        $sanitized['account_key'] = sanitize_text_field((string) $value['account_key']);
+                    }
+                    if (isset($value['container'])) {
+                        $sanitized['container'] = sanitize_text_field((string) $value['container']);
+                    }
+                    if (isset($value['object_prefix'])) {
+                        $sanitized['object_prefix'] = sanitize_text_field((string) $value['object_prefix']);
+                    }
+                    if (isset($value['endpoint_suffix'])) {
+                        $sanitized['endpoint_suffix'] = sanitize_text_field((string) $value['endpoint_suffix']);
+                    }
+                    if (isset($value['chunk_size_mb'])) {
+                        $sanitized['chunk_size_mb'] = max(1, intval($value['chunk_size_mb']));
+                    }
+                    if (isset($value['use_https'])) {
+                        $sanitized['use_https'] = $this->to_bool($value['use_https']);
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                $sanitized['object_prefix'] = trim($sanitized['object_prefix']);
+
+                return $sanitized;
+
+            case 'bjlg_backblaze_b2_settings':
+                $defaults = $this->default_settings['backblaze_b2'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['key_id'])) {
+                        $sanitized['key_id'] = sanitize_text_field((string) $value['key_id']);
+                    }
+                    if (isset($value['application_key'])) {
+                        $sanitized['application_key'] = sanitize_text_field((string) $value['application_key']);
+                    }
+                    if (isset($value['bucket_id'])) {
+                        $sanitized['bucket_id'] = sanitize_text_field((string) $value['bucket_id']);
+                    }
+                    if (isset($value['bucket_name'])) {
+                        $sanitized['bucket_name'] = sanitize_text_field((string) $value['bucket_name']);
+                    }
+                    if (isset($value['object_prefix'])) {
+                        $sanitized['object_prefix'] = sanitize_text_field((string) $value['object_prefix']);
+                    }
+                    if (isset($value['chunk_size_mb'])) {
+                        $sanitized['chunk_size_mb'] = max(1, intval($value['chunk_size_mb']));
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                $sanitized['object_prefix'] = trim($sanitized['object_prefix']);
+
+                return $sanitized;
+
+            case 'bjlg_sftp_settings':
+                $defaults = $this->default_settings['sftp'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['host'])) {
+                        $sanitized['host'] = sanitize_text_field((string) $value['host']);
+                    }
+                    if (isset($value['port'])) {
+                        $port = intval($value['port']);
+                        $sanitized['port'] = max(1, min(65535, $port));
+                    }
+                    if (isset($value['username'])) {
+                        $sanitized['username'] = sanitize_text_field((string) $value['username']);
+                    }
+                    if (isset($value['password'])) {
+                        $sanitized['password'] = sanitize_text_field((string) $value['password']);
+                    }
+                    if (isset($value['private_key'])) {
+                        $sanitized['private_key'] = sanitize_textarea_field((string) $value['private_key']);
+                    }
+                    if (isset($value['passphrase'])) {
+                        $sanitized['passphrase'] = sanitize_text_field((string) $value['passphrase']);
+                    }
+                    if (isset($value['remote_path'])) {
+                        $sanitized['remote_path'] = sanitize_text_field((string) $value['remote_path']);
+                    }
+                    if (isset($value['fingerprint'])) {
+                        $sanitized['fingerprint'] = sanitize_text_field((string) $value['fingerprint']);
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                return $sanitized;
+
             case 'bjlg_webhook_settings':
                 $defaults = [
                     'enabled' => false,
@@ -1202,6 +1467,42 @@ class BJLG_Settings {
 
             case 'bjlg_schedule_settings':
                 return self::sanitize_schedule_collection($value);
+
+            case 'bjlg_advanced_settings':
+                $defaults = $this->default_settings['advanced'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['debug_mode'])) {
+                        $sanitized['debug_mode'] = $this->to_bool($value['debug_mode']);
+                    }
+                    if (isset($value['ajax_debug'])) {
+                        $sanitized['ajax_debug'] = $this->to_bool($value['ajax_debug']);
+                    }
+                    if (isset($value['exclude_patterns'])) {
+                        $sanitized['exclude_patterns'] = self::sanitize_pattern_list($value['exclude_patterns']);
+                    }
+                    if (isset($value['custom_backup_dir'])) {
+                        $sanitized['custom_backup_dir'] = sanitize_text_field((string) $value['custom_backup_dir']);
+                    }
+                }
+
+                return $sanitized;
+
+            case 'bjlg_backup_include_patterns':
+                return self::sanitize_pattern_list($value);
+
+            case 'bjlg_backup_exclude_patterns':
+                return self::sanitize_pattern_list($value);
+
+            case 'bjlg_backup_secondary_destinations':
+                return self::sanitize_destination_list($value, self::get_known_destination_ids());
+
+            case 'bjlg_backup_post_checks':
+                return self::sanitize_post_checks($value, self::get_default_backup_post_checks());
+
+            case 'bjlg_backup_presets':
+                return self::sanitize_backup_presets($value);
 
             default:
                 return null;
@@ -1282,11 +1583,21 @@ class BJLG_Settings {
             'cleanup' => 'bjlg_cleanup_settings',
             'whitelabel' => 'bjlg_whitelabel_settings',
             'encryption' => 'bjlg_encryption_settings',
+            'incremental' => 'bjlg_incremental_settings',
             'notifications' => 'bjlg_notification_settings',
             'performance' => 'bjlg_performance_settings',
             'webhooks' => 'bjlg_webhook_settings',
             'schedule' => 'bjlg_schedule_settings',
             'gdrive' => 'bjlg_gdrive_settings',
+            'dropbox' => 'bjlg_dropbox_settings',
+            'onedrive' => 'bjlg_onedrive_settings',
+            'pcloud' => 'bjlg_pcloud_settings',
+            's3' => 'bjlg_s3_settings',
+            'wasabi' => 'bjlg_wasabi_settings',
+            'azure_blob' => 'bjlg_azure_blob_settings',
+            'backblaze_b2' => 'bjlg_backblaze_b2_settings',
+            'sftp' => 'bjlg_sftp_settings',
+            'advanced' => 'bjlg_advanced_settings',
         ];
 
         if (!isset($option_map[$section])) {
