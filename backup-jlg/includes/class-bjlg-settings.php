@@ -55,7 +55,8 @@ class BJLG_Settings {
                 'backup_complete' => true,
                 'backup_failed' => true,
                 'cleanup_complete' => false,
-                'storage_warning' => true
+                'storage_warning' => true,
+                'remote_purge_failed' => true,
             ],
             'channels' => [
                 'email' => ['enabled' => false],

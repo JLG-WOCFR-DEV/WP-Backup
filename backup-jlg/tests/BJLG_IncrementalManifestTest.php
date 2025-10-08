@@ -396,8 +396,13 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $this->assertSame('pending', $manifest['remote_purge_queue'][0]['status']);
         $this->assertIsInt($manifest['remote_purge_queue'][0]['registered_at']);
         $this->assertSame(0, $manifest['remote_purge_queue'][0]['attempts']);
+        $this->assertSame(0, $manifest['remote_purge_queue'][0]['last_attempt_at']);
+        $this->assertIsInt($manifest['remote_purge_queue'][0]['next_attempt_at']);
+        $this->assertGreaterThan(0, $manifest['remote_purge_queue'][0]['next_attempt_at']);
         $this->assertSame('', $manifest['remote_purge_queue'][0]['last_error']);
         $this->assertIsArray($manifest['remote_purge_queue'][0]['errors']);
+        $this->assertArrayHasKey('failed_at', $manifest['remote_purge_queue'][0]);
+        $this->assertSame(0, $manifest['remote_purge_queue'][0]['failed_at']);
 
         $chain = $handler->get_restore_chain();
         $this->assertCount(4, $chain);
@@ -466,6 +471,8 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $manifest = json_decode((string) file_get_contents($this->manifestPath), true);
         $this->assertSame(['google_drive'], $manifest['remote_purge_queue'][0]['destinations']);
         $this->assertSame('pending', $manifest['remote_purge_queue'][0]['status']);
+        $this->assertSame('', $manifest['remote_purge_queue'][0]['last_error']);
+        $this->assertSame(0, $manifest['remote_purge_queue'][0]['failed_at']);
 
         $this->assertTrue($handler->mark_remote_purge_completed(basename($inc1Path), ['google_drive']));
 

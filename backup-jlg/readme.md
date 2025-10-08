@@ -23,7 +23,7 @@ Une solution professionnelle complète de sauvegarde et restauration pour WordPr
 - **API REST complète** pour CI/CD
 - **Webhooks** pour déclencher des sauvegardes
 - **Google Drive** (avec Composer)
-- **Notifications** (Email, Slack, Discord, Telegram, SMS)
+- **Notifications** (Email, Slack, Discord)
 - **Compatible WP-CLI**
 
 ### 📊 Monitoring
@@ -256,11 +256,12 @@ Configuration automatique avec l'email admin WordPress.
 2. Ajoutez l'URL dans les réglages
 3. Personnalisez l'avatar et le nom
 
-### Telegram
+### Canaux supplémentaires à implémenter
 
-1. Créez un bot avec @BotFather
-2. Obtenez le token et le chat ID
-3. Configurez dans les réglages
+- **Telegram Bot** : prévoir un expéditeur dédié dans `BJLG_Notification_Transport` et étendre l’UI avant d’exposer ce canal aux
+  utilisateurs finaux.【F:backup-jlg/includes/class-bjlg-notification-transport.php†L13-L154】
+- **SMS / providers tiers** : le socle de file d’attente (`BJLG_Notification_Queue`) gère les retries ; il reste à brancher un
+  provider (Twilio, OVH, etc.) et à enrichir les réglages pour collecter les identifiants nécessaires.【F:backup-jlg/includes/class-bjlg-notification-queue.php†L8-L196】【F:backup-jlg/includes/class-bjlg-settings.php†L40-L115】
 
 ## 🐛 Débogage
 

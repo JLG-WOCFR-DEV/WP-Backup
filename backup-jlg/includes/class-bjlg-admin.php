@@ -1868,6 +1868,12 @@ class BJLG_Admin {
                                                 <span><?php esc_html_e('Alerte de stockage', 'backup-jlg'); ?></span>
                                             </label>
                                         </li>
+                                        <li>
+                                            <label for="bjlg-notify-remote-purge-failed">
+                                                <input type="checkbox" id="bjlg-notify-remote-purge-failed" name="notify_remote_purge_failed" <?php checked(!empty($notification_settings['events']['remote_purge_failed'])); ?>>
+                                                <span><?php esc_html_e('Purge distante en échec', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
                                     </ul>
                                 </fieldset>
                                 <p id="bjlg-notifications-events-description" class="description"><?php esc_html_e('Choisissez quels événements déclenchent un envoi de notification.', 'backup-jlg'); ?></p>

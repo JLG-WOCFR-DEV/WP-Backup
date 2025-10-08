@@ -14,6 +14,9 @@ class BJLG_Remote_Purge_Worker {
     private const LOCK_TRANSIENT = 'bjlg_remote_purge_lock';
     private const LOCK_DURATION = 60; // secondes
     private const MAX_ENTRIES_PER_RUN = 3;
+    private const MAX_ATTEMPTS = 5;
+    private const BASE_BACKOFF = 60; // secondes
+    private const MAX_BACKOFF = 15 * MINUTE_IN_SECONDS;
 
     public function __construct() {
         add_action(self::HOOK, [$this, 'process_queue']);
@@ -60,6 +63,7 @@ class BJLG_Remote_Purge_Worker {
                 return;
             }
 
+            $now = time();
             $processed = 0;
             foreach ($queue as $entry) {
                 if ($processed >= self::MAX_ENTRIES_PER_RUN) {
@@ -70,12 +74,11 @@ class BJLG_Remote_Purge_Worker {
                     continue;
                 }
 
-                $status = isset($entry['status']) ? (string) $entry['status'] : 'pending';
-                if (!in_array($status, ['pending', 'failed'], true)) {
+                if (!$this->should_process_entry($entry, $now)) {
                     continue;
                 }
 
-                $handled = $this->handle_queue_entry($incremental, $entry);
+                $handled = $this->handle_queue_entry($incremental, $entry, $now);
                 if ($handled) {
                     $processed++;
                 }
@@ -85,8 +88,9 @@ class BJLG_Remote_Purge_Worker {
         }
 
         $remaining = (new BJLG_Incremental())->get_remote_purge_queue();
-        if (!empty($remaining)) {
-            wp_schedule_single_event(time() + MINUTE_IN_SECONDS, self::HOOK);
+        $delay = $this->get_next_delay($remaining);
+        if ($delay !== null) {
+            wp_schedule_single_event(time() + $delay, self::HOOK);
         }
     }
 
@@ -95,7 +99,7 @@ class BJLG_Remote_Purge_Worker {
      *
      * @param array<string,mixed> $entry
      */
-    private function handle_queue_entry(BJLG_Incremental $incremental, array $entry) {
+    private function handle_queue_entry(BJLG_Incremental $incremental, array $entry, $now) {
         $file = isset($entry['file']) ? basename((string) $entry['file']) : '';
         if ($file === '') {
             return false;
@@ -110,10 +114,12 @@ class BJLG_Remote_Purge_Worker {
         }
 
         $attempts = isset($entry['attempts']) ? (int) $entry['attempts'] : 0;
+        $current_attempt = $attempts + 1;
         $incremental->update_remote_purge_entry($file, [
             'status' => 'processing',
-            'attempts' => $attempts + 1,
-            'last_attempt_at' => time(),
+            'attempts' => $current_attempt,
+            'last_attempt_at' => $now,
+            'next_attempt_at' => 0,
         ]);
 
         $success = [];
@@ -171,30 +177,84 @@ class BJLG_Remote_Purge_Worker {
 
         $remaining = array_values(array_diff($destinations, $success));
 
-        if (!empty($errors) && !empty($remaining)) {
-            $incremental->update_remote_purge_entry($file, [
-                'status' => 'failed',
-                'errors' => $errors,
-                'last_error' => implode(' | ', array_values($errors)),
-            ]);
-
-            foreach ($errors as $destination_id => $error_message) {
-                $label = $destination_names[$destination_id] ?? $destination_id;
-                $history_message = sprintf(
-                    __('Purge distante échouée pour %1$s via %2$s : %3$s', 'backup-jlg'),
-                    $file,
-                    $label,
-                    $error_message
-                );
-                $this->log_history('failure', $history_message);
-            }
-        } elseif (empty($remaining)) {
-            // Tout est supprimé, s'assurer que l'entrée ne laisse pas d'erreur résiduelle.
+        if (empty($remaining)) {
             $incremental->update_remote_purge_entry($file, [
                 'status' => 'completed',
                 'errors' => [],
                 'last_error' => '',
+                'next_attempt_at' => 0,
+                'failed_at' => 0,
             ]);
+
+            do_action('bjlg_remote_purge_completed', $file, [
+                'destinations' => $success,
+                'attempts' => $current_attempt,
+            ]);
+
+            return true;
+        }
+
+        if (!empty($errors)) {
+            $update = [
+                'errors' => $errors,
+                'last_error' => implode(' | ', array_values($errors)),
+            ];
+
+            $remaining_labels = [];
+            foreach ($remaining as $destination_id) {
+                $remaining_labels[] = $destination_names[$destination_id] ?? $destination_id;
+            }
+
+            if ($current_attempt >= self::MAX_ATTEMPTS) {
+                $update['status'] = 'failed';
+                $update['next_attempt_at'] = 0;
+                $update['failed_at'] = $now;
+
+                $incremental->update_remote_purge_entry($file, $update);
+                $current_entry = $this->find_queue_entry($incremental, $file);
+                if ($current_entry === null) {
+                    $current_entry = array_merge($entry, $update, [
+                        'file' => $file,
+                        'destinations' => $remaining,
+                        'attempts' => $current_attempt,
+                    ]);
+                }
+
+                $summary = sprintf(
+                    __('Purge distante abandonnée pour %1$s (%2$s).', 'backup-jlg'),
+                    $file,
+                    implode(', ', $remaining_labels)
+                );
+                $this->log_history('failure', $summary);
+
+                foreach ($errors as $destination_id => $error_message) {
+                    $label = $destination_names[$destination_id] ?? $destination_id;
+                    $history_message = sprintf(
+                        __('Purge distante échouée pour %1$s via %2$s : %3$s', 'backup-jlg'),
+                        $file,
+                        $label,
+                        $error_message
+                    );
+                    $this->log_history('failure', $history_message);
+                }
+
+                do_action('bjlg_remote_purge_permanent_failure', $file, $current_entry, $errors);
+            } else {
+                $delay = $this->compute_backoff($current_attempt);
+                $update['status'] = 'retry';
+                $update['next_attempt_at'] = $now + $delay;
+                $update['failed_at'] = 0;
+
+                $incremental->update_remote_purge_entry($file, $update);
+
+                $history_message = sprintf(
+                    __('Purge distante replanifiée pour %1$s (%2$s) dans %3$s.', 'backup-jlg'),
+                    $file,
+                    implode(', ', $remaining_labels),
+                    human_time_diff($now, $now + $delay)
+                );
+                $this->log_history('warning', $history_message);
+            }
         }
 
         return true;
@@ -220,5 +280,96 @@ class BJLG_Remote_Purge_Worker {
         if (class_exists(BJLG_History::class)) {
             BJLG_History::log('remote_purge', $status, $message);
         }
+    }
+
+    /**
+     * Returns true when the queue entry should be processed now.
+     *
+     * @param array<string,mixed> $entry
+     */
+    private function should_process_entry(array $entry, $now) {
+        $status = isset($entry['status']) ? (string) $entry['status'] : 'pending';
+        if (!in_array($status, ['pending', 'retry'], true)) {
+            return false;
+        }
+
+        $next_attempt = isset($entry['next_attempt_at']) ? (int) $entry['next_attempt_at'] : 0;
+
+        return $next_attempt <= $now;
+    }
+
+    private function compute_backoff($attempt) {
+        $attempt = max(1, (int) $attempt);
+        $delay = self::BASE_BACKOFF * (2 ** ($attempt - 1));
+
+        return (int) min($delay, self::MAX_BACKOFF);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $queue
+     */
+    private function get_next_delay(array $queue) {
+        if (empty($queue)) {
+            return null;
+        }
+
+        $now = time();
+        $next = null;
+
+        foreach ($queue as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $status = isset($entry['status']) ? (string) $entry['status'] : 'pending';
+            if (!in_array($status, ['pending', 'retry'], true)) {
+                continue;
+            }
+
+            $candidate = isset($entry['next_attempt_at']) ? (int) $entry['next_attempt_at'] : 0;
+            if ($candidate <= $now) {
+                return 30;
+            }
+
+            $next = $this->min_time($next, $candidate);
+        }
+
+        if ($next === null) {
+            return MINUTE_IN_SECONDS;
+        }
+
+        return max(30, $next - $now);
+    }
+
+    private function min_time($current, $candidate) {
+        if ($candidate <= 0) {
+            return $current;
+        }
+
+        if ($current === null) {
+            return $candidate;
+        }
+
+        return min($current, $candidate);
+    }
+
+    private function find_queue_entry(BJLG_Incremental $incremental, $file) {
+        $file = basename((string) $file);
+        if ($file === '') {
+            return null;
+        }
+
+        $queue = $incremental->get_remote_purge_queue();
+        foreach ($queue as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            if (($entry['file'] ?? '') === $file) {
+                return $entry;
+            }
+        }
+
+        return null;
     }
 }

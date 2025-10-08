@@ -22,6 +22,7 @@ class BJLG_Notifications {
             'backup_failed' => true,
             'cleanup_complete' => false,
             'storage_warning' => true,
+            'remote_purge_failed' => true,
         ],
         'channels' => [
             'email' => ['enabled' => false],
@@ -38,6 +39,7 @@ class BJLG_Notifications {
         add_action('bjlg_backup_failed', [$this, 'handle_backup_failed'], 15, 2);
         add_action('bjlg_cleanup_complete', [$this, 'handle_cleanup_complete'], 15, 1);
         add_action('bjlg_storage_warning', [$this, 'handle_storage_warning'], 15, 1);
+        add_action('bjlg_remote_purge_permanent_failure', [$this, 'handle_remote_purge_failed'], 15, 3);
     }
 
     /**
@@ -125,6 +127,27 @@ class BJLG_Notifications {
         ];
 
         $this->notify('storage_warning', $context);
+    }
+
+    /**
+     * Prépare le contexte d'un échec définitif de purge distante.
+     *
+     * @param string               $file
+     * @param array<string,mixed>  $entry
+     * @param array<string,string> $errors
+     */
+    public function handle_remote_purge_failed($file, $entry, $errors) {
+        $entry = is_array($entry) ? $entry : [];
+
+        $context = [
+            'file' => basename((string) $file),
+            'destinations' => $this->sanitize_components($entry['destinations'] ?? []),
+            'attempts' => isset($entry['attempts']) ? (int) $entry['attempts'] : 0,
+            'errors' => $this->sanitize_error_messages($errors),
+            'last_error' => isset($entry['last_error']) ? trim((string) $entry['last_error']) : '',
+        ];
+
+        $this->notify('remote_purge_failed', $context);
     }
 
     /**
@@ -247,6 +270,8 @@ class BJLG_Notifications {
                 return __('Nettoyage terminé', 'backup-jlg');
             case 'storage_warning':
                 return __('Alerte de stockage', 'backup-jlg');
+            case 'remote_purge_failed':
+                return __('Purge distante en échec', 'backup-jlg');
             default:
                 return ucfirst(str_replace('_', ' ', $event));
         }
@@ -311,6 +336,25 @@ class BJLG_Notifications {
                 }
                 if (isset($context['threshold'])) {
                     $lines[] = __('Seuil configuré : ', 'backup-jlg') . size_format((int) $context['threshold']);
+                }
+                break;
+            case 'remote_purge_failed':
+                $lines[] = __('La purge distante a atteint la limite de tentatives.', 'backup-jlg');
+                if (!empty($context['file'])) {
+                    $lines[] = __('Archive : ', 'backup-jlg') . $context['file'];
+                }
+                if (!empty($context['destinations'])) {
+                    $lines[] = __('Destinations restantes : ', 'backup-jlg') . implode(', ', $context['destinations']);
+                }
+                if (!empty($context['attempts'])) {
+                    $lines[] = __('Tentatives : ', 'backup-jlg') . (int) $context['attempts'];
+                }
+                if (!empty($context['errors'])) {
+                    foreach ($context['errors'] as $error_line) {
+                        $lines[] = __('Erreur : ', 'backup-jlg') . $error_line;
+                    }
+                } elseif (!empty($context['last_error'])) {
+                    $lines[] = __('Dernier message : ', 'backup-jlg') . $context['last_error'];
                 }
                 break;
             default:
@@ -414,6 +458,33 @@ class BJLG_Notifications {
         }
 
         return array_values(array_unique($sanitized));
+    }
+
+    /**
+     * Nettoie et normalise les messages d'erreur distants.
+     *
+     * @param mixed $errors
+     *
+     * @return string[]
+     */
+    private function sanitize_error_messages($errors) {
+        if (!is_array($errors)) {
+            return [];
+        }
+
+        $messages = [];
+        foreach ($errors as $error) {
+            if (!is_string($error)) {
+                continue;
+            }
+
+            $message = sanitize_text_field($error);
+            if ($message !== '') {
+                $messages[] = $message;
+            }
+        }
+
+        return array_values(array_unique($messages));
     }
 
 }
