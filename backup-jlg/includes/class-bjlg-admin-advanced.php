@@ -435,17 +435,18 @@ class BJLG_Admin_Advanced {
      * Ressources d'onboarding affichées dans l'encart d'accueil.
      */
     private function get_onboarding_resources(): array {
+        $dashboard_url = admin_url('admin.php?page=backup-jlg');
         $resources = [
             [
                 'title' => __('Guide de démarrage', 'backup-jlg'),
                 'description' => __('Découvrez les étapes essentielles pour configurer vos premières sauvegardes.', 'backup-jlg'),
-                'url' => 'https://jlg.dev/docs/backup-jlg/demarrage',
+                'url' => add_query_arg(['tab' => 'backup_restore'], $dashboard_url) . '#bjlg-backup-creation-form',
                 'action_label' => __('Lire la documentation', 'backup-jlg'),
             ],
             [
                 'title' => __('Planification automatique', 'backup-jlg'),
                 'description' => __('Configurez des sauvegardes récurrentes adaptées à votre rythme.', 'backup-jlg'),
-                'url' => 'https://jlg.dev/docs/backup-jlg/planification',
+                'url' => add_query_arg(['tab' => 'settings'], $dashboard_url) . '#bjlg-schedule-form',
                 'action_label' => __('Voir le tutoriel', 'backup-jlg'),
             ],
             [
@@ -453,7 +454,7 @@ class BJLG_Admin_Advanced {
                 'description' => __('Exécutez la suite de tests PHPUnit pour valider votre environnement.', 'backup-jlg'),
                 'command' => 'composer test',
                 'action_label' => __('Voir les tests', 'backup-jlg'),
-                'url' => 'https://jlg.dev/docs/backup-jlg/tests',
+                'url' => add_query_arg(['tab' => 'logs'], $dashboard_url) . '#bjlg-diagnostics-tests',
             ],
         ];
 
