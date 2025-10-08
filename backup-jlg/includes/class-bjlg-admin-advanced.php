@@ -436,17 +436,19 @@ class BJLG_Admin_Advanced {
      */
     private function get_onboarding_resources(): array {
         $dashboard_url = admin_url('admin.php?page=backup-jlg');
+        $documentation_url = trailingslashit(BJLG_PLUGIN_URL) . 'assets/docs/documentation.html';
+        $tutorial_url = trailingslashit(BJLG_PLUGIN_URL) . 'assets/docs/tutoriel-planification.html';
         $resources = [
             [
                 'title' => __('Guide de démarrage', 'backup-jlg'),
                 'description' => __('Découvrez les étapes essentielles pour configurer vos premières sauvegardes.', 'backup-jlg'),
-                'url' => add_query_arg(['tab' => 'backup_restore'], $dashboard_url) . '#bjlg-backup-creation-form',
+                'url' => $documentation_url,
                 'action_label' => __('Lire la documentation', 'backup-jlg'),
             ],
             [
                 'title' => __('Planification automatique', 'backup-jlg'),
                 'description' => __('Configurez des sauvegardes récurrentes adaptées à votre rythme.', 'backup-jlg'),
-                'url' => add_query_arg(['tab' => 'settings'], $dashboard_url) . '#bjlg-schedule-form',
+                'url' => $tutorial_url,
                 'action_label' => __('Voir le tutoriel', 'backup-jlg'),
             ],
             [
