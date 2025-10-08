@@ -859,7 +859,7 @@ class BJLG_Settings {
      * Réinitialise tous les paramètres
      */
     public function handle_reset_settings() {
-        if (!current_user_can('manage_options')) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -869,23 +869,23 @@ class BJLG_Settings {
             : 'all';
         
         try {
-        if ($section === 'all') {
-            foreach ($this->default_settings as $key => $defaults) {
-                update_option($this->get_option_name_for_section($key), $defaults);
-            }
-            update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
-            BJLG_History::log('settings_reset', 'info', 'Tous les réglages ont été réinitialisés');
-        } else {
-            if ($section === 'permissions') {
+            if ($section === 'all') {
+                foreach ($this->default_settings as $key => $defaults) {
+                    update_option($this->get_option_name_for_section($key), $defaults);
+                }
                 update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
-                BJLG_History::log('settings_reset', 'info', "Réglages 'permissions' réinitialisés");
-            } elseif (isset($this->default_settings[$section])) {
-                update_option($this->get_option_name_for_section($section), $this->default_settings[$section]);
-                BJLG_History::log('settings_reset', 'info', "Réglages '$section' réinitialisés");
+                BJLG_History::log('settings_reset', 'info', 'Tous les réglages ont été réinitialisés');
             } else {
-                throw new Exception("Section de réglages invalide.");
+                if ($section === 'permissions') {
+                    update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+                    BJLG_History::log('settings_reset', 'info', "Réglages 'permissions' réinitialisés");
+                } elseif (isset($this->default_settings[$section])) {
+                    update_option($this->get_option_name_for_section($section), $this->default_settings[$section]);
+                    BJLG_History::log('settings_reset', 'info', "Réglages '$section' réinitialisés");
+                } else {
+                    throw new Exception("Section de réglages invalide.");
+                }
             }
-        }
             
             wp_send_json_success(['message' => 'Réglages réinitialisés avec succès.']);
             
@@ -898,7 +898,7 @@ class BJLG_Settings {
      * Exporte les paramètres
      */
     public function handle_export_settings() {
-        if (!current_user_can('manage_options')) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -946,7 +946,7 @@ class BJLG_Settings {
      * Importe les paramètres
      */
     public function handle_import_settings() {
-        if (!current_user_can('manage_options')) {
+        if (!\bjlg_can_manage_plugin()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');

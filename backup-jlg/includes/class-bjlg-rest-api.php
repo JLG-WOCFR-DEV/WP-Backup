@@ -398,7 +398,7 @@ class BJLG_REST_API {
             return false;
         }
 
-        return current_user_can('manage_options');
+        return \bjlg_can_manage_plugin();
     }
     
     /**
