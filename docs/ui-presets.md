@@ -7,6 +7,13 @@ Ce document rassemble plusieurs propositions de presets (combinaisons de couleur
 - **Composants clés** : orientations pour buttons, cartes, formulaires, modales.
 - **Interactions** : principes d'animations, micro-interactions et transitions.
 
+👉 **Nouveau : un prototype HTML/CSS accompagnant ces presets est disponible dans [`docs/ui-presets-demo.html`](./ui-presets-demo.html)
+et la feuille de style associée [`docs/ui-presets.css`](./ui-presets.css).**
+
+Les variables CSS sont structurées autour de l’attribut `data-preset` pour faciliter l’intégration dans Storybook, WordPress ou
+des design systems basés sur les custom properties. Les composants du prototype (boutons, cartes, formulaires, modales) se
+stylisent automatiquement via ces tokens.
+
 ## 1. Preset « Minimal Focus » (inspiration Headless UI)
 
 - **Palette**
