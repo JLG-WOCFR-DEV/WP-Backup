@@ -54,6 +54,158 @@ class BJLG_Notification_Queue {
     }
 
     /**
+     * Retourne un instantané sécurisé de la file pour l'observabilité UI.
+     *
+     * @return array<string,mixed>
+     */
+    public static function get_queue_snapshot() {
+        $queue = self::get_queue();
+
+        $snapshot = [
+            'total_entries' => count($queue),
+            'status_counts' => [
+                'pending' => 0,
+                'retry' => 0,
+                'failed' => 0,
+                'completed' => 0,
+            ],
+            'next_attempt_at' => null,
+            'oldest_entry_at' => null,
+            'entries' => [],
+        ];
+
+        if (empty($queue)) {
+            return $snapshot;
+        }
+
+        foreach ($queue as $entry) {
+            if (!is_array($entry) || empty($entry['channels']) || !is_array($entry['channels'])) {
+                continue;
+            }
+
+            $channels = [];
+            $has_pending = false;
+            $has_retry = false;
+            $all_failed = !empty($entry['channels']);
+            $all_completed = !empty($entry['channels']);
+            $max_attempts = 0;
+            $entry_next_attempt = isset($entry['next_attempt_at']) ? (int) $entry['next_attempt_at'] : 0;
+            $last_error = isset($entry['last_error']) ? (string) $entry['last_error'] : '';
+
+            foreach ($entry['channels'] as $channel_key => $channel) {
+                if (!is_string($channel_key)) {
+                    continue;
+                }
+
+                $status = isset($channel['status']) ? (string) $channel['status'] : 'pending';
+                $status = $status !== '' ? $status : 'pending';
+                $attempts = isset($channel['attempts']) ? (int) $channel['attempts'] : 0;
+                $channel_next_attempt = isset($channel['next_attempt_at']) ? (int) $channel['next_attempt_at'] : 0;
+                $channel_error = isset($channel['last_error']) ? (string) $channel['last_error'] : '';
+
+                if ($channel_next_attempt > 0) {
+                    $entry_next_attempt = self::min_time_value($entry_next_attempt, $channel_next_attempt);
+                }
+
+                if ($channel_error !== '' && $last_error === '') {
+                    $last_error = $channel_error;
+                }
+
+                $has_pending = $has_pending || $status === 'pending';
+                $has_retry = $has_retry || $status === 'retry';
+                $all_failed = $all_failed && $status === 'failed';
+                $all_completed = $all_completed && $status === 'completed';
+
+                $max_attempts = max($max_attempts, $attempts);
+
+                $channels[] = [
+                    'key' => sanitize_key($channel_key),
+                    'status' => $status,
+                    'attempts' => $attempts,
+                    'last_error' => $channel_error,
+                    'next_attempt_at' => $channel_next_attempt,
+                ];
+            }
+
+            if (empty($channels)) {
+                continue;
+            }
+
+            $status = 'pending';
+            if ($has_pending) {
+                $status = 'pending';
+            } elseif ($has_retry) {
+                $status = 'retry';
+            } elseif ($all_failed) {
+                $status = 'failed';
+            } elseif ($all_completed) {
+                $status = 'completed';
+            } else {
+                $status = 'retry';
+            }
+
+            if (!isset($snapshot['status_counts'][$status])) {
+                $snapshot['status_counts'][$status] = 0;
+            }
+            $snapshot['status_counts'][$status]++;
+
+            $created_at = isset($entry['created_at']) ? (int) $entry['created_at'] : 0;
+            if ($created_at > 0) {
+                $snapshot['oldest_entry_at'] = self::min_time_value($snapshot['oldest_entry_at'], $created_at);
+            }
+
+            if ($entry_next_attempt > 0) {
+                $snapshot['next_attempt_at'] = self::min_time_value($snapshot['next_attempt_at'], $entry_next_attempt);
+            }
+
+            $snapshot['entries'][] = [
+                'id' => isset($entry['id']) ? sanitize_text_field((string) $entry['id']) : '',
+                'event' => isset($entry['event']) ? sanitize_text_field((string) $entry['event']) : '',
+                'title' => isset($entry['title']) ? sanitize_text_field((string) $entry['title']) : '',
+                'status' => $status,
+                'attempts' => $max_attempts,
+                'created_at' => $created_at,
+                'next_attempt_at' => $entry_next_attempt,
+                'last_error' => $last_error,
+                'channels' => $channels,
+            ];
+        }
+
+        if (!empty($snapshot['entries'])) {
+            usort($snapshot['entries'], static function ($a, $b) {
+                $a_time = $a['next_attempt_at'] ?? 0;
+                $b_time = $b['next_attempt_at'] ?? 0;
+
+                if ($a_time === $b_time) {
+                    return ($a['created_at'] ?? 0) <=> ($b['created_at'] ?? 0);
+                }
+
+                return $a_time <=> $b_time;
+            });
+        }
+
+        return $snapshot;
+    }
+
+    private static function min_time_value($current, $candidate) {
+        $candidate = (int) $candidate;
+        if ($candidate <= 0) {
+            return $current;
+        }
+
+        if ($current === null) {
+            return $candidate;
+        }
+
+        $current = (int) $current;
+        if ($current <= 0) {
+            return $candidate;
+        }
+
+        return min($current, $candidate);
+    }
+
+    /**
      * Processes the queued notifications when triggered by WP-Cron.
      */
     public function process_queue() {
