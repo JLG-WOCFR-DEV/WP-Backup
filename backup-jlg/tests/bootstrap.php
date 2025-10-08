@@ -7,6 +7,56 @@ if (!defined('ABSPATH')) {
     define('ABSPATH', __DIR__ . '/../');
 }
 
+if (!function_exists('plugin_basename')) {
+    function plugin_basename($file) {
+        $file = (string) $file;
+
+        return trim(str_replace(dirname($file), '', $file), '/');
+    }
+}
+
+if (!function_exists('plugin_dir_path')) {
+    function plugin_dir_path($file) {
+        return rtrim(dirname((string) $file), DIRECTORY_SEPARATOR) . '/';
+    }
+}
+
+if (!function_exists('plugin_dir_url')) {
+    function plugin_dir_url($file) {
+        $path = trim(str_replace(dirname(dirname((string) $file)), '', dirname((string) $file)), '/');
+
+        return 'https://example.com/wp-content/plugins/' . ($path !== '' ? $path . '/' : '');
+    }
+}
+
+if (!function_exists('trailingslashit')) {
+    function trailingslashit($value) {
+        $value = (string) $value;
+
+        return rtrim($value, "/\\") . '/';
+    }
+}
+
+if (!function_exists('register_activation_hook')) {
+    function register_activation_hook($file, $callback) {
+        if (!isset($GLOBALS['bjlg_test_hooks']['activation'])) {
+            $GLOBALS['bjlg_test_hooks']['activation'] = [];
+        }
+
+        $GLOBALS['bjlg_test_hooks']['activation'][$file] = $callback;
+    }
+}
+
+if (!function_exists('register_deactivation_hook')) {
+    function register_deactivation_hook($file, $callback) {
+        if (!isset($GLOBALS['bjlg_test_hooks']['deactivation'])) {
+            $GLOBALS['bjlg_test_hooks']['deactivation'] = [];
+        }
+
+        $GLOBALS['bjlg_test_hooks']['deactivation'][$file] = $callback;
+    }
+}
+
 require_once __DIR__ . '/../includes/class-bjlg-debug.php';
 
 if (!defined('BJLG_DEFAULT_CAPABILITY')) {

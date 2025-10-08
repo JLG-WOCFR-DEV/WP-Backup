@@ -184,6 +184,15 @@ final class BJLG_Plugin {
 
     private static $instance = null;
 
+    /** @var bool */
+    private $autoloader_loaded = false;
+
+    /** @var bool */
+    private $autoloader_missing_logged = false;
+
+    /** @var array<string, bool> */
+    private $missing_includes_logged = [];
+
     public static function instance() {
         if (is_null(self::$instance)) {
             self::$instance = new self();
@@ -206,6 +215,8 @@ final class BJLG_Plugin {
     }
     
     private function include_files() {
+        $this->maybe_load_autoloader();
+
         $files_to_load = [
             'class-bjlg-debug.php', 'class-bjlg-client-ip-helper.php', 'class-bjlg-history.php', 'class-bjlg-settings.php',
             'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php',
@@ -224,7 +235,32 @@ final class BJLG_Plugin {
             $path = BJLG_INCLUDES_DIR . $file;
             if (file_exists($path)) {
                 require_once $path;
+                continue;
             }
+
+            if (defined('WP_DEBUG') && WP_DEBUG && empty($this->missing_includes_logged[$path])) {
+                error_log(sprintf('[Backup JLG] Fichier attendu manquant : %s', $path));
+                $this->missing_includes_logged[$path] = true;
+            }
+        }
+    }
+
+    private function maybe_load_autoloader() {
+        if ($this->autoloader_loaded) {
+            return;
+        }
+
+        $autoloader = BJLG_PLUGIN_DIR . 'vendor-bjlg/autoload.php';
+
+        if (is_readable($autoloader)) {
+            require_once $autoloader;
+            $this->autoloader_loaded = true;
+            return;
+        }
+
+        if (defined('WP_DEBUG') && WP_DEBUG && !$this->autoloader_missing_logged) {
+            error_log(sprintf('[Backup JLG] Autoloader introuvable : %s', $autoloader));
+            $this->autoloader_missing_logged = true;
         }
     }
     
