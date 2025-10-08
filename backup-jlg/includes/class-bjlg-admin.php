@@ -2058,7 +2058,7 @@ class BJLG_Admin {
         ?>
         <div class="bjlg-section">
             <h2>Journaux et Outils de Diagnostic</h2>
-            
+
             <h3>Emplacements des Fichiers</h3>
             <p class="description">
                 <strong>Sauvegardes :</strong> <code><?php echo esc_html($relative_backup_dir); ?></code><br>
@@ -2066,7 +2066,24 @@ class BJLG_Admin {
                 <strong>Journal d'erreurs WP :</strong> <code>/wp-content/debug.log</code> (si <code>WP_DEBUG_LOG</code> est activé)
             </p>
             <hr>
-            
+
+            <h3 id="bjlg-diagnostics-tests">Vérifier l'installation</h3>
+            <p class="description">
+                <?php esc_html_e('Lancez la suite de tests automatisés pour vérifier que l’environnement du plugin est opérationnel.', 'backup-jlg'); ?>
+            </p>
+            <ol>
+                <li><?php esc_html_e('Ouvrez un terminal à la racine du plugin.', 'backup-jlg'); ?></li>
+                <li><?php esc_html_e('Exécutez les dépendances Composer si nécessaire :', 'backup-jlg'); ?></li>
+            </ol>
+            <pre class="code"><code>composer install</code></pre>
+            <ol start="3">
+                <li><?php esc_html_e('Lancez ensuite les tests PHPUnit :', 'backup-jlg'); ?></li>
+            </ol>
+            <pre class="code"><code>composer test</code></pre>
+            <p class="description">
+                <?php esc_html_e('Tous les tests doivent être verts avant de mettre le plugin en production.', 'backup-jlg'); ?>
+            </p>
+
             <h3>Journal d'activité du Plugin</h3>
             <p class="description">
                 Pour activer : ajoutez <code>define('BJLG_DEBUG', true);</code> dans votre <code>wp-config.php</code>
