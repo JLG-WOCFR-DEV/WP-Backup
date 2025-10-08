@@ -761,7 +761,41 @@ if (!function_exists('user_can')) {
 
 if (!function_exists('get_option')) {
     function get_option($option, $default = false) {
+        if (strpos($option, '_transient_') === 0) {
+            $transient = substr($option, strlen('_transient_'));
+
+            if (!isset($GLOBALS['bjlg_test_transients'][$transient])) {
+                return $default;
+            }
+        }
+
         return $GLOBALS['bjlg_test_options'][$option] ?? $default;
+    }
+}
+
+if (!function_exists('add_option')) {
+    function add_option($option, $value, $deprecated = '', $autoload = 'yes') {
+        if (isset($GLOBALS['bjlg_test_options'][$option])) {
+            return false;
+        }
+
+        $GLOBALS['bjlg_test_options'][$option] = $value;
+
+        if (strpos($option, '_transient_timeout_') === 0) {
+            // Track timeout separately without polluting the transient store.
+            $timeout_key = substr($option, strlen('_transient_timeout_'));
+            $GLOBALS['bjlg_test_options'][$option] = $value;
+            $GLOBALS['bjlg_test_options']['_transient_timeout_' . $timeout_key] = $value;
+
+            return true;
+        }
+
+        if (strpos($option, '_transient_') === 0) {
+            $transient = substr($option, strlen('_transient_'));
+            $GLOBALS['bjlg_test_transients'][$transient] = $value;
+        }
+
+        return true;
     }
 }
 
@@ -822,6 +856,20 @@ if (!function_exists('current_time')) {
 if (!function_exists('update_option')) {
     function update_option($option, $value) {
         $GLOBALS['bjlg_test_options'][$option] = $value;
+
+        if (strpos($option, '_transient_timeout_') === 0) {
+            $timeout_key = substr($option, strlen('_transient_timeout_'));
+            $GLOBALS['bjlg_test_options'][$option] = $value;
+            $GLOBALS['bjlg_test_options']['_transient_timeout_' . $timeout_key] = $value;
+
+            return true;
+        }
+
+        if (strpos($option, '_transient_') === 0) {
+            $transient = substr($option, strlen('_transient_'));
+            $GLOBALS['bjlg_test_transients'][$transient] = $value;
+        }
+
         return true;
     }
 }
@@ -1196,12 +1244,16 @@ if (!function_exists('set_transient')) {
 
             if ($mock_result === true) {
                 $GLOBALS['bjlg_test_transients'][$transient] = $value;
+                $GLOBALS['bjlg_test_options']['_transient_' . $transient] = $value;
+                $GLOBALS['bjlg_test_options']['_transient_timeout_' . $transient] = time() + (int) $expiration;
 
                 return true;
             }
         }
 
         $GLOBALS['bjlg_test_transients'][$transient] = $value;
+        $GLOBALS['bjlg_test_options']['_transient_' . $transient] = $value;
+        $GLOBALS['bjlg_test_options']['_transient_timeout_' . $transient] = time() + (int) $expiration;
 
         return true;
     }
@@ -1216,6 +1268,9 @@ if (!function_exists('get_transient')) {
 if (!function_exists('delete_transient')) {
     function delete_transient($transient) {
         unset($GLOBALS['bjlg_test_transients'][$transient]);
+        unset($GLOBALS['bjlg_test_options']['_transient_' . $transient]);
+        unset($GLOBALS['bjlg_test_options']['_transient_timeout_' . $transient]);
+
         return true;
     }
 }

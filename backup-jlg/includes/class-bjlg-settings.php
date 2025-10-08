@@ -95,23 +95,17 @@ class BJLG_Settings {
             'secret_key' => '',
             'region' => '',
             'bucket' => '',
+            'kms_key_id' => '',
             'server_side_encryption' => '',
             'object_prefix' => '',
             'enabled' => false,
         ],
-        'dropbox' => [
-            'access_token' => '',
-            'folder' => '',
-            'enabled' => false,
-        ],
-        'onedrive' => [
-            'access_token' => '',
-            'folder' => '',
-            'enabled' => false,
-        ],
-        'pcloud' => [
-            'access_token' => '',
-            'folder' => '',
+        'wasabi' => [
+            'access_key' => '',
+            'secret_key' => '',
+            'region' => '',
+            'bucket' => '',
+            'object_prefix' => '',
             'enabled' => false,
         ],
         'azure_blob' => [
@@ -164,6 +158,36 @@ class BJLG_Settings {
 
     private $default_backup_presets = [];
 
+    /**
+     * Fusionne récursivement les réglages existants avec les valeurs par défaut.
+     *
+     * @param array<string, mixed> $current
+     * @param array<string, mixed> $defaults
+     * @return array<string, mixed>
+     */
+    public static function merge_settings_with_defaults(array $current, array $defaults): array {
+        foreach ($defaults as $key => $default_value) {
+            if (array_key_exists($key, $current)) {
+                $current_value = $current[$key];
+
+                if (is_array($default_value)) {
+                    $current[$key] = self::merge_settings_with_defaults(
+                        is_array($current_value) ? $current_value : [],
+                        $default_value
+                    );
+                }
+
+                continue;
+            }
+
+            $current[$key] = is_array($default_value)
+                ? self::merge_settings_with_defaults([], $default_value)
+                : $default_value;
+        }
+
+        return $current;
+    }
+
     public function __construct() {
         if (self::$instance instanceof self) {
             return;
@@ -200,9 +224,22 @@ class BJLG_Settings {
      */
     public function init_default_settings() {
         foreach ($this->default_settings as $key => $defaults) {
-            $option_name = 'bjlg_' . $key . '_settings';
-            if (get_option($option_name) === false) {
+            $option_name = $this->get_option_name_for_section($key);
+            $stored = get_option($option_name, null);
+
+            if ($stored === null) {
                 update_option($option_name, $defaults);
+                continue;
+            }
+
+            if (!is_array($stored)) {
+                $stored = [];
+            }
+
+            $merged = self::merge_settings_with_defaults($stored, $defaults);
+
+            if ($merged !== $stored) {
+                update_option($option_name, $merged);
             }
         }
 
@@ -211,6 +248,42 @@ class BJLG_Settings {
         }
 
         $this->init_backup_preferences_defaults();
+    }
+
+    /**
+     * Retourne les réglages d'une section fusionnés avec les valeurs par défaut.
+     *
+     * @param string $section
+     * @return array<string, mixed>
+     */
+    private function get_section_settings_with_defaults($section): array {
+        $option_name = $this->get_option_name_for_section($section);
+        $stored = get_option($option_name, []);
+
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+
+        if (!isset($this->default_settings[$section])) {
+            return $stored;
+        }
+
+        return self::merge_settings_with_defaults($stored, $this->default_settings[$section]);
+    }
+
+    /**
+     * Calcule le nom d'option associé à une section donnée.
+     */
+    private function get_option_name_for_section($section): string {
+        $map = [
+            'notifications' => 'bjlg_notification_settings',
+        ];
+
+        if (isset($map[$section])) {
+            return $map[$section];
+        }
+
+        return 'bjlg_' . $section . '_settings';
     }
 
     /**
@@ -297,7 +370,7 @@ class BJLG_Settings {
             }
 
             if ($encryption_submitted) {
-                $current_encryption = get_option('bjlg_encryption_settings', $this->default_settings['encryption']);
+                $current_encryption = $this->get_section_settings_with_defaults('encryption');
 
                 $compression_level = isset($_POST['compression_level'])
                     ? max(0, intval(wp_unslash($_POST['compression_level'])))
@@ -467,28 +540,7 @@ class BJLG_Settings {
             }
 
             if ($should_update_notifications) {
-                $notification_defaults = [
-                    'enabled' => false,
-                    'email_recipients' => '',
-                    'events' => $this->default_settings['notifications']['events'],
-                    'channels' => [
-                        'email' => ['enabled' => false],
-                        'slack' => ['enabled' => false, 'webhook_url' => ''],
-                        'discord' => ['enabled' => false, 'webhook_url' => ''],
-                    ],
-                ];
-
-                $notifications_settings = get_option('bjlg_notification_settings', []);
-                if (!is_array($notifications_settings)) {
-                    $notifications_settings = [];
-                }
-                $notifications_settings = wp_parse_args($notifications_settings, $notification_defaults);
-                $notifications_settings['events'] = isset($notifications_settings['events']) && is_array($notifications_settings['events'])
-                    ? wp_parse_args($notifications_settings['events'], $notification_defaults['events'])
-                    : $notification_defaults['events'];
-                $notifications_settings['channels'] = isset($notifications_settings['channels']) && is_array($notifications_settings['channels'])
-                    ? wp_parse_args($notifications_settings['channels'], $notification_defaults['channels'])
-                    : $notification_defaults['channels'];
+                $notifications_settings = $this->get_section_settings_with_defaults('notifications');
 
                 if (array_key_exists('notifications_enabled', $_POST)) {
                     $notifications_settings['enabled'] = $this->to_bool(wp_unslash($_POST['notifications_enabled']));
@@ -776,12 +828,21 @@ class BJLG_Settings {
         $required_permission = \bjlg_get_required_capability();
 
         $settings = [
-            'cleanup' => get_option('bjlg_cleanup_settings', $this->default_settings['cleanup']),
-            'whitelabel' => get_option('bjlg_whitelabel_settings', $this->default_settings['whitelabel']),
-            'encryption' => get_option('bjlg_encryption_settings', $this->default_settings['encryption']),
-            'notifications' => get_option('bjlg_notification_settings', $this->default_settings['notifications']),
-            'performance' => get_option('bjlg_performance_settings', $this->default_settings['performance']),
-            'gdrive' => get_option('bjlg_gdrive_settings', $this->default_settings['gdrive']),
+            'cleanup' => $this->get_section_settings_with_defaults('cleanup'),
+            'whitelabel' => $this->get_section_settings_with_defaults('whitelabel'),
+            'encryption' => $this->get_section_settings_with_defaults('encryption'),
+            'notifications' => $this->get_section_settings_with_defaults('notifications'),
+            'performance' => $this->get_section_settings_with_defaults('performance'),
+            'gdrive' => $this->get_section_settings_with_defaults('gdrive'),
+            's3' => $this->get_section_settings_with_defaults('s3'),
+            'wasabi' => $this->get_section_settings_with_defaults('wasabi'),
+            'dropbox' => $this->get_section_settings_with_defaults('dropbox'),
+            'onedrive' => $this->get_section_settings_with_defaults('onedrive'),
+            'pcloud' => $this->get_section_settings_with_defaults('pcloud'),
+            'azure_blob' => $this->get_section_settings_with_defaults('azure_blob'),
+            'backblaze_b2' => $this->get_section_settings_with_defaults('backblaze_b2'),
+            'sftp' => $this->get_section_settings_with_defaults('sftp'),
+            'advanced' => $this->get_section_settings_with_defaults('advanced'),
             'webhooks' => get_option('bjlg_webhook_settings', []),
             'schedule' => get_option('bjlg_schedule_settings', []),
             'permissions' => [
@@ -808,23 +869,23 @@ class BJLG_Settings {
             : 'all';
         
         try {
-            if ($section === 'all') {
-                foreach ($this->default_settings as $key => $defaults) {
-                    update_option('bjlg_' . $key . '_settings', $defaults);
-                }
-                update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
-                BJLG_History::log('settings_reset', 'info', 'Tous les réglages ont été réinitialisés');
-            } else {
-                if ($section === 'permissions') {
-                    update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
-                    BJLG_History::log('settings_reset', 'info', "Réglages 'permissions' réinitialisés");
-                } elseif (isset($this->default_settings[$section])) {
-                    update_option('bjlg_' . $section . '_settings', $this->default_settings[$section]);
-                    BJLG_History::log('settings_reset', 'info', "Réglages '$section' réinitialisés");
-                } else {
-                    throw new Exception("Section de réglages invalide.");
-                }
+        if ($section === 'all') {
+            foreach ($this->default_settings as $key => $defaults) {
+                update_option($this->get_option_name_for_section($key), $defaults);
             }
+            update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+            BJLG_History::log('settings_reset', 'info', 'Tous les réglages ont été réinitialisés');
+        } else {
+            if ($section === 'permissions') {
+                update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+                BJLG_History::log('settings_reset', 'info', "Réglages 'permissions' réinitialisés");
+            } elseif (isset($this->default_settings[$section])) {
+                update_option($this->get_option_name_for_section($section), $this->default_settings[$section]);
+                BJLG_History::log('settings_reset', 'info', "Réglages '$section' réinitialisés");
+            } else {
+                throw new Exception("Section de réglages invalide.");
+            }
+        }
             
             wp_send_json_success(['message' => 'Réglages réinitialisés avec succès.']);
             
