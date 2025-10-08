@@ -1721,6 +1721,7 @@ class BJLG_Admin {
                         <td>
                             <div class="bjlg-field-control">
                                 <label>
+                                    <input type="hidden" name="incremental_rotation_enabled" value="0">
                                     <input
                                         type="checkbox"
                                         name="incremental_rotation_enabled"
