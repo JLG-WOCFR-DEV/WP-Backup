@@ -1500,8 +1500,7 @@ class BJLG_Admin {
             <h2>Configuration du Plugin</h2>
             
             <h3><span class="dashicons dashicons-cloud" aria-hidden="true"></span> Destinations Cloud</h3>
-            <form class="bjlg-settings-form">
-                <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
+            <div class="bjlg-settings-destinations">
                 <?php
                 if (!empty($this->destinations)) {
                     foreach ($this->destinations as $destination) {
@@ -1511,7 +1510,7 @@ class BJLG_Admin {
                     echo '<p class="description">Aucune destination cloud configurée. Activez Google Drive ou Amazon S3 en complétant leurs réglages.</p>';
                 }
                 ?>
-            </form>
+            </div>
             
             <h3><span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span> Planification des Sauvegardes</h3>
             <form

@@ -70,6 +70,8 @@ class BJLG_Azure_Blob implements BJLG_Destination_Interface {
 
         echo "<div class='bjlg-destination bjlg-destination--azure'>";
         echo "<h4><span class='dashicons dashicons-cloud' aria-hidden='true'></span> Azure Blob Storage</h4>";
+        echo "<form class='bjlg-settings-form bjlg-destination-form' novalidate>";
+        echo "<div class='bjlg-settings-feedback notice bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p class='description'>Envoyez vos sauvegardes vers un conteneur Azure Blob Storage avec authentification par clé partagée.</p>";
 
         echo "<table class='form-table'>";
@@ -101,6 +103,9 @@ class BJLG_Azure_Blob implements BJLG_Destination_Interface {
         if ($is_connected) {
             echo "<p class='description'><span class='dashicons dashicons-lock' aria-hidden='true'></span> Connexion Azure Blob configurée.</p>";
         }
+
+        echo "<p class='submit'><button type='submit' class='button button-primary'>Enregistrer les réglages</button></p>";
+        echo "</form>";
 
         echo '</div>';
     }

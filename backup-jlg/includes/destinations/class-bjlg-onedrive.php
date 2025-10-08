@@ -66,9 +66,12 @@ class BJLG_OneDrive implements BJLG_Destination_Interface {
     public function render_settings() {
         $settings = $this->get_settings();
         $status = $this->get_status();
+        $is_connected = $this->is_connected();
 
         echo "<div class='bjlg-destination bjlg-destination--onedrive'>";
         echo "<h4><span class='dashicons dashicons-cloud-upload' aria-hidden='true'></span> Microsoft OneDrive</h4>";
+        echo "<form class='bjlg-settings-form bjlg-destination-form' novalidate>";
+        echo "<div class='bjlg-settings-feedback notice bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p class='description'>Transférez vos sauvegardes vers OneDrive à l'aide d'un token d'accès Microsoft Graph.</p>";
 
         echo "<table class='form-table'>";
@@ -94,12 +97,15 @@ class BJLG_OneDrive implements BJLG_Destination_Interface {
             echo "<p class='description bjlg-onedrive-last-test bjlg-hidden'></p>";
         }
 
-        if ($this->is_connected()) {
+        if ($is_connected) {
             $disconnect_url = $this->get_disconnect_url();
             echo "<p><a class='button button-secondary' href='" . esc_url($disconnect_url) . "'>Déconnecter OneDrive</a></p>";
         }
 
-        if ($this->is_connected()) {
+        echo "<p class='submit'><button type='submit' class='button button-primary'>Enregistrer les réglages</button></p>";
+        echo "</form>";
+
+        if ($is_connected) {
             echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' class='bjlg-onedrive-disconnect-form'>";
             echo "<input type='hidden' name='action' value='bjlg_onedrive_disconnect'>";
             if (function_exists('wp_nonce_field')) {

@@ -75,6 +75,8 @@ class BJLG_Backblaze_B2 implements BJLG_Destination_Interface {
 
         echo "<div class='bjlg-destination bjlg-destination--backblaze'>";
         echo "<h4><span class='dashicons dashicons-cloud-upload' aria-hidden='true'></span> Backblaze B2</h4>";
+        echo "<form class='bjlg-settings-form bjlg-destination-form' novalidate>";
+        echo "<div class='bjlg-settings-feedback notice bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p class='description'>Sauvegardez vos archives WordPress sur Backblaze B2 avec upload multipart et jetons d'autorisation automatiques.</p>";
 
         echo "<table class='form-table'>";
@@ -106,6 +108,9 @@ class BJLG_Backblaze_B2 implements BJLG_Destination_Interface {
         if ($is_connected) {
             echo "<p class='description'><span class='dashicons dashicons-lock' aria-hidden='true'></span> Connexion Backblaze B2 configurée.</p>";
         }
+
+        echo "<p class='submit'><button type='submit' class='button button-primary'>Enregistrer les réglages</button></p>";
+        echo "</form>";
 
         echo '</div>';
     }
