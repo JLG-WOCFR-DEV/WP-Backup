@@ -2576,6 +2576,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             'notify_backup_failed' => '0',
             'notify_cleanup_complete' => 'on',
             'notify_storage_warning' => 'false',
+            'notify_remote_purge_failed' => '1',
             'channel_email' => 'on',
             'channel_slack' => '1',
             'slack_webhook_url' => 'https://example.com/slack',
@@ -2616,6 +2617,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $this->assertFalse($notifications['events']['backup_failed']);
         $this->assertTrue($notifications['events']['cleanup_complete']);
         $this->assertFalse($notifications['events']['storage_warning']);
+        $this->assertTrue($notifications['events']['remote_purge_failed']);
         $this->assertTrue($notifications['channels']['email']['enabled']);
         $this->assertTrue($notifications['channels']['slack']['enabled']);
         $this->assertFalse($notifications['channels']['discord']['enabled']);
@@ -2817,6 +2819,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
                     'backup_failed' => false,
                     'cleanup_complete' => false,
                     'storage_warning' => false,
+                    'remote_purge_failed' => true,
                 ],
                 'channels' => [
                     'email' => ['enabled' => true],

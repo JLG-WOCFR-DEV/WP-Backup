@@ -336,8 +336,10 @@ class BJLG_Incremental {
             'status' => 'pending',
             'attempts' => 0,
             'last_attempt_at' => 0,
+            'next_attempt_at' => time(),
             'last_error' => '',
             'errors' => [],
+            'failed_at' => 0,
         ];
 
         $queue_entry = null;
@@ -356,6 +358,10 @@ class BJLG_Incremental {
             $existing['status'] = 'pending';
             $existing['last_error'] = '';
             $existing['errors'] = [];
+            $existing['attempts'] = 0;
+            $existing['last_attempt_at'] = 0;
+            $existing['next_attempt_at'] = $entry['registered_at'];
+            $existing['failed_at'] = 0;
             $queue_entry = $existing;
             break;
         }
@@ -408,6 +414,10 @@ class BJLG_Incremental {
             } else {
                 $entry['destinations'] = $remaining;
                 $entry['status'] = 'pending';
+                $entry['next_attempt_at'] = time();
+                $entry['failed_at'] = 0;
+                $entry['errors'] = [];
+                $entry['last_error'] = '';
             }
 
             $modified = true;
@@ -448,8 +458,10 @@ class BJLG_Incremental {
                 'registered_at' => isset($entry['registered_at']) ? (int) $entry['registered_at'] : 0,
                 'attempts' => isset($entry['attempts']) ? (int) $entry['attempts'] : 0,
                 'last_attempt_at' => isset($entry['last_attempt_at']) ? (int) $entry['last_attempt_at'] : 0,
+                'next_attempt_at' => isset($entry['next_attempt_at']) ? (int) $entry['next_attempt_at'] : 0,
                 'last_error' => isset($entry['last_error']) ? (string) $entry['last_error'] : '',
                 'errors' => $this->normalize_error_list($entry['errors'] ?? []),
+                'failed_at' => isset($entry['failed_at']) ? (int) $entry['failed_at'] : 0,
             ];
         }
 
@@ -494,6 +506,14 @@ class BJLG_Incremental {
 
             if (isset($data['last_attempt_at'])) {
                 $entry['last_attempt_at'] = max(0, (int) $data['last_attempt_at']);
+            }
+
+            if (isset($data['next_attempt_at'])) {
+                $entry['next_attempt_at'] = max(0, (int) $data['next_attempt_at']);
+            }
+
+            if (isset($data['failed_at'])) {
+                $entry['failed_at'] = max(0, (int) $data['failed_at']);
             }
 
             $modified = true;
