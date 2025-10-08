@@ -2632,6 +2632,41 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $this->assertTrue(get_option('bjlg_ajax_debug_enabled'));
     }
 
+    public function test_handle_save_settings_allows_disabling_incremental_rotation(): void
+    {
+        $settings = new BJLG\BJLG_Settings();
+
+        $previous_post = $_POST ?? [];
+        $previous_incremental = get_option('bjlg_incremental_settings');
+
+        update_option('bjlg_incremental_settings', [
+            'max_incrementals' => 5,
+            'max_full_age_days' => 30,
+            'rotation_enabled' => true,
+        ]);
+
+        $_POST = [
+            'nonce' => 'test-nonce',
+            'incremental_rotation_enabled' => '0',
+        ];
+
+        try {
+            $settings->handle_save_settings();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertTrue($response->success);
+        } finally {
+            $_POST = $previous_post;
+            update_option('bjlg_incremental_settings', $previous_incremental);
+        }
+
+        $incremental = get_option('bjlg_incremental_settings');
+        $this->assertIsArray($incremental);
+        $this->assertFalse($incremental['rotation_enabled']);
+        $this->assertSame(5, $incremental['max_incrementals']);
+        $this->assertSame(30, $incremental['max_full_age_days']);
+    }
+
     public function test_handle_save_settings_returns_success_payload(): void
     {
         $settings = new BJLG\BJLG_Settings();

@@ -323,9 +323,17 @@ class BJLG_Settings {
                 $max_age_days = isset($_POST['incremental_max_age'])
                     ? max(0, intval(wp_unslash($_POST['incremental_max_age'])))
                     : (isset($current_incremental['max_full_age_days']) ? max(0, intval($current_incremental['max_full_age_days'])) : 30);
-                $rotation_enabled = array_key_exists('incremental_rotation_enabled', $_POST)
-                    ? $this->to_bool(wp_unslash($_POST['incremental_rotation_enabled']))
-                    : (!empty($current_incremental['rotation_enabled']));
+                if (array_key_exists('incremental_rotation_enabled', $_POST)) {
+                    $rotation_raw = wp_unslash($_POST['incremental_rotation_enabled']);
+
+                    if (is_array($rotation_raw)) {
+                        $rotation_raw = array_pop($rotation_raw);
+                    }
+
+                    $rotation_enabled = $this->to_bool($rotation_raw);
+                } else {
+                    $rotation_enabled = !empty($current_incremental['rotation_enabled']);
+                }
 
                 $incremental_settings = [
                     'max_incrementals' => $max_incrementals,
