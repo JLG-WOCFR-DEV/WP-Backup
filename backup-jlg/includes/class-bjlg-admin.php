@@ -195,11 +195,29 @@ class BJLG_Admin {
                 <span class="bjlg-version">v<?php echo esc_html(BJLG_VERSION); ?></span>
             </h1>
 
-            <nav class="nav-tab-wrapper">
-                <?php foreach ($tabs as $tab_key => $tab_label): ?>
+            <nav class="nav-tab-wrapper" role="tablist">
+                <?php foreach ($tabs as $tab_key => $tab_label):
+                    $tab_slug = sanitize_key($tab_key);
+
+                    if ($tab_slug === '') {
+                        $tab_slug = 'tab-' . substr(md5((string) $tab_key), 0, 8);
+                    }
+
+                    $tab_id = 'bjlg-tab-' . $tab_slug;
+                    $panel_id = 'bjlg-tab-panel-' . $tab_slug;
+                    $is_active = ($active_tab === $tab_key);
+                    $tab_classes = 'nav-tab' . ($is_active ? ' nav-tab-active' : '');
+                    $tab_index = $is_active ? '0' : '-1';
+                    $aria_current_attr = $is_active ? ' aria-current="page"' : '';
+                    ?>
                     <a href="<?php echo esc_url(add_query_arg(['tab' => $tab_key], $page_url)); ?>"
-                       class="nav-tab <?php echo $active_tab == $tab_key ? 'nav-tab-active' : ''; ?>"
-                       data-tab="<?php echo esc_attr($tab_key); ?>">
+                       class="<?php echo esc_attr($tab_classes); ?>"
+                       data-tab="<?php echo esc_attr($tab_key); ?>"
+                       id="<?php echo esc_attr($tab_id); ?>"
+                       role="tab"
+                       aria-controls="<?php echo esc_attr($panel_id); ?>"
+                       aria-selected="<?php echo $is_active ? 'true' : 'false'; ?>"
+                       tabindex="<?php echo esc_attr($tab_index); ?>"<?php echo $aria_current_attr; ?>>
                         <?php echo esc_html($tab_label); ?>
                     </a>
                 <?php endforeach; ?>
@@ -207,9 +225,26 @@ class BJLG_Admin {
 
             <div class="bjlg-tab-content" data-active-tab="<?php echo esc_attr($active_tab); ?>">
                 <?php $this->render_dashboard_overview($metrics); ?>
-                <?php foreach ($tabs as $tab_key => $tab_label): ?>
+                <?php foreach ($tabs as $tab_key => $tab_label):
+                    $tab_slug = sanitize_key($tab_key);
+
+                    if ($tab_slug === '') {
+                        $tab_slug = 'tab-' . substr(md5((string) $tab_key), 0, 8);
+                    }
+
+                    $tab_id = 'bjlg-tab-' . $tab_slug;
+                    $panel_id = 'bjlg-tab-panel-' . $tab_slug;
+                    $is_active = ($active_tab === $tab_key);
+                    $panel_hidden_attr = $is_active ? '' : ' hidden';
+                    $panel_aria_hidden = $is_active ? 'false' : 'true';
+                    ?>
                     <section class="bjlg-tab-panel"
-                             data-tab="<?php echo esc_attr($tab_key); ?>"<?php echo $active_tab === $tab_key ? '' : ' hidden'; ?>>
+                             data-tab="<?php echo esc_attr($tab_key); ?>"
+                             id="<?php echo esc_attr($panel_id); ?>"
+                             role="tabpanel"
+                             aria-labelledby="<?php echo esc_attr($tab_id); ?>"
+                             aria-hidden="<?php echo esc_attr($panel_aria_hidden); ?>"
+                             tabindex="0"<?php echo $panel_hidden_attr; ?>>
                         <?php $this->render_tab_panel($tab_key, $active_tab); ?>
                     </section>
                 <?php endforeach; ?>

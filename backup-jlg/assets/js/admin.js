@@ -22,16 +22,26 @@ jQuery(document).ready(function($) {
             $tabs.each(function() {
                 const $tab = $(this);
                 const isActive = $tab.data('tab') === tabKey;
-                $tab.toggleClass('nav-tab-active', isActive);
+                $tab.toggleClass('nav-tab-active', isActive)
+                    .attr('aria-selected', isActive ? 'true' : 'false')
+                    .attr('tabindex', isActive ? '0' : '-1');
+
+                if (isActive) {
+                    $tab.attr('aria-current', 'page');
+                } else {
+                    $tab.removeAttr('aria-current');
+                }
             });
 
             $panels.each(function() {
                 const $panel = $(this);
                 const matches = $panel.data('tab') === tabKey;
                 if (matches) {
-                    $panel.removeAttr('hidden');
+                    $panel.removeAttr('hidden')
+                        .attr('aria-hidden', 'false');
                 } else {
-                    $panel.attr('hidden', 'hidden');
+                    $panel.attr('hidden', 'hidden')
+                        .attr('aria-hidden', 'true');
                 }
             });
 
