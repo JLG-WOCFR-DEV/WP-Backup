@@ -79,6 +79,8 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
 
         echo "<div class='bjlg-destination bjlg-destination--s3'>";
         echo "<h4><span class='dashicons dashicons-amazon' aria-hidden='true'></span> Amazon S3</h4>";
+        echo "<form class='bjlg-settings-form bjlg-destination-form' novalidate>";
+        echo "<div class='bjlg-settings-feedback notice bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p class='description'>Envoyez automatiquement vos sauvegardes WordPress vers un bucket Amazon S3.</p>";
 
         echo "<table class='form-table'>";
@@ -121,7 +123,13 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
 
         if ($is_connected) {
             echo "<p class='description'><span class='dashicons dashicons-lock' aria-hidden='true'></span> Connexion Amazon S3 configurée.</p>";
-            echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' style='margin-top:10px;'>";
+        }
+
+        echo "<p class='submit'><button type='submit' class='button button-primary'>Enregistrer les réglages</button></p>";
+        echo "</form>";
+
+        if ($is_connected) {
+            echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' class='bjlg-destination-disconnect-form'>";
             echo "<input type='hidden' name='action' value='bjlg_s3_disconnect'>";
             if (function_exists('wp_nonce_field')) {
                 wp_nonce_field('bjlg_s3_disconnect', 'bjlg_s3_nonce');

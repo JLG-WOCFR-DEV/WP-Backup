@@ -66,9 +66,12 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
     public function render_settings() {
         $settings = $this->get_settings();
         $status = $this->get_status();
+        $is_connected = $this->is_connected();
 
         echo "<div class='bjlg-destination bjlg-destination--dropbox'>";
         echo "<h4><span class='dashicons dashicons-archive' aria-hidden='true'></span> Dropbox</h4>";
+        echo "<form class='bjlg-settings-form bjlg-destination-form' novalidate>";
+        echo "<div class='bjlg-settings-feedback notice bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p class='description'>Connectez un dossier Dropbox pour stocker automatiquement vos archives de sauvegarde.</p>";
 
         echo "<table class='form-table'>";
@@ -89,17 +92,20 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
             $color = $status['last_result'] === 'success' ? '' : '#b32d2e';
             $tested_at = gmdate('d/m/Y H:i:s', $status['tested_at']);
             $message = $status['message'] !== '' ? $status['message'] : ($status['last_result'] === 'success' ? 'Connexion vérifiée avec succès.' : 'Le dernier test a échoué.');
-            echo "<p class='description bjlg-dropbox-last-test' style='color:{$color};'><span class='dashicons {$icon}'></span> Dernier test le {$tested_at}. " . esc_html($message) . "</p>";
+            echo "<p class='description bjlg-dropbox-last-test' style='color:{$color};'><span class='dashicons {$icon}'></span>Dernier test le {$tested_at}. " . esc_html($message) . "</p>";
         } else {
             echo "<p class='description bjlg-dropbox-last-test bjlg-hidden'></p>";
         }
 
-        if ($this->is_connected()) {
+        if ($is_connected) {
             $disconnect_url = $this->get_disconnect_url();
             echo "<p><a class='button button-secondary' href='" . esc_url($disconnect_url) . "'>Déconnecter Dropbox</a></p>";
         }
 
-        if ($this->is_connected()) {
+        echo "<p class='submit'><button type='submit' class='button button-primary'>Enregistrer les réglages</button></p>";
+        echo "</form>";
+
+        if ($is_connected) {
             echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' class='bjlg-dropbox-disconnect-form'>";
             echo "<input type='hidden' name='action' value='bjlg_dropbox_disconnect'>";
             if (function_exists('wp_nonce_field')) {

@@ -65,6 +65,8 @@ class BJLG_Wasabi extends BJLG_S3_Compatible_Destination {
 
         echo "<div class='bjlg-destination bjlg-destination--wasabi'>";
         echo "<h4><span class='dashicons dashicons-cloud' aria-hidden='true'></span> Wasabi</h4>";
+        echo "<form class='bjlg-settings-form bjlg-destination-form' novalidate>";
+        echo "<div class='bjlg-settings-feedback notice bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p class='description'>Synchronisez vos sauvegardes WordPress vers un bucket Wasabi S3 compatible.</p>";
 
         echo "<table class='form-table'>";
@@ -94,6 +96,9 @@ class BJLG_Wasabi extends BJLG_S3_Compatible_Destination {
         } else {
             echo "<p class='description'>Enregistrez vos identifiants et activez la destination puis testez une sauvegarde pour valider la connexion.</p>";
         }
+
+        echo "<p class='submit'><button type='submit' class='button button-primary'>Enregistrer les réglages</button></p>";
+        echo "</form>";
 
         echo '</div>';
     }

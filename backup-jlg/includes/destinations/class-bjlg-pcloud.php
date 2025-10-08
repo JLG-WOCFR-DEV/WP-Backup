@@ -63,9 +63,12 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
     public function render_settings() {
         $settings = $this->get_settings();
         $status = $this->get_status();
+        $is_connected = $this->is_connected();
 
         echo "<div class='bjlg-destination bjlg-destination--pcloud'>";
         echo "<h4><span class='dashicons dashicons-cloud' aria-hidden='true'></span> pCloud</h4>";
+        echo "<form class='bjlg-settings-form bjlg-destination-form' novalidate>";
+        echo "<div class='bjlg-settings-feedback notice bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p class='description'>Stockez vos sauvegardes WordPress dans un dossier pCloud dédié.</p>";
 
         echo "<table class='form-table'>";
@@ -91,10 +94,13 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
             echo "<p class='description bjlg-pcloud-last-test bjlg-hidden'></p>";
         }
 
-        if ($this->is_connected()) {
+        if ($is_connected) {
             $disconnect_url = $this->get_disconnect_url();
             echo "<p><a class='button button-secondary' href='" . esc_url($disconnect_url) . "'>Déconnecter pCloud</a></p>";
         }
+
+        echo "<p class='submit'><button type='submit' class='button button-primary'>Enregistrer les réglages</button></p>";
+        echo "</form>";
 
         echo '</div>';
     }

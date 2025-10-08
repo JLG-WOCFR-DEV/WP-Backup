@@ -131,6 +131,8 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         $status = $this->get_status();
         $is_connected = $this->is_connected();
 
+        echo "<form class='bjlg-settings-form bjlg-destination-form' novalidate>";
+        echo "<div class='bjlg-settings-feedback notice bjlg-hidden' role='status' aria-live='polite'></div>";
         echo "<p class='description'>Transférez automatiquement vos sauvegardes vers un dossier Google Drive dédié.</p>";
 
         echo "<table class='form-table'>";
@@ -172,14 +174,20 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             echo "<p class='description'>Enregistrez vos identifiants puis activez Google Drive pour poursuivre la connexion.</p>";
         }
 
+        if ($is_connected) {
+            echo "<p class='description'><span class='dashicons dashicons-yes' aria-hidden='true'></span> Compte Google Drive connecté.</p>";
+        }
+
         if (!$is_connected && $settings['enabled'] && $settings['client_id'] !== '' && $settings['client_secret'] !== '') {
             $auth_url = esc_url($this->build_authorization_url());
             echo "<p><a class='button button-secondary' href='{$auth_url}'>Connecter mon compte Google Drive</a></p>";
         }
 
+        echo "<p class='submit'><button type='submit' class='button button-primary'>Enregistrer les réglages</button></p>";
+        echo "</form>";
+
         if ($is_connected) {
-            echo "<p class='description'><span class='dashicons dashicons-yes' aria-hidden='true'></span> Compte Google Drive connecté.</p>";
-            echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "'>";
+            echo "<form method='post' action='" . esc_url(admin_url('admin-post.php')) . "' class='bjlg-destination-disconnect-form'>";
             echo "<input type='hidden' name='action' value='bjlg_gdrive_disconnect'>";
             if (function_exists('wp_nonce_field')) {
                 wp_nonce_field('bjlg_gdrive_disconnect', 'bjlg_gdrive_nonce');
