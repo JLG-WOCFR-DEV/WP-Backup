@@ -817,6 +817,7 @@
     border-color: color-mix(in srgb, var(--bjlg-color-accent) 10%, var(--bjlg-color-border));
     border-radius: var(--bjlg-radius-md);
     padding: 14px;
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     gap: 10px;
