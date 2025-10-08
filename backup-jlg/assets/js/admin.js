@@ -14,6 +14,8 @@ jQuery(document).ready(function($) {
             return;
         }
 
+        const $tabContainer = $wrap.find('.bjlg-tab-content');
+
         const activateTab = function(tabKey, updateUrl) {
             if (!tabKey) {
                 return;
@@ -44,6 +46,30 @@ jQuery(document).ready(function($) {
                         .attr('aria-hidden', 'true');
                 }
             });
+
+            if ($tabContainer.length) {
+                $tabContainer.attr('data-active-tab', tabKey);
+            }
+
+            const $activePanel = $panels.filter(function() {
+                return $(this).data('tab') === tabKey;
+            });
+
+            if ($activePanel.length) {
+                const panelElement = $activePanel.get(0);
+
+                if (panelElement && typeof panelElement.focus === 'function') {
+                    try {
+                        panelElement.focus({ preventScroll: true });
+                    } catch (error) {
+                        panelElement.focus();
+                    }
+                }
+
+                if (panelElement && typeof panelElement.scrollIntoView === 'function') {
+                    panelElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }
 
             if (updateUrl && window.history && typeof window.history.replaceState === 'function') {
                 try {
