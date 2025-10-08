@@ -184,10 +184,345 @@ class BJLG_Admin_Advanced {
 
         $metrics['storage']['remote_destinations'] = $this->collect_remote_storage_metrics();
 
+        $metrics['queues'] = $this->build_queue_metrics($now);
+
         $metrics['summary'] = $this->build_summary($metrics);
         $metrics['alerts'] = $this->build_alerts($metrics);
 
         return $metrics;
+    }
+
+    private function build_queue_metrics(int $now): array {
+        $queues = [];
+
+        if (class_exists(__NAMESPACE__ . '\\BJLG_Notification_Queue')) {
+            $queues['notifications'] = $this->format_notification_queue_metrics($now);
+        }
+
+        $queues['remote_purge'] = $this->format_remote_purge_metrics($now);
+
+        return $queues;
+    }
+
+    private function format_notification_queue_metrics(int $now): array {
+        $metrics = [
+            'key' => 'notifications',
+            'label' => __('Notifications', 'backup-jlg'),
+            'total' => 0,
+            'status_counts' => [
+                'pending' => 0,
+                'retry' => 0,
+                'failed' => 0,
+                'completed' => 0,
+            ],
+            'next_attempt_formatted' => '',
+            'next_attempt_relative' => '',
+            'oldest_entry_formatted' => '',
+            'oldest_entry_relative' => '',
+            'entries' => [],
+        ];
+
+        $snapshot = BJLG_Notification_Queue::get_queue_snapshot();
+        if (!is_array($snapshot)) {
+            return $metrics;
+        }
+
+        $metrics['total'] = isset($snapshot['total_entries']) ? (int) $snapshot['total_entries'] : 0;
+
+        $status_counts = isset($snapshot['status_counts']) && is_array($snapshot['status_counts'])
+            ? $snapshot['status_counts']
+            : [];
+        foreach ($status_counts as $status => $count) {
+            $status = is_string($status) ? $status : (string) $status;
+            if (!isset($metrics['status_counts'][$status])) {
+                $metrics['status_counts'][$status] = 0;
+            }
+            $metrics['status_counts'][$status] += (int) $count;
+        }
+
+        [$metrics['next_attempt_formatted'], $metrics['next_attempt_relative']] = $this->format_timestamp_pair($snapshot['next_attempt_at'] ?? null, $now);
+        [$metrics['oldest_entry_formatted'], $metrics['oldest_entry_relative']] = $this->format_timestamp_pair($snapshot['oldest_entry_at'] ?? null, $now);
+
+        $entries = isset($snapshot['entries']) && is_array($snapshot['entries']) ? $snapshot['entries'] : [];
+        $metrics['entries'] = $this->format_notification_entries(array_slice($entries, 0, 5), $now);
+
+        return $metrics;
+    }
+
+    private function format_remote_purge_metrics(int $now): array {
+        $metrics = [
+            'key' => 'remote_purge',
+            'label' => __('Purge distante', 'backup-jlg'),
+            'total' => 0,
+            'status_counts' => [
+                'pending' => 0,
+                'retry' => 0,
+                'processing' => 0,
+                'failed' => 0,
+            ],
+            'next_attempt_formatted' => '',
+            'next_attempt_relative' => '',
+            'oldest_entry_formatted' => '',
+            'oldest_entry_relative' => '',
+            'entries' => [],
+        ];
+
+        if (!class_exists(__NAMESPACE__ . '\\BJLG_Incremental')) {
+            return $metrics;
+        }
+
+        $incremental = new BJLG_Incremental();
+        $queue = $incremental->get_remote_purge_queue();
+        if (!is_array($queue) || empty($queue)) {
+            return $metrics;
+        }
+
+        $metrics['total'] = count($queue);
+
+        $next_attempt = null;
+        $oldest = null;
+        $entries = [];
+
+        foreach ($queue as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $status = isset($entry['status']) ? (string) $entry['status'] : 'pending';
+            $status = $status !== '' ? $status : 'pending';
+            if (!isset($metrics['status_counts'][$status])) {
+                $metrics['status_counts'][$status] = 0;
+            }
+            $metrics['status_counts'][$status]++;
+
+            $registered_at = isset($entry['registered_at']) ? (int) $entry['registered_at'] : 0;
+            if ($registered_at > 0) {
+                $oldest = $this->min_time($oldest, $registered_at);
+            }
+
+            $entry_next_attempt = isset($entry['next_attempt_at']) ? (int) $entry['next_attempt_at'] : 0;
+            if ($entry_next_attempt > 0) {
+                $next_attempt = $this->min_time($next_attempt, $entry_next_attempt);
+            }
+
+            $destinations = [];
+            if (!empty($entry['destinations']) && is_array($entry['destinations'])) {
+                foreach ($entry['destinations'] as $destination) {
+                    $destinations[] = sanitize_text_field((string) $destination);
+                }
+            }
+
+            $entries[] = [
+                'title' => isset($entry['file']) ? sanitize_text_field((string) $entry['file']) : '',
+                'status' => $status,
+                'attempts' => isset($entry['attempts']) ? (int) $entry['attempts'] : 0,
+                'next_attempt_at' => $entry_next_attempt,
+                'registered_at' => $registered_at,
+                'last_error' => isset($entry['last_error']) ? sanitize_text_field((string) $entry['last_error']) : '',
+                'destinations' => $destinations,
+            ];
+        }
+
+        usort($entries, static function ($a, $b) {
+            $a_time = $a['next_attempt_at'] ?? 0;
+            $b_time = $b['next_attempt_at'] ?? 0;
+
+            if ($a_time === $b_time) {
+                return ($a['registered_at'] ?? 0) <=> ($b['registered_at'] ?? 0);
+            }
+
+            if ($a_time === 0) {
+                return 1;
+            }
+
+            if ($b_time === 0) {
+                return -1;
+            }
+
+            return $a_time <=> $b_time;
+        });
+
+        $metrics['entries'] = $this->format_remote_purge_entries(array_slice($entries, 0, 5), $now);
+        [$metrics['next_attempt_formatted'], $metrics['next_attempt_relative']] = $this->format_timestamp_pair($next_attempt, $now);
+        [$metrics['oldest_entry_formatted'], $metrics['oldest_entry_relative']] = $this->format_timestamp_pair($oldest, $now);
+
+        return $metrics;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $entries
+     */
+    private function format_notification_entries(array $entries, int $now): array {
+        $formatted = [];
+
+        foreach ($entries as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $title = isset($entry['title']) ? (string) $entry['title'] : '';
+            if ($title === '' && !empty($entry['event'])) {
+                $title = (string) $entry['event'];
+            }
+            if ($title === '' && !empty($entry['id'])) {
+                $title = (string) $entry['id'];
+            }
+
+            [$next_formatted, $next_relative] = $this->format_timestamp_pair($entry['next_attempt_at'] ?? null, $now);
+            [$created_formatted, $created_relative] = $this->format_timestamp_pair($entry['created_at'] ?? null, $now);
+
+            $status = isset($entry['status']) ? (string) $entry['status'] : 'pending';
+
+            $formatted[] = [
+                'title' => sanitize_text_field($title),
+                'status' => $status,
+                'status_label' => $this->get_queue_status_label($status),
+                'status_intent' => $this->get_queue_status_intent($status),
+                'attempts' => isset($entry['attempts']) ? (int) $entry['attempts'] : 0,
+                'attempt_label' => $this->format_attempt_label(isset($entry['attempts']) ? (int) $entry['attempts'] : 0),
+                'created_relative' => $created_relative,
+                'created_formatted' => $created_formatted,
+                'next_attempt_relative' => $next_relative,
+                'next_attempt_formatted' => $next_formatted,
+                'message' => isset($entry['last_error']) ? (string) $entry['last_error'] : '',
+            ];
+        }
+
+        return $formatted;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $entries
+     */
+    private function format_remote_purge_entries(array $entries, int $now): array {
+        $formatted = [];
+
+        foreach ($entries as $entry) {
+            [$next_formatted, $next_relative] = $this->format_timestamp_pair($entry['next_attempt_at'] ?? null, $now);
+            [$registered_formatted, $registered_relative] = $this->format_timestamp_pair($entry['registered_at'] ?? null, $now);
+
+            $status = isset($entry['status']) ? (string) $entry['status'] : 'pending';
+            $destinations_label = $this->format_destination_label($entry['destinations'] ?? []);
+
+            $title = isset($entry['title']) && $entry['title'] !== ''
+                ? $entry['title']
+                : __('Archive inconnue', 'backup-jlg');
+
+            $formatted[] = [
+                'title' => sanitize_text_field($title),
+                'status' => $status,
+                'status_label' => $this->get_queue_status_label($status),
+                'status_intent' => $this->get_queue_status_intent($status),
+                'attempts' => isset($entry['attempts']) ? (int) $entry['attempts'] : 0,
+                'attempt_label' => $this->format_attempt_label(isset($entry['attempts']) ? (int) $entry['attempts'] : 0),
+                'next_attempt_relative' => $next_relative,
+                'next_attempt_formatted' => $next_formatted,
+                'created_relative' => $registered_relative,
+                'created_formatted' => $registered_formatted,
+                'message' => isset($entry['last_error']) ? (string) $entry['last_error'] : '',
+                'details' => [
+                    'destinations' => $destinations_label,
+                ],
+            ];
+        }
+
+        return $formatted;
+    }
+
+    private function get_queue_status_label(string $status): string {
+        switch ($status) {
+            case 'completed':
+                return __('Terminé', 'backup-jlg');
+            case 'failed':
+                return __('Échec', 'backup-jlg');
+            case 'retry':
+                return __('Nouvel essai planifié', 'backup-jlg');
+            case 'processing':
+                return __('En cours', 'backup-jlg');
+            case 'pending':
+            default:
+                return __('En attente', 'backup-jlg');
+        }
+    }
+
+    private function get_queue_status_intent(string $status): string {
+        switch ($status) {
+            case 'completed':
+                return 'success';
+            case 'failed':
+                return 'error';
+            case 'retry':
+                return 'warning';
+            case 'processing':
+                return 'info';
+            case 'pending':
+            default:
+                return 'info';
+        }
+    }
+
+    private function format_timestamp_pair($timestamp, int $now): array {
+        $timestamp = is_numeric($timestamp) ? (int) $timestamp : 0;
+        if ($timestamp <= 0) {
+            return ['', ''];
+        }
+
+        $formatted = $this->format_datetime($timestamp);
+
+        if ($timestamp > $now) {
+            return [$formatted, sprintf(__('dans %s', 'backup-jlg'), human_time_diff($now, $timestamp))];
+        }
+
+        return [$formatted, sprintf(__('il y a %s', 'backup-jlg'), human_time_diff($timestamp, $now))];
+    }
+
+    private function min_time($current, $candidate) {
+        $candidate = is_numeric($candidate) ? (int) $candidate : 0;
+        if ($candidate <= 0) {
+            return $current === null ? null : (int) $current;
+        }
+
+        if ($current === null) {
+            return $candidate;
+        }
+
+        $current = is_numeric($current) ? (int) $current : 0;
+        if ($current <= 0) {
+            return $candidate;
+        }
+
+        return min($current, $candidate);
+    }
+
+    private function format_attempt_label(int $attempts): string {
+        if ($attempts <= 0) {
+            return __('Aucune tentative', 'backup-jlg');
+        }
+
+        return sprintf(
+            _n('%s tentative', '%s tentatives', $attempts, 'backup-jlg'),
+            number_format_i18n($attempts)
+        );
+    }
+
+    private function format_destination_label(array $destinations): string {
+        $sanitized = [];
+        foreach ($destinations as $destination) {
+            $label = sanitize_text_field((string) $destination);
+            if ($label !== '') {
+                $sanitized[] = $label;
+            }
+        }
+
+        if (empty($sanitized)) {
+            return __('Aucune destination spécifiée', 'backup-jlg');
+        }
+
+        if (function_exists('wp_sprintf_l')) {
+            return wp_sprintf_l('%l', $sanitized);
+        }
+
+        return implode(', ', $sanitized);
     }
 
     /**

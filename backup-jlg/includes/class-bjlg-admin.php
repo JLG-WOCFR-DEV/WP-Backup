@@ -308,6 +308,7 @@ class BJLG_Admin {
         $summary = $metrics['summary'] ?? [];
         $alerts = $metrics['alerts'] ?? [];
         $onboarding = $metrics['onboarding'] ?? [];
+        $queues = isset($metrics['queues']) && is_array($metrics['queues']) ? $metrics['queues'] : [];
         $data_attr = !empty($metrics) ? wp_json_encode($metrics) : '';
 
         $backup_tab_url = add_query_arg(
@@ -430,6 +431,132 @@ class BJLG_Admin {
                     </p>
                 </article>
             </div>
+
+            <?php if (!empty($queues)): ?>
+                <section class="bjlg-queues" aria-labelledby="bjlg-queues-title">
+                    <header class="bjlg-queues__header">
+                        <h2 id="bjlg-queues-title"><?php esc_html_e('Files d’attente', 'backup-jlg'); ?></h2>
+                        <p class="bjlg-queues__description">
+                            <?php esc_html_e('Suivez les notifications et purges distantes en attente directement depuis le tableau de bord.', 'backup-jlg'); ?>
+                        </p>
+                    </header>
+
+                    <div class="bjlg-queues__grid">
+                        <?php foreach ($queues as $queue_key => $queue):
+                            if (!is_array($queue)) {
+                                continue;
+                            }
+
+                            $total = isset($queue['total']) ? (int) $queue['total'] : 0;
+                            $status_counts = isset($queue['status_counts']) && is_array($queue['status_counts']) ? $queue['status_counts'] : [];
+                            $pending_count = isset($status_counts['pending']) ? (int) $status_counts['pending'] : 0;
+                            $retry_count = isset($status_counts['retry']) ? (int) $status_counts['retry'] : 0;
+                            $failed_count = isset($status_counts['failed']) ? (int) $status_counts['failed'] : 0;
+                            $next_relative = isset($queue['next_attempt_relative']) ? (string) $queue['next_attempt_relative'] : '';
+                            $oldest_relative = isset($queue['oldest_entry_relative']) ? (string) $queue['oldest_entry_relative'] : '';
+                            $entries = isset($queue['entries']) && is_array($queue['entries']) ? $queue['entries'] : [];
+                            ?>
+                            <article class="bjlg-queue-card" data-queue="<?php echo esc_attr($queue_key); ?>">
+                                <header class="bjlg-queue-card__header">
+                                    <h3 class="bjlg-queue-card__title"><?php echo esc_html($queue['label'] ?? ucfirst((string) $queue_key)); ?></h3>
+                                    <span class="bjlg-queue-card__count">
+                                        <?php
+                                        echo esc_html(
+                                            sprintf(
+                                                _n('%s entrée', '%s entrées', $total, 'backup-jlg'),
+                                                number_format_i18n($total)
+                                            )
+                                        );
+                                        ?>
+                                    </span>
+                                </header>
+
+                                <p class="bjlg-queue-card__meta">
+                                    <?php
+                                    printf(
+                                        /* translators: 1: number of pending entries, 2: number of retry entries, 3: number of failed entries. */
+                                        esc_html__('En attente : %1$s • Nouvel essai : %2$s • Échecs : %3$s', 'backup-jlg'),
+                                        esc_html(number_format_i18n($pending_count)),
+                                        esc_html(number_format_i18n($retry_count)),
+                                        esc_html(number_format_i18n($failed_count))
+                                    );
+                                    ?>
+                                </p>
+
+                                <p class="bjlg-queue-card__meta">
+                                    <?php if ($next_relative !== ''): ?>
+                                        <?php printf(esc_html__('Prochain passage %s', 'backup-jlg'), esc_html($next_relative)); ?>
+                                    <?php else: ?>
+                                        <?php esc_html_e('Aucun traitement planifié.', 'backup-jlg'); ?>
+                                    <?php endif; ?>
+                                </p>
+
+                                <?php if ($oldest_relative !== ''): ?>
+                                    <p class="bjlg-queue-card__meta">
+                                        <?php printf(esc_html__('Entrée la plus ancienne %s', 'backup-jlg'), esc_html($oldest_relative)); ?>
+                                    </p>
+                                <?php endif; ?>
+
+                                <ul class="bjlg-queue-card__entries">
+                                    <?php if (!empty($entries)): ?>
+                                        <?php foreach ($entries as $entry):
+                                            if (!is_array($entry)) {
+                                                continue;
+                                            }
+
+                                            $status_intent = isset($entry['status_intent']) ? (string) $entry['status_intent'] : 'info';
+                                            $status_label = isset($entry['status_label']) ? (string) $entry['status_label'] : '';
+                                            $attempt_label = isset($entry['attempt_label']) ? (string) $entry['attempt_label'] : '';
+                                            $next_attempt_relative = isset($entry['next_attempt_relative']) ? (string) $entry['next_attempt_relative'] : '';
+                                            $created_relative = isset($entry['created_relative']) ? (string) $entry['created_relative'] : '';
+                                            $details = isset($entry['details']) && is_array($entry['details']) ? $entry['details'] : [];
+                                            ?>
+                                            <li class="bjlg-queue-card__entry">
+                                                <div class="bjlg-queue-card__entry-header">
+                                                    <span class="bjlg-queue-card__entry-title"><?php echo esc_html($entry['title'] ?? ''); ?></span>
+                                                    <?php if ($status_label !== ''): ?>
+                                                        <span class="bjlg-queue-card__entry-status bjlg-queue-card__entry-status--<?php echo esc_attr($status_intent); ?>">
+                                                            <?php echo esc_html($status_label); ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </div>
+
+                                                <p class="bjlg-queue-card__entry-meta">
+                                                    <?php if ($attempt_label !== ''): ?>
+                                                        <span><?php echo esc_html($attempt_label); ?></span>
+                                                    <?php endif; ?>
+
+                                                    <?php if ($next_attempt_relative !== ''): ?>
+                                                        <span>• <?php printf(esc_html__('Prochaine tentative %s', 'backup-jlg'), esc_html($next_attempt_relative)); ?></span>
+                                                    <?php endif; ?>
+
+                                                    <?php if ($created_relative !== ''): ?>
+                                                        <span>• <?php printf(esc_html__('Ajouté %s', 'backup-jlg'), esc_html($created_relative)); ?></span>
+                                                    <?php endif; ?>
+                                                </p>
+
+                                                <?php if (!empty($details['destinations'])): ?>
+                                                    <p class="bjlg-queue-card__entry-meta">
+                                                        <?php printf(esc_html__('Destinations : %s', 'backup-jlg'), esc_html($details['destinations'])); ?>
+                                                    </p>
+                                                <?php endif; ?>
+
+                                                <?php if (!empty($entry['message'])): ?>
+                                                    <p class="bjlg-queue-card__entry-message"><?php echo esc_html($entry['message']); ?></p>
+                                                <?php endif; ?>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    <?php else: ?>
+                                        <li class="bjlg-queue-card__entry bjlg-queue-card__entry--empty">
+                                            <?php esc_html_e('Aucune entrée en attente.', 'backup-jlg'); ?>
+                                        </li>
+                                    <?php endif; ?>
+                                </ul>
+                            </article>
+                        <?php endforeach; ?>
+                    </div>
+                </section>
+            <?php endif; ?>
 
             <div class="bjlg-onboarding" data-role="onboarding" role="region" aria-live="polite" aria-atomic="true">
                 <h3 class="bjlg-onboarding__title"><?php esc_html_e('Bien démarrer', 'backup-jlg'); ?></h3>

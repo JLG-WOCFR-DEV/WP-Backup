@@ -33,7 +33,7 @@ Backup JLG est un plugin WordPress complet de sauvegarde et restauration qui com
 - API REST riche couvrant la gestion complète des sauvegardes, restaurations, historiques, statistiques, paramètres et planifications, avec pagination/validation détaillées.【F:backup-jlg/includes/class-bjlg-rest-api.php†L54-L319】
 - Téléchargements REST protégés par jetons temporaires et routage dédié pour la restauration distante.【F:backup-jlg/includes/class-bjlg-rest-api.php†L178-L219】【F:backup-jlg/includes/class-bjlg-actions.php†L66-L200】
 - Destinations distantes prêtes à l’emploi : Google Drive, Amazon S3, Wasabi, Dropbox, OneDrive, pCloud, Azure Blob, Backblaze B2 et SFTP, sélectionnables dans l’interface et depuis l’automatisation.【F:backup-jlg/includes/class-bjlg-admin.php†L62-L78】【F:backup-jlg/includes/class-bjlg-backup.php†L2175-L2214】
-- Tableau de bord récapitulatif (cartes, tendances, alertes) alimenté par les services avancés du plugin, exportable vers un bloc Gutenberg public si nécessaire.【F:backup-jlg/includes/class-bjlg-admin.php†L146-L309】【F:backup-jlg/includes/class-bjlg-blocks.php†L67-L200】
+- Tableau de bord récapitulatif (cartes, tendances, alertes) alimenté par les services avancés du plugin, avec un panneau « Files d’attente » dédié aux notifications et purges distantes, exportable vers un bloc Gutenberg public si nécessaire.【F:backup-jlg/includes/class-bjlg-admin.php†L146-L459】【F:backup-jlg/includes/class-bjlg-admin-advanced.php†L30-L231】【F:backup-jlg/assets/css/admin.css†L312-L404】【F:backup-jlg/includes/class-bjlg-blocks.php†L67-L200】
 
 ## ⚙️ Dépendances et prérequis
 - PHP ≥ 7.4 avec les fonctions `shell_exec` et `proc_open` disponibles pour tirer parti des optimisations (le plugin fonctionne sans, mais en mode dégradé).
