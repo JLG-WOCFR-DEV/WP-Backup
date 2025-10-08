@@ -77,7 +77,11 @@
 .bjlg-dashboard-overview {
     margin-top: 22px;
     padding: clamp(18px, 2vw, 26px);
-    background: linear-gradient(180deg, var(--bjlg-color-surface) 0%, #fbfbff 100%);
+    background: linear-gradient(
+        180deg,
+        var(--bjlg-color-surface) 0%,
+        color-mix(in srgb, var(--bjlg-color-surface) 88%, #ffffff 12%) 100%
+    );
     border: 1px solid var(--bjlg-color-border);
     border-radius: var(--bjlg-radius-lg);
     box-shadow: var(--bjlg-shadow-sm);
@@ -209,7 +213,12 @@
 }
 
 .bjlg-action-card {
-    background: linear-gradient(160deg, var(--bjlg-color-surface) 0%, rgba(110, 86, 207, 0.04) 55%, rgba(110, 86, 207, 0.12) 100%);
+    background: linear-gradient(
+        160deg,
+        var(--bjlg-color-surface) 0%,
+        rgba(110, 86, 207, 0.025) 55%,
+        rgba(110, 86, 207, 0.08) 100%
+    );
     border: 1px solid var(--bjlg-color-border);
     border-color: color-mix(in srgb, var(--bjlg-color-accent) 12%, var(--bjlg-color-border));
     border-radius: var(--bjlg-radius-lg);
@@ -231,7 +240,7 @@
     inset: auto -40px -60px auto;
     width: 180px;
     height: 180px;
-    background: radial-gradient(circle, rgba(110, 86, 207, 0.18) 0%, rgba(110, 86, 207, 0) 68%);
+    background: radial-gradient(circle, rgba(110, 86, 207, 0.12) 0%, rgba(110, 86, 207, 0) 68%);
     pointer-events: none;
     transform: rotate(-8deg);
 }
