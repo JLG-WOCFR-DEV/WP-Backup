@@ -16,11 +16,13 @@ if (!defined('ABSPATH')) {
 }
 
 class BJLG_Performance {
-    
+
     private $max_workers = 4;
     private $chunk_size = 50; // MB
     private $use_background_processing = true;
     private $compression_level = 6; // 1-9, 6 est un bon compromis vitesse/taille
+    private $parallel_capable = null;
+    private $disabled_functions = [];
     
     public function __construct() {
         $this->load_settings();
@@ -58,6 +60,8 @@ class BJLG_Performance {
             $disabled_functions = array_filter(array_map('trim', explode(',', $disable_functions)));
         }
 
+        $this->disabled_functions = $disabled_functions;
+
         $can_use_shell_exec = function_exists('shell_exec') && !in_array('shell_exec', $disabled_functions, true);
 
         if ($can_use_shell_exec) {
@@ -84,6 +88,8 @@ class BJLG_Performance {
             $this->chunk_size = 40;
         }
         
+        $this->parallel_capable = null; // Recalculer sur la prochaine demande
+
         BJLG_Debug::log("Capacités système détectées : {$this->max_workers} workers max, chunks de {$this->chunk_size}MB");
     }
     
@@ -112,47 +118,71 @@ class BJLG_Performance {
     /**
      * Crée une sauvegarde optimisée avec traitement parallèle
      */
-    public function create_optimized_backup($components, $task_id) {
+    public function create_optimized_backup($components, $task_id, array $context = []) {
         $start_time = microtime(true);
         $memory_start = memory_get_usage(true);
-        
+
         BJLG_Debug::log("Démarrage de la sauvegarde optimisée");
-        
+
         try {
             // Préparer les tâches
             $tasks = $this->prepare_backup_tasks($components);
             $temp_files = [];
-            
+
+            $context = array_merge([
+                'components' => $components,
+                'type' => $context['type'] ?? 'full',
+                'target_filepath' => $context['target_filepath'] ?? null,
+                'parallel_used' => $this->can_use_parallel_processing(),
+                'compression_level' => $this->compression_level,
+            ], $context);
+
             // Exécuter selon les capacités
-            if ($this->can_use_parallel_processing() && count($tasks) > 1) {
+            if ($context['parallel_used'] && count($tasks) > 1) {
                 $temp_files = $this->execute_parallel_tasks($tasks, $task_id);
             } else {
                 $temp_files = $this->execute_sequential_optimized($tasks, $task_id);
             }
-            
+
             // Combiner les résultats
-            $final_backup = $this->combine_temp_files($temp_files, $task_id);
-            
+            $combined = $this->combine_temp_files(
+                $temp_files,
+                $task_id,
+                $context['target_filepath'] ?? null,
+                $context
+            );
+
+            $final_backup = $combined['path'];
+            $entries_added = $combined['entries'];
+
             $elapsed_time = microtime(true) - $start_time;
             $memory_used = memory_get_peak_usage(true) - $memory_start;
-            
+
             // Enregistrer les stats de performance
             $this->record_performance_stats([
                 'duration' => $elapsed_time,
                 'memory_used' => $memory_used,
-                'files_processed' => count($temp_files),
-                'parallel_used' => $this->can_use_parallel_processing(),
+                'files_processed' => $entries_added,
+                'parallel_used' => (bool) $context['parallel_used'],
                 'workers_used' => $this->max_workers
             ]);
-            
+
             BJLG_Debug::log(sprintf(
                 "Sauvegarde optimisée terminée en %.2fs, mémoire utilisée: %s",
                 $elapsed_time,
                 size_format($memory_used)
             ));
-            
-            return $final_backup;
-            
+
+            return [
+                'path' => $final_backup,
+                'entries' => $entries_added,
+                'meta' => [
+                    'duration' => $elapsed_time,
+                    'memory_used' => $memory_used,
+                    'parallel_used' => (bool) $context['parallel_used'],
+                ],
+            ];
+
         } catch (Exception $e) {
             BJLG_Debug::log("Erreur dans la sauvegarde optimisée : " . $e->getMessage());
             throw $e;
@@ -600,63 +630,75 @@ class BJLG_Performance {
     /**
      * Combine les fichiers temporaires
      */
-    private function combine_temp_files($temp_files, $task_id) {
-        $final_backup = BJLG_BACKUP_DIR . 'backup-' . date('Y-m-d-H-i-s') . '.zip';
-        
+    private function combine_temp_files($temp_files, $task_id, $target_filepath = null, array $context = []) {
+        $filename = $context['filename'] ?? ('backup-' . date('Y-m-d-H-i-s') . '.zip');
+        $final_backup = $target_filepath ?: BJLG_BACKUP_DIR . $filename;
+
+        if ($target_filepath && file_exists($target_filepath)) {
+            @unlink($target_filepath);
+        }
+
         $zip = new ZipArchive();
-        if ($zip->open($final_backup, ZipArchive::CREATE) !== TRUE) {
+        if ($zip->open($final_backup, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
             throw new Exception("Impossible de créer l'archive finale");
         }
-        
-        // Ajouter le manifeste
-        $manifest = [
-            'version' => BJLG_VERSION,
-            'created_at' => current_time('mysql'),
-            'optimized' => true,
-            'compression_level' => $this->compression_level,
-            'files_count' => count($temp_files)
-        ];
-        $zip->addFromString('manifest.json', json_encode($manifest, JSON_PRETTY_PRINT));
-        
-        // Ajouter les fichiers temporaires
+
+        $entries_added = 0;
+
         foreach ($temp_files as $temp_file) {
-            if (file_exists($temp_file)) {
-                $name = $this->get_archive_name($temp_file);
-                
-                if (substr($temp_file, -3) === '.gz') {
-                    // Décompresser d'abord
-                    $uncompressed = substr($temp_file, 0, -3);
-                    $source = gzopen($temp_file, 'rb');
-                    $dest = fopen($uncompressed, 'wb');
-                    
-                    while (!gzeof($source)) {
-                        fwrite($dest, gzread($source, 1024 * 512));
-                    }
-                    
-                    gzclose($source);
-                    fclose($dest);
-                    
-                    $zip->addFile($uncompressed, $name);
-                    @unlink($uncompressed);
-                } else {
-                    $zip->addFile($temp_file, $name);
-                }
-                
-                @unlink($temp_file);
+            if (!file_exists($temp_file)) {
+                continue;
             }
+
+            $archive_name = $this->get_archive_name($temp_file);
+
+            if ($this->is_gzip_file($temp_file)) {
+                $decompressed = $this->decompress_gzip_to_temp($temp_file);
+                if ($decompressed) {
+                    if ($zip->addFile($decompressed, $archive_name)) {
+                        $entries_added++;
+                    }
+                    @unlink($decompressed);
+                }
+                @unlink($temp_file);
+                continue;
+            }
+
+            if ($this->is_zip_file($temp_file)) {
+                $entries_added += $this->merge_zip_into_archive($zip, $temp_file);
+                @unlink($temp_file);
+                continue;
+            }
+
+            if ($zip->addFile($temp_file, $archive_name)) {
+                $entries_added++;
+            }
+
+            @unlink($temp_file);
         }
-        
+
+        $manifest = $this->build_manifest_payload($context, $entries_added, $task_id);
+        $manifest_json = function_exists('wp_json_encode')
+            ? wp_json_encode($manifest, JSON_PRETTY_PRINT)
+            : json_encode($manifest, JSON_PRETTY_PRINT);
+
+        $zip->addFromString('backup-manifest.json', $manifest_json);
+        $zip->addFromString('manifest.json', $manifest_json);
+
         $zip->close();
-        
-        return $final_backup;
+
+        return [
+            'path' => $final_backup,
+            'entries' => $entries_added,
+        ];
     }
-    
+
     /**
      * Détermine le nom dans l'archive
      */
     private function get_archive_name($temp_file) {
         $basename = basename($temp_file);
-        
+
         if (strpos($basename, 'db_') === 0) {
             return 'database.sql';
         } elseif (strpos($basename, 'files_') === 0) {
@@ -664,21 +706,182 @@ class BJLG_Performance {
                 return $matches[1] . '.zip';
             }
         }
-        
+
         return $basename;
+    }
+
+    private function is_gzip_file($filepath) {
+        return substr($filepath, -3) === '.gz';
+    }
+
+    private function is_zip_file($filepath) {
+        return substr($filepath, -4) === '.zip';
+    }
+
+    private function decompress_gzip_to_temp($filepath) {
+        if (!function_exists('gzopen')) {
+            return null;
+        }
+
+        $source = gzopen($filepath, 'rb');
+        if (!$source) {
+            return null;
+        }
+
+        $temp = function_exists('wp_tempnam') ? wp_tempnam(basename($filepath, '.gz')) : tempnam(sys_get_temp_dir(), 'bjlg-unzip-');
+        if (!$temp) {
+            gzclose($source);
+
+            return null;
+        }
+
+        $destination = fopen($temp, 'wb');
+        if (!$destination) {
+            gzclose($source);
+            @unlink($temp);
+
+            return null;
+        }
+
+        while (!gzeof($source)) {
+            fwrite($destination, gzread($source, 1024 * 512));
+        }
+
+        gzclose($source);
+        fclose($destination);
+
+        return $temp;
+    }
+
+    private function merge_zip_into_archive(ZipArchive $destination, $zip_path) {
+        $source = new ZipArchive();
+        $entries_added = 0;
+
+        if ($source->open($zip_path) !== true) {
+            return $entries_added;
+        }
+
+        for ($i = 0; $i < $source->numFiles; $i++) {
+            $entry_name = $source->getNameIndex($i);
+            if ($entry_name === false) {
+                continue;
+            }
+
+            if (substr($entry_name, -1) === '/') {
+                $destination->addEmptyDir($entry_name);
+                continue;
+            }
+
+            $stream = $source->getStream($entry_name);
+            if (!$stream) {
+                continue;
+            }
+
+            $temp = function_exists('wp_tempnam') ? wp_tempnam(basename($entry_name)) : tempnam(sys_get_temp_dir(), 'bjlg-zip-');
+            if (!$temp) {
+                fclose($stream);
+                continue;
+            }
+
+            $destination_handle = fopen($temp, 'wb');
+            if (!$destination_handle) {
+                fclose($stream);
+                @unlink($temp);
+                continue;
+            }
+
+            while (!feof($stream)) {
+                fwrite($destination_handle, fread($stream, 1024 * 512));
+            }
+
+            fclose($stream);
+            fclose($destination_handle);
+
+            if ($destination->addFile($temp, $entry_name)) {
+                $entries_added++;
+            }
+
+            @unlink($temp);
+        }
+
+        $source->close();
+
+        return $entries_added;
+    }
+
+    private function build_manifest_payload(array $context, $entries_added, $task_id) {
+        global $wp_version;
+
+        $components = array_values(array_unique(array_map('strval', (array) ($context['components'] ?? []))));
+
+        return [
+            'version' => defined('BJLG_VERSION') ? BJLG_VERSION : 'dev',
+            'wp_version' => isset($wp_version) ? $wp_version : get_bloginfo('version'),
+            'php_version' => PHP_VERSION,
+            'type' => $context['type'] ?? 'full',
+            'contains' => $components,
+            'created_at' => function_exists('current_time') ? current_time('c') : date('c'),
+            'site_url' => function_exists('get_site_url') ? get_site_url() : '',
+            'site_name' => function_exists('get_bloginfo') ? get_bloginfo('name') : '',
+            'db_prefix' => isset($GLOBALS['wpdb']->prefix) ? $GLOBALS['wpdb']->prefix : '',
+            'theme_active' => function_exists('get_option') ? get_option('stylesheet') : '',
+            'plugins_active' => function_exists('get_option') ? get_option('active_plugins') : [],
+            'multisite' => function_exists('is_multisite') ? is_multisite() : false,
+            'file_count' => $entries_added,
+            'checksum' => '',
+            'checksum_algorithm' => '',
+            'optimized' => true,
+            'parallel_used' => !empty($context['parallel_used']),
+            'task_id' => $task_id,
+            'compression_level' => $context['compression_level'] ?? $this->compression_level,
+        ];
     }
     
     /**
      * Vérifie si on peut utiliser le traitement parallèle
      */
     private function can_use_parallel_processing() {
-        // Désactivé pour l'instant car nécessite une implémentation complexe
-        return false;
-        
-        // Pour une vraie implémentation, vérifier :
-        // - exec() disponible
-        // - Charge serveur acceptable
-        // - Mémoire suffisante
+        return $this->evaluate_parallel_capability();
+    }
+
+    private function evaluate_parallel_capability() {
+        if ($this->parallel_capable !== null) {
+            return (bool) $this->parallel_capable;
+        }
+
+        if (!$this->use_background_processing) {
+            $this->parallel_capable = false;
+
+            return false;
+        }
+
+        $memory_limit = $this->get_memory_limit_bytes();
+        if ($memory_limit < 134217728) { // Moins de 128 MB
+            $this->parallel_capable = false;
+
+            return false;
+        }
+
+        $pcntl_available = function_exists('pcntl_fork') && !in_array('pcntl_fork', $this->disabled_functions, true);
+        $posix_available = function_exists('posix_kill') && !in_array('posix_kill', $this->disabled_functions, true);
+        $proc_open_available = function_exists('proc_open') && !in_array('proc_open', $this->disabled_functions, true);
+        $proc_get_status_available = function_exists('proc_get_status') && !in_array('proc_get_status', $this->disabled_functions, true);
+
+        $can_spawn_process = ($pcntl_available && $posix_available) || ($proc_open_available && $proc_get_status_available);
+        $has_workers = $this->max_workers > 1;
+
+        $raw_capability = $can_spawn_process && $has_workers;
+
+        $settings = get_option('bjlg_performance_settings', []);
+        $this->parallel_capable = (bool) apply_filters(
+            'bjlg_can_use_parallel_processing',
+            $raw_capability,
+            $settings,
+            $this->max_workers,
+            $this->chunk_size
+        );
+
+        return (bool) $this->parallel_capable;
     }
     
     /**
