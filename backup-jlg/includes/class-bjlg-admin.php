@@ -845,6 +845,10 @@ class BJLG_Admin {
         $google_drive_unavailable = $this->is_google_drive_unavailable();
         $presets = BJLG_Settings::get_backup_presets();
         $presets_json = !empty($presets) ? wp_json_encode(array_values($presets)) : '';
+        $advanced_options_open = $include_text !== ''
+            || $exclude_text !== ''
+            || !empty(array_filter((array) $post_checks))
+            || !empty($secondary_destinations);
         ?>
         <div class="bjlg-section">
             <h2>Créer une sauvegarde</h2>
@@ -872,12 +876,14 @@ class BJLG_Admin {
                             <th scope="row">Contenu de la sauvegarde</th>
                             <td>
                                 <div class="bjlg-field-control">
-                                    <fieldset>
+                                    <fieldset aria-describedby="bjlg-backup-components-description">
+                                        <legend class="bjlg-fieldset-title">Sélection des composants</legend>
                                         <label><input type="checkbox" name="backup_components[]" value="db" checked> <strong>Base de données</strong> <span class="description">Toutes les tables WordPress</span></label><br>
                                         <label><input type="checkbox" name="backup_components[]" value="plugins" checked> Extensions (<code>/wp-content/plugins</code>)</label><br>
                                         <label><input type="checkbox" name="backup_components[]" value="themes" checked> Thèmes (<code>/wp-content/themes</code>)</label><br>
                                         <label><input type="checkbox" name="backup_components[]" value="uploads" checked> Médias (<code>/wp-content/uploads</code>)</label>
                                     </fieldset>
+                                    <p id="bjlg-backup-components-description" class="description">Décochez les éléments que vous ne souhaitez pas inclure dans le fichier final.</p>
                                 </div>
                             </td>
                         </tr>
@@ -885,7 +891,8 @@ class BJLG_Admin {
                             <th scope="row">Options</th>
                             <td>
                                 <div class="bjlg-field-control">
-                                    <fieldset>
+                                    <fieldset aria-describedby="bjlg-backup-options-description">
+                                        <legend class="bjlg-fieldset-title">Options principales</legend>
                                         <label for="bjlg-encrypt-backup">
                                             <input
                                                 type="checkbox"
@@ -914,100 +921,91 @@ class BJLG_Admin {
                                             Ne sauvegarde que les fichiers modifiés depuis la dernière sauvegarde complète. Plus rapide et utilise moins d'espace disque.
                                         </p>
                                     </fieldset>
+                                    <p id="bjlg-backup-options-description" class="description">Activez les optimisations essentielles avant de lancer la sauvegarde.</p>
                                 </div>
                             </td>
                         </tr>
                         <tr>
-                            <th scope="row"><label for="bjlg-include-patterns">Inclusions personnalisées</label></th>
+                            <th scope="row">Options avancées</th>
                             <td>
-                                <div class="bjlg-field-control">
-                                    <textarea
-                                        id="bjlg-include-patterns"
-                                        name="include_patterns"
-                                        rows="4"
-                                        class="large-text code"
-                                        placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"
-                                        aria-describedby="bjlg-include-patterns-description"
-                                    ><?php echo $include_text; ?></textarea>
-                                    <p id="bjlg-include-patterns-description" class="description">Un motif par ligne. Laissez vide pour inclure tous les fichiers autorisés.</p>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row"><label for="bjlg-exclude-patterns">Exclusions</label></th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <textarea
-                                        id="bjlg-exclude-patterns"
-                                        name="exclude_patterns"
-                                        rows="4"
-                                        class="large-text code"
-                                        placeholder="*/cache/*&#10;*.log"
-                                        aria-describedby="bjlg-exclude-patterns-description"
-                                    ><?php echo $exclude_text; ?></textarea>
-                                    <p id="bjlg-exclude-patterns-description" class="description">Ajoutez des motifs pour ignorer certains fichiers ou répertoires. Les exclusions globales s'appliquent également.</p>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Vérifications post-sauvegarde</th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <fieldset>
-                                        <label for="bjlg-post-checks-checksum">
-                                            <input type="checkbox"
-                                                   id="bjlg-post-checks-checksum"
-                                                   name="post_checks[]"
-                                                   value="checksum"
-                                                   <?php checked(!empty($post_checks['checksum'])); ?>
-                                                   aria-describedby="bjlg-post-checks-checksum-description"
-                                            > Vérifier l'intégrité (SHA-256)
-                                        </label>
-                                        <p id="bjlg-post-checks-checksum-description" class="description">Calcule un hachage du fichier pour détecter les corruptions.</p>
-                                        <label for="bjlg-post-checks-dry-run">
-                                            <input type="checkbox"
-                                                   id="bjlg-post-checks-dry-run"
-                                                   name="post_checks[]"
-                                                   value="dry_run"
-                                                   <?php checked(!empty($post_checks['dry_run'])); ?>
-                                                   aria-describedby="bjlg-post-checks-dry-run-description"
-                                            > Test de restauration à blanc
-                                        </label>
-                                        <p id="bjlg-post-checks-dry-run-description" class="description">Ouvre l'archive pour valider qu'elle est exploitable (non exécuté sur les fichiers chiffrés).</p>
-                                    </fieldset>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Destinations secondaires</th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <fieldset>
-                                        <?php if (!empty($destination_choices)): ?>
-                                            <?php foreach ($destination_choices as $destination_id => $destination_label):
-                                                $is_google_drive = $destination_id === 'google_drive';
-                                                $is_unavailable = $is_google_drive && $google_drive_unavailable;
-                                                ?>
-                                                <div class="bjlg-destination-option-group">
-                                                    <label class="bjlg-destination-option">
-                                                        <input type="checkbox"
-                                                               name="secondary_destinations[]"
-                                                               value="<?php echo esc_attr($destination_id); ?>"
-                                                               <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>
-                                                               <?php disabled($is_unavailable); ?>>
-                                                        <?php echo esc_html($destination_label); ?>
-                                                    </label>
-                                                    <?php if ($is_unavailable): ?>
-                                                        <p class="description bjlg-destination-unavailable"><?php echo esc_html($this->get_google_drive_unavailable_notice()); ?></p>
-                                                    <?php endif; ?>
-                                                </div>
-                                            <?php endforeach; ?>
-                                    <?php else: ?>
-                                        <p class="description">Aucune destination distante n'est encore configurée.</p>
-                                    <?php endif; ?>
-                                    <p class="description">Les destinations sélectionnées recevront la sauvegarde dans l'ordre indiqué. En cas d'échec, la suivante est tentée automatiquement.</p>
-                                    </fieldset>
-                                </div>
+                                <details class="bjlg-backup-advanced" <?php echo $advanced_options_open ? 'open' : ''; ?>>
+                                    <summary>Afficher les options d'affinage (inclusions, exclusions, vérifications…)</summary>
+                                    <div class="bjlg-advanced-options-grid">
+                                        <fieldset class="bjlg-advanced-fieldset">
+                                            <legend>Inclusions personnalisées</legend>
+                                            <label class="screen-reader-text" for="bjlg-include-patterns">Inclusions personnalisées</label>
+                                            <textarea
+                                                id="bjlg-include-patterns"
+                                                name="include_patterns"
+                                                rows="4"
+                                                class="large-text code"
+                                                placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"
+                                                aria-describedby="bjlg-include-patterns-description"
+                                            ><?php echo $include_text; ?></textarea>
+                                            <p id="bjlg-include-patterns-description" class="description">Un motif par ligne. Laissez vide pour inclure tous les fichiers autorisés.</p>
+                                        </fieldset>
+                                        <fieldset class="bjlg-advanced-fieldset">
+                                            <legend>Exclusions</legend>
+                                            <label class="screen-reader-text" for="bjlg-exclude-patterns">Exclusions personnalisées</label>
+                                            <textarea
+                                                id="bjlg-exclude-patterns"
+                                                name="exclude_patterns"
+                                                rows="4"
+                                                class="large-text code"
+                                                placeholder="*/cache/*&#10;*.log"
+                                                aria-describedby="bjlg-exclude-patterns-description"
+                                            ><?php echo $exclude_text; ?></textarea>
+                                            <p id="bjlg-exclude-patterns-description" class="description">Ajoutez des motifs pour ignorer certains fichiers ou répertoires. Les exclusions globales s'appliquent également.</p>
+                                        </fieldset>
+                                        <fieldset class="bjlg-advanced-fieldset" aria-describedby="bjlg-post-checks-description">
+                                            <legend>Vérifications post-sauvegarde</legend>
+                                            <label for="bjlg-post-checks-checksum">
+                                                <input type="checkbox"
+                                                       id="bjlg-post-checks-checksum"
+                                                       name="post_checks[]"
+                                                       value="checksum"
+                                                       <?php checked(!empty($post_checks['checksum'])); ?>
+                                                > Vérifier l'intégrité (SHA-256)
+                                            </label>
+                                            <p class="description">Calcule un hachage du fichier pour détecter les corruptions.</p>
+                                            <label for="bjlg-post-checks-dry-run">
+                                                <input type="checkbox"
+                                                       id="bjlg-post-checks-dry-run"
+                                                       name="post_checks[]"
+                                                       value="dry_run"
+                                                       <?php checked(!empty($post_checks['dry_run'])); ?>
+                                                > Test de restauration à blanc
+                                            </label>
+                                            <p class="description" id="bjlg-post-checks-description">Ouvre l'archive pour valider qu'elle est exploitable (non exécuté sur les fichiers chiffrés).</p>
+                                        </fieldset>
+                                        <fieldset class="bjlg-advanced-fieldset" aria-describedby="bjlg-secondary-destinations-description">
+                                            <legend>Destinations secondaires</legend>
+                                            <?php if (!empty($destination_choices)): ?>
+                                                <?php foreach ($destination_choices as $destination_id => $destination_label):
+                                                    $is_google_drive = $destination_id === 'google_drive';
+                                                    $is_unavailable = $is_google_drive && $google_drive_unavailable;
+                                                    ?>
+                                                    <div class="bjlg-destination-option-group">
+                                                        <label class="bjlg-destination-option">
+                                                            <input type="checkbox"
+                                                                   name="secondary_destinations[]"
+                                                                   value="<?php echo esc_attr($destination_id); ?>"
+                                                                   <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>
+                                                                   <?php disabled($is_unavailable); ?>>
+                                                            <?php echo esc_html($destination_label); ?>
+                                                        </label>
+                                                        <?php if ($is_unavailable): ?>
+                                                            <p class="description bjlg-destination-unavailable"><?php echo esc_html($this->get_google_drive_unavailable_notice()); ?></p>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                            <?php else: ?>
+                                                <p class="description">Aucune destination distante n'est encore configurée.</p>
+                                            <?php endif; ?>
+                                            <p class="description" id="bjlg-secondary-destinations-description">Les destinations sélectionnées recevront la sauvegarde dans l'ordre indiqué. En cas d'échec, la suivante est tentée automatiquement.</p>
+                                        </fieldset>
+                                    </div>
+                                </details>
                             </td>
                         </tr>
                     </tbody>
@@ -2797,7 +2795,8 @@ class BJLG_Admin {
                     <tr>
                         <th scope="row">Composants</th>
                         <td>
-                            <fieldset>
+                            <fieldset aria-describedby="<?php echo esc_attr($field_prefix); ?>-components-help">
+                                <legend class="bjlg-fieldset-title">Choisir les éléments à inclure</legend>
                                 <?php foreach ($components_labels as $component_key => $component_label): ?>
                                     <label class="bjlg-label-block bjlg-mb-4">
                                         <input type="checkbox"
@@ -2813,6 +2812,7 @@ class BJLG_Admin {
                                         <?php endif; ?>
                                     </label>
                                 <?php endforeach; ?>
+                                <p id="<?php echo esc_attr($field_prefix); ?>-components-help" class="description">Ces composants seront sauvegardés pour chaque occurrence de cette planification.</p>
                             </fieldset>
                         </td>
                     </tr>

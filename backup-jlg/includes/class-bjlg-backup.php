@@ -790,6 +790,14 @@ class BJLG_Backup {
             $task_data['secondary_destinations'] = $destination_queue;
             self::save_task_state($task_id, $task_data);
 
+            if (function_exists('apply_filters')) {
+                $filtered_task_data = apply_filters('bjlg_backup_process', $task_data, $task_id);
+                if (is_array($filtered_task_data)) {
+                    $task_data = array_merge($task_data, $filtered_task_data);
+                    self::save_task_state($task_id, $task_data);
+                }
+            }
+
             if (empty($components)) {
                 BJLG_Debug::log("ERREUR: Aucun composant valide pour la tâche $task_id.");
                 BJLG_History::log('backup_created', 'failure', 'Aucun composant valide pour la sauvegarde.');
@@ -822,67 +830,93 @@ class BJLG_Backup {
 
             $this->ensure_backup_directory_is_ready();
 
-            // Créer le fichier de sauvegarde
             $backup_filename = $this->generate_backup_filename($backup_type, $components);
             $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
+            $use_parallel_flow = !empty($task_data['use_parallel'])
+                && !$task_data['incremental']
+                && empty($include_patterns)
+                && empty($exclude_overrides)
+                && $this->performance_optimizer instanceof BJLG_Performance;
 
-            BJLG_Debug::log("Création du fichier : $backup_filename");
+            $close_result = true;
 
-            // Créer l'archive ZIP
-            $zip = $this->create_zip_archive();
-            $zip_open_result = $zip->open($backup_filepath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+            if ($use_parallel_flow) {
+                BJLG_Debug::log('Mode optimisé activé : génération parallèle du paquet.');
+                $this->update_task_progress($task_id, 35, 'running', 'Traitement optimisé des fichiers…');
 
-            if ($zip_open_result !== true) {
-                $error_message = $this->describe_zip_error($zip_open_result);
-
-                BJLG_Debug::log(
-                    sprintf(
-                        "ERREUR: ZipArchive::open a échoué pour %s : %s",
-                        $backup_filepath,
-                        $error_message
-                    )
+                $optimized = $this->performance_optimizer->create_optimized_backup(
+                    $components,
+                    $task_id,
+                    [
+                        'type' => $backup_type,
+                        'target_filepath' => $backup_filepath,
+                        'filename' => $backup_filename,
+                    ]
                 );
 
-                throw new Exception("Impossible de créer l'archive ZIP : " . $error_message . '.');
-            }
-
-            // Ajouter le manifeste
-            $manifest = $this->create_manifest($components, $backup_type);
-            $zip->addFromString('backup-manifest.json', json_encode($manifest, JSON_PRETTY_PRINT));
-
-            $progress = 20;
-            $components_count = count($components);
-            $progress_per_component = 70 / $components_count;
-
-            // Traiter chaque composant
-            foreach ($components as $component) {
-                $this->update_task_progress($task_id, $progress, 'running', "Sauvegarde : $component");
-
-                switch ($component) {
-                    case 'db':
-                        $this->backup_database($zip, $task_data['incremental']);
-                        break;
-                    case 'plugins':
-                        $this->backup_directory($zip, WP_PLUGIN_DIR, 'wp-content/plugins/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
-                        break;
-                    case 'themes':
-                        $this->backup_directory($zip, get_theme_root(), 'wp-content/themes/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
-                        break;
-                    case 'uploads':
-                        $upload_dir = wp_get_upload_dir();
-                        $this->backup_directory($zip, $upload_dir['basedir'], 'wp-content/uploads/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
-                        break;
+                if (is_array($optimized) && isset($optimized['path'])) {
+                    $backup_filepath = (string) $optimized['path'];
+                    $backup_filename = basename($backup_filepath);
+                    $task_data['performance_summary'] = $optimized['meta'] ?? [];
+                    self::save_task_state($task_id, $task_data);
                 }
 
-                $progress += $progress_per_component;
-                $this->update_task_progress($task_id, round($progress, 1), 'running', "Composant $component terminé");
-            }
+                $this->update_task_progress($task_id, 70, 'running', 'Assemblage final de la sauvegarde optimisée…');
+            } else {
+                BJLG_Debug::log("Création du fichier : $backup_filename");
 
-            // Fermer l'archive
-            $close_result = @$zip->close();
+                $zip = $this->create_zip_archive();
+                $zip_open_result = $zip->open($backup_filepath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
 
-            if ($close_result !== true) {
-                throw new Exception("Impossible de finaliser l'archive ZIP.");
+                if ($zip_open_result !== true) {
+                    $error_message = $this->describe_zip_error($zip_open_result);
+
+                    BJLG_Debug::log(
+                        sprintf(
+                            "ERREUR: ZipArchive::open a échoué pour %s : %s",
+                            $backup_filepath,
+                            $error_message
+                        )
+                    );
+
+                    throw new Exception("Impossible de créer l'archive ZIP : " . $error_message . '.');
+                }
+
+                $manifest = $this->create_manifest($components, $backup_type);
+                $zip->addFromString('backup-manifest.json', json_encode($manifest, JSON_PRETTY_PRINT));
+
+                $progress = 20;
+                $components_count = count($components);
+                $progress_per_component = 70 / max(1, $components_count);
+
+                foreach ($components as $component) {
+                    $this->update_task_progress($task_id, $progress, 'running', "Sauvegarde : $component");
+
+                    switch ($component) {
+                        case 'db':
+                            $this->backup_database($zip, $task_data['incremental']);
+                            break;
+                        case 'plugins':
+                            $this->backup_directory($zip, WP_PLUGIN_DIR, 'wp-content/plugins/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
+                            break;
+                        case 'themes':
+                            $this->backup_directory($zip, get_theme_root(), 'wp-content/themes/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
+                            break;
+                        case 'uploads':
+                            $upload_dir = wp_get_upload_dir();
+                            $this->backup_directory($zip, $upload_dir['basedir'], 'wp-content/uploads/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
+                            break;
+                    }
+
+                    $progress += $progress_per_component;
+                    $this->update_task_progress($task_id, round($progress, 1), 'running', "Composant $component terminé");
+                }
+
+                $close_result = @$zip->close();
+
+                if ($close_result !== true) {
+                    throw new Exception("Impossible de finaliser l'archive ZIP.");
+                }
             }
 
             // Chiffrement si demandé
