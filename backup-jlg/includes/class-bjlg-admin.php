@@ -204,7 +204,10 @@ class BJLG_Admin {
         ];
 
         ?>
-        <div class="wrap bjlg-wrap is-light" data-bjlg-theme="light">
+        <a class="bjlg-skip-link" href="#bjlg-main-content">
+            <?php esc_html_e('Aller au contenu principal', 'backup-jlg'); ?>
+        </a>
+        <div id="bjlg-main-content" class="wrap bjlg-wrap is-light" data-bjlg-theme="light" role="main" tabindex="-1">
             <h1>
                 <span class="dashicons dashicons-database-export" aria-hidden="true"></span>
                 <?php echo esc_html(get_admin_page_title()); ?>
@@ -363,6 +366,7 @@ class BJLG_Admin {
         $alerts = $metrics['alerts'] ?? [];
         $onboarding = $metrics['onboarding'] ?? [];
         $queues = isset($metrics['queues']) && is_array($metrics['queues']) ? $metrics['queues'] : [];
+        $reliability = isset($metrics['reliability']) && is_array($metrics['reliability']) ? $metrics['reliability'] : [];
         $data_attr = !empty($metrics) ? wp_json_encode($metrics) : '';
 
         $backup_tab_url = add_query_arg(
@@ -423,6 +427,8 @@ class BJLG_Admin {
                     </a>
                 </article>
             </div>
+
+            <?php $this->render_reliability_section($reliability); ?>
 
             <div class="bjlg-alerts" data-role="alerts" role="status" aria-live="polite" aria-atomic="true">
                 <?php foreach ($alerts as $alert): ?>
@@ -681,6 +687,89 @@ class BJLG_Admin {
                     <canvas class="bjlg-chart-card__canvas" id="bjlg-storage-trend" aria-hidden="true"></canvas>
                     <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Aucune mesure d’utilisation disponible.', 'backup-jlg'); ?></p>
                 </article>
+            </div>
+        </section>
+        <?php
+    }
+
+    private function render_reliability_section(array $reliability) {
+        $score = isset($reliability['score']) ? (int) $reliability['score'] : null;
+        $score_value = $score !== null ? number_format_i18n(max(0, min(100, $score))) : '—';
+        $score_label = isset($reliability['score_label']) ? (string) $reliability['score_label'] : '';
+        $level = isset($reliability['level']) ? (string) $reliability['level'] : __('Indisponible', 'backup-jlg');
+        $description = isset($reliability['description']) ? (string) $reliability['description'] : __('Les données de fiabilité apparaîtront après vos premières sauvegardes.', 'backup-jlg');
+        $caption = isset($reliability['caption']) ? (string) $reliability['caption'] : __('Comparaison avec les standards professionnels : planification, chiffrement et redondance.', 'backup-jlg');
+        $intent = isset($reliability['intent']) ? sanitize_key((string) $reliability['intent']) : 'info';
+        $pillars = isset($reliability['pillars']) && is_array($reliability['pillars']) ? $reliability['pillars'] : [];
+        $recommendations = isset($reliability['recommendations']) && is_array($reliability['recommendations']) ? $reliability['recommendations'] : [];
+
+        $section_intent = sanitize_html_class($intent !== '' ? $intent : 'info');
+
+        ?>
+        <section class="bjlg-reliability" data-role="reliability" data-intent="<?php echo esc_attr($section_intent); ?>" aria-labelledby="bjlg-reliability-title" role="region">
+            <header class="bjlg-reliability__header">
+                <h2 id="bjlg-reliability-title"><?php esc_html_e('Indice de fiabilité', 'backup-jlg'); ?></h2>
+                <p class="bjlg-reliability__caption" data-field="reliability_caption"><?php echo esc_html($caption); ?></p>
+            </header>
+
+            <div class="bjlg-reliability__grid">
+                <div class="bjlg-reliability__score" data-role="reliability-score">
+                    <div class="bjlg-reliability__score-main" aria-live="polite" aria-atomic="true">
+                        <span class="bjlg-reliability__value" data-field="reliability_score_value" aria-label="<?php echo esc_attr(sprintf(__('Indice de fiabilité sur 100 : %s', 'backup-jlg'), $score_label !== '' ? $score_label : $score_value)); ?>"><?php echo esc_html($score_value); ?></span>
+                        <span class="bjlg-reliability__unit" aria-hidden="true">/100</span>
+                    </div>
+                    <p class="screen-reader-text" data-field="reliability_score_label"><?php echo esc_html($score_label !== '' ? $score_label : $score_value . ' / 100'); ?></p>
+                    <span class="bjlg-reliability__level" data-field="reliability_level"><?php echo esc_html($level); ?></span>
+                    <p class="bjlg-reliability__description" data-field="reliability_description"><?php echo esc_html($description); ?></p>
+                </div>
+
+                <ul class="bjlg-reliability__pillars" data-role="reliability-pillars">
+                    <?php if (empty($pillars)): ?>
+                        <li class="bjlg-reliability-pillar bjlg-reliability-pillar--empty">
+                            <?php esc_html_e('Les signaux clés apparaîtront après vos premières sauvegardes.', 'backup-jlg'); ?>
+                        </li>
+                    <?php else: ?>
+                        <?php foreach ($pillars as $pillar):
+                            if (!is_array($pillar)) {
+                                continue;
+                            }
+
+                            $pillar_intent = isset($pillar['intent']) ? sanitize_key((string) $pillar['intent']) : (isset($pillar['status']) ? sanitize_key((string) $pillar['status']) : 'info');
+                            $pillar_icon = isset($pillar['icon']) ? sanitize_html_class((string) $pillar['icon']) : 'dashicons-shield-alt';
+                            $pillar_label = isset($pillar['label']) ? (string) $pillar['label'] : '';
+                            $pillar_message = isset($pillar['message']) ? (string) $pillar['message'] : '';
+                            ?>
+                            <li class="bjlg-reliability-pillar" data-intent="<?php echo esc_attr($pillar_intent ?: 'info'); ?>">
+                                <span class="bjlg-reliability-pillar__icon dashicons <?php echo esc_attr($pillar_icon); ?>" aria-hidden="true"></span>
+                                <div class="bjlg-reliability-pillar__content">
+                                    <?php if ($pillar_label !== ''): ?>
+                                        <span class="bjlg-reliability-pillar__label"><?php echo esc_html($pillar_label); ?></span>
+                                    <?php endif; ?>
+                                    <?php if ($pillar_message !== ''): ?>
+                                        <span class="bjlg-reliability-pillar__message"><?php echo esc_html($pillar_message); ?></span>
+                                    <?php endif; ?>
+                                </div>
+                            </li>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </ul>
+            </div>
+
+            <div class="bjlg-reliability__actions" data-role="reliability-actions"<?php echo empty($recommendations) ? ' hidden' : ''; ?>>
+                <?php foreach ($recommendations as $recommendation):
+                    if (!is_array($recommendation) || empty($recommendation['label'])) {
+                        continue;
+                    }
+
+                    $action_label = (string) $recommendation['label'];
+                    $action_url = isset($recommendation['url']) ? esc_url($recommendation['url']) : '#';
+                    $action_intent = isset($recommendation['intent']) ? sanitize_key((string) $recommendation['intent']) : 'secondary';
+                    $action_class = $action_intent === 'primary' ? 'button button-primary' : 'button button-secondary';
+                    ?>
+                    <a class="<?php echo esc_attr($action_class); ?>" href="<?php echo $action_url; ?>">
+                        <?php echo esc_html($action_label); ?>
+                    </a>
+                <?php endforeach; ?>
             </div>
         </section>
         <?php
