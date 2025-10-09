@@ -64,18 +64,24 @@ if (!function_exists('bjlg_get_capability_map')) {
      * @return array<string,string>
      */
     function bjlg_get_capability_map() {
-        $defaults = [
-            'manage_plugin' => BJLG_DEFAULT_CAPABILITY,
-            'manage_backups' => BJLG_DEFAULT_CAPABILITY,
-            'restore' => BJLG_DEFAULT_CAPABILITY,
-            'manage_settings' => BJLG_DEFAULT_CAPABILITY,
-            'manage_integrations' => BJLG_DEFAULT_CAPABILITY,
-            'view_logs' => BJLG_DEFAULT_CAPABILITY,
+        $default_keys = [
+            'manage_plugin',
+            'manage_backups',
+            'restore',
+            'manage_settings',
+            'manage_integrations',
+            'view_logs',
         ];
+
+        $defaults = array_fill_keys($default_keys, BJLG_DEFAULT_CAPABILITY);
 
         $legacy_permission = get_option('bjlg_required_capability', '');
         if (is_string($legacy_permission) && $legacy_permission !== '') {
-            $defaults['manage_plugin'] = sanitize_text_field($legacy_permission);
+            $legacy_permission = sanitize_text_field($legacy_permission);
+
+            foreach ($defaults as $key => $value) {
+                $defaults[$key] = $legacy_permission;
+            }
         }
 
         $stored = get_option('bjlg_capability_map', []);
