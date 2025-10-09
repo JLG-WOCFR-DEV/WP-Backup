@@ -1762,3 +1762,78 @@ border-color: #d1d5db;
         min-height: 44px;
     }
 }
+
+.bjlg-utility-bar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 16px;
+    gap: 8px;
+}
+
+.bjlg-wrap.is-light {
+    background-color: #f8fafc;
+    color: #111827;
+}
+
+.bjlg-wrap.is-dark {
+    background-color: #111827;
+    color: #f9fafb;
+}
+
+.bjlg-wrap.is-dark a {
+    color: #93c5fd;
+}
+
+.bjlg-wrap.is-dark .bjlg-section,
+.bjlg-wrap.is-dark .bjlg-card,
+.bjlg-wrap.is-dark .bjlg-chart-card,
+.bjlg-wrap.is-dark .bjlg-dashboard-overview {
+    background-color: #1f2937;
+    color: inherit;
+    border-color: rgba(148, 163, 184, 0.25);
+}
+
+.bjlg-wrap.is-dark .bjlg-chart-card__title,
+.bjlg-wrap.is-dark .bjlg-chart-card__subtitle,
+.bjlg-wrap.is-dark .bjlg-onboarding__title {
+    color: inherit;
+}
+
+.bjlg-wrap.is-dark .bjlg-action-card {
+    background-color: #111827;
+    border-color: rgba(148, 163, 184, 0.35);
+}
+
+.bjlg-wrap.is-dark .bjlg-action-card--disabled {
+    background-color: rgba(55, 65, 81, 0.6);
+}
+
+.bjlg-wrap.is-dark .bjlg-chart-card__empty {
+    color: #e5e7eb;
+}
+
+.bjlg-wrap.is-dark .notice {
+    background-color: #1f2937;
+    border-color: #374151;
+    color: #e5e7eb;
+}
+
+.bjlg-wrap.is-dark .button.button-primary {
+    background-color: #2563eb;
+    border-color: #1d4ed8;
+}
+
+.bjlg-wrap.is-dark .button.button-secondary {
+    background-color: #374151;
+    border-color: #4b5563;
+    color: #f9fafb;
+}
+
+.bjlg-wrap.is-dark .form-table th {
+    color: #f9fafb;
+}
+
+.bjlg-wrap.is-dark .form-table td,
+.bjlg-wrap.is-dark .form-table td .description {
+    color: #e5e7eb;
+}

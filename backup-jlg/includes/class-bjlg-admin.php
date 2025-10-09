@@ -188,13 +188,48 @@ class BJLG_Admin {
         }
         $metrics = $this->advanced_admin ? $this->advanced_admin->get_dashboard_metrics() : [];
 
+        $notice_type = isset($_GET['bjlg_notice']) ? sanitize_key($_GET['bjlg_notice']) : '';
+        $notice_message = '';
+
+        if (isset($_GET['bjlg_notice_message'])) {
+            $raw_notice = rawurldecode((string) $_GET['bjlg_notice_message']);
+            $notice_message = sanitize_text_field(wp_unslash($raw_notice));
+        }
+
+        $notice_classes = [
+            'success' => 'notice notice-success',
+            'error' => 'notice notice-error',
+            'warning' => 'notice notice-warning',
+            'info' => 'notice notice-info',
+        ];
+
         ?>
-        <div class="wrap bjlg-wrap">
+        <div class="wrap bjlg-wrap is-light" data-bjlg-theme="light">
             <h1>
                 <span class="dashicons dashicons-database-export" aria-hidden="true"></span>
                 <?php echo esc_html(get_admin_page_title()); ?>
                 <span class="bjlg-version">v<?php echo esc_html(BJLG_VERSION); ?></span>
             </h1>
+
+            <?php if ($notice_type && $notice_message !== ''): ?>
+                <?php $notice_class = isset($notice_classes[$notice_type]) ? $notice_classes[$notice_type] : $notice_classes['info']; ?>
+                <div class="<?php echo esc_attr($notice_class); ?>">
+                    <p><?php echo esc_html($notice_message); ?></p>
+                </div>
+            <?php endif; ?>
+
+            <div class="bjlg-utility-bar">
+                <button
+                    type="button"
+                    class="button button-secondary bjlg-contrast-toggle"
+                    id="bjlg-contrast-toggle"
+                    data-dark-label="<?php echo esc_attr__('Activer le contraste renforcé', 'backup-jlg'); ?>"
+                    data-light-label="<?php echo esc_attr__('Revenir au thème clair', 'backup-jlg'); ?>"
+                    aria-pressed="false"
+                >
+                    <?php echo esc_html__('Activer le contraste renforcé', 'backup-jlg'); ?>
+                </button>
+            </div>
 
             <nav class="nav-tab-wrapper" role="tablist">
                 <?php foreach ($tabs as $tab_key => $tab_label):
@@ -849,10 +884,55 @@ class BJLG_Admin {
         $google_drive_unavailable = $this->is_google_drive_unavailable();
         $presets = BJLG_Settings::get_backup_presets();
         $presets_json = !empty($presets) ? wp_json_encode(array_values($presets)) : '';
+
+        $include_suggestions = [
+            [
+                'value' => 'wp-content/uploads/**/*.webp',
+                'label' => __('Médias WebP', 'backup-jlg'),
+            ],
+            [
+                'value' => 'wp-content/mu-plugins/',
+                'label' => __('MU-plugins', 'backup-jlg'),
+            ],
+            [
+                'value' => 'wp-content/languages/*.mo',
+                'label' => __('Fichiers de langue (.mo)', 'backup-jlg'),
+            ],
+        ];
+
+        $exclude_suggestions = [
+            [
+                'value' => 'wp-content/cache/**/*',
+                'label' => __('Caches WordPress', 'backup-jlg'),
+            ],
+            [
+                'value' => 'node_modules/**/*',
+                'label' => __('Dépendances node_modules', 'backup-jlg'),
+            ],
+            [
+                'value' => 'vendor/**/*',
+                'label' => __('Dossiers vendor compilés', 'backup-jlg'),
+            ],
+        ];
+
+        $include_placeholder = isset($include_suggestions[0]['value']) ? $include_suggestions[0]['value'] : 'wp-content/uploads/**/*';
+        $exclude_placeholder = isset($exclude_suggestions[0]['value']) ? $exclude_suggestions[0]['value'] : 'wp-content/cache/**/*';
+
+        $backup_redirect = add_query_arg(
+            [
+                'page' => 'backup-jlg',
+                'tab' => 'backup_restore',
+            ],
+            admin_url('admin.php')
+        );
+        $backup_redirect .= '#bjlg-backup-step-3';
         ?>
         <div class="bjlg-section">
             <h2>Créer une sauvegarde</h2>
-            <form id="bjlg-backup-creation-form">
+            <form id="bjlg-backup-creation-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('bjlg_create_backup', 'bjlg_create_backup_nonce'); ?>
+                <input type="hidden" name="action" value="bjlg_create_backup">
+                <input type="hidden" name="redirect_to" value="<?php echo esc_url($backup_redirect); ?>">
                 <p>Choisissez les composants à inclure dans votre sauvegarde.</p>
                 <div class="bjlg-backup-steps" data-current-step="1">
                     <ol class="bjlg-backup-steps__nav" role="list">
@@ -974,94 +1054,163 @@ class BJLG_Admin {
                              hidden>
                         <h3 id="bjlg-backup-step-2-title">Étape 2 — Options avancées</h3>
                         <p>Ajustez précisément les dossiers inclus, les vérifications post-sauvegarde et les destinations secondaires.</p>
-                        <table class="form-table">
+                        <table class="form-table bjlg-advanced-table">
                             <tbody>
                                 <tr>
-                                    <th scope="row">Affinage des fichiers</th>
+                                    <th scope="row"><?php esc_html_e('Affinage avancé', 'backup-jlg'); ?></th>
                                     <td>
-                                        <div class="bjlg-field-control">
-                                            <div class="bjlg-advanced-options-grid">
-                                                <fieldset class="bjlg-advanced-fieldset">
-                                                    <legend>Inclusions personnalisées</legend>
-                                                    <label class="screen-reader-text" for="bjlg-include-patterns">Inclusions personnalisées</label>
-                                                    <textarea
-                                                        id="bjlg-include-patterns"
-                                                        name="include_patterns"
-                                                        rows="4"
-                                                        class="large-text code"
-                                                        placeholder="wp-content/uploads/2023/*&#10;wp-content/themes/mon-theme/*"
-                                                        aria-describedby="bjlg-include-patterns-description"
-                                                    ><?php echo $include_text; ?></textarea>
-                                                    <p id="bjlg-include-patterns-description" class="description">Un motif par ligne. Laissez vide pour inclure tous les fichiers autorisés.</p>
-                                                </fieldset>
-                                                <fieldset class="bjlg-advanced-fieldset">
-                                                    <legend>Exclusions</legend>
-                                                    <label class="screen-reader-text" for="bjlg-exclude-patterns">Exclusions personnalisées</label>
-                                                    <textarea
-                                                        id="bjlg-exclude-patterns"
-                                                        name="exclude_patterns"
-                                                        rows="4"
-                                                        class="large-text code"
-                                                        placeholder="*/cache/*&#10;*.log"
-                                                        aria-describedby="bjlg-exclude-patterns-description"
-                                                    ><?php echo $exclude_text; ?></textarea>
-                                                    <p id="bjlg-exclude-patterns-description" class="description">Ajoutez des motifs pour ignorer certains fichiers ou répertoires. Les exclusions globales s'appliquent également.</p>
-                                                </fieldset>
-                                                <fieldset class="bjlg-advanced-fieldset" aria-describedby="bjlg-post-checks-description">
-                                                    <legend>Vérifications post-sauvegarde</legend>
-                                                    <label for="bjlg-post-checks-checksum">
-                                                        <input type="checkbox"
-                                                               id="bjlg-post-checks-checksum"
-                                                               name="post_checks[]"
-                                                               value="checksum"
-                                                               <?php checked(!empty($post_checks['checksum'])); ?>
-                                                        > Vérifier l'intégrité (SHA-256)
-                                                    </label>
-                                                    <p class="description">Calcule un hachage du fichier pour détecter les corruptions.</p>
-                                                    <label for="bjlg-post-checks-dry-run">
-                                                        <input type="checkbox"
-                                                               id="bjlg-post-checks-dry-run"
-                                                               name="post_checks[]"
-                                                               value="dry_run"
-                                                               <?php checked(!empty($post_checks['dry_run'])); ?>
-                                                        > Test de restauration à blanc
-                                                    </label>
-                                                    <p class="description" id="bjlg-post-checks-description">Ouvre l'archive pour valider qu'elle est exploitable (non exécuté sur les fichiers chiffrés).</p>
-                                                </fieldset>
-                                            </div>
-                                        </div>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <th scope="row">Destinations secondaires</th>
-                                    <td>
-                                        <div class="bjlg-field-control">
-                                            <fieldset class="bjlg-advanced-fieldset" aria-describedby="bjlg-secondary-destinations-description">
-                                                <legend>Envoi parallèle</legend>
-                                                <?php if (!empty($destination_choices)): ?>
-                                                    <?php foreach ($destination_choices as $destination_id => $destination_label):
-                                                        $is_google_drive = $destination_id === 'google_drive';
-                                                        $is_unavailable = $is_google_drive && $google_drive_unavailable;
-                                                        ?>
-                                                        <div class="bjlg-destination-option-group">
-                                                            <label class="bjlg-destination-option">
-                                                                <input type="checkbox"
-                                                                       name="secondary_destinations[]"
-                                                                       value="<?php echo esc_attr($destination_id); ?>"
-                                                                       <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>
-                                                                       <?php disabled($is_unavailable); ?>>
-                                                                <?php echo esc_html($destination_label); ?>
-                                                            </label>
-                                                            <?php if ($is_unavailable): ?>
-                                                                <p class="description bjlg-destination-unavailable"><?php echo esc_html($this->get_google_drive_unavailable_notice()); ?></p>
-                                                            <?php endif; ?>
+                                        <div class="bjlg-field-control bjlg-advanced-accordion" data-role="advanced-panels">
+                                            <details class="bjlg-advanced-panel" data-panel="filters" open>
+                                                <summary>
+                                                    <span><?php esc_html_e('Motifs personnalisés', 'backup-jlg'); ?></span>
+                                                </summary>
+                                                <div class="bjlg-advanced-panel__content">
+                                                    <p class="description"><?php echo wp_kses_post(__('Ajoutez des inclusions ou exclusions ciblées. Les jokers glob (<code>*</code>) sont pris en charge.', 'backup-jlg')); ?></p>
+                                                    <div class="bjlg-pattern-columns">
+                                                        <div class="bjlg-pattern-editor" data-pattern-type="include">
+                                                            <label class="bjlg-pattern-editor__label" for="bjlg-include-patterns"><?php esc_html_e('Inclusions personnalisées', 'backup-jlg'); ?></label>
+                                                            <textarea
+                                                                id="bjlg-include-patterns"
+                                                                name="include_patterns"
+                                                                rows="6"
+                                                                placeholder="<?php echo esc_attr($include_placeholder); ?>"
+                                                                data-role="pattern-input"
+                                                                data-pattern-type="include"
+                                                            ><?php echo $include_text; ?></textarea>
+                                                            <div class="bjlg-pattern-helper" data-role="pattern-helper" data-pattern-type="include">
+                                                                <label class="bjlg-pattern-helper__label" for="bjlg-include-pattern-input"><?php esc_html_e('Ajouter un motif suggéré', 'backup-jlg'); ?></label>
+                                                                <div class="bjlg-pattern-helper__controls">
+                                                                    <input
+                                                                        type="text"
+                                                                        id="bjlg-include-pattern-input"
+                                                                        class="regular-text"
+                                                                        list="bjlg-include-patterns-datalist"
+                                                                        data-role="pattern-autocomplete"
+                                                                        data-pattern-type="include"
+                                                                        placeholder="<?php echo esc_attr($include_placeholder); ?>"
+                                                                    >
+                                                                    <button type="button" class="button button-secondary" data-role="pattern-add" data-pattern-type="include"><?php esc_html_e('Ajouter', 'backup-jlg'); ?></button>
+                                                                </div>
+                                                                <datalist id="bjlg-include-patterns-datalist">
+                                                                    <?php foreach ($include_suggestions as $suggestion): ?>
+                                                                        <option value="<?php echo esc_attr($suggestion['value']); ?>"><?php echo esc_html($suggestion['label']); ?></option>
+                                                                    <?php endforeach; ?>
+                                                                </datalist>
+                                                            </div>
+                                                            <ul class="bjlg-pattern-suggestions" data-role="pattern-suggestions" aria-label="<?php esc_attr_e('Exemples rapides d\'inclusion', 'backup-jlg'); ?>">
+                                                                <?php foreach ($include_suggestions as $suggestion): ?>
+                                                                    <li>
+                                                                        <button type="button" class="button-link bjlg-pattern-suggestions__item" data-pattern-value="<?php echo esc_attr($suggestion['value']); ?>"><?php echo esc_html($suggestion['label']); ?></button>
+                                                                    </li>
+                                                                <?php endforeach; ?>
+                                                            </ul>
+                                                            <p class="bjlg-pattern-feedback" data-role="pattern-feedback" data-pattern-type="include" data-success-message="<?php echo esc_attr__('Motifs valides.', 'backup-jlg'); ?>" data-error-message="<?php echo esc_attr__('Motifs non reconnus : ', 'backup-jlg'); ?>" aria-live="polite"></p>
                                                         </div>
-                                                    <?php endforeach; ?>
-                                                <?php else: ?>
-                                                    <p class="description">Aucune destination distante n'est encore configurée.</p>
-                                                <?php endif; ?>
-                                                <p class="description" id="bjlg-secondary-destinations-description">Les destinations sélectionnées recevront la sauvegarde dans l'ordre indiqué. En cas d'échec, la suivante est tentée automatiquement.</p>
-                                            </fieldset>
+                                                        <div class="bjlg-pattern-editor" data-pattern-type="exclude">
+                                                            <label class="bjlg-pattern-editor__label" for="bjlg-exclude-patterns"><?php esc_html_e('Exclusions personnalisées', 'backup-jlg'); ?></label>
+                                                            <textarea
+                                                                id="bjlg-exclude-patterns"
+                                                                name="exclude_patterns"
+                                                                rows="6"
+                                                                placeholder="<?php echo esc_attr($exclude_placeholder); ?>"
+                                                                data-role="pattern-input"
+                                                                data-pattern-type="exclude"
+                                                            ><?php echo $exclude_text; ?></textarea>
+                                                            <div class="bjlg-pattern-helper" data-role="pattern-helper" data-pattern-type="exclude">
+                                                                <label class="bjlg-pattern-helper__label" for="bjlg-exclude-pattern-input"><?php esc_html_e('Ajouter un motif d\'exclusion', 'backup-jlg'); ?></label>
+                                                                <div class="bjlg-pattern-helper__controls">
+                                                                    <input
+                                                                        type="text"
+                                                                        id="bjlg-exclude-pattern-input"
+                                                                        class="regular-text"
+                                                                        list="bjlg-exclude-patterns-datalist"
+                                                                        data-role="pattern-autocomplete"
+                                                                        data-pattern-type="exclude"
+                                                                        placeholder="<?php echo esc_attr($exclude_placeholder); ?>"
+                                                                    >
+                                                                    <button type="button" class="button button-secondary" data-role="pattern-add" data-pattern-type="exclude"><?php esc_html_e('Ajouter', 'backup-jlg'); ?></button>
+                                                                </div>
+                                                                <datalist id="bjlg-exclude-patterns-datalist">
+                                                                    <?php foreach ($exclude_suggestions as $suggestion): ?>
+                                                                        <option value="<?php echo esc_attr($suggestion['value']); ?>"><?php echo esc_html($suggestion['label']); ?></option>
+                                                                    <?php endforeach; ?>
+                                                                </datalist>
+                                                            </div>
+                                                            <ul class="bjlg-pattern-suggestions" data-role="pattern-suggestions" aria-label="<?php esc_attr_e('Exemples rapides d\'exclusion', 'backup-jlg'); ?>">
+                                                                <?php foreach ($exclude_suggestions as $suggestion): ?>
+                                                                    <li>
+                                                                        <button type="button" class="button-link bjlg-pattern-suggestions__item" data-pattern-value="<?php echo esc_attr($suggestion['value']); ?>"><?php echo esc_html($suggestion['label']); ?></button>
+                                                                    </li>
+                                                                <?php endforeach; ?>
+                                                            </ul>
+                                                            <p class="bjlg-pattern-feedback" data-role="pattern-feedback" data-pattern-type="exclude" data-success-message="<?php echo esc_attr__('Motifs valides.', 'backup-jlg'); ?>" data-error-message="<?php echo esc_attr__('Motifs non reconnus : ', 'backup-jlg'); ?>" aria-live="polite"></p>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </details>
+
+                                            <details class="bjlg-advanced-panel" data-panel="post-checks">
+                                                <summary>
+                                                    <span><?php esc_html_e('Vérifications post-sauvegarde', 'backup-jlg'); ?></span>
+                                                </summary>
+                                                <div class="bjlg-advanced-panel__content" aria-describedby="bjlg-post-checks-description">
+                                                    <p class="description"><?php esc_html_e('Ajoutez des contrôles automatiques pour valider l’archive une fois générée.', 'backup-jlg'); ?></p>
+                                                    <div class="bjlg-advanced-fieldset">
+                                                        <label for="bjlg-post-checks-checksum">
+                                                            <input type="checkbox"
+                                                                   id="bjlg-post-checks-checksum"
+                                                                   name="post_checks[]"
+                                                                   value="checksum"
+                                                                   <?php checked(!empty($post_checks['checksum'])); ?>>
+                                                            <?php esc_html_e('Vérifier l’intégrité (SHA-256)', 'backup-jlg'); ?>
+                                                        </label>
+                                                        <p class="description"><?php esc_html_e('Calcule un hachage de l’archive pour détecter toute corruption.', 'backup-jlg'); ?></p>
+                                                        <label for="bjlg-post-checks-dry-run">
+                                                            <input type="checkbox"
+                                                                   id="bjlg-post-checks-dry-run"
+                                                                   name="post_checks[]"
+                                                                   value="dry_run"
+                                                                   <?php checked(!empty($post_checks['dry_run'])); ?>>
+                                                            <?php esc_html_e('Test de restauration à blanc', 'backup-jlg'); ?>
+                                                        </label>
+                                                        <p class="description" id="bjlg-post-checks-description"><?php esc_html_e('Ouvre l’archive pour vérifier sa structure (hors archives chiffrées).', 'backup-jlg'); ?></p>
+                                                    </div>
+                                                </div>
+                                            </details>
+
+                                            <details class="bjlg-advanced-panel" data-panel="destinations">
+                                                <summary>
+                                                    <span><?php esc_html_e('Destinations secondaires', 'backup-jlg'); ?></span>
+                                                </summary>
+                                                <div class="bjlg-advanced-panel__content" aria-describedby="bjlg-secondary-destinations-description">
+                                                    <p class="description"><?php esc_html_e('Diffusez la sauvegarde vers des services distants en complément du stockage local.', 'backup-jlg'); ?></p>
+                                                    <div class="bjlg-advanced-fieldset">
+                                                        <?php if (!empty($destination_choices)): ?>
+                                                            <?php foreach ($destination_choices as $destination_id => $destination_label):
+                                                                $is_google_drive = $destination_id === 'google_drive';
+                                                                $is_unavailable = $is_google_drive && $google_drive_unavailable;
+                                                                ?>
+                                                                <div class="bjlg-destination-option-group">
+                                                                    <label class="bjlg-destination-option">
+                                                                        <input type="checkbox"
+                                                                               name="secondary_destinations[]"
+                                                                               value="<?php echo esc_attr($destination_id); ?>"
+                                                                               <?php checked(in_array($destination_id, $secondary_destinations, true)); ?>
+                                                                               <?php disabled($is_unavailable); ?>>
+                                                                        <?php echo esc_html($destination_label); ?>
+                                                                    </label>
+                                                                    <?php if ($is_unavailable): ?>
+                                                                        <p class="description bjlg-destination-unavailable"><?php echo esc_html($this->get_google_drive_unavailable_notice()); ?></p>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                            <?php endforeach; ?>
+                                                        <?php else: ?>
+                                                            <p class="description"><?php esc_html_e('Aucune destination distante n’est configurée pour le moment.', 'backup-jlg'); ?></p>
+                                                        <?php endif; ?>
+                                                        <p class="description" id="bjlg-secondary-destinations-description"><?php esc_html_e('Les destinations sélectionnées seront tentées l’une après l’autre en cas d’échec.', 'backup-jlg'); ?></p>
+                                                    </div>
+                                                </div>
+                                            </details>
                                         </div>
                                     </td>
                                 </tr>
@@ -1394,11 +1543,24 @@ class BJLG_Admin {
      * Section : Restauration
      */
     private function render_restore_section() {
+        $restore_redirect = add_query_arg(
+            [
+                'page' => 'backup-jlg',
+                'tab' => 'backup_restore',
+            ],
+            admin_url('admin.php')
+        );
+        $restore_redirect .= '#bjlg-restore-form';
+
         ?>
         <div class="bjlg-section">
             <h2>Restaurer depuis un fichier</h2>
             <p>Si vous avez un fichier de sauvegarde sur votre ordinateur, vous pouvez le téléverser ici pour lancer une restauration.</p>
-            <form id="bjlg-restore-form" method="post" enctype="multipart/form-data">
+            <form id="bjlg-restore-form" method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('bjlg_restore_backup', 'bjlg_restore_backup_nonce'); ?>
+                <input type="hidden" name="action" value="bjlg_restore_backup">
+                <input type="hidden" name="redirect_to" value="<?php echo esc_url($restore_redirect); ?>">
+                <input type="hidden" name="restore_environment" value="production" data-role="restore-environment-field">
                 <div class="bjlg-restore-username-field bjlg-screen-reader-only">
                     <label class="bjlg-screen-reader-only" for="bjlg-restore-username">Nom d'utilisateur</label>
                     <input type="text"

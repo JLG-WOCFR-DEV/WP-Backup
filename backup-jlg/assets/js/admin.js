@@ -1,3 +1,108 @@
+(function(window) {
+    const modulePromises = {};
+
+    window.bjlgLoadModule = function(moduleName) {
+        if (!moduleName || typeof moduleName !== 'string') {
+            return Promise.resolve();
+        }
+
+        const normalized = moduleName.toLowerCase();
+
+        if (modulePromises[normalized]) {
+            return modulePromises[normalized];
+        }
+
+        const modules = (typeof window.bjlg_ajax === 'object' && window.bjlg_ajax && window.bjlg_ajax.modules)
+            ? window.bjlg_ajax.modules
+            : {};
+
+        const scriptUrl = modules && modules[normalized] ? modules[normalized] : null;
+
+        if (!scriptUrl) {
+            modulePromises[normalized] = Promise.resolve();
+            return modulePromises[normalized];
+        }
+
+        modulePromises[normalized] = new Promise(function(resolve, reject) {
+            const existing = document.querySelector('script[data-bjlg-module="' + normalized + '"]');
+            if (existing) {
+                if (existing.getAttribute('data-bjlg-loaded') === 'true') {
+                    resolve();
+                } else {
+                    existing.addEventListener('load', function() { resolve(); });
+                    existing.addEventListener('error', function(event) { reject(event); });
+                }
+                return;
+            }
+
+            const script = document.createElement('script');
+            script.src = scriptUrl;
+            script.async = true;
+            script.dataset.bjlgModule = normalized;
+            script.addEventListener('load', function() {
+                script.setAttribute('data-bjlg-loaded', 'true');
+                resolve();
+            });
+            script.addEventListener('error', function(event) {
+                reject(new Error('Failed to load module "' + normalized + '"'));
+            });
+            document.head.appendChild(script);
+        });
+
+        return modulePromises[normalized];
+    };
+})(window);
+
+window.bjlgEnsureChart = (function() {
+    let promise = null;
+
+    return function bjlgEnsureChart() {
+        if (typeof window.Chart !== 'undefined') {
+            return Promise.resolve();
+        }
+
+        if (promise) {
+            return promise;
+        }
+
+        const chartUrl = (typeof window.bjlg_ajax === 'object' && window.bjlg_ajax)
+            ? window.bjlg_ajax.chart_url
+            : '';
+
+        if (!chartUrl) {
+            promise = Promise.reject(new Error('Chart.js URL is not defined.'));
+            return promise;
+        }
+
+        promise = new Promise(function(resolve, reject) {
+            const existing = document.querySelector('script[data-bjlg-module="chartjs"]');
+            if (existing) {
+                existing.addEventListener('load', function() {
+                    resolve();
+                });
+                existing.addEventListener('error', function(event) {
+                    reject(new Error('Failed to load Chart.js'));
+                });
+                return;
+            }
+
+            const script = document.createElement('script');
+            script.src = chartUrl;
+            script.async = true;
+            script.dataset.bjlgModule = 'chartjs';
+            script.addEventListener('load', function() {
+                resolve();
+            });
+            script.addEventListener('error', function() {
+                reject(new Error('Failed to load Chart.js'));
+            });
+            document.head.appendChild(script);
+        });
+
+        return promise;
+    };
+})();
+
 jQuery(document).ready(function($) {
 
     // --- ADMIN TABS ---
@@ -109,6 +214,52 @@ jQuery(document).ready(function($) {
         if (initialTab) {
             activateTab(initialTab, false);
         }
+    })();
+
+    (function setupContrastToggle() {
+        const $wrap = $('.bjlg-wrap');
+        const $button = $('#bjlg-contrast-toggle');
+
+        if (!$wrap.length || !$button.length) {
+            return;
+        }
+
+        const storageKey = 'bjlg-admin-theme';
+        const defaultDarkLabel = $button.data('darkLabel') || $button.text();
+        const defaultLightLabel = $button.data('lightLabel') || $button.text();
+
+        const applyTheme = function(theme) {
+            const normalized = theme === 'dark' ? 'dark' : 'light';
+            $wrap.removeClass('is-dark is-light');
+            $wrap.addClass(normalized === 'dark' ? 'is-dark' : 'is-light');
+            $wrap.attr('data-bjlg-theme', normalized);
+
+            const isDark = normalized === 'dark';
+            $button.attr('aria-pressed', isDark ? 'true' : 'false');
+            $button.text(isDark ? defaultLightLabel : defaultDarkLabel);
+        };
+
+        let storedTheme = null;
+        try {
+            storedTheme = window.localStorage.getItem(storageKey);
+        } catch (error) {
+            storedTheme = null;
+        }
+
+        applyTheme(storedTheme === 'dark' ? 'dark' : 'light');
+
+        $button.on('click', function(event) {
+            event.preventDefault();
+            const currentTheme = ($wrap.attr('data-bjlg-theme') || 'light') === 'dark' ? 'dark' : 'light';
+            const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            applyTheme(nextTheme);
+
+            try {
+                window.localStorage.setItem(storageKey, nextTheme);
+            } catch (error) {
+                // Storage may be unavailable (private mode). Ignore.
+            }
+        });
     })();
 
     // --- DASHBOARD OVERVIEW ---
@@ -619,9 +770,23 @@ jQuery(document).ready(function($) {
             }
         };
 
+        const ensureChartsReady = typeof window.bjlgEnsureChart === 'function'
+            ? window.bjlgEnsureChart
+            : function() { return Promise.resolve(); };
+
         const updateCharts = function() {
-            updateHistoryChart();
-            updateStorageChart();
+            ensureChartsReady()
+                .then(function() {
+                    updateHistoryChart();
+                    updateStorageChart();
+                })
+                .catch(function() {
+                    destroyChart('historyTrend');
+                    destroyChart('storageTrend');
+                    $overview.find('.bjlg-chart-card').each(function() {
+                        setChartEmptyState($(this), true);
+                    });
+                });
         };
 
         updateSummary(state.metrics.summary || {});
@@ -3243,6 +3408,12 @@ jQuery(document).ready(function($) {
             currentStep = sanitized;
             $stepsContainer.attr('data-current-step', String(sanitized));
 
+            if (sanitized === 2 && typeof window.bjlgLoadModule === 'function') {
+                window.bjlgLoadModule('advanced').catch(function() {
+                    // Module optional, ignore loading errors.
+                });
+            }
+
             $steps.each(function() {
                 const stepIndex = sanitizeStep($(this).data('step-index'));
                 if (stepIndex === sanitized) {
@@ -3278,6 +3449,8 @@ jQuery(document).ready(function($) {
             if (sanitized === totalSteps) {
                 renderSummary();
             }
+
+            $(document).trigger('bjlg-backup-step-activated', sanitized);
         }
 
         $navButtons.on('click', function(event) {
@@ -3485,6 +3658,7 @@ jQuery(document).ready(function($) {
         const passwordInput = document.getElementById('bjlg-restore-password');
         const passwordHelp = document.getElementById('bjlg-restore-password-help');
         const $sandboxToggle = $form.find('input[name="restore_to_sandbox"]');
+        const $environmentField = $form.find('[data-role="restore-environment-field"]');
         const $sandboxPathInput = $form.find('input[name="sandbox_path"]');
         const passwordHelpDefaultText = passwordHelp
             ? (passwordHelp.getAttribute('data-default-text') || passwordHelp.textContent.trim())
@@ -3497,11 +3671,18 @@ jQuery(document).ready(function($) {
 
         function syncSandboxState() {
             if (!$sandboxPathInput.length) {
+                if ($environmentField.length) {
+                    $environmentField.val('production');
+                }
                 return;
             }
 
             const enabled = $sandboxToggle.length && $sandboxToggle.is(':checked');
             $sandboxPathInput.prop('disabled', !enabled);
+
+            if ($environmentField.length) {
+                $environmentField.val(enabled ? 'sandbox' : 'production');
+            }
 
             if (!enabled) {
                 $sandboxPathInput.removeClass(errorFieldClass).removeAttr('aria-invalid');
