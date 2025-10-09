@@ -63,13 +63,63 @@ if (!defined('BJLG_DEFAULT_CAPABILITY')) {
     define('BJLG_DEFAULT_CAPABILITY', 'manage_options');
 }
 
-if (!function_exists('bjlg_get_required_capability')) {
-    function bjlg_get_required_capability() {
+if (!function_exists('bjlg_get_capability_map')) {
+    function bjlg_get_capability_map() {
+        $defaults = [
+            'manage_plugin' => BJLG_DEFAULT_CAPABILITY,
+            'manage_backups' => BJLG_DEFAULT_CAPABILITY,
+            'restore' => BJLG_DEFAULT_CAPABILITY,
+            'manage_settings' => BJLG_DEFAULT_CAPABILITY,
+            'manage_integrations' => BJLG_DEFAULT_CAPABILITY,
+            'view_logs' => BJLG_DEFAULT_CAPABILITY,
+        ];
+
         if (function_exists('get_option')) {
-            $capability = get_option('bjlg_required_capability');
+            $legacy_permission = get_option('bjlg_required_capability', '');
         } else {
-            $capability = $GLOBALS['bjlg_test_options']['bjlg_required_capability'] ?? null;
+            $legacy_permission = $GLOBALS['bjlg_test_options']['bjlg_required_capability'] ?? '';
         }
+
+        if (is_string($legacy_permission) && $legacy_permission !== '') {
+            $defaults['manage_plugin'] = sanitize_text_field($legacy_permission);
+        }
+
+        if (function_exists('get_option')) {
+            $stored = get_option('bjlg_capability_map', []);
+        } else {
+            $stored = $GLOBALS['bjlg_test_options']['bjlg_capability_map'] ?? [];
+        }
+
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+
+        $sanitized = [];
+        foreach ($stored as $key => $value) {
+            if (!is_string($key) || $key === '' || !array_key_exists($key, $defaults)) {
+                continue;
+            }
+
+            if (!is_string($value) || $value === '') {
+                continue;
+            }
+
+            $sanitized[$key] = sanitize_text_field($value);
+        }
+
+        return array_merge($defaults, $sanitized);
+    }
+}
+
+if (!function_exists('bjlg_get_required_capability')) {
+    function bjlg_get_required_capability($context = 'manage_plugin') {
+        $map = bjlg_get_capability_map();
+
+        if (!is_string($context) || $context === '') {
+            $context = 'manage_plugin';
+        }
+
+        $capability = $map[$context] ?? $map['manage_plugin'] ?? BJLG_DEFAULT_CAPABILITY;
 
         if (!is_string($capability) || $capability === '') {
             $capability = BJLG_DEFAULT_CAPABILITY;
@@ -80,8 +130,8 @@ if (!function_exists('bjlg_get_required_capability')) {
 }
 
 if (!function_exists('bjlg_can_manage_plugin')) {
-    function bjlg_can_manage_plugin($user = null) {
-        $permission = bjlg_get_required_capability();
+    function bjlg_can_manage_plugin($user = null, $context = 'manage_plugin') {
+        $permission = bjlg_get_required_capability($context);
 
         $wp_roles = function_exists('wp_roles') ? wp_roles() : null;
         $is_role = $wp_roles && class_exists('WP_Roles') && $wp_roles instanceof \WP_Roles && $wp_roles->is_role($permission);
@@ -109,6 +159,36 @@ if (!function_exists('bjlg_can_manage_plugin')) {
         }
 
         return user_can($user, $permission);
+    }
+}
+
+if (!function_exists('bjlg_can_manage_backups')) {
+    function bjlg_can_manage_backups($user = null) {
+        return bjlg_can_manage_plugin($user, 'manage_backups');
+    }
+}
+
+if (!function_exists('bjlg_can_restore_backups')) {
+    function bjlg_can_restore_backups($user = null) {
+        return bjlg_can_manage_plugin($user, 'restore');
+    }
+}
+
+if (!function_exists('bjlg_can_manage_settings')) {
+    function bjlg_can_manage_settings($user = null) {
+        return bjlg_can_manage_plugin($user, 'manage_settings');
+    }
+}
+
+if (!function_exists('bjlg_can_manage_integrations')) {
+    function bjlg_can_manage_integrations($user = null) {
+        return bjlg_can_manage_plugin($user, 'manage_integrations');
+    }
+}
+
+if (!function_exists('bjlg_can_view_logs')) {
+    function bjlg_can_view_logs($user = null) {
+        return bjlg_can_manage_plugin($user, 'view_logs');
     }
 }
 

@@ -23,7 +23,7 @@ class BJLG_Diagnostics {
      * Gère la requête AJAX pour créer et fournir le pack de support.
      */
     public function handle_generate_support_package() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_view_logs()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -132,7 +132,7 @@ class BJLG_Diagnostics {
      * Exécute un test de diagnostic spécifique
      */
     public function handle_run_diagnostic_test() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_view_logs()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -178,7 +178,7 @@ class BJLG_Diagnostics {
      * Obtient les informations système
      */
     public function handle_get_system_info() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_view_logs()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         

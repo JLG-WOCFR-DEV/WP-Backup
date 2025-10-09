@@ -776,7 +776,7 @@ class BJLG_Encryption {
      * AJAX: Génère une nouvelle clé
      */
     public function ajax_generate_key() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_settings()) {
             wp_send_json_error(['message' => 'Permission refusée']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -799,7 +799,7 @@ class BJLG_Encryption {
      * AJAX: Test du chiffrement
      */
     public function ajax_test_encryption() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_settings()) {
             wp_send_json_error(['message' => 'Permission refusée']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -853,7 +853,7 @@ class BJLG_Encryption {
      * AJAX: Vérifie si un mot de passe peut déchiffrer un fichier donné.
      */
     public function ajax_verify_password() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_settings()) {
             wp_send_json_error(['message' => 'Permission refusée']);
         }
 
