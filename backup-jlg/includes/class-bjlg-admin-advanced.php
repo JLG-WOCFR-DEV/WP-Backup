@@ -186,8 +186,11 @@ class BJLG_Admin_Advanced {
 
         $metrics['queues'] = $this->build_queue_metrics($now);
 
+        $metrics['encryption'] = $this->get_encryption_metrics();
+
         $metrics['summary'] = $this->build_summary($metrics);
         $metrics['alerts'] = $this->build_alerts($metrics);
+        $metrics['reliability'] = $this->build_reliability($metrics);
 
         return $metrics;
     }
@@ -656,6 +659,281 @@ class BJLG_Admin_Advanced {
         }
 
         return $destinations;
+    }
+
+    private function get_encryption_metrics(): array {
+        if (!class_exists(BJLG_Encryption::class)) {
+            return [];
+        }
+
+        try {
+            $service = new BJLG_Encryption();
+            $stats = $service->get_encryption_stats();
+
+            if (!is_array($stats)) {
+                return [];
+            }
+
+            $encrypted = isset($stats['encrypted_count']) ? (int) $stats['encrypted_count'] : 0;
+            $unencrypted = isset($stats['unencrypted_count']) ? (int) $stats['unencrypted_count'] : 0;
+            $total = max(0, $encrypted + $unencrypted);
+            $ratio = $total > 0 ? max(0, min(1, $encrypted / $total)) : null;
+
+            $stats['encrypted_count'] = $encrypted;
+            $stats['unencrypted_count'] = $unencrypted;
+            $stats['total_archives'] = $total;
+            $stats['encrypted_ratio'] = $ratio;
+
+            return $stats;
+        } catch (\Throwable $exception) {
+            return [
+                'encrypted_count' => 0,
+                'unencrypted_count' => 0,
+                'total_archives' => 0,
+                'encrypted_ratio' => null,
+                'encryption_enabled' => false,
+                'error' => true,
+                'error_message' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    private function build_reliability(array $metrics): array {
+        $score = 100.0;
+        $pillars = [];
+        $insights = [];
+        $recommendations = [];
+
+        $summary = $metrics['summary'] ?? [];
+        $scheduler = $metrics['scheduler'] ?? [];
+        $scheduler_stats = $scheduler['stats'] ?? [];
+        $active_count = isset($scheduler['active_count']) ? (int) $scheduler['active_count'] : 0;
+        $success_rate = isset($scheduler_stats['success_rate']) ? (float) $scheduler_stats['success_rate'] : 0.0;
+        $next_run_relative = $summary['scheduler_next_run_relative'] ?? ($summary['scheduler_next_run'] ?? '');
+
+        $scheduler_intent = 'success';
+        $scheduler_message = '';
+
+        if (!empty($scheduler['overdue'])) {
+            $scheduler_intent = 'danger';
+            $scheduler_message = __('Une sauvegarde planifiée est en retard.', 'backup-jlg');
+            $score -= 22;
+            $insights[] = __('Planification en retard', 'backup-jlg');
+            $this->add_recommendation($recommendations, __('Vérifier la planification automatique', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'scheduling'], admin_url('admin.php')), 'primary');
+        } elseif ($active_count === 0) {
+            $scheduler_intent = 'warning';
+            $scheduler_message = __('Aucune planification active.', 'backup-jlg');
+            $score -= 12;
+            $insights[] = __('Ajouter une planification récurrente', 'backup-jlg');
+            $this->add_recommendation($recommendations, __('Créer une planification automatique', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'scheduling'], admin_url('admin.php')), 'primary');
+        } else {
+            $formatted_rate = sprintf('%s%%', number_format_i18n($success_rate, $success_rate >= 1 ? 0 : 1));
+            $scheduler_message = sprintf(
+                _n('%1$s planification active • succès %2$s', '%1$s planifications actives • succès %2$s', $active_count, 'backup-jlg'),
+                number_format_i18n($active_count),
+                $formatted_rate
+            );
+
+            if ($success_rate < 75) {
+                $scheduler_intent = 'warning';
+                $score -= 8;
+                $insights[] = __('Améliorer la stabilité des planifications', 'backup-jlg');
+                $scheduler_message .= ' — ' . __('Taux de réussite sous les standards pro.', 'backup-jlg');
+                $this->add_recommendation($recommendations, __('Analyser les rapports de sauvegarde', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'history'], admin_url('admin.php')));
+            }
+        }
+
+        if ($next_run_relative !== '') {
+            $scheduler_message .= ' • ' . sprintf(__('Prochain passage %s', 'backup-jlg'), $next_run_relative);
+        }
+
+        $pillars[] = [
+            'key' => 'scheduler',
+            'label' => __('Planification', 'backup-jlg'),
+            'message' => $scheduler_message,
+            'intent' => $scheduler_intent,
+            'icon' => 'dashicons-clock',
+        ];
+
+        $encryption = isset($metrics['encryption']) && is_array($metrics['encryption']) ? $metrics['encryption'] : [];
+        $encryption_enabled = !empty($encryption['encryption_enabled']);
+        $encrypted_count = isset($encryption['encrypted_count']) ? (int) $encryption['encrypted_count'] : 0;
+        $unencrypted_count = isset($encryption['unencrypted_count']) ? (int) $encryption['unencrypted_count'] : 0;
+        $total_archives = isset($encryption['total_archives']) ? (int) $encryption['total_archives'] : ($encrypted_count + $unencrypted_count);
+        $encrypted_ratio = $total_archives > 0 ? max(0, min(1, $encrypted_count / max(1, $total_archives))) : ($encryption_enabled ? 1.0 : 0.0);
+        $encryption_intent = $encryption_enabled ? 'success' : 'warning';
+        $encryption_message = '';
+
+        if (!empty($encryption['error'])) {
+            $encryption_intent = 'warning';
+            $encryption_message = __('Impossible de vérifier le chiffrement des archives.', 'backup-jlg');
+            $score -= 8;
+            $insights[] = __('Valider le module de chiffrement', 'backup-jlg');
+        } elseif (!$encryption_enabled) {
+            $encryption_intent = 'warning';
+            $encryption_message = __('Le chiffrement AES-256 est désactivé.', 'backup-jlg');
+            $score -= 18;
+            $insights[] = __('Activer le chiffrement des sauvegardes', 'backup-jlg');
+            $this->add_recommendation($recommendations, __('Activer le chiffrement AES-256', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'settings'], admin_url('admin.php')));
+        } else {
+            $percentage = (int) round($encrypted_ratio * 100);
+            $encryption_message = sprintf(__('Chiffrement actif • %s%% des archives sécurisées', 'backup-jlg'), number_format_i18n($percentage));
+
+            if ($total_archives > 0 && $encrypted_ratio < 0.6) {
+                $encryption_intent = 'warning';
+                $score -= 6;
+                $insights[] = __('Sécuriser les archives restantes', 'backup-jlg');
+                $encryption_message .= ' — ' . __('Certaines archives restent non chiffrées.', 'backup-jlg');
+            }
+        }
+
+        if (!empty($encryption['total_encrypted_size'])) {
+            $encryption_message .= ' • ' . sprintf(__('Volume protégé : %s', 'backup-jlg'), $encryption['total_encrypted_size']);
+        }
+
+        $pillars[] = [
+            'key' => 'encryption',
+            'label' => __('Chiffrement', 'backup-jlg'),
+            'message' => $encryption_message,
+            'intent' => $encryption_intent,
+            'icon' => 'dashicons-lock',
+        ];
+
+        $storage = $metrics['storage'] ?? [];
+        $remote_destinations = isset($storage['remote_destinations']) && is_array($storage['remote_destinations']) ? $storage['remote_destinations'] : [];
+        $remote_total = count($remote_destinations);
+        $remote_connected = 0;
+        $remote_with_errors = 0;
+
+        foreach ($remote_destinations as $destination) {
+            if (!is_array($destination)) {
+                continue;
+            }
+
+            if (!empty($destination['connected'])) {
+                $remote_connected++;
+            }
+
+            if (!empty($destination['errors'])) {
+                $remote_with_errors++;
+            }
+        }
+
+        $storage_intent = 'success';
+        $storage_message = '';
+
+        if ($remote_total === 0) {
+            $storage_intent = 'warning';
+            $storage_message = __('Aucune destination distante configurée.', 'backup-jlg');
+            $score -= 8;
+            $insights[] = __('Ajouter une redondance hors-site', 'backup-jlg');
+            $this->add_recommendation($recommendations, __('Ajouter un stockage distant', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'settings'], admin_url('admin.php')));
+        } else {
+            $storage_message = sprintf(
+                __('Destinations distantes actives : %1$s / %2$s', 'backup-jlg'),
+                number_format_i18n($remote_connected),
+                number_format_i18n($remote_total)
+            );
+
+            if ($remote_connected === 0 || $remote_with_errors > 0) {
+                $storage_intent = 'warning';
+                $score -= 12;
+                if ($remote_connected === 0) {
+                    $storage_message .= ' — ' . __('Aucune connexion valide détectée.', 'backup-jlg');
+                    $insights[] = __('Réparer les connexions distantes', 'backup-jlg');
+                } else {
+                    $storage_message .= ' — ' . __('Certaines destinations signalent des erreurs.', 'backup-jlg');
+                    $insights[] = __('Vérifier les destinations distantes', 'backup-jlg');
+                }
+                $this->add_recommendation($recommendations, __('Reconfigurer la destination distante', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'settings'], admin_url('admin.php')));
+            } elseif (!empty($storage['total_size_human'])) {
+                $storage_message .= ' • ' . sprintf(__('Stockage local : %s', 'backup-jlg'), $storage['total_size_human']);
+            }
+        }
+
+        $pillars[] = [
+            'key' => 'storage',
+            'label' => __('Redondance', 'backup-jlg'),
+            'message' => $storage_message,
+            'intent' => $storage_intent,
+            'icon' => 'dashicons-database',
+        ];
+
+        $recent_failures = isset($metrics['history']['recent_failures']) && is_array($metrics['history']['recent_failures']) ? $metrics['history']['recent_failures'] : [];
+        $history_intent = 'success';
+        $history_message = __('Aucun échec récent détecté.', 'backup-jlg');
+
+        if (!empty($recent_failures)) {
+            $history_intent = count($recent_failures) > 1 ? 'danger' : 'warning';
+            $recent = $recent_failures[0];
+            $relative = isset($recent['relative']) ? (string) $recent['relative'] : (isset($recent['formatted']) ? (string) $recent['formatted'] : '');
+            $history_message = $relative !== ''
+                ? sprintf(__('Dernier échec %s', 'backup-jlg'), $relative)
+                : __('Des échecs récents nécessitent une attention.', 'backup-jlg');
+            $score -= count($recent_failures) > 1 ? 12 : 8;
+            $insights[] = __('Analyser les journaux d’erreur', 'backup-jlg');
+            $this->add_recommendation($recommendations, __('Consulter les journaux détaillés', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'logs'], admin_url('admin.php')));
+        } elseif (!empty($summary['history_last_backup_relative'])) {
+            $history_message = sprintf(__('Dernière sauvegarde réussie %s', 'backup-jlg'), $summary['history_last_backup_relative']);
+        }
+
+        $pillars[] = [
+            'key' => 'history',
+            'label' => __('Fiabilité récente', 'backup-jlg'),
+            'message' => $history_message,
+            'intent' => $history_intent,
+            'icon' => 'dashicons-shield-alt',
+        ];
+
+        $score = max(0, min(100, (int) round($score)));
+
+        if ($score >= 90) {
+            $level = __('Niveau pro', 'backup-jlg');
+            $intent = 'success';
+            $base_description = __('Tous les garde-fous majeurs sont alignés avec les extensions professionnelles.', 'backup-jlg');
+        } elseif ($score >= 75) {
+            $level = __('Solide', 'backup-jlg');
+            $intent = 'success';
+            $base_description = __('La configuration se rapproche des standards premium, quelques optimisations restent possibles.', 'backup-jlg');
+        } elseif ($score >= 60) {
+            $level = __('À surveiller', 'backup-jlg');
+            $intent = 'warning';
+            $base_description = __('Renforcez les points signalés pour atteindre la fiabilité attendue d’une solution professionnelle.', 'backup-jlg');
+        } else {
+            $level = __('Critique', 'backup-jlg');
+            $intent = 'danger';
+            $base_description = __('Priorité : résoudre les alertes critiques pour sécuriser vos sauvegardes.', 'backup-jlg');
+        }
+
+        $description = $base_description;
+        if (!empty($insights)) {
+            $description .= ' ' . implode(' ', array_slice(array_unique($insights), 0, 2));
+        }
+
+        return [
+            'score' => $score,
+            'score_label' => sprintf(_x('%s / 100', 'Indice de fiabilité', 'backup-jlg'), number_format_i18n($score)),
+            'level' => $level,
+            'description' => $description,
+            'caption' => __('Comparaison avec les standards professionnels : planification, chiffrement et redondance.', 'backup-jlg'),
+            'intent' => $intent,
+            'pillars' => $pillars,
+            'recommendations' => $recommendations,
+        ];
+    }
+
+    private function add_recommendation(array &$recommendations, string $label, string $url, string $intent = 'secondary'): void {
+        foreach ($recommendations as $entry) {
+            if (isset($entry['label']) && $entry['label'] === $label) {
+                return;
+            }
+        }
+
+        $recommendations[] = [
+            'label' => $label,
+            'url' => $url,
+            'intent' => $intent,
+        ];
     }
 
     private function sanitize_metric_value($value) {

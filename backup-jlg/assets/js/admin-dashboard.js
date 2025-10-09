@@ -92,6 +92,18 @@ jQuery(function($) {
             }
         }
 
+        const reliability = metrics.reliability || {};
+        if (reliability.level) {
+            const scoreValue = reliability.score !== undefined && reliability.score !== null
+                ? formatNumber(reliability.score)
+                : reliability.score_label || '';
+            if (scoreValue) {
+                parts.push(sprintf(__('Fiabilité : %1$s (%2$s/100)', 'backup-jlg'), reliability.level, scoreValue));
+            } else {
+                parts.push(sprintf(__('Fiabilité : %s', 'backup-jlg'), reliability.level));
+            }
+        }
+
         if (!parts.length) {
             return '';
         }
@@ -214,6 +226,102 @@ jQuery(function($) {
         } else {
             $restoreCard.removeClass('bjlg-action-card--disabled');
             $restoreButton.removeClass('disabled').removeAttr('aria-disabled').removeAttr('tabindex');
+        }
+    };
+
+    const updateReliability = function(reliability) {
+        const $section = $overview.find('[data-role="reliability"]');
+        if (!$section.length) {
+            return;
+        }
+
+        reliability = reliability || {};
+
+        const intent = (reliability.intent || 'info').toString().toLowerCase();
+        $section.attr('data-intent', intent);
+
+        const hasScore = reliability.score !== undefined && reliability.score !== null && reliability.score !== '';
+        setField('reliability_score_value', hasScore ? formatNumber(reliability.score) : '');
+        setField('reliability_score_label', reliability.score_label || '');
+        setField('reliability_level', reliability.level || '');
+        setField('reliability_description', reliability.description || '');
+        setField('reliability_caption', reliability.caption || '');
+
+        const $pillars = $section.find('[data-role="reliability-pillars"]');
+        if ($pillars.length) {
+            $pillars.empty();
+            const pillars = Array.isArray(reliability.pillars) ? reliability.pillars : [];
+            if (!pillars.length) {
+                $('<li/>', {
+                    'class': 'bjlg-reliability-pillar bjlg-reliability-pillar--empty',
+                    text: __('Les signaux clés apparaîtront après vos premières sauvegardes.', 'backup-jlg')
+                }).appendTo($pillars);
+            } else {
+                pillars.forEach(function(pillar) {
+                    if (!pillar || typeof pillar !== 'object') {
+                        return;
+                    }
+
+                    const icon = pillar.icon || 'dashicons-admin-generic';
+                    const intentValue = (pillar.intent || pillar.status || 'info').toString().toLowerCase();
+                    const $item = $('<li/>', {
+                        'class': 'bjlg-reliability-pillar',
+                        'data-intent': intentValue
+                    });
+
+                    $('<span/>', {
+                        'class': 'bjlg-reliability-pillar__icon dashicons ' + icon,
+                        'aria-hidden': 'true'
+                    }).appendTo($item);
+
+                    const $content = $('<div/>', { 'class': 'bjlg-reliability-pillar__content' }).appendTo($item);
+
+                    if (pillar.label) {
+                        $('<span/>', {
+                            'class': 'bjlg-reliability-pillar__label',
+                            text: pillar.label
+                        }).appendTo($content);
+                    }
+
+                    if (pillar.message) {
+                        $('<span/>', {
+                            'class': 'bjlg-reliability-pillar__message',
+                            text: pillar.message
+                        }).appendTo($content);
+                    }
+
+                    $pillars.append($item);
+                });
+            }
+        }
+
+        const $actions = $section.find('[data-role="reliability-actions"]');
+        if ($actions.length) {
+            $actions.empty();
+            const recommendations = Array.isArray(reliability.recommendations) ? reliability.recommendations : [];
+            if (!recommendations.length) {
+                $actions.attr('hidden', 'hidden');
+            } else {
+                $actions.removeAttr('hidden');
+                recommendations.forEach(function(reco) {
+                    if (!reco || typeof reco !== 'object' || !reco.label) {
+                        return;
+                    }
+
+                    const classes = ['button'];
+                    if (reco.intent === 'primary') {
+                        classes.push('button-primary');
+                    } else {
+                        classes.push('button-secondary');
+                    }
+
+                    $('<a/>', {
+                        'class': classes.join(' '),
+                        'href': reco.url || '#',
+                        text: reco.label
+                    }).appendTo($actions);
+                });
+            }
         }
     };
 
@@ -764,6 +872,7 @@ jQuery(function($) {
     });
 
     updateSummary(state.metrics.summary || {});
+    updateReliability(state.metrics.reliability || {});
     updateAlerts(state.metrics.alerts || []);
     updateOnboarding(state.metrics.onboarding || []);
     updateActions(state.metrics);
@@ -781,6 +890,7 @@ jQuery(function($) {
 
         state.metrics = $.extend(true, {}, state.metrics, nextMetrics);
         updateSummary(state.metrics.summary || {});
+        updateReliability(state.metrics.reliability || {});
         updateAlerts(state.metrics.alerts || []);
         updateOnboarding(state.metrics.onboarding || []);
         updateActions(state.metrics);
