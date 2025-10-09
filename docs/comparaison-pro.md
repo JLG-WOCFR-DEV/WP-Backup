@@ -40,6 +40,13 @@ Ce document positionne Backup JLG face aux offres haut de gamme (UpdraftPlus Pr
 4. **Étendre la prise en charge multisite** : support natif de WordPress multisite et mutualisation des historiques/API pour piloter plusieurs environnements depuis une seule instance, indispensable pour rivaliser avec les consoles agence.【F:README.md†L111-L116】【F:backup-jlg/includes/class-bjlg-rest-api.php†L54-L319】
 5. **Renforcer la supervision proactive** : compléter le bilan de santé et l’audit SQL existants par des métriques d’usage (quota distant, temps moyen de restauration) exposées via API/webhooks afin de fournir les garanties de service attendues sur les offres premium.【F:backup-jlg/includes/class-bjlg-health-check.php†L17-L152】【F:backup-jlg/includes/class-bjlg-history.php†L8-L158】
 
+## Nouveaux leviers différenciants face aux solutions gérées
+
+- **Réduire le RPO via des déclencheurs quasi temps réel** : la planification repose sur les intervalles WP-Cron (minimum 5 minutes), sans écoute d’événements fichiers ou base. Ajouter un watcher (inotify, binlogs MySQL, webhooks WooCommerce) permettrait de se rapprocher des sauvegardes continues proposées par BlogVault ou Jetpack Backup.【F:backup-jlg/includes/class-bjlg-scheduler.php†L35-L86】
+- **Vérifier systématiquement les archives chiffrées** : aujourd’hui les contrôles `dry_run` et manifestes sont ignorés dès qu’une archive est AES-256, ce qui laisse un angle mort vis-à-vis des politiques de test de restauration automatique des offres SaaS. Une étape de déchiffrement temporaire côté serveur (ou dans un environnement éphémère) fermerait cet écart.【F:backup-jlg/includes/class-bjlg-backup.php†L2087-L2129】
+- **Introduire un RBAC granulaire** : toutes les opérations clés reposent sur `bjlg_can_manage_plugin()` qui mappe une seule capacité (par défaut `manage_options`). Distinguer la création de sauvegardes, la restauration ou la configuration via des capacités dédiées alignerait le produit avec les consoles pro qui segmentent les rôles opérateur/auditeur.【F:backup-jlg/backup-jlg.php†L66-L118】【F:backup-jlg/includes/class-bjlg-admin.php†L136-L155】
+- **Automatiser les tests de reprise** : la classe de restauration orchestre déjà des sandboxes et des nettoyages, mais aucun run de test n’est lancé périodiquement. Planifier une restauration vers un site de vérification ou un container temporaire validerait régulièrement la chaîne de sauvegarde comme le font les services managés avancés.【F:backup-jlg/includes/class-bjlg-restore.php†L44-L207】【F:backup-jlg/includes/class-bjlg-restore.php†L503-L616】
+
 ## Axes d'amélioration alignés sur les offres pro
 
 ### Quick wins (0–3 mois)
