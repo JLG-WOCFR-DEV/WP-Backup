@@ -26,7 +26,7 @@ class BJLG_Actions {
      * Génère un token de téléchargement à la demande pour un fichier spécifique.
      */
     public function prepare_download() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_backups()) {
             wp_send_json_error(['message' => 'Permission refusée.'], 403);
         }
 
@@ -95,7 +95,7 @@ class BJLG_Actions {
      * Supprime un fichier de sauvegarde via AJAX.
      */
     public function handle_delete_backup() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_backups()) {
             wp_send_json_error(['message' => 'Permission refusée.'], 403);
         }
 

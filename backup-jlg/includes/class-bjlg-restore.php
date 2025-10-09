@@ -303,7 +303,7 @@ class BJLG_Restore {
      * Crée une sauvegarde de sécurité complète avant de lancer une restauration.
      */
     public function handle_create_pre_restore_backup() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_restore_backups()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -538,8 +538,8 @@ class BJLG_Restore {
     public static function user_can_use_sandbox($user = null) {
         $default_permission = true;
 
-        if (function_exists('bjlg_can_manage_plugin')) {
-            $default_permission = (bool) \bjlg_can_manage_plugin($user);
+        if (function_exists('bjlg_can_restore_backups')) {
+            $default_permission = (bool) \bjlg_can_restore_backups($user);
         } elseif (function_exists('current_user_can')) {
             $default_permission = current_user_can('manage_options');
         }
@@ -758,7 +758,7 @@ class BJLG_Restore {
      * Gère l'upload d'un fichier de restauration
      */
     public function handle_upload_restore_file() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_restore_backups()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -1001,7 +1001,7 @@ class BJLG_Restore {
      * Exécute la restauration granulaire à partir d'un fichier de sauvegarde.
      */
     public function handle_run_restore() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_restore_backups()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -1221,7 +1221,7 @@ class BJLG_Restore {
      * Vérifie la progression de la restauration
      */
     public function handle_check_restore_progress() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_restore_backups()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');

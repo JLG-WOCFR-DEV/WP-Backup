@@ -291,7 +291,7 @@ class BJLG_Settings {
      * Gère la requête AJAX pour sauvegarder tous les réglages.
      */
     public function handle_save_settings() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_settings()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -354,6 +354,7 @@ class BJLG_Settings {
                     $raw_permission = wp_unslash($_POST['required_capability']);
                     $required_capability = $this->sanitize_required_capability_value($raw_permission);
                     update_option('bjlg_required_capability', $required_capability);
+                    $this->sync_manage_plugin_capability_map($required_capability);
                     $saved_settings['permissions'] = [
                         'required_capability' => $required_capability,
                         'type' => $this->is_role_permission($required_capability) ? 'role' : 'capability',
@@ -824,7 +825,7 @@ class BJLG_Settings {
      * Récupère tous les paramètres
      */
     public function handle_get_settings() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_settings()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         
@@ -862,7 +863,7 @@ class BJLG_Settings {
      * Réinitialise tous les paramètres
      */
     public function handle_reset_settings() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_settings()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -877,10 +878,12 @@ class BJLG_Settings {
                     update_option($this->get_option_name_for_section($key), $defaults);
                 }
                 update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+                $this->sync_manage_plugin_capability_map(\BJLG_DEFAULT_CAPABILITY);
                 BJLG_History::log('settings_reset', 'info', 'Tous les réglages ont été réinitialisés');
             } else {
                 if ($section === 'permissions') {
                     update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+                    $this->sync_manage_plugin_capability_map(\BJLG_DEFAULT_CAPABILITY);
                     BJLG_History::log('settings_reset', 'info', "Réglages 'permissions' réinitialisés");
                 } elseif (isset($this->default_settings[$section])) {
                     update_option($this->get_option_name_for_section($section), $this->default_settings[$section]);
@@ -901,7 +904,7 @@ class BJLG_Settings {
      * Exporte les paramètres
      */
     public function handle_export_settings() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_settings()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -964,7 +967,7 @@ class BJLG_Settings {
      * Importe les paramètres
      */
     public function handle_import_settings() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_settings()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -998,6 +1001,10 @@ class BJLG_Settings {
 
             foreach ($sanitized_settings as $key => $value) {
                 update_option($key, $value);
+            }
+
+            if (array_key_exists('bjlg_required_capability', $sanitized_settings)) {
+                $this->sync_manage_plugin_capability_map($sanitized_settings['bjlg_required_capability']);
             }
             
             BJLG_History::log('settings_imported', 'success', 'Paramètres importés depuis ' . ($import_data['site_url'] ?? 'inconnu'));
@@ -1508,6 +1515,35 @@ class BJLG_Settings {
             default:
                 return null;
         }
+    }
+
+    /**
+     * Synchronise la capability map avec la permission principale.
+     */
+    private function sync_manage_plugin_capability_map($permission): void {
+        if (!function_exists('bjlg_get_capability_map')) {
+            return;
+        }
+
+        $normalized_permission = is_string($permission) ? sanitize_text_field($permission) : '';
+        if ($normalized_permission === '') {
+            $normalized_permission = \BJLG_DEFAULT_CAPABILITY;
+        }
+
+        $stored_map = get_option('bjlg_capability_map', []);
+        if (!is_array($stored_map)) {
+            $stored_map = [];
+        }
+
+        $stored_value = isset($stored_map['manage_plugin']) ? (string) $stored_map['manage_plugin'] : '';
+
+        if ($stored_value === $normalized_permission) {
+            return;
+        }
+
+        $stored_map['manage_plugin'] = $normalized_permission;
+
+        update_option('bjlg_capability_map', $stored_map);
     }
 
     /**

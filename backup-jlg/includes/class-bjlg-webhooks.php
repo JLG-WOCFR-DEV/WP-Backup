@@ -69,7 +69,7 @@ class BJLG_Webhooks {
      * Gère l'appel AJAX pour régénérer la clé.
      */
     public function handle_regenerate_key_ajax() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_integrations()) {
             wp_send_json_error(['message' => 'Permission refusée']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');

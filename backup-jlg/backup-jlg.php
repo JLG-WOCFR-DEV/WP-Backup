@@ -27,9 +27,21 @@ define('BJLG_DEFAULT_CAPABILITY', 'manage_options');
 if (!function_exists('bjlg_get_required_capability')) {
     /**
      * Returns the capability or role required to access the plugin features.
+     *
+     * @param string $context Capability context key.
      */
-    function bjlg_get_required_capability() {
-        $capability = get_option('bjlg_required_capability');
+    function bjlg_get_required_capability($context = 'manage_plugin') {
+        $map = bjlg_get_capability_map();
+
+        if (!is_string($context) || $context === '') {
+            $context = 'manage_plugin';
+        }
+
+        $capability = isset($map[$context]) ? $map[$context] : '';
+
+        if (!is_string($capability) || $capability === '') {
+            $capability = isset($map['manage_plugin']) ? $map['manage_plugin'] : BJLG_DEFAULT_CAPABILITY;
+        }
 
         if (!is_string($capability) || $capability === '') {
             $capability = BJLG_DEFAULT_CAPABILITY;
@@ -38,9 +50,72 @@ if (!function_exists('bjlg_get_required_capability')) {
         /**
          * Filters the capability or role required to access the plugin features.
          *
-         * @param string $capability
+         * @param string $capability Capability or role slug.
+         * @param string $context    Capability context key.
          */
-        return apply_filters('bjlg_required_capability', $capability);
+        return apply_filters('bjlg_required_capability', $capability, $context);
+    }
+}
+
+if (!function_exists('bjlg_get_capability_map')) {
+    /**
+     * Returns the capability map, merging stored values with defaults.
+     *
+     * @return array<string,string>
+     */
+    function bjlg_get_capability_map() {
+        $defaults = [
+            'manage_plugin' => BJLG_DEFAULT_CAPABILITY,
+            'manage_backups' => BJLG_DEFAULT_CAPABILITY,
+            'restore' => BJLG_DEFAULT_CAPABILITY,
+            'manage_settings' => BJLG_DEFAULT_CAPABILITY,
+            'manage_integrations' => BJLG_DEFAULT_CAPABILITY,
+            'view_logs' => BJLG_DEFAULT_CAPABILITY,
+        ];
+
+        $legacy_permission = get_option('bjlg_required_capability', '');
+        if (is_string($legacy_permission) && $legacy_permission !== '') {
+            $defaults['manage_plugin'] = sanitize_text_field($legacy_permission);
+        }
+
+        $stored = get_option('bjlg_capability_map', []);
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+
+        $sanitized = [];
+        foreach ($stored as $key => $value) {
+            if (!is_string($key) || $key === '' || !array_key_exists($key, $defaults)) {
+                continue;
+            }
+
+            if (!is_string($value) || $value === '') {
+                continue;
+            }
+
+            $sanitized[$key] = sanitize_text_field($value);
+        }
+
+        $map = array_merge($defaults, $sanitized);
+
+        /**
+         * Filters the capability map used by the plugin.
+         *
+         * @param array<string,string> $map
+         */
+        $map = apply_filters('bjlg_capability_map', $map);
+
+        if (!is_array($map)) {
+            return $defaults;
+        }
+
+        foreach ($defaults as $key => $default_value) {
+            if (!isset($map[$key]) || !is_string($map[$key]) || $map[$key] === '') {
+                $map[$key] = $default_value;
+            }
+        }
+
+        return $map;
     }
 }
 
@@ -65,12 +140,13 @@ if (!function_exists('bjlg_permission_is_role')) {
 
 if (!function_exists('bjlg_can_manage_plugin')) {
     /**
-     * Checks whether a user (or the current user) can access the plugin features.
+     * Checks whether a user (or the current user) can access a plugin capability context.
      *
-     * @param int|\WP_User|null $user Optional user to check. Defaults to current user.
+     * @param int|\WP_User|null $user    Optional user to check. Defaults to current user.
+     * @param string             $context Capability context key.
      */
-    function bjlg_can_manage_plugin($user = null) {
-        $permission = bjlg_get_required_capability();
+    function bjlg_can_manage_plugin($user = null, $context = 'manage_plugin') {
+        $permission = bjlg_get_required_capability($context);
 
         if (!is_string($permission) || $permission === '') {
             $permission = BJLG_DEFAULT_CAPABILITY;
@@ -104,6 +180,51 @@ if (!function_exists('bjlg_can_manage_plugin')) {
         }
 
         return function_exists('user_can') ? user_can($user, $permission) : false;
+    }
+}
+
+if (!function_exists('bjlg_can_manage_backups')) {
+    /**
+     * Checks whether the user can manage backup operations (run, schedule, clean).
+     */
+    function bjlg_can_manage_backups($user = null) {
+        return bjlg_can_manage_plugin($user, 'manage_backups');
+    }
+}
+
+if (!function_exists('bjlg_can_restore_backups')) {
+    /**
+     * Checks whether the user can run restore operations.
+     */
+    function bjlg_can_restore_backups($user = null) {
+        return bjlg_can_manage_plugin($user, 'restore');
+    }
+}
+
+if (!function_exists('bjlg_can_manage_settings')) {
+    /**
+     * Checks whether the user can manage plugin settings.
+     */
+    function bjlg_can_manage_settings($user = null) {
+        return bjlg_can_manage_plugin($user, 'manage_settings');
+    }
+}
+
+if (!function_exists('bjlg_can_manage_integrations')) {
+    /**
+     * Checks whether the user can manage external integrations and destinations.
+     */
+    function bjlg_can_manage_integrations($user = null) {
+        return bjlg_can_manage_plugin($user, 'manage_integrations');
+    }
+}
+
+if (!function_exists('bjlg_can_view_logs')) {
+    /**
+     * Checks whether the user can view audit logs and history.
+     */
+    function bjlg_can_view_logs($user = null) {
+        return bjlg_can_manage_plugin($user, 'view_logs');
     }
 }
 
@@ -366,6 +487,10 @@ final class BJLG_Plugin {
 
         if (get_option('bjlg_required_capability', null) === null) {
             add_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY);
+        }
+
+        if (get_option('bjlg_capability_map', null) === null) {
+            add_option('bjlg_capability_map', []);
         }
 
         if (!is_dir(BJLG_BACKUP_DIR)) {

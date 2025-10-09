@@ -561,7 +561,7 @@ class BJLG_Backup {
      * Gère la requête AJAX pour démarrer une tâche de sauvegarde
      */
     public function handle_start_backup_task() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_backups()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
@@ -701,7 +701,7 @@ class BJLG_Backup {
      * Vérifie la progression d'une tâche
      */
     public function handle_check_backup_progress() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_backups()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');

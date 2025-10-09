@@ -345,7 +345,7 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
     }
 
     public function handle_test_connection() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_integrations()) {
             wp_send_json_error(['message' => 'Permission refusée.'], 403);
         }
 
@@ -389,7 +389,7 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
     }
 
     public function handle_disconnect_request() {
-        if (!\bjlg_can_manage_plugin()) {
+        if (!\bjlg_can_manage_integrations()) {
             wp_die('Permission refusée.');
         }
 
