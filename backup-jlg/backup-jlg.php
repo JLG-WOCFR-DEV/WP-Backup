@@ -79,8 +79,8 @@ if (!function_exists('bjlg_get_capability_map')) {
         if (is_string($legacy_permission) && $legacy_permission !== '') {
             $legacy_permission = sanitize_text_field($legacy_permission);
 
-            foreach ($defaults as $key => $value) {
-                $defaults[$key] = $legacy_permission;
+            foreach (array_keys($defaults) as $context) {
+                $defaults[$context] = $legacy_permission;
             }
         }
 
