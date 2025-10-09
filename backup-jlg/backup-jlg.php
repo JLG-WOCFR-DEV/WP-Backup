@@ -225,7 +225,7 @@ final class BJLG_Plugin {
             'class-bjlg-notification-transport.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-purge-worker.php',
             'class-bjlg-update-guard.php',
             'class-bjlg-performance.php', 'class-bjlg-rate-limiter.php', 'class-bjlg-rest-api.php',
-            'class-bjlg-api-keys.php', 'class-bjlg-admin-advanced.php', 'class-bjlg-admin.php', 'class-bjlg-actions.php',
+            'class-bjlg-api-keys.php', 'class-bjlg-admin-advanced.php', 'class-bjlg-admin.php', 'class-bjlg-admin-fallbacks.php', 'class-bjlg-actions.php',
             'destinations/interface-bjlg-destination.php', 'destinations/abstract-class-bjlg-s3-compatible.php',
             'destinations/class-bjlg-google-drive.php', 'destinations/class-bjlg-aws-s3.php', 'destinations/class-bjlg-sftp.php',
             'destinations/class-bjlg-wasabi.php', 'destinations/class-bjlg-dropbox.php', 'destinations/class-bjlg-onedrive.php',
@@ -266,6 +266,7 @@ final class BJLG_Plugin {
     
     private function init_services() {
         new BJLG\BJLG_Admin();
+        new BJLG\BJLG_Admin_Fallbacks();
         new BJLG\BJLG_Actions();
 
         $encryption_service = new BJLG\BJLG_Encryption();
@@ -290,26 +291,36 @@ final class BJLG_Plugin {
     }
 
     public function enqueue_admin_assets($hook) {
-        if (strpos($hook, 'backup-jlg') === false) return;
+        if (strpos($hook, 'backup-jlg') === false) {
+            return;
+        }
+
+        $active_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'backup_restore';
+        if ($active_tab === '') {
+            $active_tab = 'backup_restore';
+        }
 
         wp_enqueue_style('bjlg-admin', BJLG_PLUGIN_URL . 'assets/css/admin.css', [], BJLG_VERSION);
         wp_enqueue_style('bjlg-admin-advanced', BJLG_PLUGIN_URL . 'assets/css/admin-advanced.css', [], BJLG_VERSION);
 
         $chart_asset_path = BJLG_PLUGIN_DIR . 'assets/js/vendor/chart.umd.min.js';
         $chart_asset_version = file_exists($chart_asset_path) ? filemtime($chart_asset_path) : '4.4.4';
+        $chart_asset_url = BJLG_PLUGIN_URL . 'assets/js/vendor/chart.umd.min.js';
 
-        wp_register_script(
-            'bjlg-chartjs',
-            BJLG_PLUGIN_URL . 'assets/js/vendor/chart.umd.min.js',
-            [],
-            $chart_asset_version,
-            true
-        );
+        $advanced_asset_path = BJLG_PLUGIN_DIR . 'assets/js/admin-advanced.js';
+        $advanced_asset_url = BJLG_PLUGIN_URL . 'assets/js/admin-advanced.js';
+        $advanced_asset_version = file_exists($advanced_asset_path) ? filemtime($advanced_asset_path) : BJLG_VERSION;
 
-        wp_enqueue_script('bjlg-admin', BJLG_PLUGIN_URL . 'assets/js/admin.js', ['jquery', 'bjlg-chartjs', 'wp-a11y', 'wp-i18n'], BJLG_VERSION, true);
+        $module_urls = [
+            'advanced' => esc_url_raw(add_query_arg('ver', $advanced_asset_version, $advanced_asset_url)),
+        ];
+
+        wp_enqueue_script('bjlg-admin', BJLG_PLUGIN_URL . 'assets/js/admin.js', ['jquery', 'wp-a11y', 'wp-i18n'], BJLG_VERSION, true);
+
         if (function_exists('wp_set_script_translations')) {
             wp_set_script_translations('bjlg-admin', 'backup-jlg', BJLG_PLUGIN_DIR . 'languages');
         }
+
         wp_localize_script('bjlg-admin', 'bjlg_ajax', [
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce'    => wp_create_nonce('bjlg_nonce'),
@@ -318,6 +329,9 @@ final class BJLG_Plugin {
             'rest_namespace' => 'backup-jlg/v1',
             'rest_root' => esc_url_raw(rest_url()),
             'rest_backups' => esc_url_raw(rest_url('backup-jlg/v1/backups')),
+            'active_tab' => $active_tab,
+            'chart_url' => esc_url_raw(add_query_arg('ver', $chart_asset_version, $chart_asset_url)),
+            'modules' => $module_urls,
         ]);
     }
 
