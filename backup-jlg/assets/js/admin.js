@@ -3011,6 +3011,7 @@ jQuery(document).ready(function($) {
             }
 
             bjlgApplyBackupPresetToForm($form, preset);
+            $form.trigger('bjlg-backup-form-updated');
             showStatus('success', `Modèle « ${preset.label || selectedId} » appliqué.`);
         }
 
@@ -3104,6 +3105,213 @@ jQuery(document).ready(function($) {
                     $save.prop('disabled', false).removeClass('is-busy');
                 });
         });
+    })();
+
+    (function setupBackupStepper() {
+        const $form = $('#bjlg-backup-creation-form');
+        if (!$form.length) {
+            return;
+        }
+
+        const $stepsContainer = $form.find('.bjlg-backup-steps');
+        if (!$stepsContainer.length) {
+            return;
+        }
+
+        const $steps = $stepsContainer.find('.bjlg-backup-step');
+        if (!$steps.length) {
+            return;
+        }
+
+        const $navItems = $stepsContainer.find('.bjlg-backup-steps__item');
+        const $navButtons = $stepsContainer.find('.bjlg-backup-steps__button');
+        const $summary = $stepsContainer.find('[data-role="backup-summary"]');
+        const $warning = $stepsContainer.find('[data-role="backup-summary-warning"]');
+        const totalSteps = $steps.length;
+        let currentStep = 1;
+
+        function sanitizeStep(value) {
+            const numeric = parseInt(value, 10);
+            if (!Number.isFinite(numeric)) {
+                return 1;
+            }
+            return Math.min(Math.max(numeric, 1), totalSteps);
+        }
+
+        function cleanLabelText($input) {
+            const $label = $input.closest('label');
+            if (!$label.length) {
+                return '';
+            }
+            return $label.text().replace(/\s+/g, ' ').trim();
+        }
+
+        function renderSummary() {
+            if (!$summary.length) {
+                return;
+            }
+
+            const state = bjlgCollectBackupFormState($form);
+            const $content = $('<dl/>');
+
+            const componentLabels = [];
+            $form.find('input[name="backup_components[]"]').each(function() {
+                if ($(this).is(':checked')) {
+                    const label = cleanLabelText($(this));
+                    if (label) {
+                        componentLabels.push(label);
+                    }
+                }
+            });
+
+            $('<dt/>', { text: 'Composants sélectionnés' }).appendTo($content);
+            $('<dd/>', {
+                text: componentLabels.length ? componentLabels.join(', ') : 'Aucun composant sélectionné'
+            }).appendTo($content);
+
+            const optionLabels = [];
+            if (state.encrypt) {
+                optionLabels.push('Chiffrement AES-256 activé');
+            }
+            if (state.incremental) {
+                optionLabels.push('Sauvegarde incrémentale activée');
+            }
+            if (!optionLabels.length) {
+                optionLabels.push('Options essentielles désactivées');
+            }
+            $('<dt/>', { text: 'Options' }).appendTo($content);
+            $('<dd/>', { text: optionLabels.join(', ') }).appendTo($content);
+
+            const postCheckLabels = [];
+            $form.find('input[name="post_checks[]"]').each(function() {
+                if ($(this).is(':checked')) {
+                    const label = cleanLabelText($(this));
+                    if (label) {
+                        postCheckLabels.push(label);
+                    }
+                }
+            });
+            if (postCheckLabels.length) {
+                $('<dt/>', { text: 'Vérifications post-sauvegarde' }).appendTo($content);
+                $('<dd/>', { text: postCheckLabels.join(', ') }).appendTo($content);
+            }
+
+            const includeText = (state.include_patterns_text || '').trim();
+            if (includeText !== '') {
+                $('<dt/>', { text: 'Inclusions personnalisées' }).appendTo($content);
+                $('<dd/>').append($('<pre/>', { text: includeText })).appendTo($content);
+            }
+
+            const excludeText = (state.exclude_patterns_text || '').trim();
+            if (excludeText !== '') {
+                $('<dt/>', { text: 'Exclusions' }).appendTo($content);
+                $('<dd/>').append($('<pre/>', { text: excludeText })).appendTo($content);
+            }
+
+            const destinationLabels = [];
+            $form.find('input[name="secondary_destinations[]"]').each(function() {
+                if ($(this).is(':checked')) {
+                    const label = cleanLabelText($(this));
+                    if (label) {
+                        destinationLabels.push(label);
+                    }
+                }
+            });
+            if (destinationLabels.length) {
+                $('<dt/>', { text: 'Destinations secondaires' }).appendTo($content);
+                $('<dd/>', { text: destinationLabels.join(', ') }).appendTo($content);
+            }
+
+            if (!$content.children().length) {
+                $('<dt/>', { text: 'Résumé' }).appendTo($content);
+                $('<dd/>', { text: 'Aucun paramètre personnalisé.' }).appendTo($content);
+            }
+
+            $summary.empty().append($content);
+
+            if ($warning.length) {
+                if (componentLabels.length === 0) {
+                    $warning.show();
+                } else {
+                    $warning.hide();
+                }
+            }
+        }
+
+        function setActiveStep(step) {
+            const sanitized = sanitizeStep(step);
+            currentStep = sanitized;
+            $stepsContainer.attr('data-current-step', String(sanitized));
+
+            $steps.each(function() {
+                const stepIndex = sanitizeStep($(this).data('step-index'));
+                if (stepIndex === sanitized) {
+                    $(this).removeAttr('hidden').attr('aria-hidden', 'false');
+                    const $heading = $(this).find('h3').first();
+                    if ($heading.length) {
+                        $heading.attr('tabindex', '-1');
+                        $heading.focus();
+                        $heading.one('blur', function() {
+                            $(this).removeAttr('tabindex');
+                        });
+                    }
+                } else {
+                    $(this).attr('hidden', 'hidden').attr('aria-hidden', 'true');
+                }
+            });
+
+            $navItems.each(function(index) {
+                const stepIndex = index + 1;
+                const isActive = stepIndex === sanitized;
+                $(this).toggleClass('is-active', isActive);
+                $(this).toggleClass('is-complete', stepIndex < sanitized);
+                const $button = $(this).find('.bjlg-backup-steps__button');
+                if ($button.length) {
+                    if (isActive) {
+                        $button.attr('aria-current', 'step');
+                    } else {
+                        $button.removeAttr('aria-current');
+                    }
+                }
+            });
+
+            if (sanitized === totalSteps) {
+                renderSummary();
+            }
+        }
+
+        $navButtons.on('click', function(event) {
+            event.preventDefault();
+            const target = sanitizeStep($(this).data('step-target'));
+            setActiveStep(target);
+        });
+
+        $stepsContainer.on('click', '[data-step-action="next"]', function(event) {
+            event.preventDefault();
+            setActiveStep(currentStep + 1);
+        });
+
+        $stepsContainer.on('click', '[data-step-action="prev"]', function(event) {
+            event.preventDefault();
+            setActiveStep(currentStep - 1);
+        });
+
+        $form.on('change input', 'input, textarea, select', function() {
+            if (currentStep === totalSteps) {
+                renderSummary();
+            }
+        });
+
+        $form.on('bjlg-backup-form-updated', function() {
+            if (currentStep === totalSteps) {
+                renderSummary();
+            }
+        });
+
+        setActiveStep(1);
+        if ($warning.length) {
+            $warning.hide();
+        }
     })();
 
     // La navigation par onglets est gérée par PHP via rechargement de page.
