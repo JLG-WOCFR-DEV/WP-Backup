@@ -779,7 +779,7 @@ jQuery(function($) {
             return;
         }
 
-        state.metrics = $.extend(true, {}, state.metrics, nextMetrics);
+        state.metrics = $.extend(true, {}, nextMetrics);
         updateSummary(state.metrics.summary || {});
         updateAlerts(state.metrics.alerts || []);
         updateOnboarding(state.metrics.onboarding || []);
