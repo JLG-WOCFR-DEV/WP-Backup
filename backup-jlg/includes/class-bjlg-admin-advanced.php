@@ -374,6 +374,7 @@ class BJLG_Admin_Advanced {
             $status = isset($entry['status']) ? (string) $entry['status'] : 'pending';
 
             $formatted[] = [
+                'id' => isset($entry['id']) ? sanitize_text_field((string) $entry['id']) : '',
                 'title' => sanitize_text_field($title),
                 'status' => $status,
                 'status_label' => $this->get_queue_status_label($status),
@@ -409,6 +410,7 @@ class BJLG_Admin_Advanced {
                 : __('Archive inconnue', 'backup-jlg');
 
             $formatted[] = [
+                'file' => sanitize_text_field($title),
                 'title' => sanitize_text_field($title),
                 'status' => $status,
                 'status_label' => $this->get_queue_status_label($status),

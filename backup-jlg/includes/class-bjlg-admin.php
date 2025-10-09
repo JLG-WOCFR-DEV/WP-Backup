@@ -513,7 +513,7 @@ class BJLG_Admin {
                             <article class="bjlg-queue-card" data-queue="<?php echo esc_attr($queue_key); ?>">
                                 <header class="bjlg-queue-card__header">
                                     <h3 class="bjlg-queue-card__title"><?php echo esc_html($queue['label'] ?? ucfirst((string) $queue_key)); ?></h3>
-                                    <span class="bjlg-queue-card__count">
+                                    <span class="bjlg-queue-card__count" data-field="total">
                                         <?php
                                         echo esc_html(
                                             sprintf(
@@ -525,7 +525,7 @@ class BJLG_Admin {
                                     </span>
                                 </header>
 
-                                <p class="bjlg-queue-card__meta">
+                                <p class="bjlg-queue-card__meta" data-field="status-counts">
                                     <?php
                                     printf(
                                         /* translators: 1: number of pending entries, 2: number of retry entries, 3: number of failed entries. */
@@ -537,7 +537,7 @@ class BJLG_Admin {
                                     ?>
                                 </p>
 
-                                <p class="bjlg-queue-card__meta">
+                                <p class="bjlg-queue-card__meta" data-field="next">
                                     <?php if ($next_relative !== ''): ?>
                                         <?php printf(esc_html__('Prochain passage %s', 'backup-jlg'), esc_html($next_relative)); ?>
                                     <?php else: ?>
@@ -545,13 +545,13 @@ class BJLG_Admin {
                                     <?php endif; ?>
                                 </p>
 
-                                <?php if ($oldest_relative !== ''): ?>
-                                    <p class="bjlg-queue-card__meta">
+                                <p class="bjlg-queue-card__meta" data-field="oldest">
+                                    <?php if ($oldest_relative !== ''): ?>
                                         <?php printf(esc_html__('Entrée la plus ancienne %s', 'backup-jlg'), esc_html($oldest_relative)); ?>
-                                    </p>
-                                <?php endif; ?>
+                                    <?php endif; ?>
+                                </p>
 
-                                <ul class="bjlg-queue-card__entries">
+                                <ul class="bjlg-queue-card__entries" data-role="entries">
                                     <?php if (!empty($entries)): ?>
                                         <?php foreach ($entries as $entry):
                                             if (!is_array($entry)) {
@@ -564,8 +564,13 @@ class BJLG_Admin {
                                             $next_attempt_relative = isset($entry['next_attempt_relative']) ? (string) $entry['next_attempt_relative'] : '';
                                             $created_relative = isset($entry['created_relative']) ? (string) $entry['created_relative'] : '';
                                             $details = isset($entry['details']) && is_array($entry['details']) ? $entry['details'] : [];
+                                            $entry_id = isset($entry['id']) ? (string) $entry['id'] : '';
+                                            $entry_file = isset($entry['file']) ? (string) $entry['file'] : '';
                                             ?>
-                                            <li class="bjlg-queue-card__entry">
+                                            <li class="bjlg-queue-card__entry"
+                                                <?php echo $entry_id !== '' ? ' data-entry-id="' . esc_attr($entry_id) . '"' : ''; ?>
+                                                <?php echo $entry_file !== '' ? ' data-entry-file="' . esc_attr($entry_file) . '"' : ''; ?>
+                                            >
                                                 <div class="bjlg-queue-card__entry-header">
                                                     <span class="bjlg-queue-card__entry-title"><?php echo esc_html($entry['title'] ?? ''); ?></span>
                                                     <?php if ($status_label !== ''): ?>
@@ -598,6 +603,24 @@ class BJLG_Admin {
                                                 <?php if (!empty($entry['message'])): ?>
                                                     <p class="bjlg-queue-card__entry-message"><?php echo esc_html($entry['message']); ?></p>
                                                 <?php endif; ?>
+
+                                                <div class="bjlg-queue-card__entry-actions">
+                                                    <?php if ($queue_key === 'notifications' && $entry_id !== ''): ?>
+                                                        <button type="button" class="button button-secondary button-small" data-queue-action="retry-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>">
+                                                            <?php esc_html_e('Relancer', 'backup-jlg'); ?>
+                                                        </button>
+                                                        <button type="button" class="button button-link-delete" data-queue-action="clear-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>">
+                                                            <?php esc_html_e('Ignorer', 'backup-jlg'); ?>
+                                                        </button>
+                                                    <?php elseif ($queue_key === 'remote_purge' && $entry_file !== ''): ?>
+                                                        <button type="button" class="button button-secondary button-small" data-queue-action="retry-remote-purge" data-file="<?php echo esc_attr($entry_file); ?>">
+                                                            <?php esc_html_e('Relancer la purge', 'backup-jlg'); ?>
+                                                        </button>
+                                                        <button type="button" class="button button-link-delete" data-queue-action="clear-remote-purge" data-file="<?php echo esc_attr($entry_file); ?>">
+                                                            <?php esc_html_e('Retirer de la file', 'backup-jlg'); ?>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                </div>
                                             </li>
                                         <?php endforeach; ?>
                                     <?php else: ?>

@@ -463,6 +463,23 @@
     color: color-mix(in srgb, #b91c1c 70%, var(--bjlg-color-text) 30%);
 }
 
+.bjlg-queue-card__entry-actions {
+    margin-top: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.bjlg-queue-card__entry-actions .button-link-delete {
+    color: var(--wp-admin-theme-color-darker-20, #b32d2e);
+}
+
+.bjlg-queue-card__entry-actions .button[disabled],
+.bjlg-queue-card__entry-actions .button-link-delete[disabled] {
+    opacity: 0.6;
+    cursor: default;
+}
+
 .bjlg-queue-card__entry--empty {
     color: var(--bjlg-color-text-subtle);
     font-style: italic;

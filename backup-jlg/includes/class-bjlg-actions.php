@@ -20,6 +20,10 @@ class BJLG_Actions {
         add_action('wp_ajax_nopriv_bjlg_download', [$this, 'handle_download_request']);
         add_action('init', [$this, 'maybe_handle_public_download']);
         add_action('template_redirect', [$this, 'maybe_handle_public_download']);
+        add_action('wp_ajax_bjlg_notification_queue_retry', [$this, 'handle_notification_queue_retry']);
+        add_action('wp_ajax_bjlg_notification_queue_delete', [$this, 'handle_notification_queue_delete']);
+        add_action('wp_ajax_bjlg_remote_purge_retry', [$this, 'handle_remote_purge_retry']);
+        add_action('wp_ajax_bjlg_remote_purge_delete', [$this, 'handle_remote_purge_delete']);
     }
 
     /**
@@ -376,6 +380,122 @@ class BJLG_Actions {
         }
 
         return $filtered_ttl;
+    }
+
+    public function handle_notification_queue_retry() {
+        if (!\bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $entry_id = isset($_POST['entry_id']) ? sanitize_text_field(wp_unslash($_POST['entry_id'])) : '';
+
+        if ($entry_id === '') {
+            wp_send_json_error(['message' => __('Identifiant de notification manquant.', 'backup-jlg')], 400);
+        }
+
+        if (!BJLG_Notification_Queue::retry_entry($entry_id)) {
+            wp_send_json_error(['message' => __('Impossible de relancer cette notification.', 'backup-jlg')], 500);
+        }
+
+        $metrics = $this->get_dashboard_metrics_snapshot();
+
+        wp_send_json_success([
+            'message' => __('Notification reprogrammée. Un nouvel essai sera déclenché sous peu.', 'backup-jlg'),
+            'metrics' => $metrics,
+        ]);
+    }
+
+    public function handle_notification_queue_delete() {
+        if (!\bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $entry_id = isset($_POST['entry_id']) ? sanitize_text_field(wp_unslash($_POST['entry_id'])) : '';
+
+        if ($entry_id === '') {
+            wp_send_json_error(['message' => __('Identifiant de notification manquant.', 'backup-jlg')], 400);
+        }
+
+        if (!BJLG_Notification_Queue::delete_entry($entry_id)) {
+            wp_send_json_error(['message' => __('Impossible de retirer cette notification de la file.', 'backup-jlg')], 500);
+        }
+
+        $metrics = $this->get_dashboard_metrics_snapshot();
+
+        wp_send_json_success([
+            'message' => __('Notification retirée de la file.', 'backup-jlg'),
+            'metrics' => $metrics,
+        ]);
+    }
+
+    public function handle_remote_purge_retry() {
+        if (!\bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $file = isset($_POST['file']) ? sanitize_file_name(wp_unslash($_POST['file'])) : '';
+
+        if ($file === '') {
+            wp_send_json_error(['message' => __('Archive de purge invalide.', 'backup-jlg')], 400);
+        }
+
+        $incremental = new BJLG_Incremental();
+
+        if (!$incremental->retry_remote_purge_entry($file)) {
+            wp_send_json_error(['message' => __('Impossible de relancer cette purge distante.', 'backup-jlg')], 500);
+        }
+
+        wp_schedule_single_event(time() + 5, 'bjlg_process_remote_purge_queue');
+
+        $metrics = $this->get_dashboard_metrics_snapshot();
+
+        wp_send_json_success([
+            'message' => __('Purge distante reprogrammée. Les tentatives vont reprendre immédiatement.', 'backup-jlg'),
+            'metrics' => $metrics,
+        ]);
+    }
+
+    public function handle_remote_purge_delete() {
+        if (!\bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $file = isset($_POST['file']) ? sanitize_file_name(wp_unslash($_POST['file'])) : '';
+
+        if ($file === '') {
+            wp_send_json_error(['message' => __('Archive de purge invalide.', 'backup-jlg')], 400);
+        }
+
+        $incremental = new BJLG_Incremental();
+
+        if (!$incremental->delete_remote_purge_entry($file)) {
+            wp_send_json_error(['message' => __('Impossible de retirer cette purge distante.', 'backup-jlg')], 500);
+        }
+
+        $metrics = $this->get_dashboard_metrics_snapshot();
+
+        wp_send_json_success([
+            'message' => __('Purge distante retirée de la file.', 'backup-jlg'),
+            'metrics' => $metrics,
+        ]);
+    }
+
+    private function get_dashboard_metrics_snapshot() {
+        if (!class_exists(BJLG_Admin_Advanced::class)) {
+            return [];
+        }
+
+        $advanced = new BJLG_Admin_Advanced();
+
+        return $advanced->get_dashboard_metrics();
     }
 
     /**
