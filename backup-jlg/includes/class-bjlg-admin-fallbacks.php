@@ -359,6 +359,18 @@ class BJLG_Admin_Fallbacks {
             $type = 'info';
         }
 
+        $fallback_reason = '';
+        if (isset($_POST['bjlg_fallback_reason'])) {
+            $fallback_reason = sanitize_key((string) wp_unslash($_POST['bjlg_fallback_reason']));
+        }
+
+        if ($fallback_reason !== '') {
+            $fallback_notice = $this->describe_fallback_reason($fallback_reason);
+            if ($fallback_notice !== '') {
+                $message = trim($message . ' ' . $fallback_notice);
+            }
+        }
+
         $redirect = isset($_POST['redirect_to']) ? esc_url_raw(wp_unslash($_POST['redirect_to'])) : '';
         if ($redirect === '') {
             $redirect = admin_url('admin.php?page=backup-jlg');
@@ -371,5 +383,18 @@ class BJLG_Admin_Fallbacks {
 
         wp_safe_redirect($url);
         exit;
+    }
+
+    private function describe_fallback_reason($reason) {
+        $messages = [
+            'ajax_transport_error' => __('Le mode sécurisé a pris le relais après un échec de communication JavaScript.', 'backup-jlg'),
+            'ajax_launch_incomplete' => __('Le lancement JavaScript n’a pas abouti ; un relais serveur a été déclenché.', 'backup-jlg'),
+            'ajax_upload_transport' => __('Téléversement interrompu côté navigateur. Le traitement se poursuit côté serveur.', 'backup-jlg'),
+            'ajax_upload_incomplete' => __('La réponse AJAX est incomplète ; bascule sur le traitement serveur.', 'backup-jlg'),
+            'ajax_restore_incomplete' => __('La restauration a été reprise via la voie serveur suite à une erreur JS.', 'backup-jlg'),
+            'ajax_restore_transport' => __('La communication AJAX a échoué. Passage en mode restauration sécurisé.', 'backup-jlg'),
+        ];
+
+        return isset($messages[$reason]) ? $messages[$reason] : '';
     }
 }

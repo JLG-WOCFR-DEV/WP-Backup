@@ -261,6 +261,7 @@ class BJLG_Admin {
 
             <div class="bjlg-tab-content" data-active-tab="<?php echo esc_attr($active_tab); ?>">
                 <?php $this->render_dashboard_overview($metrics); ?>
+                <?php $tab_modules_map = $this->get_tab_module_mapping(); ?>
                 <?php foreach ($tabs as $tab_key => $tab_label):
                     $tab_slug = sanitize_key($tab_key);
 
@@ -273,6 +274,9 @@ class BJLG_Admin {
                     $is_active = ($active_tab === $tab_key);
                     $panel_hidden_attr = $is_active ? '' : ' hidden';
                     $panel_aria_hidden = $is_active ? 'false' : 'true';
+                    $panel_modules = isset($tab_modules_map[$tab_key]) ? (array) $tab_modules_map[$tab_key] : [];
+                    $panel_modules = array_filter(array_map('sanitize_key', $panel_modules));
+                    $panel_modules_attr = $panel_modules ? ' data-bjlg-modules="' . esc_attr(implode(' ', array_unique($panel_modules))) . '"' : '';
                     ?>
                     <section class="bjlg-tab-panel"
                              data-tab="<?php echo esc_attr($tab_key); ?>"
@@ -280,7 +284,7 @@ class BJLG_Admin {
                              role="tabpanel"
                              aria-labelledby="<?php echo esc_attr($tab_id); ?>"
                              aria-hidden="<?php echo esc_attr($panel_aria_hidden); ?>"
-                             tabindex="0"<?php echo $panel_hidden_attr; ?>>
+                             tabindex="0"<?php echo $panel_hidden_attr . $panel_modules_attr; ?>>
                         <?php $this->render_tab_panel($tab_key, $active_tab); ?>
                     </section>
                 <?php endforeach; ?>
@@ -337,6 +341,17 @@ class BJLG_Admin {
             'api' => function () {
                 $this->render_api_section();
             },
+        ];
+    }
+
+    private function get_tab_module_mapping() {
+        return [
+            'backup_restore' => ['dashboard', 'backup'],
+            'scheduling' => ['scheduling'],
+            'history' => ['backup'],
+            'settings' => ['settings'],
+            'logs' => ['logs'],
+            'api' => ['api'],
         ];
     }
 
@@ -1050,8 +1065,7 @@ class BJLG_Admin {
                     <section class="bjlg-backup-step"
                              id="bjlg-backup-step-2"
                              data-step-index="2"
-                             aria-labelledby="bjlg-backup-step-2-title"
-                             hidden>
+                             aria-labelledby="bjlg-backup-step-2-title">
                         <h3 id="bjlg-backup-step-2-title">Étape 2 — Options avancées</h3>
                         <p>Ajustez précisément les dossiers inclus, les vérifications post-sauvegarde et les destinations secondaires.</p>
                         <table class="form-table bjlg-advanced-table">
@@ -1225,8 +1239,7 @@ class BJLG_Admin {
                     <section class="bjlg-backup-step"
                              id="bjlg-backup-step-3"
                              data-step-index="3"
-                             aria-labelledby="bjlg-backup-step-3-title"
-                             hidden>
+                             aria-labelledby="bjlg-backup-step-3-title">
                         <h3 id="bjlg-backup-step-3-title">Étape 3 — Confirmation</h3>
                         <p>Revérifiez votre configuration avant de lancer la sauvegarde.</p>
                         <div class="bjlg-backup-summary" data-role="backup-summary">

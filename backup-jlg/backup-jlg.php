@@ -307,12 +307,31 @@ final class BJLG_Plugin {
         $chart_asset_version = file_exists($chart_asset_path) ? filemtime($chart_asset_path) : '4.4.4';
         $chart_asset_url = BJLG_PLUGIN_URL . 'assets/js/vendor/chart.umd.min.js';
 
-        $advanced_asset_path = BJLG_PLUGIN_DIR . 'assets/js/admin-advanced.js';
-        $advanced_asset_url = BJLG_PLUGIN_URL . 'assets/js/admin-advanced.js';
-        $advanced_asset_version = file_exists($advanced_asset_path) ? filemtime($advanced_asset_path) : BJLG_VERSION;
+        $module_files = [
+            'advanced' => 'assets/js/admin-advanced.js',
+            'dashboard' => 'assets/js/admin-dashboard.js',
+            'backup' => 'assets/js/admin-backup.js',
+            'scheduling' => 'assets/js/admin-scheduling.js',
+            'settings' => 'assets/js/admin-settings.js',
+            'logs' => 'assets/js/admin-logs.js',
+            'api' => 'assets/js/admin-api.js',
+        ];
 
-        $module_urls = [
-            'advanced' => esc_url_raw(add_query_arg('ver', $advanced_asset_version, $advanced_asset_url)),
+        $module_urls = [];
+        foreach ($module_files as $module_key => $relative_path) {
+            $absolute_path = BJLG_PLUGIN_DIR . $relative_path;
+            $absolute_url = BJLG_PLUGIN_URL . $relative_path;
+            $version = file_exists($absolute_path) ? filemtime($absolute_path) : BJLG_VERSION;
+            $module_urls[$module_key] = esc_url_raw(add_query_arg('ver', $version, $absolute_url));
+        }
+
+        $tab_modules = [
+            'backup_restore' => ['dashboard', 'backup'],
+            'scheduling' => ['scheduling'],
+            'history' => ['backup'],
+            'settings' => ['settings'],
+            'logs' => ['logs'],
+            'api' => ['api'],
         ];
 
         wp_enqueue_script('bjlg-admin', BJLG_PLUGIN_URL . 'assets/js/admin.js', ['jquery', 'wp-a11y', 'wp-i18n'], BJLG_VERSION, true);
@@ -332,6 +351,7 @@ final class BJLG_Plugin {
             'active_tab' => $active_tab,
             'chart_url' => esc_url_raw(add_query_arg('ver', $chart_asset_version, $chart_asset_url)),
             'modules' => $module_urls,
+            'tab_modules' => $tab_modules,
         ]);
     }
 

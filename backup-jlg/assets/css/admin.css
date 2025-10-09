@@ -1337,6 +1337,14 @@ border-color: #d1d5db;
     display: block;
 }
 
+.bjlg-backup-steps[data-enhanced="true"] .bjlg-backup-step {
+    display: none;
+}
+
+.bjlg-backup-steps[data-enhanced="true"] .bjlg-backup-step:not([hidden]) {
+    display: block;
+}
+
 .bjlg-backup-step__actions {
     display: flex;
     flex-wrap: wrap;
