@@ -75,7 +75,11 @@ if (!function_exists('bjlg_get_capability_map')) {
 
         $legacy_permission = get_option('bjlg_required_capability', '');
         if (is_string($legacy_permission) && $legacy_permission !== '') {
-            $defaults['manage_plugin'] = sanitize_text_field($legacy_permission);
+            $legacy_permission = sanitize_text_field($legacy_permission);
+
+            foreach (array_keys($defaults) as $context) {
+                $defaults[$context] = $legacy_permission;
+            }
         }
 
         $stored = get_option('bjlg_capability_map', []);
