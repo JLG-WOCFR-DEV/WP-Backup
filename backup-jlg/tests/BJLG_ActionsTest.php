@@ -42,10 +42,13 @@ namespace {
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/../includes/class-bjlg-notification-queue.php';
+require_once __DIR__ . '/../includes/class-bjlg-incremental.php';
 require_once __DIR__ . '/../includes/class-bjlg-actions.php';
 
 final class BJLG_ActionsTest extends TestCase
 {
+    private string $manifestPath;
     protected function setUp(): void
     {
         $GLOBALS['bjlg_test_current_user_can'] = true;
@@ -56,6 +59,44 @@ final class BJLG_ActionsTest extends TestCase
         $_POST = [];
         $_REQUEST = [];
         $_GET = [];
+        $this->manifestPath = BJLG_BACKUP_DIR . '.incremental-manifest.json';
+        if (file_exists($this->manifestPath)) {
+            @unlink($this->manifestPath);
+        }
+    }
+
+    protected function tearDown(): void
+    {
+        parent::tearDown();
+        if (isset($this->manifestPath) && file_exists($this->manifestPath)) {
+            @unlink($this->manifestPath);
+        }
+    }
+
+    private function seedRemotePurgeManifest(string $file): void
+    {
+        $incremental = new BJLG\BJLG_Incremental();
+        $reflection = new \ReflectionClass(BJLG\BJLG_Incremental::class);
+        $property = $reflection->getProperty('last_backup_data');
+        $property->setAccessible(true);
+        $data = $property->getValue($incremental);
+        $data['remote_purge_queue'] = [[
+            'file' => $file,
+            'destinations' => ['s3'],
+            'status' => 'failed',
+            'registered_at' => time() - 300,
+            'attempts' => 2,
+            'last_attempt_at' => time() - 60,
+            'next_attempt_at' => time() + 600,
+            'last_error' => 'error',
+            'errors' => ['error'],
+            'failed_at' => time() - 30,
+        ]];
+        $property->setValue($incremental, $data);
+
+        $save = $reflection->getMethod('save_manifest');
+        $save->setAccessible(true);
+        $this->assertTrue($save->invoke($incremental));
     }
 
     public function test_handle_delete_backup_denies_user_without_capability(): void
@@ -280,6 +321,138 @@ final class BJLG_ActionsTest extends TestCase
             $this->assertSame(['message' => 'Répertoire de sauvegarde introuvable.'], $exception->data);
             $this->assertSame(500, $exception->status_code);
         }
+    }
+
+    public function test_handle_notification_queue_retry_succeeds(): void
+    {
+        $actions = new BJLG\BJLG_Actions();
+
+        update_option('bjlg_notification_queue', [
+            [
+                'id' => 'ajax-entry',
+                'event' => 'backup_failed',
+                'title' => 'Failure',
+                'subject' => 'Subject',
+                'lines' => ['Failure'],
+                'body' => 'Body',
+                'context' => [],
+                'next_attempt_at' => time() + 600,
+                'channels' => [
+                    'email' => [
+                        'enabled' => true,
+                        'status' => 'failed',
+                        'attempts' => 2,
+                        'recipients' => ['admin@example.com'],
+                        'last_error' => 'error',
+                        'next_attempt_at' => time() + 600,
+                    ],
+                ],
+            ],
+        ]);
+
+        $_POST = [
+            'nonce' => 'test-nonce',
+            'entry_id' => 'ajax-entry',
+        ];
+
+        try {
+            $actions->handle_notification_queue_retry();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+        } finally {
+            $_POST = [];
+        }
+
+        $queue = get_option('bjlg_notification_queue');
+        $this->assertSame('pending', $queue[0]['channels']['email']['status']);
+    }
+
+    public function test_handle_notification_queue_delete_succeeds(): void
+    {
+        $actions = new BJLG\BJLG_Actions();
+        update_option('bjlg_notification_queue', [
+            [
+                'id' => 'ajax-delete',
+                'event' => 'backup_complete',
+                'title' => 'Complete',
+                'subject' => 'Subject',
+                'lines' => ['Complete'],
+                'body' => 'Body',
+                'context' => [],
+                'channels' => [
+                    'email' => [
+                        'enabled' => true,
+                        'status' => 'completed',
+                        'attempts' => 1,
+                        'recipients' => ['user@example.com'],
+                    ],
+                ],
+            ],
+        ]);
+
+        $_POST = [
+            'nonce' => 'test-nonce',
+            'entry_id' => 'ajax-delete',
+        ];
+
+        try {
+            $actions->handle_notification_queue_delete();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+        } finally {
+            $_POST = [];
+        }
+
+        $queue = get_option('bjlg_notification_queue');
+        $this->assertSame([], $queue);
+    }
+
+    public function test_handle_remote_purge_retry_succeeds(): void
+    {
+        $this->seedRemotePurgeManifest('ajax-remote.zip');
+        $actions = new BJLG\BJLG_Actions();
+
+        $_POST = [
+            'nonce' => 'test-nonce',
+            'file' => 'ajax-remote.zip',
+        ];
+
+        try {
+            $actions->handle_remote_purge_retry();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+        } finally {
+            $_POST = [];
+        }
+
+        $queue = (new BJLG\BJLG_Incremental())->get_remote_purge_queue();
+        $this->assertSame('pending', $queue[0]['status']);
+    }
+
+    public function test_handle_remote_purge_delete_succeeds(): void
+    {
+        $this->seedRemotePurgeManifest('ajax-delete.zip');
+        $actions = new BJLG\BJLG_Actions();
+
+        $_POST = [
+            'nonce' => 'test-nonce',
+            'file' => 'ajax-delete.zip',
+        ];
+
+        try {
+            $actions->handle_remote_purge_delete();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertIsArray($response->data);
+        } finally {
+            $_POST = [];
+        }
+
+        $queue = (new BJLG\BJLG_Incremental())->get_remote_purge_queue();
+        $this->assertSame([], $queue);
     }
 
     public function test_validate_download_token_restores_user_context(): void

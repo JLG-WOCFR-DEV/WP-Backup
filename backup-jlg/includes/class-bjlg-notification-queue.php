@@ -187,6 +187,120 @@ class BJLG_Notification_Queue {
         return $snapshot;
     }
 
+    /**
+     * Resets a queue entry so it can be retried immediately.
+     *
+     * @param string $entry_id
+     */
+    public static function retry_entry($entry_id) {
+        $entry_id = is_string($entry_id) ? trim($entry_id) : '';
+        if ($entry_id === '') {
+            return false;
+        }
+
+        $queue = self::get_queue();
+        $now = time();
+        $updated = false;
+        $retried_entry = null;
+
+        foreach ($queue as &$entry) {
+            if (!is_array($entry) || !isset($entry['id']) || (string) $entry['id'] !== $entry_id) {
+                continue;
+            }
+
+            if (empty($entry['channels']) || !is_array($entry['channels'])) {
+                break;
+            }
+
+            foreach ($entry['channels'] as $channel_key => &$channel) {
+                if (!is_array($channel)) {
+                    continue;
+                }
+
+                if (empty($channel['enabled'])) {
+                    continue;
+                }
+
+                $channel['status'] = 'pending';
+                $channel['attempts'] = 0;
+                unset($channel['next_attempt_at'], $channel['last_error'], $channel['last_error_at'], $channel['failed_at'], $channel['completed_at']);
+            }
+            unset($channel);
+
+            $entry['next_attempt_at'] = $now;
+            $entry['last_attempt_at'] = 0;
+            $entry['updated_at'] = $now;
+            $entry['last_error'] = '';
+
+            $retried_entry = $entry;
+            $updated = true;
+            break;
+        }
+        unset($entry);
+
+        if (!$updated) {
+            return false;
+        }
+
+        self::save_queue($queue);
+        wp_schedule_single_event(time() + 5, self::HOOK);
+
+        if ($retried_entry !== null) {
+            /**
+             * Fires after a notification queue entry has been reset for retry.
+             *
+             * @param array<string,mixed> $retried_entry
+             */
+            do_action('bjlg_notification_queue_entry_retried', $retried_entry);
+        }
+
+        return true;
+    }
+
+    /**
+     * Removes an entry from the notification queue.
+     *
+     * @param string $entry_id
+     */
+    public static function delete_entry($entry_id) {
+        $entry_id = is_string($entry_id) ? trim($entry_id) : '';
+        if ($entry_id === '') {
+            return false;
+        }
+
+        $queue = self::get_queue();
+        $updated_queue = [];
+        $removed_entry = null;
+
+        foreach ($queue as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            if (isset($entry['id']) && (string) $entry['id'] === $entry_id) {
+                $removed_entry = $entry;
+                continue;
+            }
+
+            $updated_queue[] = $entry;
+        }
+
+        if ($removed_entry === null) {
+            return false;
+        }
+
+        self::save_queue($updated_queue);
+
+        /**
+         * Fires after a notification queue entry has been deleted.
+         *
+         * @param array<string,mixed> $removed_entry
+         */
+        do_action('bjlg_notification_queue_entry_deleted', $removed_entry);
+
+        return true;
+    }
+
     private static function min_time_value($current, $candidate) {
         $candidate = (int) $candidate;
         if ($candidate <= 0) {

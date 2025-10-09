@@ -32,6 +32,22 @@ jQuery(function($) {
         return format;
     };
 
+    const _n = function(singular, plural, number) {
+        if (i18n && typeof i18n._n === 'function') {
+            return i18n._n(singular, plural, number, 'backup-jlg');
+        }
+        return number === 1 ? singular : plural;
+    };
+
+    const ajaxData = window.bjlg_ajax || {};
+
+    const queueActionMap = {
+        'retry-notification': { action: 'bjlg_notification_queue_retry', param: 'entry_id' },
+        'clear-notification': { action: 'bjlg_notification_queue_delete', param: 'entry_id' },
+        'retry-remote-purge': { action: 'bjlg_remote_purge_retry', param: 'file' },
+        'clear-remote-purge': { action: 'bjlg_remote_purge_delete', param: 'file' }
+    };
+
     const announce = function(message, priority) {
         if (!message) {
             return;
@@ -199,6 +215,147 @@ jQuery(function($) {
             $restoreCard.removeClass('bjlg-action-card--disabled');
             $restoreButton.removeClass('disabled').removeAttr('aria-disabled').removeAttr('tabindex');
         }
+    };
+
+    const updateQueues = function(queues) {
+        const $section = $overview.find('.bjlg-queues');
+        if (!$section.length || !queues || typeof queues !== 'object') {
+            return;
+        }
+
+        Object.keys(queues).forEach(function(key) {
+            if (!Object.prototype.hasOwnProperty.call(queues, key)) {
+                return;
+            }
+
+            const queue = queues[key] || {};
+            const $card = $section.find('.bjlg-queue-card[data-queue="' + key + '"]');
+            if (!$card.length) {
+                return;
+            }
+
+            const total = Number(queue.total || 0);
+            const totalLabel = sprintf(_n('%s entrée', '%s entrées', total), formatNumber(total));
+            $card.find('[data-field="total"]').text(totalLabel);
+
+            const counts = queue.status_counts || {};
+            const pending = Number(counts.pending || 0);
+            const retry = Number(counts.retry || 0);
+            const failed = Number(counts.failed || 0);
+            const countsText = sprintf(__('En attente : %1$s • Nouvel essai : %2$s • Échecs : %3$s', 'backup-jlg'), formatNumber(pending), formatNumber(retry), formatNumber(failed));
+            $card.find('[data-field="status-counts"]').text(countsText);
+
+            const $nextField = $card.find('[data-field="next"]');
+            if (queue.next_attempt_relative) {
+                $nextField.text(sprintf(__('Prochain passage %s', 'backup-jlg'), queue.next_attempt_relative));
+            } else {
+                $nextField.text(__('Aucun traitement planifié.', 'backup-jlg'));
+            }
+
+            const $oldestField = $card.find('[data-field="oldest"]');
+            if (queue.oldest_entry_relative) {
+                $oldestField.text(sprintf(__('Entrée la plus ancienne %s', 'backup-jlg'), queue.oldest_entry_relative));
+            } else {
+                $oldestField.text('');
+            }
+
+            const $entries = $card.find('[data-role="entries"]');
+            if (!$entries.length) {
+                return;
+            }
+
+            $entries.empty();
+
+            const entries = Array.isArray(queue.entries) ? queue.entries : [];
+            if (!entries.length) {
+                $('<li/>', {
+                    'class': 'bjlg-queue-card__entry bjlg-queue-card__entry--empty',
+                    text: __('Aucune entrée en attente.', 'backup-jlg')
+                }).appendTo($entries);
+                return;
+            }
+
+            entries.forEach(function(entry) {
+                if (!entry || typeof entry !== 'object') {
+                    return;
+                }
+
+                const $entry = $('<li/>', { 'class': 'bjlg-queue-card__entry' });
+                if (entry.id) {
+                    $entry.attr('data-entry-id', entry.id);
+                }
+                if (entry.file) {
+                    $entry.attr('data-entry-file', entry.file);
+                }
+
+                const $header = $('<div/>', { 'class': 'bjlg-queue-card__entry-header' }).appendTo($entry);
+                $('<span/>', { 'class': 'bjlg-queue-card__entry-title', text: entry.title || '' }).appendTo($header);
+
+                if (entry.status_label) {
+                    $('<span/>', {
+                        'class': 'bjlg-queue-card__entry-status bjlg-queue-card__entry-status--' + (entry.status_intent || 'info'),
+                        text: entry.status_label
+                    }).appendTo($header);
+                }
+
+                const $meta = $('<p/>', { 'class': 'bjlg-queue-card__entry-meta' }).appendTo($entry);
+                if (entry.attempt_label) {
+                    $('<span/>', { text: entry.attempt_label }).appendTo($meta);
+                }
+                if (entry.next_attempt_relative) {
+                    $('<span/>', { text: sprintf(__('Prochaine tentative %s', 'backup-jlg'), entry.next_attempt_relative) }).appendTo($meta);
+                }
+                if (entry.created_relative) {
+                    $('<span/>', { text: sprintf(__('Ajouté %s', 'backup-jlg'), entry.created_relative) }).appendTo($meta);
+                }
+
+                if (entry.details && entry.details.destinations) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-meta',
+                        text: sprintf(__('Destinations : %s', 'backup-jlg'), entry.details.destinations)
+                    }).appendTo($entry);
+                }
+
+                if (entry.message) {
+                    $('<p/>', { 'class': 'bjlg-queue-card__entry-message', text: entry.message }).appendTo($entry);
+                }
+
+                const $actions = $('<div/>', { 'class': 'bjlg-queue-card__entry-actions' }).appendTo($entry);
+                if (key === 'notifications' && entry.id) {
+                    $('<button/>', {
+                        type: 'button',
+                        'class': 'button button-secondary button-small',
+                        'data-queue-action': 'retry-notification',
+                        'data-entry-id': entry.id,
+                        text: __('Relancer', 'backup-jlg')
+                    }).appendTo($actions);
+                    $('<button/>', {
+                        type: 'button',
+                        'class': 'button button-link-delete',
+                        'data-queue-action': 'clear-notification',
+                        'data-entry-id': entry.id,
+                        text: __('Ignorer', 'backup-jlg')
+                    }).appendTo($actions);
+                } else if (key === 'remote_purge' && entry.file) {
+                    $('<button/>', {
+                        type: 'button',
+                        'class': 'button button-secondary button-small',
+                        'data-queue-action': 'retry-remote-purge',
+                        'data-file': entry.file,
+                        text: __('Relancer la purge', 'backup-jlg')
+                    }).appendTo($actions);
+                    $('<button/>', {
+                        type: 'button',
+                        'class': 'button button-link-delete',
+                        'data-queue-action': 'clear-remote-purge',
+                        'data-file': entry.file,
+                        text: __('Retirer de la file', 'backup-jlg')
+                    }).appendTo($actions);
+                }
+
+                $entries.append($entry);
+            });
+        });
     };
 
     const updateAlerts = function(alerts) {
@@ -541,10 +698,76 @@ jQuery(function($) {
             });
     };
 
+    $overview.on('click', '[data-queue-action]', function(event) {
+        event.preventDefault();
+
+        const $button = $(this);
+        const actionKey = $button.data('queueAction');
+        const config = queueActionMap[actionKey];
+
+        if (!config) {
+            return;
+        }
+
+        if (!$overview.length || !ajaxData.ajax_url || !ajaxData.nonce) {
+            announce(__('Impossible de contacter le serveur. Rechargez la page.', 'backup-jlg'), 'assertive');
+            return;
+        }
+
+        if ($button.prop('disabled')) {
+            return;
+        }
+
+        const value = $button.data(config.param);
+        if (!value) {
+            announce(__('Action impossible : données manquantes.', 'backup-jlg'), 'assertive');
+            return;
+        }
+
+        const payload = {
+            action: config.action,
+            nonce: ajaxData.nonce
+        };
+        payload[config.param] = value;
+
+        $button.prop('disabled', true).attr('aria-busy', 'true');
+
+        $.ajax({
+            url: ajaxData.ajax_url,
+            method: 'POST',
+            data: payload
+        })
+            .done(function(response) {
+                if (response && response.success) {
+                    const message = response.data && response.data.message
+                        ? response.data.message
+                        : __('Action effectuée.', 'backup-jlg');
+                    announce(message, 'assertive');
+
+                    if (response.data && response.data.metrics && window.bjlgDashboard && typeof window.bjlgDashboard.updateMetrics === 'function') {
+                        window.bjlgDashboard.updateMetrics(response.data.metrics);
+                    }
+                } else {
+                    const errorMessage = response && response.data && response.data.message
+                        ? response.data.message
+                        : __('Impossible de traiter la demande.', 'backup-jlg');
+                    announce(errorMessage, 'assertive');
+                }
+            })
+            .fail(function() {
+                const errorMessage = __('Erreur de communication avec le serveur.', 'backup-jlg');
+                announce(errorMessage, 'assertive');
+            })
+            .always(function() {
+                $button.prop('disabled', false).removeAttr('aria-busy');
+            });
+    });
+
     updateSummary(state.metrics.summary || {});
     updateAlerts(state.metrics.alerts || []);
     updateOnboarding(state.metrics.onboarding || []);
     updateActions(state.metrics);
+    updateQueues(state.metrics.queues || {});
     updateCharts();
 
     lastAnnouncement = buildAnnouncement(state.metrics);
@@ -561,6 +784,7 @@ jQuery(function($) {
         updateAlerts(state.metrics.alerts || []);
         updateOnboarding(state.metrics.onboarding || []);
         updateActions(state.metrics);
+        updateQueues(state.metrics.queues || {});
         updateCharts();
 
         const announcement = buildAnnouncement(state.metrics);

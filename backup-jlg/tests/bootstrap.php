@@ -37,6 +37,26 @@ if (!function_exists('trailingslashit')) {
     }
 }
 
+if (!defined('BJLG_PLUGIN_FILE')) {
+    define('BJLG_PLUGIN_FILE', __DIR__ . '/../backup-jlg.php');
+}
+
+if (!defined('BJLG_PLUGIN_DIR')) {
+    define('BJLG_PLUGIN_DIR', trailingslashit(dirname(BJLG_PLUGIN_FILE)));
+}
+
+if (!defined('BJLG_PLUGIN_BASENAME')) {
+    define('BJLG_PLUGIN_BASENAME', plugin_basename(BJLG_PLUGIN_FILE));
+}
+
+if (!defined('BJLG_PLUGIN_URL')) {
+    define('BJLG_PLUGIN_URL', trailingslashit(plugin_dir_url(BJLG_PLUGIN_FILE)));
+}
+
+if (!defined('BJLG_VERSION')) {
+    define('BJLG_VERSION', 'tests');
+}
+
 if (!function_exists('register_activation_hook')) {
     function register_activation_hook($file, $callback) {
         if (!isset($GLOBALS['bjlg_test_hooks']['activation'])) {
@@ -228,6 +248,12 @@ if (!function_exists('esc_html')) {
     }
 }
 
+if (!function_exists('esc_html__')) {
+    function esc_html__($text, $domain = 'default') {
+        return esc_html(__($text, $domain));
+    }
+}
+
 if (!function_exists('esc_html_e')) {
     function esc_html_e($text, $domain = 'default') {
         echo esc_html($text);
@@ -237,6 +263,12 @@ if (!function_exists('esc_html_e')) {
 if (!function_exists('esc_attr')) {
     function esc_attr($text) {
         return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
+    }
+}
+
+if (!function_exists('esc_attr_e')) {
+    function esc_attr_e($text, $domain = 'default') {
+        echo esc_attr__($text, $domain);
     }
 }
 
@@ -622,6 +654,12 @@ if (!function_exists('__')) {
     }
 }
 
+if (!function_exists('esc_attr__')) {
+    function esc_attr__($text, $domain = 'default') {
+        return esc_attr(__($text, $domain));
+    }
+}
+
 if (!class_exists('BJLG_Debug') && class_exists('BJLG\\BJLG_Debug')) {
     class_alias('BJLG\\BJLG_Debug', 'BJLG_Debug');
 }
@@ -789,6 +827,43 @@ if (!function_exists('apply_filters')) {
         }
 
         return $all_args[0];
+    }
+}
+
+if (!function_exists('wp_create_nonce')) {
+    function wp_create_nonce($action = -1) {
+        $action = (string) $action;
+        $nonce = substr(hash('sha256', 'bjlg-test-nonce-' . $action), 0, 12);
+
+        $GLOBALS['bjlg_test_nonces'][$action] = $nonce;
+
+        return $nonce;
+    }
+}
+
+if (!function_exists('wp_verify_nonce')) {
+    function wp_verify_nonce($nonce, $action = -1) {
+        $action = (string) $action;
+        $expected = $GLOBALS['bjlg_test_nonces'][$action] ?? substr(hash('sha256', 'bjlg-test-nonce-' . $action), 0, 12);
+
+        return hash_equals((string) $expected, (string) $nonce);
+    }
+}
+
+if (!function_exists('wp_nonce_field')) {
+    function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo = true) {
+        $field = '<input type="hidden" name="' . esc_attr($name) . '" value="' . esc_attr(wp_create_nonce($action)) . '" />';
+
+        if ($referer) {
+            $referer_value = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '';
+            $field .= '<input type="hidden" name="_wp_http_referer" value="' . esc_attr($referer_value) . '" />';
+        }
+
+        if ($echo) {
+            echo $field;
+        }
+
+        return $field;
     }
 }
 

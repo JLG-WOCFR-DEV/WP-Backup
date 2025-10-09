@@ -797,8 +797,6 @@ class BJLG_Scheduler {
      */
     public function get_schedule_stats() {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'bjlg_history';
-
         $stats = [
             'total_scheduled' => 0,
             'successful' => 0,
@@ -807,7 +805,13 @@ class BJLG_Scheduler {
             'last_run' => null,
             'average_duration' => 0
         ];
-        
+
+        if (!is_object($wpdb) || !isset($wpdb->prefix) || !method_exists($wpdb, 'get_var')) {
+            return $stats;
+        }
+
+        $table_name = $wpdb->prefix . 'bjlg_history';
+
         // Total des sauvegardes planifiées
         $stats['total_scheduled'] = $wpdb->get_var(
             "SELECT COUNT(*) FROM $table_name WHERE action_type = 'scheduled_backup'"
@@ -828,16 +832,20 @@ class BJLG_Scheduler {
         if ($stats['total_scheduled'] > 0) {
             $stats['success_rate'] = round(($stats['successful'] / $stats['total_scheduled']) * 100, 2);
         }
-        
+
         // Dernière exécution
-        $last_run = $wpdb->get_row(
-            "SELECT * FROM $table_name 
-             WHERE action_type = 'scheduled_backup' 
-             ORDER BY timestamp DESC 
-             LIMIT 1",
-            ARRAY_A
-        );
-        
+        $last_run = null;
+
+        if (method_exists($wpdb, 'get_row')) {
+            $last_run = $wpdb->get_row(
+                "SELECT * FROM $table_name
+                 WHERE action_type = 'scheduled_backup'
+                 ORDER BY timestamp DESC
+                 LIMIT 1",
+                ARRAY_A
+            );
+        }
+
         if ($last_run) {
             $stats['last_run'] = $last_run['timestamp'];
         }

@@ -84,7 +84,7 @@ class BJLG_Incremental {
 
         $required_keys = ['full_backup', 'incremental_backups', 'synthetic_full', 'file_hashes', 'database_checksums', 'remote_purge_queue'];
         foreach ($required_keys as $key) {
-            if (!isset($this->last_backup_data[$key])) {
+            if (!is_array($this->last_backup_data) || !array_key_exists($key, $this->last_backup_data)) {
                 return false;
             }
         }
@@ -526,6 +526,89 @@ class BJLG_Incremental {
         }
 
         return $modified;
+    }
+
+    /**
+     * Relance immédiatement une entrée de purge distante en échec.
+     */
+    public function retry_remote_purge_entry($file) {
+        $file = basename((string) $file);
+        if ($file === '') {
+            return false;
+        }
+
+        $modified = false;
+        $now = time();
+
+        foreach ($this->last_backup_data['remote_purge_queue'] as &$entry) {
+            if (!is_array($entry) || !isset($entry['file']) || $entry['file'] !== $file) {
+                continue;
+            }
+
+            $entry['status'] = 'pending';
+            $entry['attempts'] = 0;
+            $entry['last_attempt_at'] = 0;
+            $entry['next_attempt_at'] = $now;
+            $entry['failed_at'] = 0;
+            $entry['errors'] = [];
+            $entry['last_error'] = '';
+
+            $modified = true;
+            break;
+        }
+        unset($entry);
+
+        if (!$modified) {
+            return false;
+        }
+
+        if ($this->save_manifest() && class_exists(BJLG_Debug::class)) {
+            BJLG_Debug::log(sprintf('Relance manuelle de la purge distante pour %s.', $file));
+        }
+
+        if (function_exists('do_action')) {
+            do_action('bjlg_remote_purge_entry_retried', $file);
+        }
+
+        return true;
+    }
+
+    /**
+     * Supprime une entrée de purge distante.
+     */
+    public function delete_remote_purge_entry($file) {
+        $file = basename((string) $file);
+        if ($file === '') {
+            return false;
+        }
+
+        $modified = false;
+
+        foreach ($this->last_backup_data['remote_purge_queue'] as $index => $entry) {
+            if (!is_array($entry) || !isset($entry['file']) || $entry['file'] !== $file) {
+                continue;
+            }
+
+            unset($this->last_backup_data['remote_purge_queue'][$index]);
+            $modified = true;
+            break;
+        }
+
+        if (!$modified) {
+            return false;
+        }
+
+        $this->last_backup_data['remote_purge_queue'] = array_values($this->last_backup_data['remote_purge_queue']);
+
+        if ($this->save_manifest() && class_exists(BJLG_Debug::class)) {
+            BJLG_Debug::log(sprintf('Entrée de purge distante supprimée pour %s.', $file));
+        }
+
+        if (function_exists('do_action')) {
+            do_action('bjlg_remote_purge_entry_deleted', $file);
+        }
+
+        return true;
     }
     
     /**

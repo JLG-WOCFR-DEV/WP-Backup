@@ -528,6 +528,7 @@ class BJLG_Settings {
                 'notify_backup_failed',
                 'notify_cleanup_complete',
                 'notify_storage_warning',
+                'notify_remote_purge_failed',
                 'channel_email',
                 'channel_slack',
                 'slack_webhook_url',
@@ -555,6 +556,7 @@ class BJLG_Settings {
                     'backup_failed' => 'notify_backup_failed',
                     'cleanup_complete' => 'notify_cleanup_complete',
                     'storage_warning' => 'notify_storage_warning',
+                    'remote_purge_failed' => 'notify_remote_purge_failed',
                 ];
                 foreach ($event_map as $event_key => $field_name) {
                     if (array_key_exists($field_name, $_POST)) {
