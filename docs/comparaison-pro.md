@@ -95,7 +95,32 @@ Ce document positionne Backup JLG face aux offres haut de gamme (UpdraftPlus Pr
 - **Couleurs non testées** : les alertes et cartes reposent sur des contrastes pastel personnalisés sans référence aux palettes WordPress, risquant un contraste insuffisant en mode sombre ou daltonien. Utiliser les variables CSS `--wp-admin-theme-color` et proposer un mode haute visibilité améliorerait l’AA.【F:backup-jlg/assets/css/admin.css†L35-L118】【F:backup-jlg/assets/css/block-status.css†L1-L78】
 - **Focus management** : après une action (ex. création de preset), le script injecte du contenu mais ne renvoie pas le focus sur le message de succès, obligeant la navigation clavier à repartir du début. Implémenter `focus()` ciblé ou des annonces `wp.a11y.speak()` suivrait les pratiques pro.【F:backup-jlg/assets/js/admin.js†L205-L318】
 
+### Organisation « mode simple / mode expert »
+
+- **Progression non mémorisée** : le parcours de sauvegarde sépare bien une étape « Choix rapides » (cases à cocher essentielles) d’un second écran « Options avancées », mais il ne conserve pas la préférence d’un utilisateur pour rester en mode simplifié ou expert, contrairement aux consoles pro qui mémorisent le dernier profil chargé.【F:backup-jlg/includes/class-bjlg-admin.php†L1120-L1225】
+- **Densité des panneaux avancés** : l’étape 2 empile filtres personnalisés, vérifications post-sauvegarde et destinations secondaires dans le même accordéon, sans résumé d’impact ni métriques (temps estimé, dépendances) comme chez BlogVault ou ManageWP.【F:backup-jlg/includes/class-bjlg-admin.php†L1226-L1336】
+- **Absence de bascule globale** : aucune option n’expose un commutateur explicite « Afficher les options expertes » sur le tableau de bord ; tout utilisateur arrive sur le wizard complet, ce qui contraste avec les suites pro offrant une vue compacte par défaut.【F:backup-jlg/includes/class-bjlg-admin.php†L103-L170】
+
+**Pistes d’amélioration alignées sur les apps pro**
+
+1. **Introduire un sélecteur persistant de mode** (simple, avancé, personnalisé) stocké par utilisateur afin de recharger automatiquement l’interface adaptée lors des visites suivantes.
+2. **Ajouter des résumés d’impact** dans chaque panneau avancé (durée, risques, dépendances) et des recommandations automatiques pour guider les profils non experts.
+3. **Segmenter les options avancées** en sous-sections ciblées (filtres, validation, distribution) avec ancrage, pagination ou `TabPanel`, tout en conservant un bouton clair « Basculer en mode expert » depuis la page principale.
+
 ### Apparence dans WordPress & éditeur visuel
 
 - **Styles figés dans le bloc** : la feuille `block-status.css` impose couleurs, rayons et boutons custom qui ne respectent pas la typographie ni les variables du thème, d’où un rendu potentiellement dissonant côté front ou éditeur visuel. Supporter les presets `color`, `typography` et les variables globales assurerait une meilleure intégration.【F:backup-jlg/assets/css/block-status.css†L1-L86】【F:backup-jlg/block.json†L11-L27】
 - **Éditeur sans prévisualisation dynamique** : le bloc charge un snapshot via `apiFetch` mais n’expose pas de skeleton ni de message clair lors du chargement/erreur, contrairement aux blocs pro qui affichent placeholders et liens de correction. Ajouter un état `Spinner` accessible et des actions de rechargement guiderait l’éditeur.【F:backup-jlg/assets/js/block-status.js†L8-L62】【F:backup-jlg/assets/js/block-status.js†L115-L184】
+
+### Fiabilité opérationnelle & observabilité
+
+- **Contrôles post-sauvegarde incomplets** : les cases « Vérifier l’intégrité (SHA-256) » et « Test de restauration à blanc » ne déclenchent pas de rapport détaillé automatisé, alors que les suites pro publient systématiquement un compte rendu par exécution.【F:backup-jlg/includes/class-bjlg-admin.php†L1258-L1297】【F:backup-jlg/includes/class-bjlg-backup.php†L2087-L2129】
+- **Gestion des échecs silencieuse** : en cas d’échec d’une destination secondaire, le fallback est bien tenté séquentiellement mais l’interface n’affiche pas de synthèse exploitable ni de recommandations de remédiation comme le font BlogVault ou ManageWP.【F:backup-jlg/includes/class-bjlg-admin.php†L1307-L1336】【F:backup-jlg/includes/class-bjlg-backup.php†L2168-L2233】
+- **File de purge distante sans SLA visible** : la queue `bjlg_process_remote_purge_queue` s’exécute en tâche de fond mais aucun indicateur de retard ou de saturation n’est exposé au tableau de bord, rendant difficile le suivi des objectifs RPO/RTO.【F:backup-jlg/includes/class-bjlg-incremental.php†L279-L347】【F:backup-jlg/includes/class-bjlg-remote-purge-worker.php†L12-L166】
+
+**Améliorations proposées**
+
+1. **Automatiser la génération de rapports de validation** (hash, test de restauration) et les attacher à l’historique ou aux notifications pour sécuriser la conformité.
+2. **Ajouter une vue « santé des destinations »** affichant taux d’échec, latence et actions rapides (reconnecter, relancer) afin d’aligner la remédiation sur les consoles pro.
+3. **Monitorer la purge distante** via des compteurs temps-réel et déclencher alertes/escalades lorsque la file dépasse un seuil, à l’image des orchestrateurs SaaS.
+
