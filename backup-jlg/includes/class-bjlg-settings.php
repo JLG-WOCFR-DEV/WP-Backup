@@ -1115,6 +1115,8 @@ class BJLG_Settings {
                         'email' => ['enabled' => false],
                         'slack' => ['enabled' => false, 'webhook_url' => ''],
                         'discord' => ['enabled' => false, 'webhook_url' => ''],
+                        'teams' => ['enabled' => false, 'webhook_url' => ''],
+                        'sms' => ['enabled' => false, 'webhook_url' => ''],
                     ],
                 ];
                 $sanitized = $defaults;
