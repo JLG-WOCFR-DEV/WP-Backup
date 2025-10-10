@@ -719,13 +719,13 @@ class BJLG_Admin_Advanced {
             $scheduler_message = __('Une sauvegarde planifiée est en retard.', 'backup-jlg');
             $score -= 22;
             $insights[] = __('Planification en retard', 'backup-jlg');
-            $this->add_recommendation($recommendations, __('Vérifier la planification automatique', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'scheduling'], admin_url('admin.php')), 'primary');
+            $this->add_recommendation($recommendations, __('Vérifier la planification automatique', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'section' => 'backup'], admin_url('admin.php')), 'primary');
         } elseif ($active_count === 0) {
             $scheduler_intent = 'warning';
             $scheduler_message = __('Aucune planification active.', 'backup-jlg');
             $score -= 12;
             $insights[] = __('Ajouter une planification récurrente', 'backup-jlg');
-            $this->add_recommendation($recommendations, __('Créer une planification automatique', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'scheduling'], admin_url('admin.php')), 'primary');
+            $this->add_recommendation($recommendations, __('Créer une planification automatique', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'section' => 'backup'], admin_url('admin.php')), 'primary');
         } else {
             $formatted_rate = sprintf('%s%%', number_format_i18n($success_rate, $success_rate >= 1 ? 0 : 1));
             $scheduler_message = sprintf(
@@ -739,7 +739,7 @@ class BJLG_Admin_Advanced {
                 $score -= 8;
                 $insights[] = __('Améliorer la stabilité des planifications', 'backup-jlg');
                 $scheduler_message .= ' — ' . __('Taux de réussite sous les standards pro.', 'backup-jlg');
-                $this->add_recommendation($recommendations, __('Analyser les rapports de sauvegarde', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'history'], admin_url('admin.php')));
+                $this->add_recommendation($recommendations, __('Analyser les rapports de sauvegarde', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'section' => 'monitoring'], admin_url('admin.php')));
             }
         }
 
@@ -774,7 +774,7 @@ class BJLG_Admin_Advanced {
             $encryption_message = __('Le chiffrement AES-256 est désactivé.', 'backup-jlg');
             $score -= 18;
             $insights[] = __('Activer le chiffrement des sauvegardes', 'backup-jlg');
-            $this->add_recommendation($recommendations, __('Activer le chiffrement AES-256', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'settings'], admin_url('admin.php')));
+            $this->add_recommendation($recommendations, __('Activer le chiffrement AES-256', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php')));
         } else {
             $percentage = (int) round($encrypted_ratio * 100);
             $encryption_message = sprintf(__('Chiffrement actif • %s%% des archives sécurisées', 'backup-jlg'), number_format_i18n($percentage));
@@ -827,7 +827,7 @@ class BJLG_Admin_Advanced {
             $storage_message = __('Aucune destination distante configurée.', 'backup-jlg');
             $score -= 8;
             $insights[] = __('Ajouter une redondance hors-site', 'backup-jlg');
-            $this->add_recommendation($recommendations, __('Ajouter un stockage distant', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'settings'], admin_url('admin.php')));
+            $this->add_recommendation($recommendations, __('Ajouter un stockage distant', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php')));
         } else {
             $storage_message = sprintf(
                 __('Destinations distantes actives : %1$s / %2$s', 'backup-jlg'),
@@ -845,7 +845,7 @@ class BJLG_Admin_Advanced {
                     $storage_message .= ' — ' . __('Certaines destinations signalent des erreurs.', 'backup-jlg');
                     $insights[] = __('Vérifier les destinations distantes', 'backup-jlg');
                 }
-                $this->add_recommendation($recommendations, __('Reconfigurer la destination distante', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'settings'], admin_url('admin.php')));
+                $this->add_recommendation($recommendations, __('Reconfigurer la destination distante', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php')));
             } elseif (!empty($storage['total_size_human'])) {
                 $storage_message .= ' • ' . sprintf(__('Stockage local : %s', 'backup-jlg'), $storage['total_size_human']);
             }
@@ -872,7 +872,7 @@ class BJLG_Admin_Advanced {
                 : __('Des échecs récents nécessitent une attention.', 'backup-jlg');
             $score -= count($recent_failures) > 1 ? 12 : 8;
             $insights[] = __('Analyser les journaux d’erreur', 'backup-jlg');
-            $this->add_recommendation($recommendations, __('Consulter les journaux détaillés', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'tab' => 'logs'], admin_url('admin.php')));
+            $this->add_recommendation($recommendations, __('Consulter les journaux détaillés', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'section' => 'monitoring'], admin_url('admin.php')));
         } elseif (!empty($summary['history_last_backup_relative'])) {
             $history_message = sprintf(__('Dernière sauvegarde réussie %s', 'backup-jlg'), $summary['history_last_backup_relative']);
         }
@@ -965,7 +965,7 @@ class BJLG_Admin_Advanced {
                 [
                     'label' => __('Créer une sauvegarde', 'backup-jlg'),
                     'url' => add_query_arg(
-                        ['page' => 'backup-jlg', 'tab' => 'backup_restore'],
+                        ['page' => 'backup-jlg', 'section' => 'backup'],
                         admin_url('admin.php')
                     ),
                 ]
@@ -982,7 +982,7 @@ class BJLG_Admin_Advanced {
                 [
                     'label' => __('Consulter les logs', 'backup-jlg'),
                     'url' => add_query_arg(
-                        ['page' => 'backup-jlg', 'tab' => 'logs'],
+                        ['page' => 'backup-jlg', 'section' => 'monitoring'],
                         admin_url('admin.php')
                     ),
                 ]
@@ -997,7 +997,7 @@ class BJLG_Admin_Advanced {
                 [
                     'label' => __('Vérifier la planification', 'backup-jlg'),
                     'url' => add_query_arg(
-                        ['page' => 'backup-jlg', 'tab' => 'backup_restore'],
+                        ['page' => 'backup-jlg', 'section' => 'backup'],
                         admin_url('admin.php')
                     ) . '#bjlg-schedule',
                 ]
@@ -1071,7 +1071,7 @@ class BJLG_Admin_Advanced {
                 'description' => __('Exécutez la suite de tests PHPUnit pour valider votre environnement.', 'backup-jlg'),
                 'command' => 'composer test',
                 'action_label' => __('Voir les tests', 'backup-jlg'),
-                'url' => add_query_arg(['tab' => 'logs'], $dashboard_url) . '#bjlg-diagnostics-tests',
+                'url' => add_query_arg(['section' => 'monitoring'], $dashboard_url) . '#bjlg-diagnostics-tests',
             ],
         ];
 

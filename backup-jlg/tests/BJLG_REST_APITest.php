@@ -221,7 +221,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $this->assertIsArray($response);
             $this->assertArrayHasKey('documentation', $response);
             $this->assertSame(
-                admin_url('admin.php?page=backup-jlg&tab=api'),
+                admin_url('admin.php?page=backup-jlg&section=integrations'),
                 $response['documentation']
             );
         }

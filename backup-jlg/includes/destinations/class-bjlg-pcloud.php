@@ -397,7 +397,7 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
 
         $this->disconnect();
 
-        $redirect = isset($_REQUEST['_wp_http_referer']) ? esc_url_raw(wp_unslash($_REQUEST['_wp_http_referer'])) : admin_url('admin.php?page=backup-jlg&tab=settings');
+        $redirect = isset($_REQUEST['_wp_http_referer']) ? esc_url_raw(wp_unslash($_REQUEST['_wp_http_referer'])) : admin_url('admin.php?page=backup-jlg&section=settings');
         wp_safe_redirect(add_query_arg('bjlg_pcloud_disconnected', '1', $redirect));
         exit;
     }
@@ -603,7 +603,7 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
     }
 
     private function get_disconnect_url() {
-        $referer = isset($_SERVER['REQUEST_URI']) ? wp_unslash($_SERVER['REQUEST_URI']) : admin_url('admin.php?page=backup-jlg&tab=settings');
+        $referer = isset($_SERVER['REQUEST_URI']) ? wp_unslash($_SERVER['REQUEST_URI']) : admin_url('admin.php?page=backup-jlg&section=settings');
 
         $url = wp_nonce_url(add_query_arg('action', 'bjlg_pcloud_disconnect', admin_url('admin-post.php')), 'bjlg_pcloud_disconnect');
 

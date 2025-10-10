@@ -128,51 +128,32 @@ final class BJLG_AdminAccessibilityTest extends TestCase
 
         $xpath = $this->createXPathFromHtml($html);
 
-        $nav = $xpath->query('//nav[contains(@class, "nav-tab-wrapper")]')->item(0);
-        $this->assertInstanceOf(\DOMElement::class, $nav, 'Navigation wrapper not found.');
+        $app = $xpath->query('//*[@id="bjlg-admin-app"]')->item(0);
+        $this->assertInstanceOf(\DOMElement::class, $app, 'React app container not found.');
+        /** @var \DOMElement $app */
+        $this->assertNotSame('', $app->getAttribute('data-bjlg-sections'), 'Sections payload missing.');
+
+        $nav = $xpath->query('//*[@id="bjlg-admin-app-nav"]')->item(0);
+        $this->assertInstanceOf(\DOMElement::class, $nav, 'TabPanel placeholder missing.');
         /** @var \DOMElement $nav */
-        $this->assertSame('tablist', $nav->getAttribute('role'));
+        $this->assertSame('true', $nav->getAttribute('aria-hidden'));
 
-        $tabs = $xpath->query('//nav[contains(@class, "nav-tab-wrapper")]//a[@role="tab"]');
-        $this->assertGreaterThan(0, $tabs->length, 'No tabs were rendered.');
+        $panels = $xpath->query('//*[contains(concat(" ", normalize-space(@class), " "), " bjlg-shell-section ")]');
+        $this->assertGreaterThan(0, $panels->length, 'No panels were rendered.');
 
-        $activeTabs = 0;
+        foreach ($panels as $panelElement) {
+            $this->assertInstanceOf(\DOMElement::class, $panelElement);
+            /** @var \DOMElement $panel */
+            $panel = $panelElement;
 
-        foreach ($tabs as $tabElement) {
-            $this->assertInstanceOf(\DOMElement::class, $tabElement);
-            /** @var \DOMElement $tab */
-            $tab = $tabElement;
+            $panelId = $panel->getAttribute('id');
+            $panelSection = $panel->getAttribute('data-section');
+            $panelLabelledBy = $panel->getAttribute('aria-labelledby');
 
-            $tabId = $tab->getAttribute('id');
-            $panelId = $tab->getAttribute('aria-controls');
-
-            $this->assertNotSame('', $tabId, 'Tab must have an id attribute.');
-            $this->assertNotSame('', $panelId, 'Tab must reference a panel via aria-controls.');
-
-            $panel = $xpath->query('//*[@id="' . $panelId . '"]')->item(0);
-            $this->assertInstanceOf(\DOMElement::class, $panel, sprintf('Panel "%s" not found.', $panelId));
-            /** @var \DOMElement $panelElement */
-            $panelElement = $panel;
-
-            $this->assertSame('tabpanel', $panelElement->getAttribute('role'));
-            $this->assertSame($tabId, $panelElement->getAttribute('aria-labelledby'));
-
-            $isSelected = $tab->getAttribute('aria-selected') === 'true';
-
-            if ($isSelected) {
-                ++$activeTabs;
-                $this->assertSame('page', $tab->getAttribute('aria-current'));
-                $this->assertSame('0', $tab->getAttribute('tabindex'));
-                $this->assertSame('false', $panelElement->getAttribute('aria-hidden'));
-                $this->assertFalse($panelElement->hasAttribute('hidden'));
-            } else {
-                $this->assertSame('', $tab->getAttribute('aria-current'));
-                $this->assertSame('-1', $tab->getAttribute('tabindex'));
-                $this->assertSame('true', $panelElement->getAttribute('aria-hidden'));
-                $this->assertTrue($panelElement->hasAttribute('hidden'));
-            }
+            $this->assertNotSame('', $panelId, 'Panel must have an id.');
+            $this->assertNotSame('', $panelSection, 'Panel must declare its section.');
+            $this->assertSame('tabpanel', $panel->getAttribute('role'));
+            $this->assertNotSame('', $panelLabelledBy, 'Panel must reference its tab control.');
         }
-
-        $this->assertSame(1, $activeTabs, 'Exactly one tab should be selected.');
     }
 }

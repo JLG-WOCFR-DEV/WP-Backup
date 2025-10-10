@@ -436,9 +436,13 @@ final class BJLG_Plugin {
             return;
         }
 
-        $active_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'backup_restore';
-        if ($active_tab === '') {
-            $active_tab = 'backup_restore';
+        $active_section = isset($_GET['section']) ? sanitize_key($_GET['section']) : '';
+        if ($active_section === '' && isset($_GET['tab'])) {
+            $active_section = sanitize_key($_GET['tab']);
+        }
+
+        if ($active_section === '') {
+            $active_section = 'monitoring';
         }
 
         wp_enqueue_style('bjlg-admin', BJLG_PLUGIN_URL . 'assets/css/admin.css', [], BJLG_VERSION);
@@ -466,16 +470,21 @@ final class BJLG_Plugin {
             $module_urls[$module_key] = esc_url_raw(add_query_arg('ver', $version, $absolute_url));
         }
 
-        $tab_modules = [
-            'backup_restore' => ['dashboard', 'backup'],
-            'scheduling' => ['scheduling'],
-            'history' => ['backup'],
+        $section_modules = [
+            'monitoring' => ['dashboard', 'logs'],
+            'backup' => ['dashboard', 'backup', 'scheduling'],
+            'restore' => ['backup'],
             'settings' => ['settings'],
-            'logs' => ['logs'],
-            'api' => ['api'],
+            'integrations' => ['api'],
         ];
 
-        wp_enqueue_script('bjlg-admin', BJLG_PLUGIN_URL . 'assets/js/admin.js', ['jquery', 'wp-a11y', 'wp-i18n'], BJLG_VERSION, true);
+        wp_enqueue_script(
+            'bjlg-admin',
+            BJLG_PLUGIN_URL . 'assets/js/admin.js',
+            ['jquery', 'wp-a11y', 'wp-i18n', 'wp-element', 'wp-components', 'wp-api-fetch'],
+            BJLG_VERSION,
+            true
+        );
 
         if (function_exists('wp_set_script_translations')) {
             wp_set_script_translations('bjlg-admin', 'backup-jlg', BJLG_PLUGIN_DIR . 'languages');
@@ -489,10 +498,13 @@ final class BJLG_Plugin {
             'rest_namespace' => 'backup-jlg/v1',
             'rest_root' => esc_url_raw(rest_url()),
             'rest_backups' => esc_url_raw(rest_url('backup-jlg/v1/backups')),
-            'active_tab' => $active_tab,
+            'active_tab' => $active_section,
+            'active_section' => $active_section,
             'chart_url' => esc_url_raw(add_query_arg('ver', $chart_asset_version, $chart_asset_url)),
             'modules' => $module_urls,
-            'tab_modules' => $tab_modules,
+            'tab_modules' => $section_modules,
+            'section_modules' => $section_modules,
+            'onboarding_nonce' => wp_create_nonce('bjlg_onboarding_progress'),
         ]);
     }
 
