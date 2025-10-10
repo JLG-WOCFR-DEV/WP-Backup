@@ -971,7 +971,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      * @return string
      */
     private function get_redirect_uri() {
-        $redirect = admin_url('admin.php?page=backup-jlg&tab=settings');
+        $redirect = admin_url('admin.php?page=backup-jlg&section=settings');
         $redirect = add_query_arg(['bjlg_gdrive_auth' => '1'], $redirect);
 
         return $redirect;

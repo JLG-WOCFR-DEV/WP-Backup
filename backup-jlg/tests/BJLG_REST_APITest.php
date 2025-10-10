@@ -221,7 +221,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $this->assertIsArray($response);
             $this->assertArrayHasKey('documentation', $response);
             $this->assertSame(
-                admin_url('admin.php?page=backup-jlg&tab=api'),
+                admin_url('admin.php?page=backup-jlg&section=integrations'),
                 $response['documentation']
             );
         }
@@ -2577,11 +2577,18 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             'notify_cleanup_complete' => 'on',
             'notify_storage_warning' => 'false',
             'notify_remote_purge_failed' => '1',
+            'notify_remote_purge_delayed' => '1',
+            'notify_restore_self_test_passed' => '1',
+            'notify_restore_self_test_failed' => '1',
             'channel_email' => 'on',
             'channel_slack' => '1',
             'slack_webhook_url' => 'https://example.com/slack',
             'channel_discord' => 'no',
             'discord_webhook_url' => 'https://example.com/discord',
+            'channel_teams' => 'yes',
+            'teams_webhook_url' => 'https://example.com/teams',
+            'channel_sms' => '1',
+            'sms_webhook_url' => 'https://sms.example.com/hook',
             'multi_threading' => 'yes',
             'max_workers' => '4',
             'chunk_size' => '25',
@@ -2618,9 +2625,16 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $this->assertTrue($notifications['events']['cleanup_complete']);
         $this->assertFalse($notifications['events']['storage_warning']);
         $this->assertTrue($notifications['events']['remote_purge_failed']);
+        $this->assertTrue($notifications['events']['remote_purge_delayed']);
+        $this->assertTrue($notifications['events']['restore_self_test_passed']);
+        $this->assertTrue($notifications['events']['restore_self_test_failed']);
         $this->assertTrue($notifications['channels']['email']['enabled']);
         $this->assertTrue($notifications['channels']['slack']['enabled']);
         $this->assertFalse($notifications['channels']['discord']['enabled']);
+        $this->assertTrue($notifications['channels']['teams']['enabled']);
+        $this->assertTrue($notifications['channels']['sms']['enabled']);
+        $this->assertSame('https://example.com/teams', $notifications['channels']['teams']['webhook_url']);
+        $this->assertSame('https://sms.example.com/hook', $notifications['channels']['sms']['webhook_url']);
 
         $performance = get_option('bjlg_performance_settings');
         $this->assertTrue($performance['multi_threading']);

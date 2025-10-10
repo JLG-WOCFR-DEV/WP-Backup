@@ -155,6 +155,119 @@ class BJLG_Notification_Transport {
     }
 
     /**
+     * Sends a message card to a Microsoft Teams incoming webhook.
+     *
+     * @param string   $webhook_url
+     * @param string   $title
+     * @param string[] $lines
+     *
+     * @return array{success:bool,message?:string}
+     */
+    public static function send_teams($webhook_url, $title, array $lines) {
+        if (!self::is_valid_url($webhook_url)) {
+            return [
+                'success' => false,
+                'message' => __('URL Teams invalide.', 'backup-jlg'),
+            ];
+        }
+
+        $body_lines = array_map('strval', $lines);
+        $text = implode("\n\n", $body_lines);
+
+        $payload = [
+            '@type' => 'MessageCard',
+            '@context' => 'http://schema.org/extensions',
+            'summary' => $title,
+            'themeColor' => '0078D7',
+            'title' => $title,
+            'text' => $title !== '' ? sprintf("**%s**\n\n%s", $title, $text) : $text,
+        ];
+
+        $response = wp_remote_post($webhook_url, [
+            'headers' => ['Content-Type' => 'application/json; charset=utf-8'],
+            'body' => wp_json_encode($payload),
+            'timeout' => 15,
+        ]);
+
+        if (is_wp_error($response)) {
+            return [
+                'success' => false,
+                'message' => $response->get_error_message(),
+            ];
+        }
+
+        $code = wp_remote_retrieve_response_code($response);
+        if ($code >= 200 && $code < 300) {
+            return ['success' => true];
+        }
+
+        return [
+            'success' => false,
+            'message' => sprintf(__('Réponse inattendue de Teams : %s', 'backup-jlg'), $code),
+        ];
+    }
+
+    /**
+     * Sends a compact payload to a generic SMS webhook gateway.
+     *
+     * @param string   $webhook_url
+     * @param string   $title
+     * @param string[] $lines
+     *
+     * @return array{success:bool,message?:string}
+     */
+    public static function send_sms($webhook_url, $title, array $lines) {
+        if (!self::is_valid_url($webhook_url)) {
+            return [
+                'success' => false,
+                'message' => __('URL SMS invalide.', 'backup-jlg'),
+            ];
+        }
+
+        $body_lines = array_values(array_filter(array_map('strval', $lines)));
+        $message_parts = [];
+
+        if ($title !== '') {
+            $message_parts[] = $title;
+        }
+
+        if (!empty($body_lines)) {
+            $message_parts[] = implode(' | ', $body_lines);
+        }
+
+        $message = implode(' – ', $message_parts);
+
+        $payload = [
+            'title' => $title,
+            'message' => $message,
+            'lines' => $body_lines,
+        ];
+
+        $response = wp_remote_post($webhook_url, [
+            'headers' => ['Content-Type' => 'application/json; charset=utf-8'],
+            'body' => wp_json_encode($payload),
+            'timeout' => 15,
+        ]);
+
+        if (is_wp_error($response)) {
+            return [
+                'success' => false,
+                'message' => $response->get_error_message(),
+            ];
+        }
+
+        $code = wp_remote_retrieve_response_code($response);
+        if ($code >= 200 && $code < 300) {
+            return ['success' => true];
+        }
+
+        return [
+            'success' => false,
+            'message' => sprintf(__('Réponse inattendue de la passerelle SMS : %s', 'backup-jlg'), $code),
+        ];
+    }
+
+    /**
      * Validates an URL before calling wp_remote_post.
      *
      * @param mixed $url

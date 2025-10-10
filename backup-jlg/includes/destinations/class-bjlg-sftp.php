@@ -520,7 +520,7 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
 
         $this->disconnect();
 
-        wp_safe_redirect(add_query_arg(['page' => 'backup-jlg', 'tab' => 'settings'], admin_url('admin.php')));
+        wp_safe_redirect(add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php')));
         exit;
     }
 

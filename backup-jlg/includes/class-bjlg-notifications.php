@@ -28,11 +28,16 @@ class BJLG_Notifications {
             'cleanup_complete' => false,
             'storage_warning' => true,
             'remote_purge_failed' => true,
+            'remote_purge_delayed' => true,
+            'restore_self_test_passed' => false,
+            'restore_self_test_failed' => true,
         ],
         'channels' => [
             'email' => ['enabled' => false],
             'slack' => ['enabled' => false, 'webhook_url' => ''],
             'discord' => ['enabled' => false, 'webhook_url' => ''],
+            'teams' => ['enabled' => false, 'webhook_url' => ''],
+            'sms' => ['enabled' => false, 'webhook_url' => ''],
         ],
     ];
 
@@ -58,6 +63,9 @@ class BJLG_Notifications {
         add_action('bjlg_cleanup_complete', [$this, 'handle_cleanup_complete'], 15, 1);
         add_action('bjlg_storage_warning', [$this, 'handle_storage_warning'], 15, 1);
         add_action('bjlg_remote_purge_permanent_failure', [$this, 'handle_remote_purge_failed'], 15, 3);
+        add_action('bjlg_remote_purge_delayed', [$this, 'handle_remote_purge_delayed'], 15, 2);
+        add_action('bjlg_restore_self_test_passed', [$this, 'handle_restore_self_test_passed'], 15, 1);
+        add_action('bjlg_restore_self_test_failed', [$this, 'handle_restore_self_test_failed'], 15, 1);
     }
 
     /**
@@ -166,6 +174,64 @@ class BJLG_Notifications {
         ];
 
         $this->notify('remote_purge_failed', $context);
+    }
+
+    /**
+     * Prépare le contexte d'un retard critique de purge distante.
+     *
+     * @param string              $file
+     * @param array<string,mixed> $entry
+     */
+    public function handle_remote_purge_delayed($file, $entry) {
+        $entry = is_array($entry) ? $entry : [];
+
+        $context = [
+            'file' => basename((string) $file),
+            'destinations' => $this->sanitize_components($entry['destinations'] ?? []),
+            'attempts' => isset($entry['attempts']) ? (int) $entry['attempts'] : 0,
+            'max_delay' => isset($entry['max_delay']) ? (int) $entry['max_delay'] : null,
+            'last_delay' => isset($entry['last_delay']) ? (int) $entry['last_delay'] : null,
+            'last_error' => isset($entry['last_error']) ? trim((string) $entry['last_error']) : '',
+        ];
+
+        $this->notify('remote_purge_delayed', $context);
+    }
+
+    /**
+     * Construit le contexte d'un test de restauration réussi.
+     *
+     * @param array<string,mixed> $report
+     */
+    public function handle_restore_self_test_passed($report) {
+        $report = is_array($report) ? $report : [];
+
+        $context = [
+            'archive' => isset($report['archive']) ? (string) $report['archive'] : '',
+            'duration' => isset($report['duration']) ? (float) $report['duration'] : null,
+            'components' => isset($report['components']) && is_array($report['components']) ? $report['components'] : [],
+            'started_at' => isset($report['started_at']) ? (int) $report['started_at'] : null,
+            'completed_at' => isset($report['completed_at']) ? (int) $report['completed_at'] : null,
+        ];
+
+        $this->notify('restore_self_test_passed', $context);
+    }
+
+    /**
+     * Construit le contexte d'un test de restauration en échec.
+     *
+     * @param array<string,mixed> $report
+     */
+    public function handle_restore_self_test_failed($report) {
+        $report = is_array($report) ? $report : [];
+
+        $context = [
+            'archive' => isset($report['archive']) ? (string) $report['archive'] : '',
+            'error' => isset($report['exception']) ? trim((string) $report['exception']) : ($report['message'] ?? ''),
+            'started_at' => isset($report['started_at']) ? (int) $report['started_at'] : null,
+            'completed_at' => isset($report['completed_at']) ? (int) $report['completed_at'] : null,
+        ];
+
+        $this->notify('restore_self_test_failed', $context);
     }
 
     /**
@@ -395,6 +461,12 @@ class BJLG_Notifications {
                 return __('Alerte de stockage', 'backup-jlg');
             case 'remote_purge_failed':
                 return __('Purge distante en échec', 'backup-jlg');
+            case 'remote_purge_delayed':
+                return __('Purge distante en retard', 'backup-jlg');
+            case 'restore_self_test_passed':
+                return __('Test de restauration réussi', 'backup-jlg');
+            case 'restore_self_test_failed':
+                return __('Test de restauration échoué', 'backup-jlg');
             default:
                 return ucfirst(str_replace('_', ' ', $event));
         }
@@ -480,6 +552,60 @@ class BJLG_Notifications {
                     $lines[] = __('Dernier message : ', 'backup-jlg') . $context['last_error'];
                 }
                 break;
+            case 'remote_purge_delayed':
+                $lines[] = __('Une purge distante accumule du retard.', 'backup-jlg');
+                if (!empty($context['file'])) {
+                    $lines[] = __('Archive : ', 'backup-jlg') . $context['file'];
+                }
+                if (!empty($context['destinations'])) {
+                    $lines[] = __('Destinations concernées : ', 'backup-jlg') . implode(', ', $context['destinations']);
+                }
+                if (!empty($context['attempts'])) {
+                    $lines[] = __('Tentatives effectuées : ', 'backup-jlg') . (int) $context['attempts'];
+                }
+                if (!empty($context['max_delay'])) {
+                    $lines[] = __('Retard maximum : ', 'backup-jlg') . $this->format_delay((int) $context['max_delay']);
+                }
+                if (!empty($context['last_delay'])) {
+                    $lines[] = __('Dernier délai : ', 'backup-jlg') . $this->format_delay((int) $context['last_delay']);
+                }
+                if (!empty($context['last_error'])) {
+                    $lines[] = __('Dernier message : ', 'backup-jlg') . $context['last_error'];
+                }
+                break;
+            case 'restore_self_test_passed':
+                $lines[] = __('Le test de restauration sandbox a réussi.', 'backup-jlg');
+                if (!empty($context['archive'])) {
+                    $lines[] = __('Archive testée : ', 'backup-jlg') . $context['archive'];
+                }
+                if (!empty($context['duration'])) {
+                    $lines[] = __('Durée : ', 'backup-jlg') . $this->format_duration_seconds((float) $context['duration']);
+                }
+                if (!empty($context['components']) && is_array($context['components'])) {
+                    $component_lines = [];
+                    foreach ($context['components'] as $component => $status) {
+                        $component_lines[] = sprintf('%s (%s)', $component, $status ? __('ok', 'backup-jlg') : __('manquant', 'backup-jlg'));
+                    }
+                    if (!empty($component_lines)) {
+                        $lines[] = __('Composants vérifiés : ', 'backup-jlg') . implode(', ', $component_lines);
+                    }
+                }
+                if (!empty($context['completed_at'])) {
+                    $lines[] = __('Terminé : ', 'backup-jlg') . $this->format_timestamp($context['completed_at']);
+                }
+                break;
+            case 'restore_self_test_failed':
+                $lines[] = __('Le test de restauration sandbox a échoué.', 'backup-jlg');
+                if (!empty($context['archive'])) {
+                    $lines[] = __('Archive testée : ', 'backup-jlg') . $context['archive'];
+                }
+                if (!empty($context['error'])) {
+                    $lines[] = __('Erreur : ', 'backup-jlg') . $context['error'];
+                }
+                if (!empty($context['completed_at'])) {
+                    $lines[] = __('Horodatage : ', 'backup-jlg') . $this->format_timestamp($context['completed_at']);
+                }
+                break;
             default:
                 foreach ($context as $key => $value) {
                     if (is_scalar($value)) {
@@ -492,6 +618,145 @@ class BJLG_Notifications {
         $lines[] = __('Horodatage : ', 'backup-jlg') . $timestamp;
 
         return array_filter(array_map('trim', $lines));
+    }
+
+    /**
+     * Formate un délai exprimé en secondes en libellé lisible.
+     *
+     * @param int $seconds
+     */
+    private function format_delay($seconds) {
+        $seconds = max(0, (int) $seconds);
+        $minute = defined('MINUTE_IN_SECONDS') ? MINUTE_IN_SECONDS : 60;
+        $hour = defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600;
+        $day = defined('DAY_IN_SECONDS') ? DAY_IN_SECONDS : 86400;
+
+        if ($seconds <= 0) {
+            return __('immédiat', 'backup-jlg');
+        }
+
+        if ($seconds < $minute) {
+            return sprintf(
+                _n('%s seconde', '%s secondes', $seconds, 'backup-jlg'),
+                number_format_i18n($seconds)
+            );
+        }
+
+        $now = time();
+        if (function_exists('human_time_diff')) {
+            $reference = max($now - $seconds, 0);
+            $human = human_time_diff($reference, $now);
+            if (is_string($human) && $human !== '') {
+                return $human;
+            }
+        }
+
+        if ($seconds < $hour) {
+            $minutes = (int) round($seconds / $minute);
+
+            return sprintf(
+                _n('%s minute', '%s minutes', $minutes, 'backup-jlg'),
+                number_format_i18n($minutes)
+            );
+        }
+
+        if ($seconds < $day) {
+            $hours = (int) round($seconds / $hour);
+
+            return sprintf(
+                _n('%s heure', '%s heures', $hours, 'backup-jlg'),
+                number_format_i18n($hours)
+            );
+        }
+
+        $days = (int) round($seconds / $day);
+
+        return sprintf(
+            _n('%s jour', '%s jours', $days, 'backup-jlg'),
+            number_format_i18n($days)
+        );
+    }
+
+    /**
+     * Formate une durée en secondes en conservant les unités les plus pertinentes.
+     *
+     * @param float $seconds
+     */
+    private function format_duration_seconds($seconds) {
+        $seconds = max(0.0, (float) $seconds);
+        $minute = defined('MINUTE_IN_SECONDS') ? MINUTE_IN_SECONDS : 60;
+        $hour = defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600;
+
+        if ($seconds < 1) {
+            return __('< 1 s', 'backup-jlg');
+        }
+
+        if ($seconds < $minute) {
+            $precision = $seconds < 10 ? 2 : 1;
+
+            return number_format_i18n($seconds, $precision) . ' ' . __('s', 'backup-jlg');
+        }
+
+        if ($seconds < $hour) {
+            $minutes = (int) floor($seconds / $minute);
+            $remaining = (int) round($seconds - ($minutes * $minute));
+
+            $parts = [
+                sprintf(_n('%s minute', '%s minutes', $minutes, 'backup-jlg'), number_format_i18n($minutes)),
+            ];
+
+            if ($remaining > 0) {
+                $parts[] = sprintf(
+                    _n('%s seconde', '%s secondes', $remaining, 'backup-jlg'),
+                    number_format_i18n($remaining)
+                );
+            }
+
+            return implode(' ', $parts);
+        }
+
+        $hours = (int) floor($seconds / $hour);
+        $remaining_minutes = (int) floor(($seconds - ($hours * $hour)) / $minute);
+
+        $parts = [
+            sprintf(_n('%s heure', '%s heures', $hours, 'backup-jlg'), number_format_i18n($hours)),
+        ];
+
+        if ($remaining_minutes > 0) {
+            $parts[] = sprintf(
+                _n('%s minute', '%s minutes', $remaining_minutes, 'backup-jlg'),
+                number_format_i18n($remaining_minutes)
+            );
+        }
+
+        return implode(' ', $parts);
+    }
+
+    /**
+     * Convertit un timestamp Unix en date localisée.
+     *
+     * @param int $timestamp
+     */
+    private function format_timestamp($timestamp) {
+        $timestamp = (int) $timestamp;
+
+        if ($timestamp <= 0) {
+            return '';
+        }
+
+        $date_format = function_exists('get_option') ? get_option('date_format', 'Y-m-d') : 'Y-m-d';
+        $time_format = function_exists('get_option') ? get_option('time_format', 'H:i') : 'H:i';
+        $format = trim($date_format . ' ' . $time_format);
+
+        if (function_exists('wp_date')) {
+            return wp_date($format, $timestamp);
+        }
+
+        if (function_exists('date_i18n')) {
+            return date_i18n($format, $timestamp);
+        }
+
+        return date($format, $timestamp);
     }
 
     /**
@@ -545,6 +810,34 @@ class BJLG_Notifications {
                 ];
             } else {
                 BJLG_Debug::log('Canal Discord ignoré : URL invalide.');
+            }
+        }
+
+        if ($this->is_channel_enabled('teams', $settings)) {
+            $url = $settings['channels']['teams']['webhook_url'] ?? '';
+            if (BJLG_Notification_Transport::is_valid_url($url)) {
+                $channels['teams'] = [
+                    'enabled' => true,
+                    'webhook_url' => $url,
+                    'status' => 'pending',
+                    'attempts' => 0,
+                ];
+            } else {
+                BJLG_Debug::log('Canal Teams ignoré : URL invalide.');
+            }
+        }
+
+        if ($this->is_channel_enabled('sms', $settings)) {
+            $url = $settings['channels']['sms']['webhook_url'] ?? '';
+            if (BJLG_Notification_Transport::is_valid_url($url)) {
+                $channels['sms'] = [
+                    'enabled' => true,
+                    'webhook_url' => $url,
+                    'status' => 'pending',
+                    'attempts' => 0,
+                ];
+            } else {
+                BJLG_Debug::log('Canal SMS ignoré : URL invalide.');
             }
         }
 
