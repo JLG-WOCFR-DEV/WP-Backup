@@ -1543,6 +1543,8 @@ class BJLG_Admin {
                                 ? $schedule['exclude_patterns']
                                 : [];
                             $recurrence = isset($schedule['recurrence']) ? (string) $schedule['recurrence'] : 'disabled';
+                            $time = isset($schedule['time']) ? (string) $schedule['time'] : '';
+                            $custom_cron = isset($schedule['custom_cron']) ? (string) $schedule['custom_cron'] : '';
                             $recurrence_label = $recurrence_labels[$recurrence] ?? ucfirst($recurrence);
                             $next_run_summary = $next_runs[$schedule_id] ?? [];
                             $next_run_formatted = isset($next_run_summary['next_run_formatted']) && $next_run_summary['next_run_formatted'] !== ''
@@ -3051,6 +3053,7 @@ class BJLG_Admin {
         $recurrence = isset($schedule['recurrence']) ? (string) $schedule['recurrence'] : 'disabled';
         $day = isset($schedule['day']) ? (string) $schedule['day'] : 'sunday';
         $time = isset($schedule['time']) ? (string) $schedule['time'] : '23:59';
+        $custom_cron = isset($schedule['custom_cron']) ? (string) $schedule['custom_cron'] : '';
         $day_of_month = isset($schedule['day_of_month']) ? (int) $schedule['day_of_month'] : 1;
         if ($day_of_month < 1 || $day_of_month > 31) {
             $day_of_month = 1;
@@ -3103,6 +3106,8 @@ class BJLG_Admin {
         $day_of_month_description_id_template = 'bjlg-schedule-day-of-month-%s-description';
         $include_id_template = 'bjlg-schedule-include-%s';
         $exclude_id_template = 'bjlg-schedule-exclude-%s';
+        $custom_id_template = 'bjlg-schedule-custom-%s';
+        $custom_description_id_template = 'bjlg-schedule-custom-%s-description';
         $time_id = sprintf($time_id_template, $field_prefix);
         $time_description_id = sprintf($time_description_id_template, $field_prefix);
         $custom_id = sprintf($custom_id_template, $field_prefix);
@@ -3111,6 +3116,8 @@ class BJLG_Admin {
         $day_of_month_description_id = sprintf($day_of_month_description_id_template, $field_prefix);
         $include_id = sprintf($include_id_template, $field_prefix);
         $exclude_id = sprintf($exclude_id_template, $field_prefix);
+        $custom_id = sprintf($custom_id_template, $field_prefix);
+        $custom_description_id = sprintf($custom_description_id_template, $field_prefix);
 
         $summary_html = $this->get_schedule_summary_markup(
             $schedule_components,
@@ -3176,6 +3183,7 @@ class BJLG_Admin {
                                 <option value="daily" <?php selected($recurrence, 'daily'); ?>>Journalière</option>
                                 <option value="weekly" <?php selected($recurrence, 'weekly'); ?>>Hebdomadaire</option>
                                 <option value="monthly" <?php selected($recurrence, 'monthly'); ?>>Mensuelle</option>
+                                <option value="custom" <?php selected($recurrence, 'custom'); ?>>Expression Cron</option>
                             </select>
                         </td>
                     </tr>

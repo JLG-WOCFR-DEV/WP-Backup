@@ -22,7 +22,8 @@ jQuery(function($) {
         twice_daily: 'Deux fois par jour',
         daily: 'Journalière',
         weekly: 'Hebdomadaire',
-        monthly: 'Mensuelle'
+        monthly: 'Mensuelle',
+        custom: 'Expression Cron'
     };
 
     const componentLabels = {
@@ -692,6 +693,7 @@ jQuery(function($) {
         const $weekly = $item.find('.bjlg-schedule-weekly-options');
         const $monthly = $item.find('.bjlg-schedule-monthly-options');
         const $time = $item.find('.bjlg-schedule-time-options');
+        const $custom = $item.find('.bjlg-schedule-custom-options');
 
         if ($weekly.length) {
             if (recurrence === 'weekly') {
@@ -710,10 +712,18 @@ jQuery(function($) {
         }
 
         if ($time.length) {
-            if (recurrence === 'disabled') {
+            if (recurrence === 'disabled' || recurrence === 'custom') {
                 $time.hide().attr('aria-hidden', 'true');
             } else {
                 $time.show().attr('aria-hidden', 'false');
+            }
+        }
+
+        if ($custom.length) {
+            if (recurrence === 'custom') {
+                $custom.show().attr('aria-hidden', 'false');
+            } else {
+                $custom.hide().attr('aria-hidden', 'true');
             }
         }
     }
@@ -807,6 +817,38 @@ jQuery(function($) {
     }
 
     function buildSummaryGroupsFromData(data) {
+        const recurrence = (data.recurrence || 'disabled').toString();
+        const frequencyBadges = [];
+        if (recurrence === 'custom') {
+            const expression = (data.custom_cron || '').toString().trim();
+            const label = expression || 'Expression requise';
+            const classes = ['bjlg-badge-recurrence', 'bjlg-badge-recurrence-custom'];
+            if (!expression) {
+                classes.push('bjlg-badge-state-off');
+            }
+            frequencyBadges.push({
+                label: label,
+                color: expression ? '#f59e0b' : '#f43f5e',
+                classes: classes
+            });
+        } else {
+            const label = recurrenceLabels[recurrence] || recurrence || '—';
+            const classes = ['bjlg-badge-recurrence'];
+            let color = '#0ea5e9';
+            if (recurrence === 'disabled') {
+                color = '#4b5563';
+                classes.push('bjlg-badge-state-off');
+            }
+            frequencyBadges.push({ label: label, color: color, classes: classes });
+
+            if (recurrence === 'daily' || recurrence === 'weekly' || recurrence === 'monthly' || recurrence === 'twice_daily') {
+                const timeLabel = (data.time || '').toString();
+                if (timeLabel) {
+                    frequencyBadges.push({ label: 'Heure ' + timeLabel, color: '#3b82f6', classes: ['bjlg-badge-time'] });
+                }
+            }
+        }
+
         const components = Array.isArray(data.components) ? data.components : [];
         const componentBadges = [];
         const seenComponents = new Set();
@@ -875,6 +917,7 @@ jQuery(function($) {
         }
 
         return [
+            { title: 'Fréquence', badges: frequencyBadges.length ? frequencyBadges : [{ label: '—', color: '#4b5563', classes: ['bjlg-badge-recurrence'] }] },
             { title: 'Composants', badges: componentBadges },
             { title: 'Options', badges: optionBadges },
             { title: 'Inclusions', badges: includeBadges },
@@ -891,6 +934,7 @@ jQuery(function($) {
         const day = ($item.find('[data-field="day"]').val() || 'sunday').toString();
         const time = ($item.find('[data-field="time"]').val() || '23:59').toString();
         const dayOfMonthRaw = ($item.find('[data-field="day_of_month"]').val() || '').toString();
+        const customCronRaw = ($item.find('[data-field="custom_cron"]').val() || '').toString();
         let dayOfMonth = clampDayOfMonth(dayOfMonthRaw);
         if (dayOfMonth === null) {
             dayOfMonth = getScheduleDayOfMonth({});
@@ -927,6 +971,9 @@ jQuery(function($) {
             }
         });
 
+        const customCronValue = recurrence === 'custom' ? customCronRaw.toString() : '';
+        const trimmedCron = customCronValue.trim();
+
         const data = {
             id: id,
             label: label,
@@ -935,6 +982,7 @@ jQuery(function($) {
             day: day,
             day_of_month: dayOfMonth,
             time: time,
+            custom_cron: recurrence === 'custom' ? (forSummary ? trimmedCron : customCronValue) : '',
             components: components,
             encrypt: encrypt,
             incremental: incremental,
@@ -972,6 +1020,7 @@ jQuery(function($) {
         $item.find('[data-field="recurrence"]').val(schedule && schedule.recurrence ? schedule.recurrence : 'disabled');
         $item.find('[data-field="day"]').val(schedule && schedule.day ? schedule.day : 'sunday');
         $item.find('[data-field="time"]').val(schedule && schedule.time ? schedule.time : '23:59');
+        $item.find('[data-field="custom_cron"]').val(schedule && schedule.custom_cron ? schedule.custom_cron : '');
         $item.find('[data-field="day_of_month"]').val(getScheduleDayOfMonth(schedule));
 
         const components = Array.isArray(schedule && schedule.components) ? schedule.components : (defaultScheduleData.components || []);
@@ -1412,12 +1461,12 @@ jQuery(function($) {
         updateState(collectSchedulesForRequest(), state.nextRuns);
     });
 
-    $scheduleForm.on('change', '.bjlg-schedule-item [data-field="components"], .bjlg-schedule-item [data-field="encrypt"], .bjlg-schedule-item [data-field="incremental"], .bjlg-schedule-item [data-field="day"], .bjlg-schedule-item [data-field="day_of_month"], .bjlg-schedule-item [data-field="time"], .bjlg-schedule-item [data-field="post_checks"], .bjlg-schedule-item [data-field="secondary_destinations"]', function() {
+    $scheduleForm.on('change', '.bjlg-schedule-item [data-field="components"], .bjlg-schedule-item [data-field="encrypt"], .bjlg-schedule-item [data-field="incremental"], .bjlg-schedule-item [data-field="day"], .bjlg-schedule-item [data-field="day_of_month"], .bjlg-schedule-item [data-field="time"], .bjlg-schedule-item [data-field="custom_cron"], .bjlg-schedule-item [data-field="post_checks"], .bjlg-schedule-item [data-field="secondary_destinations"]', function() {
         updateScheduleSummaryForItem($(this).closest('.bjlg-schedule-item'));
         updateState(collectSchedulesForRequest(), state.nextRuns);
     });
 
-    $scheduleForm.on('input', '.bjlg-schedule-item [data-field="label"], .bjlg-schedule-item textarea[data-field]', function() {
+    $scheduleForm.on('input', '.bjlg-schedule-item [data-field="label"], .bjlg-schedule-item textarea[data-field], .bjlg-schedule-item [data-field="custom_cron"]', function() {
         updateScheduleSummaryForItem($(this).closest('.bjlg-schedule-item'));
         updateState(collectSchedulesForRequest(), state.nextRuns);
     });
