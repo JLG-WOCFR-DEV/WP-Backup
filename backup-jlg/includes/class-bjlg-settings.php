@@ -204,6 +204,7 @@ class BJLG_Settings {
         add_action('wp_ajax_bjlg_import_settings', [$this, 'handle_import_settings']);
         add_action('wp_ajax_bjlg_get_backup_presets', [$this, 'handle_get_backup_presets']);
         add_action('wp_ajax_bjlg_save_backup_preset', [$this, 'handle_save_backup_preset']);
+        add_action('wp_ajax_bjlg_send_notification_test', [$this, 'handle_send_notification_test']);
 
         // Initialiser les paramètres par défaut si nécessaire
         add_action('init', [$this, 'init_default_settings']);
@@ -545,81 +546,7 @@ class BJLG_Settings {
             }
 
             if ($should_update_notifications) {
-                $notifications_settings = $this->get_section_settings_with_defaults('notifications');
-
-                if (array_key_exists('notifications_enabled', $_POST)) {
-                    $notifications_settings['enabled'] = $this->to_bool(wp_unslash($_POST['notifications_enabled']));
-                }
-
-                $event_map = [
-                    'backup_complete' => 'notify_backup_complete',
-                    'backup_failed' => 'notify_backup_failed',
-                    'cleanup_complete' => 'notify_cleanup_complete',
-                    'storage_warning' => 'notify_storage_warning',
-                    'remote_purge_failed' => 'notify_remote_purge_failed',
-                ];
-                foreach ($event_map as $event_key => $field_name) {
-                    if (array_key_exists($field_name, $_POST)) {
-                        $notifications_settings['events'][$event_key] = $this->to_bool(wp_unslash($_POST[$field_name]));
-                    }
-                }
-
-                $channel_map = [
-                    'email' => 'channel_email',
-                    'slack' => 'channel_slack',
-                    'discord' => 'channel_discord',
-                ];
-                foreach ($channel_map as $channel_key => $field_name) {
-                    if (!isset($notifications_settings['channels'][$channel_key])) {
-                        $notifications_settings['channels'][$channel_key] = $notification_defaults['channels'][$channel_key];
-                    }
-                    if (array_key_exists($field_name, $_POST)) {
-                        $notifications_settings['channels'][$channel_key]['enabled'] = $this->to_bool(wp_unslash($_POST[$field_name]));
-                    }
-                }
-
-                $slack_source = array_key_exists('slack_webhook_url', $_POST)
-                    ? wp_unslash($_POST['slack_webhook_url'])
-                    : ($notifications_settings['channels']['slack']['webhook_url'] ?? '');
-                $slack_url = $this->validate_optional_url($slack_source, 'Slack');
-                $notifications_settings['channels']['slack']['webhook_url'] = $slack_url;
-
-                $discord_source = array_key_exists('discord_webhook_url', $_POST)
-                    ? wp_unslash($_POST['discord_webhook_url'])
-                    : ($notifications_settings['channels']['discord']['webhook_url'] ?? '');
-                $discord_url = $this->validate_optional_url($discord_source, 'Discord');
-                $notifications_settings['channels']['discord']['webhook_url'] = $discord_url;
-
-                $email_source = array_key_exists('email_recipients', $_POST)
-                    ? wp_unslash($_POST['email_recipients'])
-                    : ($notifications_settings['email_recipients'] ?? '');
-
-                $email_validation = $this->normalize_email_recipients($email_source);
-
-                if (!empty($email_validation['invalid'])) {
-                    throw new Exception(sprintf(
-                        'Les adresses e-mail suivantes sont invalides : %s.',
-                        implode(', ', $email_validation['invalid'])
-                    ));
-                }
-
-                if (
-                    !empty($notifications_settings['enabled'])
-                    && !empty($notifications_settings['channels']['email']['enabled'])
-                    && empty($email_validation['valid'])
-                ) {
-                    throw new Exception('Veuillez renseigner au moins une adresse e-mail valide pour les notifications.');
-                }
-
-                if (!empty($notifications_settings['channels']['slack']['enabled']) && $slack_url === '') {
-                    throw new Exception('Veuillez fournir une URL de webhook Slack valide pour activer ce canal.');
-                }
-
-                if (!empty($notifications_settings['channels']['discord']['enabled']) && $discord_url === '') {
-                    throw new Exception('Veuillez fournir une URL de webhook Discord valide pour activer ce canal.');
-                }
-
-                $notifications_settings['email_recipients'] = implode(', ', $email_validation['valid']);
+                $notifications_settings = $this->prepare_notifications_settings_from_request($_POST);
 
                 update_option('bjlg_notification_settings', $notifications_settings);
                 $saved_settings['notifications'] = $notifications_settings;
@@ -820,6 +747,61 @@ class BJLG_Settings {
             'message' => sprintf('Modèle "%s" enregistré avec succès.', $sanitized['label']),
             'saved' => $sanitized,
             'presets' => array_values($existing),
+        ]);
+    }
+
+    /**
+     * Déclenche l'envoi d'une notification de test sur les canaux actifs.
+     */
+    public function handle_send_notification_test() {
+        if (!\bjlg_can_manage_settings()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        try {
+            $request = is_array($_POST) ? $_POST : [];
+            $notifications_settings = $this->prepare_notifications_settings_from_request($request);
+        } catch (Exception $exception) {
+            wp_send_json_error(['message' => $exception->getMessage()], 400);
+        }
+
+        $notifications = BJLG_Notifications::instance();
+        $result = $notifications->send_test_notification($notifications_settings);
+
+        if (is_wp_error($result)) {
+            wp_send_json_error(['message' => $result->get_error_message()], 400);
+        }
+
+        $channels = isset($result['channels']) && is_array($result['channels'])
+            ? array_values(array_filter(array_map('strval', $result['channels'])))
+            : [];
+
+        $labels = [];
+        $map = [
+            'email' => __('e-mail', 'backup-jlg'),
+            'slack' => __('Slack', 'backup-jlg'),
+            'discord' => __('Discord', 'backup-jlg'),
+        ];
+
+        foreach ($channels as $channel) {
+            $labels[] = $map[$channel] ?? $channel;
+        }
+
+        if (empty($labels)) {
+            $labels[] = __('aucun canal actif', 'backup-jlg');
+        }
+
+        $message = sprintf(
+            __('Notification de test planifiée pour %s.', 'backup-jlg'),
+            implode(', ', $labels)
+        );
+
+        wp_send_json_success([
+            'message' => $message,
+            'channels' => $channels,
+            'entry_id' => isset($result['entry']['id']) ? (string) $result['entry']['id'] : '',
         ]);
     }
 
@@ -2375,6 +2357,124 @@ class BJLG_Settings {
             'valid' => $valid,
             'invalid' => $invalid,
         ];
+    }
+
+    /**
+     * Prépare les réglages de notification en fusionnant la requête avec les valeurs stockées.
+     *
+     * @param array<string,mixed> $request
+     * @return array<string,mixed>
+     * @throws Exception
+     */
+    private function prepare_notifications_settings_from_request($request) {
+        if (!is_array($request)) {
+            $request = [];
+        }
+
+        $notification_defaults = $this->default_settings['notifications'];
+        $settings = $this->get_section_settings_with_defaults('notifications');
+
+        $enabled_current = !empty($settings['enabled']);
+        $enabled_raw = $this->get_scalar_request_value($request, 'notifications_enabled', $enabled_current ? '1' : '0');
+        $settings['enabled'] = $this->to_bool($enabled_raw);
+
+        $event_map = [
+            'backup_complete' => 'notify_backup_complete',
+            'backup_failed' => 'notify_backup_failed',
+            'cleanup_complete' => 'notify_cleanup_complete',
+            'storage_warning' => 'notify_storage_warning',
+            'remote_purge_failed' => 'notify_remote_purge_failed',
+        ];
+        foreach ($event_map as $event_key => $field_name) {
+            $current = !empty($settings['events'][$event_key]);
+            $raw = $this->get_scalar_request_value($request, $field_name, $current ? '1' : '0');
+            $settings['events'][$event_key] = $this->to_bool($raw);
+        }
+
+        $channel_map = [
+            'email' => 'channel_email',
+            'slack' => 'channel_slack',
+            'discord' => 'channel_discord',
+        ];
+        foreach ($channel_map as $channel_key => $field_name) {
+            if (!isset($settings['channels'][$channel_key])) {
+                $settings['channels'][$channel_key] = $notification_defaults['channels'][$channel_key];
+            }
+
+            $current = !empty($settings['channels'][$channel_key]['enabled']);
+            $raw = $this->get_scalar_request_value($request, $field_name, $current ? '1' : '0');
+            $settings['channels'][$channel_key]['enabled'] = $this->to_bool($raw);
+        }
+
+        $slack_source = $this->get_scalar_request_value(
+            $request,
+            'slack_webhook_url',
+            $settings['channels']['slack']['webhook_url'] ?? ''
+        );
+        $slack_url = $this->validate_optional_url($slack_source, 'Slack');
+        $settings['channels']['slack']['webhook_url'] = $slack_url;
+
+        $discord_source = $this->get_scalar_request_value(
+            $request,
+            'discord_webhook_url',
+            $settings['channels']['discord']['webhook_url'] ?? ''
+        );
+        $discord_url = $this->validate_optional_url($discord_source, 'Discord');
+        $settings['channels']['discord']['webhook_url'] = $discord_url;
+
+        $email_source = $this->get_scalar_request_value(
+            $request,
+            'email_recipients',
+            $settings['email_recipients'] ?? ''
+        );
+        $email_validation = $this->normalize_email_recipients($email_source);
+
+        if (!empty($email_validation['invalid'])) {
+            throw new Exception(sprintf(
+                'Les adresses e-mail suivantes sont invalides : %s.',
+                implode(', ', $email_validation['invalid'])
+            ));
+        }
+
+        if (
+            !empty($settings['enabled'])
+            && !empty($settings['channels']['email']['enabled'])
+            && empty($email_validation['valid'])
+        ) {
+            throw new Exception('Veuillez renseigner au moins une adresse e-mail valide pour les notifications.');
+        }
+
+        if (!empty($settings['channels']['slack']['enabled']) && $slack_url === '') {
+            throw new Exception('Veuillez fournir une URL de webhook Slack valide pour activer ce canal.');
+        }
+
+        if (!empty($settings['channels']['discord']['enabled']) && $discord_url === '') {
+            throw new Exception('Veuillez fournir une URL de webhook Discord valide pour activer ce canal.');
+        }
+
+        $settings['email_recipients'] = implode(', ', $email_validation['valid']);
+
+        return $settings;
+    }
+
+    /**
+     * Récupère une valeur scalaire envoyée dans la requête.
+     *
+     * @param array<string,mixed> $request
+     * @param string              $key
+     * @param string              $default
+     */
+    private function get_scalar_request_value(array $request, $key, $default = '') {
+        if (!array_key_exists($key, $request)) {
+            return $default;
+        }
+
+        $value = $request[$key];
+        if (is_array($value)) {
+            $value = reset($value);
+        }
+
+        return is_scalar($value) ? wp_unslash((string) $value) : $default;
     }
 
     /**

@@ -403,7 +403,7 @@ final class BJLG_Plugin {
         new BJLG\BJLG_Webhooks();
         new BJLG\BJLG_Incremental();
         new BJLG\BJLG_Notification_Queue();
-        new BJLG\BJLG_Notifications();
+        BJLG\BJLG_Notifications::instance();
         new BJLG\BJLG_REST_API();
         new BJLG\BJLG_Settings();
         new BJLG\BJLG_API_Keys();
