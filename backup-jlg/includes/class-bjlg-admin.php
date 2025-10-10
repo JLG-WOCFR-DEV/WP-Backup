@@ -1543,6 +1543,8 @@ class BJLG_Admin {
                                 ? $schedule['exclude_patterns']
                                 : [];
                             $recurrence = isset($schedule['recurrence']) ? (string) $schedule['recurrence'] : 'disabled';
+                            $time = isset($schedule['time']) ? (string) $schedule['time'] : '';
+                            $custom_cron = isset($schedule['custom_cron']) ? (string) $schedule['custom_cron'] : '';
                             $recurrence_label = $recurrence_labels[$recurrence] ?? ucfirst($recurrence);
                             $next_run_summary = $next_runs[$schedule_id] ?? [];
                             $next_run_formatted = isset($next_run_summary['next_run_formatted']) && $next_run_summary['next_run_formatted'] !== ''
@@ -1572,7 +1574,10 @@ class BJLG_Admin {
                                 $post_checks,
                                 $destinations,
                                 $include_patterns,
-                                $exclude_patterns
+                                $exclude_patterns,
+                                $recurrence,
+                                $time,
+                                $custom_cron
                             );
                             ?>
                             <article
@@ -2890,8 +2895,47 @@ class BJLG_Admin {
         array $post_checks = [],
         array $destinations = [],
         array $include_patterns = [],
-        array $exclude_patterns = []
+        array $exclude_patterns = [],
+        string $recurrence = 'disabled',
+        string $time = '',
+        string $custom_cron = ''
     ) {
+        $recurrence_labels = [
+            'disabled' => 'Désactivée',
+            'every_five_minutes' => 'Toutes les 5 minutes',
+            'every_fifteen_minutes' => 'Toutes les 15 minutes',
+            'hourly' => 'Toutes les heures',
+            'twice_daily' => 'Deux fois par jour',
+            'daily' => 'Journalière',
+            'weekly' => 'Hebdomadaire',
+            'monthly' => 'Mensuelle',
+            'custom' => 'Expression Cron',
+        ];
+
+        $recurrence_badges = [];
+        $recurrence_key = $recurrence !== '' ? $recurrence : 'disabled';
+
+        if ($recurrence_key === 'custom') {
+            $cron_label = trim($custom_cron) !== '' ? trim($custom_cron) : 'Expression requise';
+            $color = trim($custom_cron) !== '' ? 'bjlg-badge-bg-amber' : 'bjlg-badge-bg-rose';
+            $extra = 'bjlg-badge-recurrence bjlg-badge-recurrence-custom' . (trim($custom_cron) === '' ? ' bjlg-badge-state-off' : '');
+            $recurrence_badges[] = $this->format_schedule_badge($cron_label, $color, $extra);
+        } else {
+            $label = $recurrence_labels[$recurrence_key] ?? ucfirst(str_replace('_', ' ', $recurrence_key));
+            $color = $recurrence_key === 'disabled' ? 'bjlg-badge-bg-slate' : 'bjlg-badge-bg-sky';
+            $extra = 'bjlg-badge-recurrence' . ($recurrence_key === 'disabled' ? ' bjlg-badge-state-off' : '');
+            $recurrence_badges[] = $this->format_schedule_badge($label, $color, $extra);
+
+            $time = trim($time);
+            if ($time !== '' && in_array($recurrence_key, ['daily', 'weekly', 'monthly', 'twice_daily'], true)) {
+                $recurrence_badges[] = $this->format_schedule_badge(
+                    sprintf('Heure %s', $time),
+                    'bjlg-badge-bg-blue',
+                    'bjlg-badge-time'
+                );
+            }
+        }
+
         $component_config = [
             'db' => ['label' => 'Base de données', 'color_class' => 'bjlg-badge-bg-indigo'],
             'plugins' => ['label' => 'Extensions', 'color_class' => 'bjlg-badge-bg-amber'],
@@ -2978,7 +3022,8 @@ class BJLG_Admin {
             $destination_badges[] = $this->format_schedule_badge('Stockage local', 'bjlg-badge-bg-slate', 'bjlg-badge-destination');
         }
 
-        return $this->wrap_schedule_badge_group('Composants', $component_badges)
+        return $this->wrap_schedule_badge_group('Fréquence', $recurrence_badges)
+            . $this->wrap_schedule_badge_group('Composants', $component_badges)
             . $this->wrap_schedule_badge_group('Options', $option_badges)
             . $this->wrap_schedule_badge_group('Inclusions', $include_badges)
             . $this->wrap_schedule_badge_group('Exclusions', $exclude_badges)
@@ -3003,6 +3048,7 @@ class BJLG_Admin {
         $recurrence = isset($schedule['recurrence']) ? (string) $schedule['recurrence'] : 'disabled';
         $day = isset($schedule['day']) ? (string) $schedule['day'] : 'sunday';
         $time = isset($schedule['time']) ? (string) $schedule['time'] : '23:59';
+        $custom_cron = isset($schedule['custom_cron']) ? (string) $schedule['custom_cron'] : '';
         $day_of_month = isset($schedule['day_of_month']) ? (int) $schedule['day_of_month'] : 1;
         if ($day_of_month < 1 || $day_of_month > 31) {
             $day_of_month = 1;
@@ -3028,9 +3074,12 @@ class BJLG_Admin {
         $weekly_hidden = $recurrence !== 'weekly';
         $monthly_hidden = $recurrence !== 'monthly';
         $time_hidden = $recurrence === 'disabled';
+        $custom_hidden = $recurrence !== 'custom';
+
         $weekly_classes = 'bjlg-schedule-weekly-options' . ($weekly_hidden ? ' bjlg-hidden' : '');
         $monthly_classes = 'bjlg-schedule-monthly-options' . ($monthly_hidden ? ' bjlg-hidden' : '');
         $time_classes = 'bjlg-schedule-time-options' . ($time_hidden ? ' bjlg-hidden' : '');
+        $custom_classes = 'bjlg-schedule-custom-options' . ($custom_hidden ? ' bjlg-hidden' : '');
 
         $next_run_text = isset($next_run_summary['next_run_formatted']) && $next_run_summary['next_run_formatted'] !== ''
             ? $next_run_summary['next_run_formatted']
@@ -3051,12 +3100,16 @@ class BJLG_Admin {
         $day_of_month_description_id_template = 'bjlg-schedule-day-of-month-%s-description';
         $include_id_template = 'bjlg-schedule-include-%s';
         $exclude_id_template = 'bjlg-schedule-exclude-%s';
+        $custom_id_template = 'bjlg-schedule-custom-%s';
+        $custom_description_id_template = 'bjlg-schedule-custom-%s-description';
         $time_id = sprintf($time_id_template, $field_prefix);
         $time_description_id = sprintf($time_description_id_template, $field_prefix);
         $day_of_month_id = sprintf($day_of_month_id_template, $field_prefix);
         $day_of_month_description_id = sprintf($day_of_month_description_id_template, $field_prefix);
         $include_id = sprintf($include_id_template, $field_prefix);
         $exclude_id = sprintf($exclude_id_template, $field_prefix);
+        $custom_id = sprintf($custom_id_template, $field_prefix);
+        $custom_description_id = sprintf($custom_description_id_template, $field_prefix);
 
         $summary_html = $this->get_schedule_summary_markup(
             $schedule_components,
@@ -3065,7 +3118,10 @@ class BJLG_Admin {
             $post_checks,
             $secondary_destinations,
             $include_patterns,
-            $exclude_patterns
+            $exclude_patterns,
+            $recurrence,
+            $time,
+            $custom_cron
         );
 
         $classes = ['bjlg-schedule-item'];
@@ -3120,6 +3176,7 @@ class BJLG_Admin {
                                 <option value="daily" <?php selected($recurrence, 'daily'); ?>>Journalière</option>
                                 <option value="weekly" <?php selected($recurrence, 'weekly'); ?>>Hebdomadaire</option>
                                 <option value="monthly" <?php selected($recurrence, 'monthly'); ?>>Mensuelle</option>
+                                <option value="custom" <?php selected($recurrence, 'custom'); ?>>Expression Cron</option>
                             </select>
                         </td>
                     </tr>
@@ -3167,6 +3224,26 @@ class BJLG_Admin {
                                    value="<?php echo esc_attr($time); ?>"
                                    aria-describedby="<?php echo esc_attr($time_description_id); ?>">
                             <p id="<?php echo esc_attr($time_description_id); ?>" class="description" data-id-template="bjlg-schedule-time-%s-description">Heure locale du site</p>
+                        </td>
+                    </tr>
+                    <tr class="<?php echo esc_attr($custom_classes); ?>" aria-hidden="<?php echo esc_attr($custom_hidden ? 'true' : 'false'); ?>">
+                        <th scope="row"><label for="<?php echo esc_attr($custom_id); ?>" data-for-template="bjlg-schedule-custom-%s">Expression Cron</label></th>
+                        <td>
+                            <input type="text"
+                                   id="<?php echo esc_attr($custom_id); ?>"
+                                   class="regular-text"
+                                   data-field="custom_cron"
+                                   data-id-template="bjlg-schedule-custom-%s"
+                                   data-describedby-template="bjlg-schedule-custom-%s-description"
+                                   name="schedules[<?php echo esc_attr($field_prefix); ?>][custom_cron]"
+                                   value="<?php echo esc_attr($custom_cron); ?>"
+                                   placeholder="0 3 * * *"
+                                   aria-describedby="<?php echo esc_attr($custom_description_id); ?>">
+                            <p id="<?php echo esc_attr($custom_description_id); ?>"
+                               class="description"
+                               data-id-template="bjlg-schedule-custom-%s-description">
+                                Format standard minute heure jour mois jour-semaine (ex. <code>0 3 * * *</code> pour 3h chaque jour).
+                            </p>
                         </td>
                     </tr>
                     <tr>
