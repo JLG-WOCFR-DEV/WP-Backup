@@ -156,7 +156,7 @@ class BJLG_Admin {
 
         $normalized = [];
         foreach ($completed as $step_id) {
-            $key = sanitize_key((string) $step_id);
+            $key = sanitize_title_with_dashes((string) $step_id);
             if ($key !== '') {
                 $normalized[] = $key;
             }
