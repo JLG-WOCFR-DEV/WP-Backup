@@ -45,6 +45,9 @@ final class BJLG_SettingsDefaultsTest extends TestCase
             'channels' => [
                 'email' => ['enabled' => false],
                 'slack' => ['enabled' => false, 'webhook_url' => ''],
+                'discord' => ['enabled' => false, 'webhook_url' => ''],
+                'teams' => ['enabled' => false, 'webhook_url' => ''],
+                'sms' => ['enabled' => false, 'webhook_url' => ''],
             ],
         ];
 
@@ -57,6 +60,16 @@ final class BJLG_SettingsDefaultsTest extends TestCase
         $this->assertSame(
             ['enabled' => false, 'webhook_url' => ''],
             $merged['channels']['slack']
+        );
+        $this->assertArrayHasKey('teams', $merged['channels']);
+        $this->assertSame(
+            ['enabled' => false, 'webhook_url' => ''],
+            $merged['channels']['teams']
+        );
+        $this->assertArrayHasKey('sms', $merged['channels']);
+        $this->assertSame(
+            ['enabled' => false, 'webhook_url' => ''],
+            $merged['channels']['sms']
         );
     }
 
@@ -93,6 +106,16 @@ final class BJLG_SettingsDefaultsTest extends TestCase
         $this->assertSame(
             ['enabled' => false, 'webhook_url' => ''],
             $stored['channels']['slack']
+        );
+        $this->assertArrayHasKey('teams', $stored['channels']);
+        $this->assertSame(
+            ['enabled' => false, 'webhook_url' => ''],
+            $stored['channels']['teams']
+        );
+        $this->assertArrayHasKey('sms', $stored['channels']);
+        $this->assertSame(
+            ['enabled' => false, 'webhook_url' => ''],
+            $stored['channels']['sms']
         );
     }
 }

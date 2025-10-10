@@ -17,6 +17,8 @@ class BJLG_Remote_Purge_Worker {
     private const MAX_ATTEMPTS = 5;
     private const BASE_BACKOFF = 60; // secondes
     private const MAX_BACKOFF = 15 * MINUTE_IN_SECONDS;
+    private const DELAY_ALERT_THRESHOLD = 10 * MINUTE_IN_SECONDS;
+    private const ALERT_ATTEMPT_THRESHOLD = 3;
 
     public function __construct() {
         add_action(self::HOOK, [$this, 'process_queue']);
@@ -115,11 +117,38 @@ class BJLG_Remote_Purge_Worker {
 
         $attempts = isset($entry['attempts']) ? (int) $entry['attempts'] : 0;
         $current_attempt = $attempts + 1;
+        $last_attempt_at = isset($entry['last_attempt_at']) ? (int) $entry['last_attempt_at'] : 0;
+        $registered_at = isset($entry['registered_at']) ? (int) $entry['registered_at'] : $now;
+        if ($registered_at <= 0) {
+            $registered_at = $now;
+        }
+
+        $anchor = $last_attempt_at > 0 ? $last_attempt_at : $registered_at;
+        $wait_time = max(0, $now - $anchor);
+        $previous_max_delay = isset($entry['max_delay']) ? (int) $entry['max_delay'] : 0;
+        $max_delay = max($previous_max_delay, $wait_time);
+        $was_alerted = !empty($entry['delay_alerted']);
+
+        if ($wait_time > 0) {
+            $this->log_history(
+                'info',
+                sprintf(
+                    __('Tentative #%1$s pour %2$s après %3$s d\'attente.', 'backup-jlg'),
+                    number_format_i18n($current_attempt),
+                    $file,
+                    $this->format_delay_label($wait_time)
+                )
+            );
+        }
+
         $incremental->update_remote_purge_entry($file, [
             'status' => 'processing',
             'attempts' => $current_attempt,
             'last_attempt_at' => $now,
             'next_attempt_at' => 0,
+            'last_delay' => $wait_time,
+            'max_delay' => $max_delay,
+            'delay_alerted' => $was_alerted,
         ]);
 
         $success = [];
@@ -184,6 +213,9 @@ class BJLG_Remote_Purge_Worker {
                 'last_error' => '',
                 'next_attempt_at' => 0,
                 'failed_at' => 0,
+                'last_delay' => $wait_time,
+                'max_delay' => $max_delay,
+                'delay_alerted' => false,
             ]);
 
             do_action('bjlg_remote_purge_completed', $file, [
@@ -198,6 +230,8 @@ class BJLG_Remote_Purge_Worker {
             $update = [
                 'errors' => $errors,
                 'last_error' => implode(' | ', array_values($errors)),
+                'last_delay' => $wait_time,
+                'max_delay' => $max_delay,
             ];
 
             $remaining_labels = [];
@@ -209,6 +243,7 @@ class BJLG_Remote_Purge_Worker {
                 $update['status'] = 'failed';
                 $update['next_attempt_at'] = 0;
                 $update['failed_at'] = $now;
+                $update['delay_alerted'] = true;
 
                 $incremental->update_remote_purge_entry($file, $update);
                 $current_entry = $this->find_queue_entry($incremental, $file);
@@ -254,6 +289,32 @@ class BJLG_Remote_Purge_Worker {
                     human_time_diff($now, $now + $delay)
                 );
                 $this->log_history('warning', $history_message);
+
+                if (!$was_alerted && $this->should_raise_delay_alert($current_attempt, $max_delay)) {
+                    $incremental->update_remote_purge_entry($file, ['delay_alerted' => true]);
+                    $alert_message = sprintf(
+                        __('Retard critique pour la purge distante %1$s (%2$s tentatives, attente max %3$s).', 'backup-jlg'),
+                        $file,
+                        number_format_i18n($current_attempt),
+                        $this->format_delay_label($max_delay)
+                    );
+                    $this->log_history('warning', $alert_message);
+
+                    $alert_context = array_merge(
+                        $entry,
+                        $update,
+                        [
+                            'file' => $file,
+                            'destinations' => $remaining,
+                            'attempts' => $current_attempt,
+                            'last_delay' => $wait_time,
+                            'max_delay' => $max_delay,
+                            'was_alerted' => false,
+                        ]
+                    );
+
+                    do_action('bjlg_remote_purge_delayed', $file, $alert_context);
+                }
             }
         }
 
@@ -280,6 +341,55 @@ class BJLG_Remote_Purge_Worker {
         if (class_exists(BJLG_History::class)) {
             BJLG_History::log('remote_purge', $status, $message);
         }
+    }
+
+    private function should_raise_delay_alert(int $attempts, int $max_delay): bool {
+        if ($attempts >= self::MAX_ATTEMPTS) {
+            return true;
+        }
+
+        if ($attempts >= self::ALERT_ATTEMPT_THRESHOLD) {
+            return true;
+        }
+
+        return $max_delay >= self::DELAY_ALERT_THRESHOLD;
+    }
+
+    private function format_delay_label(int $seconds): string {
+        $seconds = max(0, $seconds);
+
+        if ($seconds < MINUTE_IN_SECONDS) {
+            if ($seconds <= 1) {
+                return __('1 seconde', 'backup-jlg');
+            }
+
+            return sprintf(
+                __('%s secondes', 'backup-jlg'),
+                number_format_i18n($seconds)
+            );
+        }
+
+        $now = time();
+        $reference = $now - $seconds;
+        if ($reference < 0) {
+            $reference = 0;
+        }
+
+        $relative = human_time_diff($reference, $now);
+        if (!is_string($relative) || $relative === '') {
+            $minutes = max(1, round($seconds / MINUTE_IN_SECONDS));
+
+            if ($minutes <= 1) {
+                return __('1 minute', 'backup-jlg');
+            }
+
+            return sprintf(
+                __('%s minutes', 'backup-jlg'),
+                number_format_i18n($minutes)
+            );
+        }
+
+        return $relative;
     }
 
     /**

@@ -57,11 +57,16 @@ class BJLG_Settings {
                 'cleanup_complete' => false,
                 'storage_warning' => true,
                 'remote_purge_failed' => true,
+                'remote_purge_delayed' => true,
+                'restore_self_test_passed' => false,
+                'restore_self_test_failed' => true,
             ],
             'channels' => [
                 'email' => ['enabled' => false],
                 'slack' => ['enabled' => false, 'webhook_url' => ''],
                 'discord' => ['enabled' => false, 'webhook_url' => ''],
+                'teams' => ['enabled' => false, 'webhook_url' => ''],
+                'sms' => ['enabled' => false, 'webhook_url' => ''],
             ]
         ],
         'performance' => [
@@ -2384,6 +2389,9 @@ class BJLG_Settings {
             'cleanup_complete' => 'notify_cleanup_complete',
             'storage_warning' => 'notify_storage_warning',
             'remote_purge_failed' => 'notify_remote_purge_failed',
+            'remote_purge_delayed' => 'notify_remote_purge_delayed',
+            'restore_self_test_passed' => 'notify_restore_self_test_passed',
+            'restore_self_test_failed' => 'notify_restore_self_test_failed',
         ];
         foreach ($event_map as $event_key => $field_name) {
             $current = !empty($settings['events'][$event_key]);
@@ -2395,6 +2403,8 @@ class BJLG_Settings {
             'email' => 'channel_email',
             'slack' => 'channel_slack',
             'discord' => 'channel_discord',
+            'teams' => 'channel_teams',
+            'sms' => 'channel_sms',
         ];
         foreach ($channel_map as $channel_key => $field_name) {
             if (!isset($settings['channels'][$channel_key])) {
@@ -2421,6 +2431,22 @@ class BJLG_Settings {
         );
         $discord_url = $this->validate_optional_url($discord_source, 'Discord');
         $settings['channels']['discord']['webhook_url'] = $discord_url;
+
+        $teams_source = $this->get_scalar_request_value(
+            $request,
+            'teams_webhook_url',
+            $settings['channels']['teams']['webhook_url'] ?? ''
+        );
+        $teams_url = $this->validate_optional_url($teams_source, 'Teams');
+        $settings['channels']['teams']['webhook_url'] = $teams_url;
+
+        $sms_source = $this->get_scalar_request_value(
+            $request,
+            'sms_webhook_url',
+            $settings['channels']['sms']['webhook_url'] ?? ''
+        );
+        $sms_url = $this->validate_optional_url($sms_source, 'SMS');
+        $settings['channels']['sms']['webhook_url'] = $sms_url;
 
         $email_source = $this->get_scalar_request_value(
             $request,
@@ -2450,6 +2476,14 @@ class BJLG_Settings {
 
         if (!empty($settings['channels']['discord']['enabled']) && $discord_url === '') {
             throw new Exception('Veuillez fournir une URL de webhook Discord valide pour activer ce canal.');
+        }
+
+        if (!empty($settings['channels']['teams']['enabled']) && $teams_url === '') {
+            throw new Exception('Veuillez fournir une URL de webhook Teams valide pour activer ce canal.');
+        }
+
+        if (!empty($settings['channels']['sms']['enabled']) && $sms_url === '') {
+            throw new Exception('Veuillez fournir une URL de webhook SMS valide pour activer ce canal.');
         }
 
         $settings['email_recipients'] = implode(', ', $email_validation['valid']);

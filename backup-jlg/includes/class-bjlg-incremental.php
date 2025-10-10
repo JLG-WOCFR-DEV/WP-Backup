@@ -340,6 +340,9 @@ class BJLG_Incremental {
             'last_error' => '',
             'errors' => [],
             'failed_at' => 0,
+            'last_delay' => 0,
+            'max_delay' => 0,
+            'delay_alerted' => false,
         ];
 
         $queue_entry = null;
@@ -362,6 +365,9 @@ class BJLG_Incremental {
             $existing['last_attempt_at'] = 0;
             $existing['next_attempt_at'] = $entry['registered_at'];
             $existing['failed_at'] = 0;
+            $existing['last_delay'] = 0;
+            $existing['max_delay'] = 0;
+            $existing['delay_alerted'] = false;
             $queue_entry = $existing;
             break;
         }
@@ -418,6 +424,9 @@ class BJLG_Incremental {
                 $entry['failed_at'] = 0;
                 $entry['errors'] = [];
                 $entry['last_error'] = '';
+                $entry['last_delay'] = 0;
+                $entry['max_delay'] = 0;
+                $entry['delay_alerted'] = false;
             }
 
             $modified = true;
@@ -462,6 +471,9 @@ class BJLG_Incremental {
                 'last_error' => isset($entry['last_error']) ? (string) $entry['last_error'] : '',
                 'errors' => $this->normalize_error_list($entry['errors'] ?? []),
                 'failed_at' => isset($entry['failed_at']) ? (int) $entry['failed_at'] : 0,
+                'last_delay' => isset($entry['last_delay']) ? max(0, (int) $entry['last_delay']) : 0,
+                'max_delay' => isset($entry['max_delay']) ? max(0, (int) $entry['max_delay']) : 0,
+                'delay_alerted' => !empty($entry['delay_alerted']),
             ];
         }
 
@@ -516,6 +528,25 @@ class BJLG_Incremental {
                 $entry['failed_at'] = max(0, (int) $data['failed_at']);
             }
 
+            if (isset($data['last_delay'])) {
+                $entry['last_delay'] = max(0, (int) $data['last_delay']);
+            }
+
+            if (isset($data['max_delay'])) {
+                $entry['max_delay'] = max(
+                    isset($entry['last_delay']) ? (int) $entry['last_delay'] : 0,
+                    max(0, (int) $data['max_delay'])
+                );
+            } elseif (!isset($entry['max_delay'])) {
+                $entry['max_delay'] = isset($entry['last_delay']) ? (int) $entry['last_delay'] : 0;
+            }
+
+            if (array_key_exists('delay_alerted', $data)) {
+                $entry['delay_alerted'] = (bool) $data['delay_alerted'];
+            } elseif (!isset($entry['delay_alerted'])) {
+                $entry['delay_alerted'] = false;
+            }
+
             $modified = true;
             break;
         }
@@ -552,6 +583,9 @@ class BJLG_Incremental {
             $entry['failed_at'] = 0;
             $entry['errors'] = [];
             $entry['last_error'] = '';
+            $entry['last_delay'] = 0;
+            $entry['max_delay'] = 0;
+            $entry['delay_alerted'] = false;
 
             $modified = true;
             break;

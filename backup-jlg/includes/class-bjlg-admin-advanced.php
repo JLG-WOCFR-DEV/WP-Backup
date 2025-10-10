@@ -268,6 +268,7 @@ class BJLG_Admin_Advanced {
             'oldest_entry_formatted' => '',
             'oldest_entry_relative' => '',
             'entries' => [],
+            'delayed_count' => 0,
         ];
 
         if (!class_exists(__NAMESPACE__ . '\\BJLG_Incremental')) {
@@ -308,6 +309,15 @@ class BJLG_Admin_Advanced {
                 $next_attempt = $this->min_time($next_attempt, $entry_next_attempt);
             }
 
+            $last_delay = isset($entry['last_delay']) ? max(0, (int) $entry['last_delay']) : 0;
+            $max_delay = isset($entry['max_delay']) ? max(0, (int) $entry['max_delay']) : $last_delay;
+            $delay_alerted = !empty($entry['delay_alerted']);
+            $next_attempt_overdue = $entry_next_attempt > 0 && $entry_next_attempt <= $now;
+            $is_delayed = $delay_alerted || $next_attempt_overdue;
+            if ($is_delayed) {
+                $metrics['delayed_count']++;
+            }
+
             $destinations = [];
             if (!empty($entry['destinations']) && is_array($entry['destinations'])) {
                 foreach ($entry['destinations'] as $destination) {
@@ -323,6 +333,10 @@ class BJLG_Admin_Advanced {
                 'registered_at' => $registered_at,
                 'last_error' => isset($entry['last_error']) ? sanitize_text_field((string) $entry['last_error']) : '',
                 'destinations' => $destinations,
+                'last_delay' => $last_delay,
+                'max_delay' => $max_delay,
+                'delay_alerted' => $delay_alerted,
+                'is_delayed' => $is_delayed,
             ];
         }
 
@@ -427,7 +441,11 @@ class BJLG_Admin_Advanced {
                 'message' => isset($entry['last_error']) ? (string) $entry['last_error'] : '',
                 'details' => [
                     'destinations' => $destinations_label,
+                    'delay' => $this->format_duration_label(isset($entry['max_delay']) ? (int) $entry['max_delay'] : 0),
                 ],
+                'delayed' => !empty($entry['is_delayed']),
+                'delay_label' => $this->format_duration_label(isset($entry['max_delay']) ? (int) $entry['max_delay'] : 0),
+                'last_delay_label' => $this->format_duration_label(isset($entry['last_delay']) ? (int) $entry['last_delay'] : 0),
             ];
         }
 
@@ -508,6 +526,52 @@ class BJLG_Admin_Advanced {
             _n('%s tentative', '%s tentatives', $attempts, 'backup-jlg'),
             number_format_i18n($attempts)
         );
+    }
+
+    private function format_duration_label(int $seconds): string {
+        $seconds = max(0, $seconds);
+
+        if ($seconds === 0) {
+            return __('instantané', 'backup-jlg');
+        }
+
+        if ($seconds < MINUTE_IN_SECONDS) {
+            if ($seconds <= 1) {
+                return __('1 seconde', 'backup-jlg');
+            }
+
+            return sprintf(__('~%s secondes', 'backup-jlg'), number_format_i18n($seconds));
+        }
+
+        $now = function_exists('current_time') ? current_time('timestamp') : time();
+        if ($now <= 0) {
+            $now = time();
+        }
+
+        if (function_exists('human_time_diff')) {
+            $relative = human_time_diff(max(0, $now - $seconds), $now);
+            if (is_string($relative) && $relative !== '') {
+                return $relative;
+            }
+        }
+
+        $minutes = max(1, round($seconds / MINUTE_IN_SECONDS));
+        if ($minutes === 1) {
+            return __('1 minute', 'backup-jlg');
+        }
+
+        if ($minutes < 60) {
+            return sprintf(__('~%s minutes', 'backup-jlg'), number_format_i18n($minutes));
+        }
+
+        $hours = round($minutes / 60, 1);
+        if ($hours < 24) {
+            return sprintf(__('~%s heures', 'backup-jlg'), number_format_i18n($hours));
+        }
+
+        $days = round($hours / 24, 1);
+
+        return sprintf(__('~%s jours', 'backup-jlg'), number_format_i18n($days));
     }
 
     private function format_destination_label(array $destinations): string {

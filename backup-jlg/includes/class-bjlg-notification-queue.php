@@ -488,6 +488,12 @@ class BJLG_Notification_Queue {
             case 'discord':
                 $webhook = isset($channel['webhook_url']) ? (string) $channel['webhook_url'] : '';
                 return BJLG_Notification_Transport::send_discord($webhook, $title, $lines);
+            case 'teams':
+                $webhook = isset($channel['webhook_url']) ? (string) $channel['webhook_url'] : '';
+                return BJLG_Notification_Transport::send_teams($webhook, $title, $lines);
+            case 'sms':
+                $webhook = isset($channel['webhook_url']) ? (string) $channel['webhook_url'] : '';
+                return BJLG_Notification_Transport::send_sms($webhook, $title, $lines);
         }
 
         return [

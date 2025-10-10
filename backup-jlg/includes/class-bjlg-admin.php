@@ -916,6 +916,7 @@ class BJLG_Admin {
                             $pending_count = isset($status_counts['pending']) ? (int) $status_counts['pending'] : 0;
                             $retry_count = isset($status_counts['retry']) ? (int) $status_counts['retry'] : 0;
                             $failed_count = isset($status_counts['failed']) ? (int) $status_counts['failed'] : 0;
+                            $delayed_count = isset($queue['delayed_count']) ? (int) $queue['delayed_count'] : 0;
                             $next_relative = isset($queue['next_attempt_relative']) ? (string) $queue['next_attempt_relative'] : '';
                             $oldest_relative = isset($queue['oldest_entry_relative']) ? (string) $queue['oldest_entry_relative'] : '';
                             $entries = isset($queue['entries']) && is_array($queue['entries']) ? $queue['entries'] : [];
@@ -961,6 +962,12 @@ class BJLG_Admin {
                                     <?php endif; ?>
                                 </p>
 
+                                <?php if (!empty($delayed_count)): ?>
+                                    <p class="bjlg-queue-card__meta bjlg-queue-card__meta--alert" data-field="delayed">
+                                        <?php printf(esc_html__('%s purge(s) en retard', 'backup-jlg'), esc_html(number_format_i18n($delayed_count))); ?>
+                                    </p>
+                                <?php endif; ?>
+
                                 <ul class="bjlg-queue-card__entries" data-role="entries">
                                     <?php if (!empty($entries)): ?>
                                         <?php foreach ($entries as $entry):
@@ -976,6 +983,8 @@ class BJLG_Admin {
                                             $details = isset($entry['details']) && is_array($entry['details']) ? $entry['details'] : [];
                                             $entry_id = isset($entry['id']) ? (string) $entry['id'] : '';
                                             $entry_file = isset($entry['file']) ? (string) $entry['file'] : '';
+                                            $entry_delay_flag = !empty($entry['delayed']);
+                                            $delay_label = isset($entry['delay_label']) ? (string) $entry['delay_label'] : '';
                                             ?>
                                             <li class="bjlg-queue-card__entry"
                                                 data-status="<?php echo esc_attr($status_intent); ?>"
@@ -1004,6 +1013,16 @@ class BJLG_Admin {
                                                 <?php if (!empty($details['destinations'])): ?>
                                                     <p class="bjlg-queue-card__entry-meta">
                                                         <?php printf(esc_html__('Destinations : %s', 'backup-jlg'), esc_html($details['destinations'])); ?>
+                                                    </p>
+                                                <?php endif; ?>
+
+                                                <?php if ($entry_delay_flag): ?>
+                                                    <p class="bjlg-queue-card__entry-flag" data-field="delay">
+                                                        <?php if ($delay_label !== ''): ?>
+                                                            <?php printf(esc_html__('Retard max : %s', 'backup-jlg'), esc_html($delay_label)); ?>
+                                                        <?php else: ?>
+                                                            <?php esc_html_e('Retard détecté', 'backup-jlg'); ?>
+                                                        <?php endif; ?>
                                                     </p>
                                                 <?php endif; ?>
 
@@ -2732,6 +2751,24 @@ class BJLG_Admin {
                                                 <span><?php esc_html_e('Purge distante en échec', 'backup-jlg'); ?></span>
                                             </label>
                                         </li>
+                                        <li>
+                                            <label for="bjlg-notify-remote-purge-delayed">
+                                                <input type="checkbox" id="bjlg-notify-remote-purge-delayed" name="notify_remote_purge_delayed" <?php checked(!empty($notification_settings['events']['remote_purge_delayed'])); ?>>
+                                                <span><?php esc_html_e('Purge distante en retard critique', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                        <li>
+                                            <label for="bjlg-notify-restore-self-test-passed">
+                                                <input type="checkbox" id="bjlg-notify-restore-self-test-passed" name="notify_restore_self_test_passed" <?php checked(!empty($notification_settings['events']['restore_self_test_passed'])); ?>>
+                                                <span><?php esc_html_e('Test de restauration réussi', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                        <li>
+                                            <label for="bjlg-notify-restore-self-test-failed">
+                                                <input type="checkbox" id="bjlg-notify-restore-self-test-failed" name="notify_restore_self_test_failed" <?php checked(!empty($notification_settings['events']['restore_self_test_failed'])); ?>>
+                                                <span><?php esc_html_e('Test de restauration en échec', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
                                     </ul>
                                 </fieldset>
                                 <p id="bjlg-notifications-events-description" class="description"><?php esc_html_e('Choisissez quels événements déclenchent un envoi de notification.', 'backup-jlg'); ?></p>
@@ -2784,6 +2821,18 @@ class BJLG_Admin {
                                                 <span><?php esc_html_e('Discord', 'backup-jlg'); ?></span>
                                             </label>
                                         </li>
+                                        <li>
+                                            <label for="bjlg-channel-teams">
+                                                <input type="checkbox" id="bjlg-channel-teams" name="channel_teams" <?php checked(!empty($notification_settings['channels']['teams']['enabled'])); ?>>
+                                                <span><?php esc_html_e('Microsoft Teams', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                        <li>
+                                            <label for="bjlg-channel-sms">
+                                                <input type="checkbox" id="bjlg-channel-sms" name="channel_sms" <?php checked(!empty($notification_settings['channels']['sms']['enabled'])); ?>>
+                                                <span><?php esc_html_e('SMS / webhook mobile', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
                                     </ul>
                                 </fieldset>
                                 <p id="bjlg-notifications-channels-description" class="description"><?php esc_html_e('Activez les canaux qui doivent recevoir vos notifications.', 'backup-jlg'); ?></p>
@@ -2805,6 +2854,24 @@ class BJLG_Admin {
                             <div class="bjlg-field-control">
                                 <input type="url" name="discord_webhook_url" class="regular-text" value="<?php echo esc_attr($notification_settings['channels']['discord']['webhook_url']); ?>" placeholder="https://discord.com/api/webhooks/...">
                                 <p class="description">URL du webhook Discord. Obligatoire si le canal Discord est activé.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Webhook Microsoft Teams</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <input type="url" name="teams_webhook_url" class="regular-text" value="<?php echo esc_attr($notification_settings['channels']['teams']['webhook_url']); ?>" placeholder="https://outlook.office.com/webhook/...">
+                                <p class="description">URL du webhook entrant Teams. Obligatoire si le canal Teams est activé.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Webhook SMS</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <input type="url" name="sms_webhook_url" class="regular-text" value="<?php echo esc_attr($notification_settings['channels']['sms']['webhook_url']); ?>" placeholder="https://sms.example.com/hooks/...">
+                                <p class="description">URL du webhook de votre passerelle SMS (Twilio, etc.). Obligatoire si le canal SMS est activé.</p>
                             </div>
                         </td>
                     </tr>

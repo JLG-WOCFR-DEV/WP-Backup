@@ -603,6 +603,11 @@
     font-size: 0.95em;
 }
 
+.bjlg-queue-card__meta--alert {
+    color: var(--bjlg-warning-text, #7f5300);
+    font-weight: 600;
+}
+
 .bjlg-queue-card__entries {
     list-style: none;
     margin: 0;
@@ -680,6 +685,19 @@
     margin: 6px 0 0;
     font-size: 0.9em;
     color: color-mix(in srgb, #b91c1c 70%, var(--bjlg-color-text) 30%);
+}
+
+.bjlg-queue-card__entry-flag {
+    display: inline-flex;
+    align-items: center;
+    margin: 6px 0 0;
+    padding: 4px 12px;
+    border-radius: 999px;
+    background-color: color-mix(in srgb, #f59e0b 20%, #fff8e6 80%);
+    color: var(--bjlg-warning-text, #92400e);
+    font-size: 0.75em;
+    font-weight: 600;
+    letter-spacing: 0.01em;
 }
 
 .bjlg-queue-card__entry-actions {
