@@ -2834,6 +2834,9 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
                     'cleanup_complete' => false,
                     'storage_warning' => false,
                     'remote_purge_failed' => true,
+                    'remote_purge_delayed' => true,
+                    'restore_self_test_passed' => false,
+                    'restore_self_test_failed' => true,
                 ],
                 'channels' => [
                     'email' => ['enabled' => true],
@@ -2844,6 +2847,14 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
                     'discord' => [
                         'enabled' => false,
                         'webhook_url' => 'ftp://discord.example.com/hook',
+                    ],
+                    'teams' => [
+                        'enabled' => false,
+                        'webhook_url' => '',
+                    ],
+                    'sms' => [
+                        'enabled' => false,
+                        'webhook_url' => '',
                     ],
                 ],
             ], get_option('bjlg_notification_settings'));

@@ -2307,11 +2307,17 @@ class BJLG_Admin {
                 'backup_failed' => true,
                 'cleanup_complete' => false,
                 'storage_warning' => true,
+                'remote_purge_failed' => true,
+                'remote_purge_delayed' => true,
+                'restore_self_test_passed' => false,
+                'restore_self_test_failed' => true,
             ],
             'channels' => [
                 'email' => ['enabled' => false],
                 'slack' => ['enabled' => false, 'webhook_url' => ''],
                 'discord' => ['enabled' => false, 'webhook_url' => ''],
+                'teams' => ['enabled' => false, 'webhook_url' => ''],
+                'sms' => ['enabled' => false, 'webhook_url' => ''],
             ],
         ];
 
