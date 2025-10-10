@@ -1,6 +1,8 @@
 <?php
 namespace BJLG;
 
+use WP_Error;
+
 if (!defined('ABSPATH')) {
     exit;
 }
@@ -9,6 +11,9 @@ if (!defined('ABSPATH')) {
  * Gère l'envoi des notifications multi-canales configurées dans le plugin.
  */
 class BJLG_Notifications {
+
+    /** @var self|null */
+    private static $instance = null;
 
     /** @var array<string,mixed> */
     private $settings = [];
@@ -31,7 +36,20 @@ class BJLG_Notifications {
         ],
     ];
 
+    public static function instance() {
+        if (!self::$instance instanceof self) {
+            self::$instance = new self();
+        }
+
+        return self::$instance;
+    }
+
     public function __construct() {
+        if (self::$instance instanceof self) {
+            return;
+        }
+
+        self::$instance = $this;
         $this->reload_settings();
 
         add_action('bjlg_settings_saved', [$this, 'handle_settings_saved']);
@@ -151,6 +169,107 @@ class BJLG_Notifications {
     }
 
     /**
+     * Enfile une notification de test en utilisant les réglages fournis ou stockés.
+     *
+     * @param array<string,mixed>|null $override_settings
+     *
+     * @return array{success:bool,entry:array<string,mixed>,channels:string[]}|WP_Error
+     */
+    public function send_test_notification($override_settings = null) {
+        $settings = $override_settings !== null
+            ? $this->merge_settings($override_settings)
+            : $this->settings;
+
+        if (empty($settings['enabled'])) {
+            return new WP_Error('bjlg_notifications_disabled', __('Les notifications sont désactivées.', 'backup-jlg'));
+        }
+
+        $site_name = function_exists('get_bloginfo') ? get_bloginfo('name') : '';
+        $site_url = function_exists('home_url') ? home_url('/') : ''; // phpcs:ignore WordPress.WP.AlternativeFunctions.home_url_home_url
+
+        $user_label = '';
+        if (function_exists('wp_get_current_user')) {
+            $current_user = wp_get_current_user();
+            if ($current_user && isset($current_user->display_name) && $current_user->display_name !== '') {
+                $user_label = $current_user->display_name;
+            } elseif ($current_user && isset($current_user->user_login) && $current_user->user_login !== '') {
+                $user_label = $current_user->user_login;
+            }
+        }
+
+        $context = [
+            'test' => true,
+            'site_name' => is_string($site_name) ? $site_name : '',
+            'site_url' => is_string($site_url) ? $site_url : '',
+            'initiator' => is_string($user_label) ? $user_label : '',
+            'timestamp' => current_time('mysql'),
+        ];
+
+        $title = __('Notification de test', 'backup-jlg');
+        $lines = [
+            __('Ce message confirme que vos canaux reçoivent correctement les alertes Backup JLG.', 'backup-jlg'),
+        ];
+
+        if ($context['site_name'] !== '') {
+            $lines[] = sprintf(__('Site : %s', 'backup-jlg'), $context['site_name']);
+        }
+
+        if ($context['site_url'] !== '') {
+            $lines[] = sprintf(__('URL : %s', 'backup-jlg'), $context['site_url']);
+        }
+
+        if ($context['initiator'] !== '') {
+            $lines[] = sprintf(__('Déclenché par : %s', 'backup-jlg'), $context['initiator']);
+        }
+
+        $lines[] = sprintf(__('Horodatage : %s', 'backup-jlg'), $context['timestamp']);
+
+        $lines = array_filter(array_map('trim', $lines));
+        $lines = apply_filters('bjlg_notification_message_lines', $lines, 'test_notification', $context);
+
+        $payload = [
+            'event' => 'test_notification',
+            'title' => $title,
+            'lines' => $lines,
+            'context' => $context,
+        ];
+
+        $payload = apply_filters('bjlg_notification_payload', $payload, 'test_notification', $context);
+
+        if (!is_array($payload) || empty($payload['title']) || empty($payload['lines']) || !is_array($payload['lines'])) {
+            return new WP_Error('bjlg_notification_payload_invalid', __('Impossible de préparer la notification de test.', 'backup-jlg'));
+        }
+
+        $title = (string) $payload['title'];
+        $lines = array_map('strval', $payload['lines']);
+        $channels = $this->prepare_channels_payload($title, $lines, $settings);
+
+        if (empty($channels)) {
+            return new WP_Error('bjlg_notifications_no_channels', __('Aucun canal de notification actif n’est disponible.', 'backup-jlg'));
+        }
+
+        $entry = [
+            'id' => uniqid('bjlg_notif_test_', true),
+            'event' => 'test_notification',
+            'title' => $title,
+            'subject' => '[Backup JLG] ' . $title,
+            'lines' => $lines,
+            'body' => implode("\n", $lines),
+            'context' => is_array($payload['context']) ? $payload['context'] : $context,
+            'channels' => $channels,
+            'created_at' => time(),
+        ];
+
+        BJLG_Notification_Queue::enqueue($entry);
+
+        return [
+            'success' => true,
+            'entry' => $entry,
+            'channels' => array_keys($channels),
+        ];
+    }
+
+    /**
      * Recharge les réglages depuis la base de données.
      */
     private function reload_settings() {
@@ -184,19 +303,23 @@ class BJLG_Notifications {
     /**
      * Vérifie si un événement doit générer une notification.
      */
-    private function is_event_enabled($event) {
-        if (empty($this->settings['enabled'])) {
+    private function is_event_enabled($event, ?array $settings = null) {
+        $settings = $settings ?? $this->settings;
+
+        if (empty($settings['enabled'])) {
             return false;
         }
 
-        return !empty($this->settings['events'][$event]);
+        return !empty($settings['events'][$event]);
     }
 
     /**
      * Retourne vrai si le canal spécifié est activé.
      */
-    private function is_channel_enabled($channel) {
-        return !empty($this->settings['channels'][$channel]['enabled']);
+    private function is_channel_enabled($channel, ?array $settings = null) {
+        $settings = $settings ?? $this->settings;
+
+        return !empty($settings['channels'][$channel]['enabled']);
     }
 
     /**
@@ -379,11 +502,12 @@ class BJLG_Notifications {
      *
      * @return array<string,array<string,mixed>>
      */
-    private function prepare_channels_payload($title, $lines) {
+    private function prepare_channels_payload($title, $lines, ?array $settings = null) {
+        $settings = $settings ?? $this->settings;
         $channels = [];
 
-        if ($this->is_channel_enabled('email')) {
-            $recipients = BJLG_Notification_Transport::normalize_email_recipients($this->settings['email_recipients']);
+        if ($this->is_channel_enabled('email', $settings)) {
+            $recipients = BJLG_Notification_Transport::normalize_email_recipients($settings['email_recipients']);
             if (!empty($recipients)) {
                 $channels['email'] = [
                     'enabled' => true,
@@ -396,8 +520,8 @@ class BJLG_Notifications {
             }
         }
 
-        if ($this->is_channel_enabled('slack')) {
-            $url = $this->settings['channels']['slack']['webhook_url'] ?? '';
+        if ($this->is_channel_enabled('slack', $settings)) {
+            $url = $settings['channels']['slack']['webhook_url'] ?? '';
             if (BJLG_Notification_Transport::is_valid_url($url)) {
                 $channels['slack'] = [
                     'enabled' => true,
@@ -410,8 +534,8 @@ class BJLG_Notifications {
             }
         }
 
-        if ($this->is_channel_enabled('discord')) {
-            $url = $this->settings['channels']['discord']['webhook_url'] ?? '';
+        if ($this->is_channel_enabled('discord', $settings)) {
+            $url = $settings['channels']['discord']['webhook_url'] ?? '';
             if (BJLG_Notification_Transport::is_valid_url($url)) {
                 $channels['discord'] = [
                     'enabled' => true,

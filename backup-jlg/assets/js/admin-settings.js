@@ -296,6 +296,86 @@ registerSimpleDestinationTest({
     defaultErrorMessage: 'Impossible de tester la connexion pCloud.'
 });
 
+$('.bjlg-notification-test-button').on('click', function(e) {
+    e.preventDefault();
+
+    const $button = $(this);
+    const $container = $button.closest('.bjlg-notification-test');
+    const $spinner = $container.find('.spinner');
+    const $feedback = $container.find('.bjlg-notification-test-feedback');
+
+    if ($feedback.length) {
+        $feedback.removeClass('notice-success notice-error').addClass('bjlg-hidden').empty();
+    }
+
+    const payload = {
+        action: 'bjlg_send_notification_test',
+        nonce: bjlg_ajax.nonce
+    };
+
+    const $preferencesForm = $('.bjlg-notification-preferences-form');
+    if ($preferencesForm.length) {
+        Object.assign(payload, collectFormData($preferencesForm));
+    }
+
+    const $channelsForm = $('.bjlg-notification-channels-form');
+    if ($channelsForm.length) {
+        Object.assign(payload, collectFormData($channelsForm));
+    }
+
+    const originalText = $button.text();
+    const loadingLabel = $button.attr('data-loading-label') || 'Envoi…';
+
+    $button.prop('disabled', true).data('bjlg-original-text', originalText).text(loadingLabel);
+
+    if ($spinner.length) {
+        $spinner.addClass('is-active').show();
+    }
+
+    const displayFeedback = function(type, message) {
+        if (!$feedback.length) {
+            return;
+        }
+
+        showFeedback($feedback, type, message);
+    };
+
+    $.post(bjlg_ajax.ajax_url, payload)
+        .done(function(response) {
+            const normalized = normalizeSettingsResponse(response);
+            if (normalized.success) {
+                const message = normalized.message || 'Notification de test planifiée.';
+                displayFeedback('success', message);
+            } else {
+                const message = normalized.message || 'Impossible d\'envoyer la notification de test.';
+                displayFeedback('error', message);
+            }
+        })
+        .fail(function(xhr) {
+            let message = 'Impossible d\'envoyer la notification de test.';
+
+            if (xhr && xhr.responseJSON) {
+                if (xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                    message = xhr.responseJSON.data.message;
+                } else if (xhr.responseJSON.message) {
+                    message = xhr.responseJSON.message;
+                }
+            }
+
+            displayFeedback('error', message);
+        })
+        .always(function() {
+            $button.prop('disabled', false);
+            if (typeof originalText === 'string') {
+                $button.text(originalText);
+            }
+
+            if ($spinner.length) {
+                $spinner.removeClass('is-active').hide();
+            }
+        });
+});
+
 // --- GESTIONNAIRE SAUVEGARDE DES RÉGLAGES ---
 $('.bjlg-settings-form').on('submit', function(e) {
     e.preventDefault();

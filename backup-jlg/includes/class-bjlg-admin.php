@@ -1576,8 +1576,7 @@ class BJLG_Admin {
                                 $include_patterns,
                                 $exclude_patterns,
                                 $recurrence,
-                                $time,
-                                $custom_cron
+                                $schedule['custom_cron'] ?? ''
                             );
                             ?>
                             <article
@@ -2307,7 +2306,7 @@ class BJLG_Admin {
             </form>
 
             <h3><span class="dashicons dashicons-megaphone" aria-hidden="true"></span> Notifications</h3>
-            <form class="bjlg-settings-form" data-success-message="Notifications mises à jour." data-error-message="Impossible de sauvegarder les notifications.">
+            <form class="bjlg-settings-form bjlg-notification-preferences-form" data-success-message="Notifications mises à jour." data-error-message="Impossible de sauvegarder les notifications.">
                 <table class="form-table">
                     <tr>
                         <th scope="row">Notifications automatiques</th>
@@ -2391,8 +2390,21 @@ class BJLG_Admin {
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les notifications</button></p>
             </form>
 
+            <div class="bjlg-notification-test">
+                <button
+                    type="button"
+                    class="button button-secondary bjlg-notification-test-button"
+                    data-loading-label="<?php esc_attr_e('Envoi…', 'backup-jlg'); ?>"
+                >
+                    <?php esc_html_e('Envoyer une notification de test', 'backup-jlg'); ?>
+                </button>
+                <span class="spinner" aria-hidden="true"></span>
+                <p class="description"><?php esc_html_e('La notification de test utilise les canaux et destinataires renseignés ci-dessus, même si les modifications ne sont pas encore enregistrées.', 'backup-jlg'); ?></p>
+                <div class="notice bjlg-notification-test-feedback bjlg-hidden" role="status" aria-live="polite"></div>
+            </div>
+
             <h3><span class="dashicons dashicons-admin-site-alt3" aria-hidden="true"></span> Canaux</h3>
-            <form class="bjlg-settings-form" data-success-message="Canaux mis à jour." data-error-message="Impossible de mettre à jour les canaux.">
+            <form class="bjlg-settings-form bjlg-notification-channels-form" data-success-message="Canaux mis à jour." data-error-message="Impossible de mettre à jour les canaux.">
                 <table class="form-table">
                     <tr>
                         <th scope="row">Canaux disponibles</th>
@@ -2897,7 +2909,6 @@ class BJLG_Admin {
         array $include_patterns = [],
         array $exclude_patterns = [],
         string $recurrence = 'disabled',
-        string $time = '',
         string $custom_cron = ''
     ) {
         $recurrence_labels = [
@@ -2909,32 +2920,26 @@ class BJLG_Admin {
             'daily' => 'Journalière',
             'weekly' => 'Hebdomadaire',
             'monthly' => 'Mensuelle',
-            'custom' => 'Expression Cron',
+            'custom' => 'Expression Cron personnalisée',
         ];
 
-        $recurrence_badges = [];
-        $recurrence_key = $recurrence !== '' ? $recurrence : 'disabled';
+        $normalized_recurrence = trim(strtolower($recurrence));
+        $frequency_label = $recurrence_labels[$normalized_recurrence] ?? ucfirst(str_replace('_', ' ', $recurrence));
 
-        if ($recurrence_key === 'custom') {
-            $cron_label = trim($custom_cron) !== '' ? trim($custom_cron) : 'Expression requise';
-            $color = trim($custom_cron) !== '' ? 'bjlg-badge-bg-amber' : 'bjlg-badge-bg-rose';
-            $extra = 'bjlg-badge-recurrence bjlg-badge-recurrence-custom' . (trim($custom_cron) === '' ? ' bjlg-badge-state-off' : '');
-            $recurrence_badges[] = $this->format_schedule_badge($cron_label, $color, $extra);
-        } else {
-            $label = $recurrence_labels[$recurrence_key] ?? ucfirst(str_replace('_', ' ', $recurrence_key));
-            $color = $recurrence_key === 'disabled' ? 'bjlg-badge-bg-slate' : 'bjlg-badge-bg-sky';
-            $extra = 'bjlg-badge-recurrence' . ($recurrence_key === 'disabled' ? ' bjlg-badge-state-off' : '');
-            $recurrence_badges[] = $this->format_schedule_badge($label, $color, $extra);
-
-            $time = trim($time);
-            if ($time !== '' && in_array($recurrence_key, ['daily', 'weekly', 'monthly', 'twice_daily'], true)) {
-                $recurrence_badges[] = $this->format_schedule_badge(
-                    sprintf('Heure %s', $time),
-                    'bjlg-badge-bg-blue',
-                    'bjlg-badge-time'
-                );
+        if ($normalized_recurrence === 'custom') {
+            $custom_cron = trim($custom_cron);
+            if ($custom_cron !== '') {
+                $frequency_label = sprintf('%s (%s)', $frequency_label, $custom_cron);
             }
         }
+
+        if ($frequency_label === '') {
+            $frequency_label = '—';
+        }
+
+        $frequency_badges = [
+            $this->format_schedule_badge($frequency_label, 'bjlg-badge-bg-indigo', 'bjlg-badge-frequency')
+        ];
 
         $component_config = [
             'db' => ['label' => 'Base de données', 'color_class' => 'bjlg-badge-bg-indigo'],
@@ -3022,7 +3027,7 @@ class BJLG_Admin {
             $destination_badges[] = $this->format_schedule_badge('Stockage local', 'bjlg-badge-bg-slate', 'bjlg-badge-destination');
         }
 
-        return $this->wrap_schedule_badge_group('Fréquence', $recurrence_badges)
+        return $this->wrap_schedule_badge_group('Fréquence', $frequency_badges)
             . $this->wrap_schedule_badge_group('Composants', $component_badges)
             . $this->wrap_schedule_badge_group('Options', $option_badges)
             . $this->wrap_schedule_badge_group('Inclusions', $include_badges)
@@ -3073,9 +3078,8 @@ class BJLG_Admin {
 
         $weekly_hidden = $recurrence !== 'weekly';
         $monthly_hidden = $recurrence !== 'monthly';
-        $time_hidden = $recurrence === 'disabled';
+        $time_hidden = in_array($recurrence, ['disabled', 'custom'], true);
         $custom_hidden = $recurrence !== 'custom';
-
         $weekly_classes = 'bjlg-schedule-weekly-options' . ($weekly_hidden ? ' bjlg-hidden' : '');
         $monthly_classes = 'bjlg-schedule-monthly-options' . ($monthly_hidden ? ' bjlg-hidden' : '');
         $time_classes = 'bjlg-schedule-time-options' . ($time_hidden ? ' bjlg-hidden' : '');
@@ -3096,6 +3100,8 @@ class BJLG_Admin {
         $label_id = 'bjlg-schedule-label-' . $field_prefix;
         $time_id_template = 'bjlg-schedule-time-%s';
         $time_description_id_template = 'bjlg-schedule-time-%s-description';
+        $custom_id_template = 'bjlg-schedule-custom-%s';
+        $custom_description_id_template = 'bjlg-schedule-custom-%s-description';
         $day_of_month_id_template = 'bjlg-schedule-day-of-month-%s';
         $day_of_month_description_id_template = 'bjlg-schedule-day-of-month-%s-description';
         $include_id_template = 'bjlg-schedule-include-%s';
@@ -3104,6 +3110,8 @@ class BJLG_Admin {
         $custom_description_id_template = 'bjlg-schedule-custom-%s-description';
         $time_id = sprintf($time_id_template, $field_prefix);
         $time_description_id = sprintf($time_description_id_template, $field_prefix);
+        $custom_id = sprintf($custom_id_template, $field_prefix);
+        $custom_description_id = sprintf($custom_description_id_template, $field_prefix);
         $day_of_month_id = sprintf($day_of_month_id_template, $field_prefix);
         $day_of_month_description_id = sprintf($day_of_month_description_id_template, $field_prefix);
         $include_id = sprintf($include_id_template, $field_prefix);
@@ -3120,8 +3128,7 @@ class BJLG_Admin {
             $include_patterns,
             $exclude_patterns,
             $recurrence,
-            $time,
-            $custom_cron
+            $schedule['custom_cron'] ?? ''
         );
 
         $classes = ['bjlg-schedule-item'];
@@ -3231,18 +3238,16 @@ class BJLG_Admin {
                         <td>
                             <input type="text"
                                    id="<?php echo esc_attr($custom_id); ?>"
-                                   class="regular-text"
+                                   class="regular-text code"
                                    data-field="custom_cron"
                                    data-id-template="bjlg-schedule-custom-%s"
                                    data-describedby-template="bjlg-schedule-custom-%s-description"
                                    name="schedules[<?php echo esc_attr($field_prefix); ?>][custom_cron]"
-                                   value="<?php echo esc_attr($custom_cron); ?>"
-                                   placeholder="0 3 * * *"
+                                   value="<?php echo esc_attr($schedule['custom_cron'] ?? ''); ?>"
+                                   placeholder="0 3 * * mon-fri"
                                    aria-describedby="<?php echo esc_attr($custom_description_id); ?>">
-                            <p id="<?php echo esc_attr($custom_description_id); ?>"
-                               class="description"
-                               data-id-template="bjlg-schedule-custom-%s-description">
-                                Format standard minute heure jour mois jour-semaine (ex. <code>0 3 * * *</code> pour 3h chaque jour).
+                            <p id="<?php echo esc_attr($custom_description_id); ?>" class="description" data-id-template="bjlg-schedule-custom-%s-description">
+                                Utilisez une expression Cron standard à cinq champs (minute, heure, jour du mois, mois, jour de semaine).
                             </p>
                         </td>
                     </tr>
