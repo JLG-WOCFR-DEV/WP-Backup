@@ -594,7 +594,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         $this->disconnect();
 
         if (function_exists('wp_safe_redirect')) {
-            wp_safe_redirect(admin_url('admin.php?page=backup-jlg&tab=settings'));
+            wp_safe_redirect(admin_url('admin.php?page=backup-jlg&section=settings'));
             exit;
         }
     }

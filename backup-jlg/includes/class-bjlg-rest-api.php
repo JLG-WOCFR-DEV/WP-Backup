@@ -1046,7 +1046,7 @@ class BJLG_REST_API {
                 'requests_per_minute' => 60,
                 'requests_per_hour' => 1000
             ],
-            'documentation' => admin_url('admin.php?page=backup-jlg&tab=api')
+            'documentation' => admin_url('admin.php?page=backup-jlg&section=integrations')
         ]);
     }
     

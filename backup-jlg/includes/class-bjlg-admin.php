@@ -15,17 +15,23 @@ class BJLG_Admin {
 
     private const DASHBOARD_RECENT_BACKUPS_LIMIT = 3;
 
+    private const ONBOARDING_PROGRESS_META_KEY = 'bjlg_onboarding_progress';
+
     private $destinations = [];
     private $advanced_admin;
     private $google_drive_notice;
+    private $onboarding_progress = [];
 
     public function __construct() {
         $this->load_destinations();
         $this->advanced_admin = class_exists(BJLG_Admin_Advanced::class) ? new BJLG_Admin_Advanced() : null;
+        $this->onboarding_progress = $this->get_user_onboarding_progress();
         add_action('admin_menu', [$this, 'create_admin_page']);
         add_filter('bjlg_admin_tabs', [$this, 'get_default_tabs']);
+        add_filter('bjlg_admin_sections', [$this, 'get_default_sections']);
         add_action('wp_dashboard_setup', [$this, 'register_dashboard_widget']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_dashboard_widget_assets']);
+        add_action('wp_ajax_bjlg_update_onboarding_progress', [$this, 'ajax_update_onboarding_progress']);
     }
 
     /**
@@ -111,6 +117,89 @@ class BJLG_Admin {
         return $defaults;
     }
 
+    private function get_user_onboarding_progress(): array {
+        if (!\function_exists('get_current_user_id') || !\function_exists('get_user_meta')) {
+            return [];
+        }
+
+        $user_id = \get_current_user_id();
+        if (!$user_id) {
+            return [];
+        }
+
+        $progress = \get_user_meta($user_id, self::ONBOARDING_PROGRESS_META_KEY, true);
+
+        if (!is_array($progress) || empty($progress)) {
+            return [];
+        }
+
+        $completed = [];
+        foreach ($progress as $step_id) {
+            $key = sanitize_key((string) $step_id);
+            if ($key !== '') {
+                $completed[] = $key;
+            }
+        }
+
+        return array_values(array_unique($completed));
+    }
+
+    private function save_user_onboarding_progress(array $completed) {
+        if (!\function_exists('get_current_user_id') || !\function_exists('update_user_meta')) {
+            return;
+        }
+
+        $user_id = \get_current_user_id();
+        if (!$user_id) {
+            return;
+        }
+
+        $normalized = [];
+        foreach ($completed as $step_id) {
+            $key = sanitize_key((string) $step_id);
+            if ($key !== '') {
+                $normalized[] = $key;
+            }
+        }
+
+        \update_user_meta($user_id, self::ONBOARDING_PROGRESS_META_KEY, array_values(array_unique($normalized)));
+        $this->onboarding_progress = $this->get_user_onboarding_progress();
+    }
+
+    /**
+     * Retourne les sections par défaut affichées dans l'application React.
+     */
+    public function get_default_sections($sections) {
+        $defaults = [
+            'monitoring' => [
+                'label' => __('Monitoring', 'backup-jlg'),
+                'icon' => 'chart-line',
+            ],
+            'backup' => [
+                'label' => __('Sauvegarde', 'backup-jlg'),
+                'icon' => 'database-export',
+            ],
+            'restore' => [
+                'label' => __('Restauration', 'backup-jlg'),
+                'icon' => 'update-alt',
+            ],
+            'settings' => [
+                'label' => __('Réglages', 'backup-jlg'),
+                'icon' => 'admin-generic',
+            ],
+            'integrations' => [
+                'label' => __('Intégrations', 'backup-jlg'),
+                'icon' => 'admin-network',
+            ],
+        ];
+
+        if (is_array($sections) && !empty($sections)) {
+            return array_merge($defaults, $sections);
+        }
+
+        return $defaults;
+    }
+
     /**
      * Crée la page de menu dans l'administration.
      */
@@ -163,29 +252,253 @@ class BJLG_Admin {
             BJLG_VERSION
         );
     }
+
+    public function ajax_update_onboarding_progress() {
+        if (!function_exists('bjlg_can_manage_plugin') || !bjlg_can_manage_plugin()) {
+            wp_send_json_error(['message' => __('Vous n’avez pas la permission de modifier cette checklist.', 'backup-jlg')], 403);
+        }
+
+        $nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+        if (!wp_verify_nonce($nonce, 'bjlg_onboarding_progress')) {
+            wp_send_json_error(['message' => __('Jeton de sécurité invalide.', 'backup-jlg')], 403);
+        }
+
+        $steps = isset($_POST['completed']) ? (array) wp_unslash($_POST['completed']) : [];
+        $completed = [];
+
+        foreach ($steps as $step_id) {
+            $key = sanitize_key((string) $step_id);
+            if ($key !== '') {
+                $completed[] = $key;
+            }
+        }
+
+        $this->save_user_onboarding_progress($completed);
+
+        wp_send_json_success([
+            'completed' => $this->onboarding_progress,
+        ]);
+    }
     
+    private function map_legacy_tab_to_section(string $tab): string {
+        switch ($tab) {
+            case 'backup_restore':
+            case 'scheduling':
+                return 'backup';
+            case 'history':
+            case 'health_check':
+            case 'logs':
+                return 'monitoring';
+            case 'settings':
+                return 'settings';
+            case 'api':
+                return 'integrations';
+            default:
+                return $tab !== '' ? sanitize_key($tab) : 'monitoring';
+        }
+    }
+
+    private function get_section_module_mapping(): array {
+        return [
+            'monitoring' => ['dashboard', 'logs'],
+            'backup' => ['dashboard', 'backup', 'scheduling'],
+            'restore' => ['backup'],
+            'settings' => ['settings'],
+            'integrations' => ['api'],
+        ];
+    }
+
+    private function build_sidebar_summary_items(array $metrics): array {
+        $summary = isset($metrics['summary']) && is_array($metrics['summary']) ? $metrics['summary'] : [];
+        $reliability = isset($metrics['reliability']) && is_array($metrics['reliability']) ? $metrics['reliability'] : [];
+
+        $items = [];
+
+        $items[] = [
+            'label' => __('Dernière sauvegarde', 'backup-jlg'),
+            'value' => $summary['history_last_backup_relative'] ?? ($summary['history_last_backup'] ?? __('Aucune sauvegarde effectuée', 'backup-jlg')),
+            'meta' => $summary['history_last_backup'] ?? '',
+            'icon' => 'dashicons-backup',
+        ];
+
+        $items[] = [
+            'label' => __('Prochaine planification', 'backup-jlg'),
+            'value' => $summary['scheduler_next_run_relative'] ?? ($summary['scheduler_next_run'] ?? __('Non planifié', 'backup-jlg')),
+            'meta' => $summary['scheduler_next_run'] ?? '',
+            'icon' => 'dashicons-clock',
+        ];
+
+        $count_archives = (int) ($summary['storage_backup_count'] ?? 0);
+        $count_formatted = \function_exists('number_format_i18n')
+            ? \number_format_i18n($count_archives)
+            : number_format($count_archives);
+
+        if (\function_exists('_n')) {
+            $meta_label = sprintf(
+                \_n('%s archive', '%s archives', $count_archives, 'backup-jlg'),
+                $count_formatted
+            );
+        } else {
+            $meta_label = sprintf(
+                $count_archives === 1 ? '%s archive' : '%s archives',
+                $count_formatted
+            );
+        }
+
+        $items[] = [
+            'label' => __('Stockage local', 'backup-jlg'),
+            'value' => $summary['storage_total_size_human'] ?? size_format(0),
+            'meta' => $meta_label,
+            'icon' => 'dashicons-database',
+        ];
+
+        if (!empty($reliability)) {
+            $score = isset($reliability['score']) ? max(0, min(100, (int) $reliability['score'])) : null;
+            $score_label = $reliability['score_label'] ?? '';
+            $items[] = [
+                'label' => __('Indice de fiabilité', 'backup-jlg'),
+                'value' => $score !== null ? sprintf(__('%s /100', 'backup-jlg'), number_format_i18n($score)) : __('Non disponible', 'backup-jlg'),
+                'meta' => $score_label,
+                'icon' => 'dashicons-shield-alt',
+            ];
+        }
+
+        return $items;
+    }
+
+    private function has_api_keys(): bool {
+        if (!class_exists(BJLG_API_Keys::class)) {
+            return false;
+        }
+
+        $keys = BJLG_API_Keys::get_keys();
+
+        return is_array($keys) && !empty($keys);
+    }
+
+    private function build_onboarding_steps(array $metrics): array {
+        $summary = isset($metrics['summary']) && is_array($metrics['summary']) ? $metrics['summary'] : [];
+        $scheduler = isset($metrics['scheduler']) && is_array($metrics['scheduler']) ? $metrics['scheduler'] : [];
+        $encryption = isset($metrics['encryption']) && is_array($metrics['encryption']) ? $metrics['encryption'] : [];
+        $has_backup = (int) ($summary['history_successful_backups'] ?? 0) > 0;
+        $has_schedule = (int) ($scheduler['active_count'] ?? 0) > 0;
+        $encryption_enabled = !empty($encryption['encryption_enabled']);
+        $has_api_key = $this->has_api_keys();
+
+        $steps = [
+            [
+                'id' => 'create-first-backup',
+                'title' => __('Créer une sauvegarde immédiate', 'backup-jlg'),
+                'description' => __('Assurez-vous d’avoir une archive complète en lançant une sauvegarde à la demande.', 'backup-jlg'),
+                'cta' => [
+                    'label' => __('Lancer une sauvegarde', 'backup-jlg'),
+                    'href' => add_query_arg(['page' => 'backup-jlg', 'section' => 'backup'], admin_url('admin.php')) . '#bjlg-backup-creation-form',
+                ],
+                'completed' => $has_backup,
+                'locked' => false,
+            ],
+            [
+                'id' => 'configure-schedule',
+                'title' => __('Planifier des sauvegardes automatiques', 'backup-jlg'),
+                'description' => __('Activez au moins une planification récurrente pour couvrir vos besoins métier.', 'backup-jlg'),
+                'cta' => [
+                    'label' => __('Configurer la planification', 'backup-jlg'),
+                    'href' => add_query_arg(['page' => 'backup-jlg', 'section' => 'backup'], admin_url('admin.php')) . '#bjlg-scheduling',
+                ],
+                'completed' => $has_schedule,
+                'locked' => false,
+            ],
+            [
+                'id' => 'enable-encryption',
+                'title' => __('Activer le chiffrement AES-256', 'backup-jlg'),
+                'description' => __('Protégez vos archives en activant le chiffrement côté serveur.', 'backup-jlg'),
+                'cta' => [
+                    'label' => __('Activer le chiffrement', 'backup-jlg'),
+                    'href' => add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php')) . '#bjlg-encryption-settings',
+                ],
+                'completed' => $encryption_enabled,
+                'locked' => true,
+            ],
+            [
+                'id' => 'generate-api-key',
+                'title' => __('Générer une clé API', 'backup-jlg'),
+                'description' => __('Créez une clé API dédiée pour vos intégrations externes et automatisez vos workflows.', 'backup-jlg'),
+                'cta' => [
+                    'label' => __('Créer une clé API', 'backup-jlg'),
+                    'href' => add_query_arg(['page' => 'backup-jlg', 'section' => 'integrations'], admin_url('admin.php')) . '#bjlg-create-api-key',
+                    'action' => 'open-api-key',
+                ],
+                'completed' => $has_api_key,
+                'locked' => true,
+            ],
+        ];
+
+        return $steps;
+    }
+
     /**
      * Affiche le contenu de la page principale et gère le routage des onglets.
      */
     public function render_admin_page() {
-        $active_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'backup_restore';
-        $page_url = add_query_arg(
-            [
-                'page' => 'backup-jlg',
-            ],
-            admin_url('admin.php')
-        );
-
-        $tabs = apply_filters('bjlg_admin_tabs', []);
-        if (!is_array($tabs) || empty($tabs)) {
-            $tabs = $this->get_default_tabs([]);
+        $requested_section = isset($_GET['section']) ? sanitize_key($_GET['section']) : '';
+        $legacy_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : '';
+        if ($requested_section === '' && $legacy_tab !== '') {
+            $requested_section = $this->map_legacy_tab_to_section($legacy_tab);
         }
 
-        if (!array_key_exists($active_tab, $tabs)) {
-            $active_tab = array_key_exists('backup_restore', $tabs)
-                ? 'backup_restore'
-                : (string) array_key_first($tabs);
+        $raw_sections = apply_filters('bjlg_admin_sections', []);
+        if (!is_array($raw_sections) || empty($raw_sections)) {
+            $raw_sections = $this->get_default_sections([]);
         }
+
+        $sections = [];
+        foreach ($raw_sections as $key => $data) {
+            $slug = sanitize_key((string) $key);
+            if ($slug === '') {
+                $slug = 'section-' . substr(md5((string) $key), 0, 8);
+            }
+
+            $label = '';
+            $icon_candidate = 'admin-generic';
+            if (is_array($data)) {
+                $label = isset($data['label']) ? (string) $data['label'] : '';
+                $icon_candidate = isset($data['icon']) ? (string) $data['icon'] : 'admin-generic';
+            } else {
+                $label = (string) $data;
+            }
+
+            if (strpos($icon_candidate, 'dashicons-') !== 0) {
+                $icon_candidate = 'dashicons-' . $icon_candidate;
+            }
+
+            if ($label === '') {
+                $label = ucwords(str_replace(['_', '-'], ' ', $slug));
+            }
+
+            $sections[$slug] = [
+                'key' => $slug,
+                'label' => $label,
+                'icon' => sanitize_html_class($icon_candidate),
+                'url' => add_query_arg(
+                    [
+                        'page' => 'backup-jlg',
+                        'section' => $slug,
+                    ],
+                    admin_url('admin.php')
+                ),
+            ];
+        }
+
+        if (empty($sections)) {
+            return;
+        }
+
+        if ($requested_section === '' || !isset($sections[$requested_section])) {
+            $active_section = (string) array_key_first($sections);
+        } else {
+            $active_section = $requested_section;
+        }
+
         $metrics = $this->advanced_admin ? $this->advanced_admin->get_dashboard_metrics() : [];
 
         $notice_type = isset($_GET['bjlg_notice']) ? sanitize_key($_GET['bjlg_notice']) : '';
@@ -203,16 +516,62 @@ class BJLG_Admin {
             'info' => 'notice notice-info',
         ];
 
+        $section_modules_map = $this->get_section_module_mapping();
+        $sections_for_js = array_values($sections);
+        $sections_json = !empty($sections_for_js) ? wp_json_encode($sections_for_js) : '';
+        $modules_json = !empty($section_modules_map) ? wp_json_encode($section_modules_map) : '';
+        $onboarding_steps = $this->build_onboarding_steps($metrics);
+        $onboarding_payload = [
+            'steps' => $onboarding_steps,
+            'completed' => $this->onboarding_progress,
+        ];
+        $onboarding_json = !empty($onboarding_steps) ? wp_json_encode($onboarding_payload) : '';
+
+        $summary_items = $this->build_sidebar_summary_items($metrics);
+        $reliability = isset($metrics['reliability']) && is_array($metrics['reliability']) ? $metrics['reliability'] : [];
+        $reliability_level = $reliability['level'] ?? __('Indisponible', 'backup-jlg');
+        $reliability_intent = isset($reliability['intent']) ? sanitize_html_class((string) $reliability['intent']) : 'info';
+        $reliability_score = isset($reliability['score']) ? max(0, min(100, (int) $reliability['score'])) : null;
+
+        $breadcrumb_items = [
+            [
+                'label' => __('Console Backup JLG', 'backup-jlg'),
+                'url' => add_query_arg(['page' => 'backup-jlg'], admin_url('admin.php')),
+            ],
+            [
+                'label' => $sections[$active_section]['label'],
+                'url' => '',
+            ],
+        ];
+
+        $app_sections_attr = $sections_json ? ' data-bjlg-sections="' . esc_attr($sections_json) . '"' : '';
+        $app_modules_attr = $modules_json ? ' data-bjlg-modules="' . esc_attr($modules_json) . '"' : '';
+        $app_onboarding_attr = $onboarding_json ? ' data-bjlg-onboarding="' . esc_attr($onboarding_json) . '"' : '';
+
         ?>
         <a class="bjlg-skip-link" href="#bjlg-main-content">
             <?php esc_html_e('Aller au contenu principal', 'backup-jlg'); ?>
         </a>
-        <div id="bjlg-main-content" class="wrap bjlg-wrap is-light" data-bjlg-theme="light" role="main" tabindex="-1">
-            <h1>
-                <span class="dashicons dashicons-database-export" aria-hidden="true"></span>
-                <?php echo esc_html(get_admin_page_title()); ?>
-                <span class="bjlg-version">v<?php echo esc_html(BJLG_VERSION); ?></span>
-            </h1>
+        <div id="bjlg-main-content" class="wrap bjlg-wrap is-light" data-bjlg-theme="light" role="main" tabindex="-1" data-active-section="<?php echo esc_attr($active_section); ?>">
+            <header class="bjlg-page-header">
+                <h1>
+                    <span class="dashicons dashicons-database-export" aria-hidden="true"></span>
+                    <?php echo esc_html(get_admin_page_title()); ?>
+                    <span class="bjlg-version">v<?php echo esc_html(BJLG_VERSION); ?></span>
+                </h1>
+                <div class="bjlg-utility-bar">
+                    <button
+                        type="button"
+                        class="button button-secondary bjlg-contrast-toggle"
+                        id="bjlg-contrast-toggle"
+                        data-dark-label="<?php echo esc_attr__('Activer le contraste renforcé', 'backup-jlg'); ?>"
+                        data-light-label="<?php echo esc_attr__('Revenir au thème clair', 'backup-jlg'); ?>"
+                        aria-pressed="false"
+                    >
+                        <?php echo esc_html__('Activer le contraste renforcé', 'backup-jlg'); ?>
+                    </button>
+                </div>
+            </header>
 
             <?php if ($notice_type && $notice_message !== ''): ?>
                 <?php $notice_class = isset($notice_classes[$notice_type]) ? $notice_classes[$notice_type] : $notice_classes['info']; ?>
@@ -221,150 +580,159 @@ class BJLG_Admin {
                 </div>
             <?php endif; ?>
 
-            <div class="bjlg-utility-bar">
-                <button
-                    type="button"
-                    class="button button-secondary bjlg-contrast-toggle"
-                    id="bjlg-contrast-toggle"
-                    data-dark-label="<?php echo esc_attr__('Activer le contraste renforcé', 'backup-jlg'); ?>"
-                    data-light-label="<?php echo esc_attr__('Revenir au thème clair', 'backup-jlg'); ?>"
-                    aria-pressed="false"
-                >
-                    <?php echo esc_html__('Activer le contraste renforcé', 'backup-jlg'); ?>
-                </button>
-            </div>
+            <div class="bjlg-admin-shell" data-active-section="<?php echo esc_attr($active_section); ?>">
+                <aside id="bjlg-shell-sidebar" class="bjlg-admin-shell__sidebar" data-collapsible="true">
+                    <div class="bjlg-sidebar__header">
+                        <h2><?php esc_html_e('Navigation', 'backup-jlg'); ?></h2>
+                        <button type="button" class="bjlg-sidebar__close button button-link" id="bjlg-sidebar-close">
+                            <span class="dashicons dashicons-no-alt" aria-hidden="true"></span>
+                            <span class="screen-reader-text"><?php esc_html_e('Fermer le menu', 'backup-jlg'); ?></span>
+                        </button>
+                    </div>
+                    <div class="bjlg-sidebar__summary" role="region" aria-label="<?php esc_attr_e('Résumé d’état global', 'backup-jlg'); ?>">
+                        <h3><?php esc_html_e('Résumé d’état', 'backup-jlg'); ?></h3>
+                        <ul class="bjlg-sidebar-summary-list">
+                            <?php foreach ($summary_items as $item): ?>
+                                <li class="bjlg-sidebar-summary-list__item">
+                                    <span class="bjlg-sidebar-summary-list__icon dashicons <?php echo esc_attr($item['icon']); ?>" aria-hidden="true"></span>
+                                    <div class="bjlg-sidebar-summary-list__content">
+                                        <span class="bjlg-sidebar-summary-list__label"><?php echo esc_html($item['label']); ?></span>
+                                        <span class="bjlg-sidebar-summary-list__value"><?php echo esc_html($item['value']); ?></span>
+                                        <?php if (!empty($item['meta'])): ?>
+                                            <span class="bjlg-sidebar-summary-list__meta"><?php echo esc_html($item['meta']); ?></span>
+                                        <?php endif; ?>
+                                    </div>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                    <nav class="bjlg-sidebar__nav" aria-label="<?php esc_attr_e('Navigation principale', 'backup-jlg'); ?>">
+                        <ul>
+                            <?php foreach ($sections as $section_key => $section): ?>
+                                <li>
+                                    <a class="bjlg-sidebar__nav-link<?php echo $section_key === $active_section ? ' is-active' : ''; ?>"
+                                       href="<?php echo esc_url($section['url']); ?>"
+                                       data-section="<?php echo esc_attr($section_key); ?>">
+                                        <span class="dashicons <?php echo esc_attr($section['icon']); ?>" aria-hidden="true"></span>
+                                        <span><?php echo esc_html($section['label']); ?></span>
+                                    </a>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </nav>
+                </aside>
 
-            <nav class="nav-tab-wrapper" role="tablist">
-                <?php foreach ($tabs as $tab_key => $tab_label):
-                    $tab_slug = sanitize_key($tab_key);
+                <div class="bjlg-admin-shell__main">
+                    <div class="bjlg-shell-topbar">
+                        <button type="button" class="button button-secondary bjlg-shell-topbar__toggle" id="bjlg-sidebar-toggle" aria-controls="bjlg-shell-sidebar" aria-expanded="false">
+                            <span class="dashicons dashicons-menu" aria-hidden="true"></span>
+                            <span class="screen-reader-text"><?php esc_html_e('Afficher le menu latéral', 'backup-jlg'); ?></span>
+                        </button>
+                        <nav class="bjlg-breadcrumbs" aria-label="<?php esc_attr_e('Fil d’Ariane', 'backup-jlg'); ?>">
+                            <ol>
+                                <?php $crumb_count = count($breadcrumb_items); ?>
+                                <?php foreach ($breadcrumb_items as $index => $crumb): ?>
+                                    <li<?php echo $index === $crumb_count - 1 ? ' aria-current="page"' : ''; ?>>
+                                        <?php if (!empty($crumb['url']) && $index !== $crumb_count - 1): ?>
+                                            <a href="<?php echo esc_url($crumb['url']); ?>"><?php echo esc_html($crumb['label']); ?></a>
+                                        <?php else: ?>
+                                            <span><?php echo esc_html($crumb['label']); ?></span>
+                                        <?php endif; ?>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ol>
+                        </nav>
+                        <div class="bjlg-shell-topbar__status" data-intent="<?php echo esc_attr($reliability_intent); ?>">
+                            <span class="bjlg-shell-topbar__label"><?php esc_html_e('Indice de fiabilité', 'backup-jlg'); ?></span>
+                            <strong class="bjlg-shell-topbar__value">
+                                <?php echo $reliability_score !== null ? esc_html(number_format_i18n($reliability_score)) : '—'; ?>
+                            </strong>
+                            <span class="bjlg-shell-topbar__meta"><?php echo esc_html($reliability_level); ?></span>
+                        </div>
+                    </div>
 
-                    if ($tab_slug === '') {
-                        $tab_slug = 'tab-' . substr(md5((string) $tab_key), 0, 8);
-                    }
-
-                    $tab_id = 'bjlg-tab-' . $tab_slug;
-                    $panel_id = 'bjlg-tab-panel-' . $tab_slug;
-                    $is_active = ($active_tab === $tab_key);
-                    $tab_classes = 'nav-tab' . ($is_active ? ' nav-tab-active' : '');
-                    $tab_index = $is_active ? '0' : '-1';
-                    $aria_current_attr = $is_active ? ' aria-current="page"' : '';
-                    ?>
-                    <a href="<?php echo esc_url(add_query_arg(['tab' => $tab_key], $page_url)); ?>"
-                       class="<?php echo esc_attr($tab_classes); ?>"
-                       data-tab="<?php echo esc_attr($tab_key); ?>"
-                       id="<?php echo esc_attr($tab_id); ?>"
-                       role="tab"
-                       aria-controls="<?php echo esc_attr($panel_id); ?>"
-                       aria-selected="<?php echo $is_active ? 'true' : 'false'; ?>"
-                       tabindex="<?php echo esc_attr($tab_index); ?>"<?php echo $aria_current_attr; ?>>
-                        <?php echo esc_html($tab_label); ?>
-                    </a>
-                <?php endforeach; ?>
-            </nav>
-
-            <div class="bjlg-tab-content" data-active-tab="<?php echo esc_attr($active_tab); ?>">
-                <?php $this->render_dashboard_overview($metrics); ?>
-                <?php $tab_modules_map = $this->get_tab_module_mapping(); ?>
-                <?php foreach ($tabs as $tab_key => $tab_label):
-                    $tab_slug = sanitize_key($tab_key);
-
-                    if ($tab_slug === '') {
-                        $tab_slug = 'tab-' . substr(md5((string) $tab_key), 0, 8);
-                    }
-
-                    $tab_id = 'bjlg-tab-' . $tab_slug;
-                    $panel_id = 'bjlg-tab-panel-' . $tab_slug;
-                    $is_active = ($active_tab === $tab_key);
-                    $panel_hidden_attr = $is_active ? '' : ' hidden';
-                    $panel_aria_hidden = $is_active ? 'false' : 'true';
-                    $panel_modules = isset($tab_modules_map[$tab_key]) ? (array) $tab_modules_map[$tab_key] : [];
-                    $panel_modules = array_filter(array_map('sanitize_key', $panel_modules));
-                    $panel_modules_attr = $panel_modules ? ' data-bjlg-modules="' . esc_attr(implode(' ', array_unique($panel_modules))) . '"' : '';
-                    ?>
-                    <section class="bjlg-tab-panel"
-                             data-tab="<?php echo esc_attr($tab_key); ?>"
-                             id="<?php echo esc_attr($panel_id); ?>"
-                             role="tabpanel"
-                             aria-labelledby="<?php echo esc_attr($tab_id); ?>"
-                             aria-hidden="<?php echo esc_attr($panel_aria_hidden); ?>"
-                             tabindex="0"<?php echo $panel_hidden_attr . $panel_modules_attr; ?>>
-                        <?php $this->render_tab_panel($tab_key, $active_tab); ?>
-                    </section>
-                <?php endforeach; ?>
+                    <div id="bjlg-admin-app" class="bjlg-admin-app" data-active-section="<?php echo esc_attr($active_section); ?>"<?php echo $app_sections_attr . $app_modules_attr . $app_onboarding_attr; ?>>
+                        <div id="bjlg-admin-app-nav" class="bjlg-admin-app__nav" aria-hidden="true"></div>
+                        <div class="bjlg-admin-app__panels">
+                            <?php foreach ($sections as $section_key => $section):
+                                $panel_id = 'bjlg-section-' . $section_key;
+                                $is_active = ($section_key === $active_section);
+                                $panel_modules = isset($section_modules_map[$section_key]) ? array_filter(array_map('sanitize_key', (array) $section_modules_map[$section_key])) : [];
+                                $panel_modules_attr = $panel_modules ? ' data-bjlg-modules="' . esc_attr(implode(' ', array_unique($panel_modules))) . '"' : '';
+                                ?>
+                                <section
+                                    id="<?php echo esc_attr($panel_id); ?>"
+                                    class="bjlg-shell-section"
+                                    data-section="<?php echo esc_attr($section_key); ?>"
+                                    role="tabpanel"
+                                    aria-hidden="<?php echo $is_active ? 'false' : 'true'; ?>"
+                                    aria-labelledby="bjlg-tab-<?php echo esc_attr($section_key); ?>"
+                                    tabindex="0"<?php echo $is_active ? '' : ' hidden'; ?><?php echo $panel_modules_attr; ?>>
+                                    <?php $this->render_section_content($section_key, $active_section, $metrics, $onboarding_payload); ?>
+                                </section>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         <?php
     }
 
-    /**
-     * Affiche le contenu d'un onglet.
-     */
-    private function render_tab_panel($tab_key, $active_tab) {
-        $panels = $this->get_tab_renderers();
+    private function render_section_content($section_key, $active_section, array $metrics, array $onboarding_payload) {
+        $handled = true;
 
-        if (isset($panels[$tab_key]) && is_callable($panels[$tab_key])) {
-            call_user_func($panels[$tab_key]);
-            return;
+        switch ($section_key) {
+            case 'monitoring':
+                $this->render_dashboard_overview($metrics, $onboarding_payload);
+                $this->render_history_section();
+                $this->render_health_check_section();
+                $this->render_logs_section();
+                break;
+            case 'backup':
+                $this->render_backup_creation_section();
+                $this->render_backup_list_section();
+                $this->render_schedule_section();
+                break;
+            case 'restore':
+                $this->render_restore_section();
+                break;
+            case 'settings':
+                $this->render_settings_section();
+                break;
+            case 'integrations':
+                $this->render_api_section();
+                break;
+            default:
+                $handled = false;
+                break;
         }
 
         /**
-         * Permet d'afficher le contenu des onglets personnalisés.
+         * Permet aux extensions d'ajouter du contenu après le rendu d'une section.
          *
-         * @param string $tab_key    Clé de l'onglet à afficher.
-         * @param string $active_tab Onglet actuellement actif.
+         * @param string $section_key     Clé de la section affichée.
+         * @param string $active_section  Section actuellement active.
+         * @param array  $metrics         Dernières métriques calculées.
+         * @param bool   $handled         Indique si la section a été gérée par le cœur du plugin.
          */
-        do_action('bjlg_render_admin_tab', $tab_key, $active_tab);
-    }
+        do_action('bjlg_render_admin_section', $section_key, $active_section, $metrics, $handled);
 
-    /**
-     * Retourne les callbacks de rendu pour chaque onglet.
-     */
-    private function get_tab_renderers() {
-        return [
-            'backup_restore' => function () {
-                $this->render_backup_creation_section();
-                $this->render_backup_list_section();
-                $this->render_restore_section();
-            },
-            'scheduling' => function () {
-                $this->render_schedule_section();
-            },
-            'history' => function () {
-                $this->render_history_section();
-            },
-            'health_check' => function () {
-                $this->render_health_check_section();
-            },
-            'settings' => function () {
-                $this->render_settings_section();
-            },
-            'logs' => function () {
-                $this->render_logs_section();
-            },
-            'api' => function () {
-                $this->render_api_section();
-            },
-        ];
+        if (!$handled) {
+            do_action('bjlg_render_admin_tab', $section_key, $active_section);
+        }
     }
 
     private function get_tab_module_mapping() {
-        return [
-            'backup_restore' => ['dashboard', 'backup'],
-            'scheduling' => ['scheduling'],
-            'history' => ['backup'],
-            'settings' => ['settings'],
-            'logs' => ['logs'],
-            'api' => ['api'],
-        ];
+        return $this->get_section_module_mapping();
     }
 
     /**
      * Affiche l'encart de synthèse des métriques et l'onboarding.
      */
-    private function render_dashboard_overview(array $metrics) {
+    private function render_dashboard_overview(array $metrics, array $onboarding_payload = []) {
         $summary = $metrics['summary'] ?? [];
         $alerts = $metrics['alerts'] ?? [];
-        $onboarding = $metrics['onboarding'] ?? [];
         $queues = isset($metrics['queues']) && is_array($metrics['queues']) ? $metrics['queues'] : [];
         $reliability = isset($metrics['reliability']) && is_array($metrics['reliability']) ? $metrics['reliability'] : [];
         $data_attr = !empty($metrics) ? wp_json_encode($metrics) : '';
@@ -372,13 +740,15 @@ class BJLG_Admin {
         $backup_tab_url = add_query_arg(
             [
                 'page' => 'backup-jlg',
-                'tab' => 'backup_restore',
+                'section' => 'backup',
             ],
             admin_url('admin.php')
         );
 
         $backup_cta_url = $backup_tab_url . '#bjlg-backup-creation-form';
         $restore_cta_url = $backup_tab_url . '#bjlg-restore-form';
+        $checklist_json = !empty($onboarding_payload) ? wp_json_encode($onboarding_payload) : '';
+        $checklist_attr = $checklist_json ? ' data-bjlg-checklist="' . esc_attr($checklist_json) . '"' : '';
 
         ?>
         <section class="bjlg-dashboard-overview" <?php echo $data_attr ? 'data-bjlg-dashboard="' . esc_attr($data_attr) . '"' : ''; ?>>
@@ -492,6 +862,40 @@ class BJLG_Admin {
                 </article>
             </div>
 
+            <div class="bjlg-onboarding-checklist" id="bjlg-onboarding-checklist" role="region" aria-live="polite" aria-atomic="true"<?php echo $checklist_attr; ?>>
+                <div class="bjlg-onboarding-checklist__placeholder">
+                    <span class="spinner is-active" aria-hidden="true"></span>
+                    <p><?php esc_html_e('Chargement de votre checklist personnalisée…', 'backup-jlg'); ?></p>
+                </div>
+                <noscript>
+                    <p class="bjlg-onboarding-checklist__noscript"><?php esc_html_e('Activez JavaScript pour utiliser la checklist interactive.', 'backup-jlg'); ?></p>
+                </noscript>
+            </div>
+
+            <div class="bjlg-dashboard-charts" data-role="charts">
+                <article class="bjlg-chart-card" data-chart="history-trend">
+                    <header class="bjlg-chart-card__header">
+                        <h3 class="bjlg-chart-card__title"><?php esc_html_e('Tendance des sauvegardes', 'backup-jlg'); ?></h3>
+                        <p class="bjlg-chart-card__subtitle" data-field="chart_history_subtitle">
+                            <?php esc_html_e('Actions réussies et échouées sur 30 jours.', 'backup-jlg'); ?>
+                        </p>
+                    </header>
+                    <canvas class="bjlg-chart-card__canvas" id="bjlg-history-trend" aria-hidden="true"></canvas>
+                    <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Données de tendance indisponibles pour le moment.', 'backup-jlg'); ?></p>
+                </article>
+
+                <article class="bjlg-chart-card" data-chart="storage-trend">
+                    <header class="bjlg-chart-card__header">
+                        <h3 class="bjlg-chart-card__title"><?php esc_html_e('Evolution du stockage', 'backup-jlg'); ?></h3>
+                        <p class="bjlg-chart-card__subtitle" data-field="chart_storage_subtitle">
+                            <?php esc_html_e('Capacité utilisée par vos archives.', 'backup-jlg'); ?>
+                        </p>
+                    </header>
+                    <canvas class="bjlg-chart-card__canvas" id="bjlg-storage-trend" aria-hidden="true"></canvas>
+                    <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Aucune mesure d’utilisation disponible.', 'backup-jlg'); ?></p>
+                </article>
+            </div>
+
             <?php if (!empty($queues)): ?>
                 <section class="bjlg-queues" aria-labelledby="bjlg-queues-title">
                     <header class="bjlg-queues__header">
@@ -574,29 +978,26 @@ class BJLG_Admin {
                                             $entry_file = isset($entry['file']) ? (string) $entry['file'] : '';
                                             ?>
                                             <li class="bjlg-queue-card__entry"
-                                                <?php echo $entry_id !== '' ? ' data-entry-id="' . esc_attr($entry_id) . '"' : ''; ?>
-                                                <?php echo $entry_file !== '' ? ' data-entry-file="' . esc_attr($entry_file) . '"' : ''; ?>
-                                            >
-                                                <div class="bjlg-queue-card__entry-header">
+                                                data-status="<?php echo esc_attr($status_intent); ?>"
+                                                data-entry-id="<?php echo esc_attr($entry_id); ?>"
+                                                data-entry-file="<?php echo esc_attr($entry_file); ?>">
+                                                <header class="bjlg-queue-card__entry-header">
                                                     <span class="bjlg-queue-card__entry-title"><?php echo esc_html($entry['title'] ?? ''); ?></span>
                                                     <?php if ($status_label !== ''): ?>
-                                                        <span class="bjlg-queue-card__entry-status bjlg-queue-card__entry-status--<?php echo esc_attr($status_intent); ?>">
-                                                            <?php echo esc_html($status_label); ?>
-                                                        </span>
+                                                        <span class="bjlg-queue-card__entry-status bjlg-queue-card__entry-status--<?php echo esc_attr($status_intent); ?>"><?php echo esc_html($status_label); ?></span>
                                                     <?php endif; ?>
-                                                </div>
+                                                </header>
 
-                                                <p class="bjlg-queue-card__entry-meta">
-                                                    <?php if ($attempt_label !== ''): ?>
-                                                        <span><?php echo esc_html($attempt_label); ?></span>
-                                                    <?php endif; ?>
+                                                <?php if ($attempt_label !== ''): ?>
+                                                    <p class="bjlg-queue-card__entry-meta"><?php echo esc_html($attempt_label); ?></p>
+                                                <?php endif; ?>
 
-                                                    <?php if ($next_attempt_relative !== ''): ?>
-                                                        <span>• <?php printf(esc_html__('Prochaine tentative %s', 'backup-jlg'), esc_html($next_attempt_relative)); ?></span>
-                                                    <?php endif; ?>
-
+                                                <p class="bjlg-queue-card__entry-meta" data-field="timestamps">
                                                     <?php if ($created_relative !== ''): ?>
-                                                        <span>• <?php printf(esc_html__('Ajouté %s', 'backup-jlg'), esc_html($created_relative)); ?></span>
+                                                        <span><?php printf(esc_html__('Créée %s', 'backup-jlg'), esc_html($created_relative)); ?></span>
+                                                    <?php endif; ?>
+                                                    <?php if ($next_attempt_relative !== ''): ?>
+                                                        <span><?php printf(esc_html__('Rejouée %s', 'backup-jlg'), esc_html($next_attempt_relative)); ?></span>
                                                     <?php endif; ?>
                                                 </p>
 
@@ -640,54 +1041,6 @@ class BJLG_Admin {
                     </div>
                 </section>
             <?php endif; ?>
-
-            <div class="bjlg-onboarding" data-role="onboarding" role="region" aria-live="polite" aria-atomic="true">
-                <h3 class="bjlg-onboarding__title"><?php esc_html_e('Bien démarrer', 'backup-jlg'); ?></h3>
-                <ul class="bjlg-onboarding__list">
-                    <?php foreach ($onboarding as $resource): ?>
-                        <li class="bjlg-onboarding__item">
-                            <div class="bjlg-onboarding__content">
-                                <strong class="bjlg-onboarding__label"><?php echo esc_html($resource['title']); ?></strong>
-                                <?php if (!empty($resource['description'])): ?>
-                                    <p class="bjlg-onboarding__description"><?php echo esc_html($resource['description']); ?></p>
-                                <?php endif; ?>
-                                <?php if (!empty($resource['command'])): ?>
-                                    <code class="bjlg-onboarding__command" data-command="<?php echo esc_attr($resource['command']); ?>"><?php echo esc_html($resource['command']); ?></code>
-                                <?php endif; ?>
-                            </div>
-                            <?php if (!empty($resource['url'])): ?>
-                                <a class="bjlg-onboarding__action button button-secondary" href="<?php echo esc_url($resource['url']); ?>" target="_blank" rel="noopener noreferrer">
-                                    <?php echo esc_html($resource['action_label'] ?? __('Ouvrir', 'backup-jlg')); ?>
-                                </a>
-                            <?php endif; ?>
-                        </li>
-                    <?php endforeach; ?>
-                </ul>
-            </div>
-
-            <div class="bjlg-dashboard-charts" data-role="charts">
-                <article class="bjlg-chart-card" data-chart="history-trend">
-                    <header class="bjlg-chart-card__header">
-                        <h3 class="bjlg-chart-card__title"><?php esc_html_e('Tendance des sauvegardes', 'backup-jlg'); ?></h3>
-                        <p class="bjlg-chart-card__subtitle" data-field="chart_history_subtitle">
-                            <?php esc_html_e('Actions réussies et échouées sur 30 jours.', 'backup-jlg'); ?>
-                        </p>
-                    </header>
-                    <canvas class="bjlg-chart-card__canvas" id="bjlg-history-trend" aria-hidden="true"></canvas>
-                    <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Données de tendance indisponibles pour le moment.', 'backup-jlg'); ?></p>
-                </article>
-
-                <article class="bjlg-chart-card" data-chart="storage-trend">
-                    <header class="bjlg-chart-card__header">
-                        <h3 class="bjlg-chart-card__title"><?php esc_html_e('Evolution du stockage', 'backup-jlg'); ?></h3>
-                        <p class="bjlg-chart-card__subtitle" data-field="chart_storage_subtitle">
-                            <?php esc_html_e('Capacité utilisée par vos archives.', 'backup-jlg'); ?>
-                        </p>
-                    </header>
-                    <canvas class="bjlg-chart-card__canvas" id="bjlg-storage-trend" aria-hidden="true"></canvas>
-                    <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Aucune mesure d’utilisation disponible.', 'backup-jlg'); ?></p>
-                </article>
-            </div>
         </section>
         <?php
     }
@@ -930,7 +1283,7 @@ class BJLG_Admin {
         $backup_tab_url = add_query_arg(
             [
                 'page' => 'backup-jlg',
-                'tab' => 'backup_restore',
+                'section' => 'backup',
             ],
             admin_url('admin.php')
         );
@@ -1048,7 +1401,7 @@ class BJLG_Admin {
         $backup_redirect = add_query_arg(
             [
                 'page' => 'backup-jlg',
-                'tab' => 'backup_restore',
+                'section' => 'backup',
             ],
             admin_url('admin.php')
         );
@@ -1675,7 +2028,7 @@ class BJLG_Admin {
         $restore_redirect = add_query_arg(
             [
                 'page' => 'backup-jlg',
-                'tab' => 'backup_restore',
+                'section' => 'restore',
             ],
             admin_url('admin.php')
         );

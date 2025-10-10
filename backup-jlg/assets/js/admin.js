@@ -107,8 +107,20 @@ jQuery(function($) {
     'use strict';
 
     const ajaxData = (typeof window.bjlg_ajax === 'object' && window.bjlg_ajax) ? window.bjlg_ajax : {};
-    const tabModulesMap = ajaxData.tab_modules || {};
+    const sectionModulesMap = ajaxData.section_modules || ajaxData.tab_modules || {};
     const loadedModules = new Set();
+
+    const parseJSONSafe = function(raw, fallback) {
+        if (typeof raw !== 'string' || raw === '') {
+            return fallback;
+        }
+
+        try {
+            return JSON.parse(raw);
+        } catch (error) {
+            return fallback;
+        }
+    };
 
     const requestModules = function(modules) {
         if (!Array.isArray(modules) || !modules.length) {
@@ -124,6 +136,7 @@ jQuery(function($) {
             if (loadedModules.has(normalized)) {
                 return;
             }
+
             loadedModules.add(normalized);
 
             if (typeof window.bjlgLoadModule === 'function') {
@@ -146,15 +159,17 @@ jQuery(function($) {
         });
     };
 
-    const loadModulesForTab = function(tabKey) {
+    const loadModulesForSection = function(sectionKey) {
         const modules = [];
-        if (tabModulesMap[tabKey]) {
-            tabModulesMap[tabKey].forEach(function(name) {
+        const configured = sectionModulesMap[sectionKey];
+
+        if (Array.isArray(configured)) {
+            configured.forEach(function(name) {
                 modules.push(name);
             });
         }
 
-        const $panel = $('.bjlg-tab-panel[data-tab="' + tabKey + '"]');
+        const $panel = $('.bjlg-shell-section[data-section="' + sectionKey + '"]');
         if ($panel.length) {
             const attr = $panel.attr('data-bjlg-modules');
             if (attr) {
@@ -165,101 +180,447 @@ jQuery(function($) {
         requestModules(modules);
     };
 
-    const $wrap = $('.bjlg-wrap');
-    if ($wrap.length) {
-        const $tabs = $wrap.find('.nav-tab-wrapper .nav-tab');
-        const $panels = $wrap.find('.bjlg-tab-panel');
-        const $tabContainer = $wrap.find('.bjlg-tab-content');
+    const shellElement = document.querySelector('.bjlg-admin-shell');
+    const sidebarToggle = document.getElementById('bjlg-sidebar-toggle');
+    const sidebarClose = document.getElementById('bjlg-sidebar-close');
+    const sidebarLinks = document.querySelectorAll('.bjlg-sidebar__nav-link');
+    const mainWrap = document.getElementById('bjlg-main-content');
+    const appEl = document.getElementById('bjlg-admin-app');
 
-        const activateTab = function(tabKey, updateUrl) {
-            if (!tabKey) {
-                return;
-            }
+    let updateTabSelection = null;
+    let currentSection = '';
 
-            $tabs.each(function() {
-                const $tab = $(this);
-                const isActive = $tab.data('tab') === tabKey;
-                $tab.toggleClass('nav-tab-active', isActive)
-                    .attr('aria-selected', isActive ? 'true' : 'false')
-                    .attr('tabindex', isActive ? '0' : '-1');
+    const setSidebarExpanded = function(expanded) {
+        if (!shellElement) {
+            return;
+        }
 
-                if (isActive) {
-                    $tab.attr('aria-current', 'page');
-                } else {
-                    $tab.removeAttr('aria-current');
-                }
-            });
+        const isOpen = !!expanded;
+        shellElement.classList.toggle('is-sidebar-open', isOpen);
 
-            $panels.each(function() {
-                const $panel = $(this);
-                const matches = $panel.data('tab') === tabKey;
-                if (matches) {
-                    $panel.removeAttr('hidden')
-                        .attr('aria-hidden', 'false');
-                } else {
-                    $panel.attr('hidden', 'hidden')
-                        .attr('aria-hidden', 'true');
-                }
-            });
+        if (sidebarToggle) {
+            sidebarToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        }
+    };
 
-            if ($tabContainer.length) {
-                $tabContainer.attr('data-active-tab', tabKey);
-            }
+    const toggleSidebar = function(force) {
+        if (!shellElement) {
+            return;
+        }
 
-            const $activePanel = $panels.filter(function() {
-                return $(this).data('tab') === tabKey;
-            });
+        if (typeof force === 'boolean') {
+            setSidebarExpanded(force);
+            return;
+        }
 
-            if ($activePanel.length) {
-                const panelElement = $activePanel.get(0);
-                if (panelElement && typeof panelElement.focus === 'function') {
-                    try {
-                        panelElement.focus({ preventScroll: true });
-                    } catch (error) {
-                        panelElement.focus();
-                    }
-                }
-            }
+        const shouldOpen = !shellElement.classList.contains('is-sidebar-open');
+        setSidebarExpanded(shouldOpen);
+    };
 
-            loadModulesForTab(tabKey);
-
-            if (updateUrl && window.history && typeof window.history.replaceState === 'function') {
-                try {
-                    const currentUrl = new URL(window.location.href);
-                    currentUrl.searchParams.set('tab', tabKey);
-                    window.history.replaceState({}, '', currentUrl.toString());
-                } catch (error) {
-                    const baseUrl = window.location.href.split('#')[0];
-                    const hasQuery = baseUrl.indexOf('?') !== -1;
-                    let newUrl;
-
-                    if (hasQuery) {
-                        if (baseUrl.indexOf('tab=') !== -1) {
-                            newUrl = baseUrl.replace(/([?&])tab=[^&#]*/, '$1tab=' + encodeURIComponent(tabKey));
-                        } else {
-                            newUrl = baseUrl + '&tab=' + encodeURIComponent(tabKey);
-                        }
-                    } else {
-                        newUrl = baseUrl + '?tab=' + encodeURIComponent(tabKey);
-                    }
-
-                    window.history.replaceState({}, '', newUrl);
-                }
-            }
-        };
-
-        $tabs.on('click', function(event) {
-            const tabKey = $(this).data('tab');
-            if (!tabKey) {
-                return;
-            }
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', function(event) {
             event.preventDefault();
-            activateTab(tabKey, true);
+            toggleSidebar();
+        });
+    }
+
+    if (sidebarClose) {
+        sidebarClose.addEventListener('click', function(event) {
+            event.preventDefault();
+            toggleSidebar(false);
+        });
+    }
+
+    if (sidebarLinks.length) {
+        Array.prototype.forEach.call(sidebarLinks, function(link) {
+            link.addEventListener('click', function(event) {
+                const targetSection = link.getAttribute('data-section');
+                if (!targetSection) {
+                    return;
+                }
+
+                event.preventDefault();
+                toggleSidebar(false);
+                setActiveSection(targetSection, true, false);
+            });
+        });
+    }
+
+    const setActiveSection = function(sectionKey, updateHistory, fromTab) {
+        if (!sectionKey) {
+            return;
+        }
+
+        if (currentSection === sectionKey && !fromTab) {
+            return;
+        }
+
+        currentSection = sectionKey;
+
+        const panels = document.querySelectorAll('.bjlg-shell-section');
+        panels.forEach(function(panel) {
+            const matches = panel.getAttribute('data-section') === sectionKey;
+            if (matches) {
+                panel.removeAttribute('hidden');
+                panel.setAttribute('aria-hidden', 'false');
+                panel.setAttribute('tabindex', '0');
+            } else {
+                panel.setAttribute('hidden', 'hidden');
+                panel.setAttribute('aria-hidden', 'true');
+            }
         });
 
-        const initialTab = $tabContainer.attr('data-active-tab') || ($tabs.filter('.nav-tab-active').data('tab')) || $tabs.first().data('tab');
-        if (initialTab) {
-            activateTab(initialTab, false);
+        if (appEl) {
+            appEl.setAttribute('data-active-section', sectionKey);
+        }
+
+        if (mainWrap) {
+            mainWrap.setAttribute('data-active-section', sectionKey);
+        }
+
+        if (shellElement) {
+            shellElement.setAttribute('data-active-section', sectionKey);
+        }
+
+        sidebarLinks.forEach(function(link) {
+            const matches = link.getAttribute('data-section') === sectionKey;
+            link.classList.toggle('is-active', matches);
+            if (matches) {
+                link.setAttribute('aria-current', 'page');
+            } else {
+                link.removeAttribute('aria-current');
+            }
+        });
+
+        loadModulesForSection(sectionKey);
+
+        if (!fromTab && typeof updateTabSelection === 'function') {
+            updateTabSelection(sectionKey);
+        }
+
+        if (updateHistory && window.history && typeof window.history.replaceState === 'function') {
+            try {
+                const currentUrl = new URL(window.location.href);
+                currentUrl.searchParams.set('section', sectionKey);
+                currentUrl.searchParams.delete('tab');
+                window.history.replaceState({}, '', currentUrl.toString());
+            } catch (error) {
+                const baseUrl = window.location.href.split('#')[0];
+                const hasQuery = baseUrl.indexOf('?') !== -1;
+                let newUrl;
+
+                if (baseUrl.indexOf('section=') !== -1) {
+                    newUrl = baseUrl.replace(/([?&])section=[^&#]*/, '$1section=' + encodeURIComponent(sectionKey));
+                } else if (hasQuery) {
+                    newUrl = baseUrl + '&section=' + encodeURIComponent(sectionKey);
+                } else {
+                    newUrl = baseUrl + '?section=' + encodeURIComponent(sectionKey);
+                }
+
+                newUrl = newUrl.replace(/([?&])tab=[^&#]*/, '$1section=' + encodeURIComponent(sectionKey));
+                window.history.replaceState({}, '', newUrl);
+            }
+        }
+
+        setSidebarExpanded(false);
+    };
+
+    window.bjlgSetActiveSection = function(sectionKey) {
+        setActiveSection(sectionKey, true, false);
+    };
+
+    const mountSectionTabs = function(appElement) {
+        if (!appElement || !window.wp || !window.wp.element || !window.wp.components) {
+            return;
+        }
+
+        const sections = parseJSONSafe(appElement.getAttribute('data-bjlg-sections'), []);
+        if (!sections.length) {
+            return;
+        }
+
+        const navContainer = document.getElementById('bjlg-admin-app-nav');
+        if (!navContainer) {
+            return;
+        }
+
+        const initialSection = appElement.getAttribute('data-active-section') || sections[0].key;
+
+        const datasetModules = parseJSONSafe(appElement.getAttribute('data-bjlg-modules'), null);
+        if (datasetModules && typeof datasetModules === 'object') {
+            Object.keys(datasetModules).forEach(function(key) {
+                sectionModulesMap[key] = datasetModules[key];
+            });
+        }
+
+        const { createElement, render, useEffect, useState } = window.wp.element;
+        const { TabPanel } = window.wp.components;
+
+        const AdminSectionTabs = function(props) {
+            const [active, setActive] = useState(props.initialSection);
+
+            useEffect(function() {
+                if (typeof props.onChange === 'function') {
+                    props.onChange(active, true);
+                }
+            }, [active]);
+
+            useEffect(function() {
+                if (typeof props.registerExternal === 'function') {
+                    props.registerExternal(setActive);
+                }
+            }, [props.registerExternal]);
+
+            const tabs = props.sections.map(function(section) {
+                return {
+                    name: section.key,
+                    title: section.label,
+                    className: 'bjlg-react-tab',
+                };
+            });
+
+            return createElement(TabPanel, {
+                className: 'bjlg-react-tabpanel',
+                activeClass: 'is-active',
+                initialTab: props.initialSection,
+                tabs: tabs,
+                onSelect: function(tabName) {
+                    setActive(tabName);
+                },
+            }, function() {
+                return null;
+            });
+        };
+
+        render(createElement(AdminSectionTabs, {
+            sections: sections,
+            initialSection: initialSection,
+            onChange: function(sectionKey) {
+                setActiveSection(sectionKey, true, true);
+            },
+            registerExternal: function(callback) {
+                updateTabSelection = function(sectionKey) {
+                    callback(sectionKey);
+                };
+            },
+        }), navContainer);
+
+        setActiveSection(initialSection, false, true);
+    };
+
+    const mountOnboardingChecklist = function(rootElement, data) {
+        if (!rootElement || !window.wp || !window.wp.element || !window.wp.components) {
+            return;
+        }
+
+        const steps = Array.isArray(data.steps) ? data.steps : [];
+        if (!steps.length) {
+            rootElement.setAttribute('hidden', 'hidden');
+            return;
+        }
+
+        const { createElement, render, useEffect, useState } = window.wp.element;
+        const { Card, CardBody, Button, CheckboxControl } = window.wp.components;
+        const i18n = window.wp.i18n || {};
+        const __ = typeof i18n.__ === 'function' ? i18n.__ : function(str) { return str; };
+        const sprintf = typeof i18n.sprintf === 'function' ? i18n.sprintf : function(format) {
+            const args = Array.prototype.slice.call(arguments, 1);
+            return format.replace(/%s/g, function() { return args.length ? args.shift() : ''; });
+        };
+        const apiFetch = window.wp.apiFetch;
+
+        const autoCompleted = new Set(steps.filter(function(step) { return step && step.completed; }).map(function(step) { return step.id; }));
+        const initialManual = new Set((Array.isArray(data.completed) ? data.completed : []).filter(function(id) {
+            return !autoCompleted.has(id);
+        }));
+
+        const Checklist = function() {
+            const [manualCompleted, setManualCompleted] = useState(initialManual);
+
+            const completedCount = steps.reduce(function(total, step) {
+                if (!step || !step.id) {
+                    return total;
+                }
+
+                if (autoCompleted.has(step.id) || manualCompleted.has(step.id)) {
+                    return total + 1;
+                }
+
+                return total;
+            }, 0);
+
+            const totalSteps = steps.length;
+            const progress = totalSteps > 0 ? Math.round((completedCount / totalSteps) * 100) : 0;
+
+            useEffect(function() {
+                if (!apiFetch || !ajaxData || !ajaxData.ajax_url) {
+                    return undefined;
+                }
+
+                const payload = Array.from(manualCompleted);
+                const timeout = window.setTimeout(function() {
+                    apiFetch({
+                        url: ajaxData.ajax_url,
+                        method: 'POST',
+                        data: {
+                            action: 'bjlg_update_onboarding_progress',
+                            nonce: ajaxData.onboarding_nonce || '',
+                            completed: payload,
+                        },
+                    }).catch(function() {});
+                }, 400);
+
+                return function() {
+                    window.clearTimeout(timeout);
+                };
+            }, [manualCompleted]);
+
+            const handleToggle = function(step, checked) {
+                if (!step || !step.id || step.locked) {
+                    return;
+                }
+
+                setManualCompleted(function(previous) {
+                    const next = new Set(previous);
+                    if (checked) {
+                        next.add(step.id);
+                    } else {
+                        next.delete(step.id);
+                    }
+
+                    return next;
+                });
+            };
+
+            const handleAction = function(step, event) {
+                if (step && step.cta && step.cta.action === 'open-api-key') {
+                    if (event && typeof event.preventDefault === 'function') {
+                        event.preventDefault();
+                    }
+
+                    if (typeof window.bjlgSetActiveSection === 'function') {
+                        window.bjlgSetActiveSection('integrations');
+                    }
+
+                    window.setTimeout(function() {
+                        const target = document.getElementById('bjlg-create-api-key');
+                        if (target && typeof target.scrollIntoView === 'function') {
+                            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                        if (target && typeof target.focus === 'function') {
+                            try {
+                                target.focus({ preventScroll: true });
+                            } catch (focusError) {
+                                target.focus();
+                            }
+                        }
+                    }, 150);
+                }
+            };
+
+            return createElement(
+                Card,
+                { className: 'bjlg-onboarding-card' },
+                createElement(
+                    CardBody,
+                    null,
+                    createElement(
+                        'div',
+                        { className: 'bjlg-onboarding-card__header' },
+                        createElement(
+                            'div',
+                            { className: 'bjlg-onboarding-card__header-main' },
+                            createElement('h3', { className: 'bjlg-onboarding-card__title' }, __('Bien démarrer', 'backup-jlg')),
+                            createElement('p', { className: 'bjlg-onboarding-card__subtitle' }, sprintf(__('Étapes complétées : %1$s/%2$s', 'backup-jlg'), completedCount, totalSteps))
+                        ),
+                        createElement(
+                            'div',
+                            { className: 'bjlg-onboarding-card__progress', role: 'group', 'aria-label': __('Progression', 'backup-jlg') },
+                            createElement(
+                                'div',
+                                {
+                                    className: 'bjlg-onboarding-card__progress-bar',
+                                    role: 'progressbar',
+                                    'aria-valuemin': 0,
+                                    'aria-valuemax': 100,
+                                    'aria-valuenow': progress,
+                                    'aria-valuetext': progress + '%',
+                                },
+                                createElement('span', {
+                                    className: 'bjlg-onboarding-card__progress-fill',
+                                    style: { width: progress + '%' },
+                                })
+                            ),
+                            createElement('span', { className: 'bjlg-onboarding-card__progress-value' }, progress + '%')
+                        )
+                    ),
+                    steps.map(function(step) {
+                        if (!step || !step.id) {
+                            return null;
+                        }
+
+                        const isLocked = !!step.locked;
+                        const isChecked = autoCompleted.has(step.id) || manualCompleted.has(step.id);
+                        const classes = ['bjlg-onboarding-card__step'];
+
+                        if (isLocked) {
+                            classes.push('is-locked');
+                        }
+
+                        if (isChecked) {
+                            classes.push('is-complete');
+                        }
+
+                        return createElement(
+                            'div',
+                            { key: step.id, className: classes.join(' ') },
+                            createElement(
+                                'div',
+                                { className: 'bjlg-onboarding-card__step-main' },
+                                createElement(CheckboxControl, {
+                                    label: step.title || '',
+                                    checked: isChecked,
+                                    onChange: function(checked) {
+                                        handleToggle(step, checked);
+                                    },
+                                    disabled: isLocked,
+                                }),
+                                step.description ? createElement('p', { className: 'bjlg-onboarding-card__description' }, step.description) : null,
+                                (isLocked && !autoCompleted.has(step.id)) ? createElement('p', { className: 'bjlg-onboarding-card__hint' }, __('Terminez l’action associée pour valider cette étape.', 'backup-jlg')) : null
+                            ),
+                            step.cta ? createElement(
+                                Button,
+                                {
+                                    isSecondary: true,
+                                    href: step.cta.action ? undefined : (step.cta.href || '#'),
+                                    target: step.cta.target || undefined,
+                                    onClick: step.cta.action ? function(event) { handleAction(step, event); } : undefined,
+                                },
+                                step.cta.label || __('Ouvrir', 'backup-jlg')
+                            ) : null
+                        );
+                    })
+                )
+            );
+        };
+
+        render(createElement(Checklist), rootElement);
+    };
+
+    if (appEl) {
+        mountSectionTabs(appEl);
+
+        const onboardingData = parseJSONSafe(appEl.getAttribute('data-bjlg-onboarding'), null);
+        const onboardingRoot = document.getElementById('bjlg-onboarding-checklist');
+        if (onboardingRoot && onboardingData) {
+            mountOnboardingChecklist(onboardingRoot, onboardingData);
+        }
+    }
+
+    if (appEl && !currentSection) {
+        const initialSection = appEl.getAttribute('data-active-section');
+        if (initialSection) {
+            setActiveSection(initialSection, false, true);
         }
     }
 
@@ -317,4 +678,11 @@ jQuery(function($) {
             }
         });
     })();
+
+    $(window).on('resize', function() {
+        if (window.innerWidth > 960) {
+            setSidebarExpanded(false);
+        }
+    });
 });
+
