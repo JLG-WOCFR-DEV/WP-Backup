@@ -654,9 +654,37 @@ if (!function_exists('__')) {
     }
 }
 
+if (!function_exists('_x')) {
+    function _x($text, $context = '', $domain = 'default') {
+        return $text;
+    }
+}
+
 if (!function_exists('esc_attr__')) {
     function esc_attr__($text, $domain = 'default') {
         return esc_attr(__($text, $domain));
+    }
+}
+
+if (!function_exists('sanitize_html_class')) {
+    function sanitize_html_class($class, $fallback = '') {
+        if (is_array($class)) {
+            $sanitized = array_map(static function ($value) use ($fallback) {
+                return sanitize_html_class($value, $fallback);
+            }, $class);
+
+            return array_values(array_filter($sanitized, static function ($value) {
+                return $value !== '';
+            }));
+        }
+
+        $class = preg_replace('/[^A-Za-z0-9_-]/', '-', (string) $class);
+
+        if ($class === '' && $fallback !== '') {
+            return sanitize_html_class($fallback);
+        }
+
+        return $class;
     }
 }
 

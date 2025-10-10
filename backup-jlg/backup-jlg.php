@@ -16,13 +16,33 @@ if (!defined('ABSPATH')) exit;
 /* -------------------------------------------------------------------------- */
 /* Constantes du Plugin                                                      */
 /* -------------------------------------------------------------------------- */
-define('BJLG_VERSION', '2.0.3');
-define('BJLG_PLUGIN_FILE', __FILE__);
-define('BJLG_PLUGIN_BASENAME', plugin_basename(__FILE__));
-define('BJLG_PLUGIN_DIR', plugin_dir_path(__FILE__));
-define('BJLG_PLUGIN_URL', plugin_dir_url(__FILE__));
-define('BJLG_INCLUDES_DIR', BJLG_PLUGIN_DIR . 'includes/');
-define('BJLG_DEFAULT_CAPABILITY', 'manage_options');
+if (!defined('BJLG_VERSION')) {
+    define('BJLG_VERSION', '2.0.3');
+}
+
+if (!defined('BJLG_PLUGIN_FILE')) {
+    define('BJLG_PLUGIN_FILE', __FILE__);
+}
+
+if (!defined('BJLG_PLUGIN_BASENAME')) {
+    define('BJLG_PLUGIN_BASENAME', plugin_basename(__FILE__));
+}
+
+if (!defined('BJLG_PLUGIN_DIR')) {
+    define('BJLG_PLUGIN_DIR', plugin_dir_path(__FILE__));
+}
+
+if (!defined('BJLG_PLUGIN_URL')) {
+    define('BJLG_PLUGIN_URL', plugin_dir_url(__FILE__));
+}
+
+if (!defined('BJLG_INCLUDES_DIR')) {
+    define('BJLG_INCLUDES_DIR', BJLG_PLUGIN_DIR . 'includes/');
+}
+
+if (!defined('BJLG_DEFAULT_CAPABILITY')) {
+    define('BJLG_DEFAULT_CAPABILITY', 'manage_options');
+}
 
 if (!function_exists('bjlg_get_required_capability')) {
     /**
