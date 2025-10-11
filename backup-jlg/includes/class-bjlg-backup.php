@@ -2,6 +2,10 @@
 namespace BJLG;
 
 use Exception;
+use FilesystemIterator;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
+use UnexpectedValueException;
 use ZipArchive;
 
 if (!defined('ABSPATH')) {
@@ -9,9 +13,47 @@ if (!defined('ABSPATH')) {
 }
 
 /**
+ * Exception dédiée au contrôle d'espace disque avant sauvegarde.
+ */
+class BJLG_DiskSpaceException extends Exception {
+    /** @var array<string, int|null> */
+    private $context = [];
+
+    /**
+     * @param string                     $message
+     * @param array<string, int|null>    $context
+     * @param int                        $code
+     * @param Exception|null             $previous
+     */
+    public function __construct($message, array $context = [], $code = 0, ?Exception $previous = null) {
+        parent::__construct($message, $code, $previous);
+        $this->context = $context;
+    }
+
+    /**
+     * Retourne les métadonnées associées à l'erreur.
+     *
+     * @return array<string, int|null>
+     */
+    public function get_context() {
+        return $this->context;
+    }
+}
+
+/**
  * Gère le processus complet de création de sauvegardes
  */
 class BJLG_Backup {
+
+    /**
+     * Ratio de marge de sécurité appliqué à l'estimation de la sauvegarde.
+     */
+    private const DISK_SPACE_MARGIN_RATIO = 0.2;
+
+    /**
+     * Marge minimale ajoutée à toute sauvegarde, en bytes.
+     */
+    private const DISK_SPACE_MIN_MARGIN_BYTES = 100 * 1024 * 1024;
 
     /**
      * Durée de vie par défaut d'une tâche stockée dans un transient.
@@ -611,6 +653,36 @@ class BJLG_Backup {
             'secondary_destinations' => $secondary_destinations,
         ];
 
+        try {
+            $this->ensure_backup_directory_is_ready();
+            $disk_assessment = $this->assert_sufficient_disk_space($task_data);
+            $task_data['disk_space_check'] = $disk_assessment;
+        } catch (BJLG_DiskSpaceException $disk_exception) {
+            $context = $disk_exception->get_context();
+            if (!is_array($context)) {
+                $context = [];
+            }
+
+            $task_data['disk_space_check'] = array_merge($context, ['status' => 'insufficient']);
+
+            BJLG_Debug::log("Tâche $task_id interrompue : " . $disk_exception->getMessage());
+            BJLG_History::log('backup_created', 'failure', $disk_exception->getMessage());
+
+            wp_send_json_error([
+                'message' => $disk_exception->getMessage(),
+                'code' => 'bjlg_disk_space_insufficient',
+                'details' => $context,
+            ], 507);
+        } catch (Exception $exception) {
+            BJLG_Debug::log('ERREUR : ' . $exception->getMessage());
+            BJLG_History::log('backup_created', 'failure', $exception->getMessage());
+
+            wp_send_json_error([
+                'message' => $exception->getMessage(),
+                'code' => 'bjlg_backup_initialization_failed',
+            ], 500);
+        }
+
         if (!self::reserve_task_slot($task_id)) {
             BJLG_Debug::log("Impossible de démarrer la tâche $task_id : une sauvegarde est déjà en cours.");
             wp_send_json_error([
@@ -805,6 +877,33 @@ class BJLG_Backup {
                 return;
             }
 
+            $this->ensure_backup_directory_is_ready();
+
+            try {
+                $disk_assessment = $this->assert_sufficient_disk_space($task_data);
+                $task_data['disk_space_check'] = $disk_assessment;
+                self::save_task_state($task_id, $task_data);
+            } catch (BJLG_DiskSpaceException $disk_exception) {
+                $context = $disk_exception->get_context();
+                if (!is_array($context)) {
+                    $context = [];
+                }
+
+                $task_data['disk_space_check'] = array_merge($context, ['status' => 'insufficient']);
+                self::save_task_state($task_id, $task_data);
+
+                BJLG_Debug::log('ERREUR dans la sauvegarde : ' . $disk_exception->getMessage());
+                BJLG_History::log('backup_created', 'failure', $disk_exception->getMessage());
+
+                do_action('bjlg_backup_failed', $disk_exception->getMessage(), [
+                    'task_id' => $task_id,
+                    'components' => $components,
+                ]);
+
+                $this->update_task_progress($task_id, 100, 'error', $disk_exception->getMessage());
+                return;
+            }
+
             // Mise à jour : Début
             $this->update_task_progress($task_id, 10, 'running', 'Préparation de la sauvegarde...');
 
@@ -827,8 +926,6 @@ class BJLG_Backup {
                     $incremental_handler = null;
                 }
             }
-
-            $this->ensure_backup_directory_is_ready();
 
             $backup_filename = $this->generate_backup_filename($backup_type, $components);
             $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
@@ -1133,6 +1230,321 @@ class BJLG_Backup {
         if (!$is_writable) {
             throw new Exception("Le dossier de sauvegarde n'est pas accessible en écriture.");
         }
+    }
+
+    /**
+     * Vérifie que l'espace disque disponible est suffisant pour la sauvegarde à venir.
+     *
+     * @param array<string, mixed> $task_data
+     * @return array<string, int|string|null>
+     * @throws BJLG_DiskSpaceException
+     */
+    private function assert_sufficient_disk_space(array $task_data) {
+        $components = isset($task_data['components']) ? (array) $task_data['components'] : [];
+        $components = array_filter(array_map('sanitize_key', $components));
+
+        if (empty($components)) {
+            return [
+                'estimated_bytes' => 0,
+                'margin_bytes' => 0,
+                'required_bytes' => 0,
+                'free_bytes' => null,
+                'checked_at' => time(),
+                'status' => 'skipped',
+                'target_path' => BJLG_BACKUP_DIR,
+            ];
+        }
+
+        $estimated_bytes = $this->estimate_backup_size_bytes($components, $task_data);
+
+        $margin_ratio = self::DISK_SPACE_MARGIN_RATIO;
+        if (function_exists('apply_filters')) {
+            $filtered_ratio = apply_filters('bjlg_disk_space_margin_ratio', $margin_ratio, $task_data, $components, $estimated_bytes);
+            if (is_numeric($filtered_ratio) && (float) $filtered_ratio >= 0) {
+                $margin_ratio = (float) $filtered_ratio;
+            }
+        }
+
+        $margin_bytes = (int) round($estimated_bytes * $margin_ratio);
+        $minimum_margin = self::DISK_SPACE_MIN_MARGIN_BYTES;
+        if (function_exists('apply_filters')) {
+            $filtered_min_margin = apply_filters('bjlg_disk_space_margin_min_bytes', $minimum_margin, $task_data, $components, $estimated_bytes);
+            if (is_numeric($filtered_min_margin) && (int) $filtered_min_margin >= 0) {
+                $minimum_margin = (int) $filtered_min_margin;
+            }
+        }
+
+        if ($margin_bytes < $minimum_margin) {
+            $margin_bytes = $minimum_margin;
+        }
+
+        $required_bytes = $estimated_bytes + $margin_bytes;
+
+        $disk_probe_path = BJLG_BACKUP_DIR;
+        if (!is_dir($disk_probe_path)) {
+            $probe_parent = dirname($disk_probe_path);
+            if (is_dir($probe_parent)) {
+                $disk_probe_path = $probe_parent;
+            } elseif (defined('WP_CONTENT_DIR') && is_dir(WP_CONTENT_DIR)) {
+                $disk_probe_path = WP_CONTENT_DIR;
+            } else {
+                $disk_probe_path = defined('ABSPATH') ? ABSPATH : sys_get_temp_dir();
+            }
+        }
+
+        $free_bytes_raw = @disk_free_space($disk_probe_path);
+        $free_bytes = ($free_bytes_raw === false) ? null : (int) $free_bytes_raw;
+
+        $snapshot = [
+            'estimated_bytes' => $estimated_bytes,
+            'margin_bytes' => $margin_bytes,
+            'required_bytes' => $required_bytes,
+            'free_bytes' => $free_bytes,
+            'checked_at' => time(),
+            'status' => $free_bytes === null ? 'unknown' : 'ok',
+            'target_path' => $disk_probe_path,
+        ];
+
+        if ($free_bytes !== null && $free_bytes < $required_bytes) {
+            $message = sprintf(
+                "Espace disque insuffisant : %s requis (estimation %s + marge %s), %s disponibles.",
+                $this->format_bytes($required_bytes),
+                $this->format_bytes($estimated_bytes),
+                $this->format_bytes($margin_bytes),
+                $this->format_bytes($free_bytes)
+            );
+
+            BJLG_Debug::log('ERREUR : ' . $message);
+            BJLG_History::log('backup_disk_space', 'failure', $message);
+
+            $snapshot['status'] = 'insufficient';
+
+            throw new BJLG_DiskSpaceException($message, $snapshot);
+        }
+
+        if ($free_bytes === null) {
+            BJLG_Debug::log("Impossible de déterminer l'espace disque libre pour {$disk_probe_path}. Contrôle préventif ignoré.");
+        } else {
+            BJLG_Debug::log(sprintf(
+                'Contrôle espace disque OK : %s requis, %s disponibles (%s de marge).',
+                $this->format_bytes($required_bytes),
+                $this->format_bytes($free_bytes),
+                $this->format_bytes($margin_bytes)
+            ));
+        }
+
+        return $snapshot;
+    }
+
+    /**
+     * Estime la taille totale de la sauvegarde selon les composants sélectionnés.
+     *
+     * @param array<int, string> $components
+     * @param array<string, mixed> $task_data
+     * @return int
+     */
+    private function estimate_backup_size_bytes(array $components, array $task_data) {
+        $total = 0;
+        $include_patterns = isset($task_data['include_patterns']) && is_array($task_data['include_patterns'])
+            ? $task_data['include_patterns']
+            : [];
+        $exclude_overrides = isset($task_data['exclude_patterns']) && is_array($task_data['exclude_patterns'])
+            ? $task_data['exclude_patterns']
+            : [];
+        $incremental = !empty($task_data['incremental']);
+
+        $incremental_handler = null;
+        if ($incremental && class_exists(BJLG_Incremental::class)) {
+            $incremental_handler = BJLG_Incremental::get_latest_instance();
+            if (!$incremental_handler) {
+                $incremental_handler = new BJLG_Incremental();
+            }
+        }
+
+        foreach ($components as $component) {
+            switch ($component) {
+                case 'db':
+                    $total += $this->estimate_database_size_bytes();
+                    break;
+                case 'plugins':
+                    if (defined('WP_PLUGIN_DIR')) {
+                        $total += $this->estimate_directory_component_size(
+                            WP_PLUGIN_DIR,
+                            'wp-content/plugins/',
+                            $include_patterns,
+                            $exclude_overrides,
+                            $incremental,
+                            $incremental_handler
+                        );
+                    }
+                    break;
+                case 'themes':
+                    $theme_root = function_exists('get_theme_root') ? get_theme_root() : null;
+                    if (is_string($theme_root) && $theme_root !== '') {
+                        $total += $this->estimate_directory_component_size(
+                            $theme_root,
+                            'wp-content/themes/',
+                            $include_patterns,
+                            $exclude_overrides,
+                            $incremental,
+                            $incremental_handler
+                        );
+                    }
+                    break;
+                case 'uploads':
+                    $upload_dir = function_exists('wp_get_upload_dir') ? wp_get_upload_dir() : null;
+                    if (is_array($upload_dir) && !empty($upload_dir['basedir'])) {
+                        $total += $this->estimate_directory_component_size(
+                            $upload_dir['basedir'],
+                            'wp-content/uploads/',
+                            $include_patterns,
+                            $exclude_overrides,
+                            $incremental,
+                            $incremental_handler
+                        );
+                    }
+                    break;
+            }
+        }
+
+        if (function_exists('apply_filters')) {
+            $filtered_total = apply_filters('bjlg_estimated_backup_size', $total, $components, $task_data);
+            if (is_numeric($filtered_total) && (int) $filtered_total >= 0) {
+                $total = (int) $filtered_total;
+            }
+        }
+
+        return max(0, (int) $total);
+    }
+
+    /**
+     * Estime la taille d'un composant de type répertoire.
+     *
+     * @param string $source_dir
+     * @param string $zip_path
+     * @param array<int, string> $include_patterns
+     * @param array<int, string> $exclude_overrides
+     * @param bool $incremental
+     * @param BJLG_Incremental|null $incremental_handler
+     * @return int
+     */
+    private function estimate_directory_component_size(
+        $source_dir,
+        $zip_path,
+        array $include_patterns,
+        array $exclude_overrides,
+        $incremental,
+        $incremental_handler
+    ) {
+        if (!is_string($source_dir) || $source_dir === '' || !is_dir($source_dir)) {
+            return 0;
+        }
+
+        $exclude_patterns = $this->get_exclude_patterns($source_dir, $zip_path, $exclude_overrides);
+
+        if ($incremental && $incremental_handler instanceof BJLG_Incremental) {
+            try {
+                $scan = $incremental_handler->get_modified_files($source_dir);
+            } catch (Exception $exception) {
+                BJLG_Debug::log('Impossible d\'estimer les changements incrémentaux : ' . $exception->getMessage());
+                $scan = [];
+            }
+
+            $modified_files = is_array($scan['modified'] ?? null) ? $scan['modified'] : [];
+            if (empty($modified_files)) {
+                return 0;
+            }
+
+            $total = 0;
+            foreach ($modified_files as $file) {
+                if (!is_string($file) || $file === '' || !file_exists($file)) {
+                    continue;
+                }
+
+                $normalized = $this->normalize_path($file);
+                if ($normalized === '') {
+                    continue;
+                }
+
+                if ($this->path_matches_any($normalized, $exclude_patterns)) {
+                    continue;
+                }
+
+                if (!$this->should_include_file($normalized, $include_patterns)) {
+                    continue;
+                }
+
+                $size = @filesize($file);
+                if (is_numeric($size) && (int) $size > 0) {
+                    $total += (int) $size;
+                }
+            }
+
+            return $total;
+        }
+
+        try {
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($source_dir, FilesystemIterator::SKIP_DOTS)
+            );
+        } catch (UnexpectedValueException $exception) {
+            BJLG_Debug::log('Impossible de parcourir le répertoire ' . $source_dir . ' : ' . $exception->getMessage());
+            return 0;
+        }
+
+        $total = 0;
+        foreach ($iterator as $fileinfo) {
+            if (!$fileinfo->isFile() || $fileinfo->isLink()) {
+                continue;
+            }
+
+            $file_path = $fileinfo->getPathname();
+            $normalized = $this->normalize_path($file_path);
+
+            if ($normalized === '') {
+                continue;
+            }
+
+            if ($this->path_matches_any($normalized, $exclude_patterns)) {
+                continue;
+            }
+
+            if (!$this->should_include_file($normalized, $include_patterns)) {
+                continue;
+            }
+
+            $total += (int) $fileinfo->getSize();
+        }
+
+        return $total;
+    }
+
+    /**
+     * Estime la taille de la base de données.
+     *
+     * @return int
+     */
+    private function estimate_database_size_bytes() {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb) || !method_exists($wpdb, 'get_var')) {
+            return 0;
+        }
+
+        try {
+            $size = $wpdb->get_var(
+                "SELECT SUM(data_length + index_length) FROM information_schema.TABLES WHERE table_schema = '" . DB_NAME . "'"
+            );
+        } catch (Exception $exception) {
+            BJLG_Debug::log('Impossible d\'estimer la taille de la base de données : ' . $exception->getMessage());
+            $size = 0;
+        }
+
+        if (!is_numeric($size) || (float) $size < 0) {
+            return 0;
+        }
+
+        return (int) $size;
     }
 
     /**
@@ -2519,6 +2931,20 @@ class BJLG_Backup {
      * @param string $path
      * @return bool
      */
+    private function path_matches_any($path, array $patterns) {
+        if (empty($patterns)) {
+            return false;
+        }
+
+        foreach ($patterns as $pattern) {
+            if ($this->path_matches_pattern($pattern, $path)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function path_matches_pattern($pattern, $path) {
         if (!is_string($pattern) || $pattern === '' || !is_string($path) || $path === '') {
             return false;
@@ -2585,6 +3011,34 @@ class BJLG_Backup {
         }
 
         return str_replace('\\', '/', $path);
+    }
+
+    /**
+     * Formate une taille lisible par l'humain sans dépendre de size_format().
+     *
+     * @param int|null $bytes
+     * @return string
+     */
+    private function format_bytes($bytes) {
+        if (!is_numeric($bytes) || (int) $bytes < 0) {
+            return '0 B';
+        }
+
+        $bytes = (int) $bytes;
+
+        if (function_exists('size_format')) {
+            return size_format($bytes);
+        }
+
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $position = 0;
+
+        while ($bytes >= 1024 && $position < count($units) - 1) {
+            $bytes /= 1024;
+            $position++;
+        }
+
+        return round($bytes, 2) . ' ' . $units[$position];
     }
 
     /**
