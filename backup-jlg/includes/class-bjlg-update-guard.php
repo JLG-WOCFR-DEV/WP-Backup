@@ -32,7 +32,7 @@ class BJLG_Update_Guard {
      *
      * @return mixed
      */
-    public function handle_pre_install($response, $hook_extra, $upgrader) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter
+    public function handle_pre_install($response, $hook_extra, $upgrader = null) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter
         try {
             $this->maybe_trigger_pre_update_backup($hook_extra);
         } catch (\Throwable $exception) {
