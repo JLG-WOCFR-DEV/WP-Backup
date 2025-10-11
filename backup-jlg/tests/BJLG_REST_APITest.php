@@ -2272,6 +2272,81 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         }
     }
 
+    public function test_restore_endpoint_applies_deleted_file_manifest(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $plugin_dir = WP_PLUGIN_DIR . '/deleted-plugin';
+        if (!is_dir($plugin_dir)) {
+            mkdir($plugin_dir, 0777, true);
+        }
+
+        $plugin_file = $plugin_dir . '/deleteme.php';
+        file_put_contents($plugin_file, "<?php\n// removable\n");
+
+        $archive_path = BJLG_BACKUP_DIR . 'bjlg-rest-incremental-' . uniqid('', true) . '.zip';
+        $zip = new \ZipArchive();
+        $open_result = $zip->open($archive_path, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
+        $this->assertTrue($open_result === true || $open_result === \ZipArchive::ER_OK);
+
+        $manifest = [
+            'type' => 'incremental',
+            'contains' => ['plugins'],
+        ];
+
+        $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $deleted_manifest = [
+            'generated_at' => date('c'),
+            'count' => 1,
+            'paths' => ['wp-content/plugins/deleted-plugin/deleteme.php'],
+        ];
+        $zip->addFromString('deleted-files.json', json_encode($deleted_manifest));
+        $zip->close();
+
+        $request = new class($archive_path) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct(string $archive_path)
+            {
+                $this->params = [
+                    'id' => basename($archive_path),
+                    'components' => ['plugins'],
+                    'create_restore_point' => false,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $response = $api->restore_backup($request);
+
+        $this->assertIsArray($response);
+        $this->assertArrayHasKey('task_id', $response);
+
+        $task_id = $response['task_id'];
+        $restore = new BJLG_Test_Restore_For_Rest();
+        $restore->run_restore_task($task_id);
+
+        $this->assertFileDoesNotExist($plugin_file);
+
+        if (file_exists($archive_path)) {
+            unlink($archive_path);
+        }
+
+        if (is_dir($plugin_dir)) {
+            $files = scandir($plugin_dir);
+            if (is_array($files) && count($files) <= 2) {
+                rmdir($plugin_dir);
+            }
+        }
+    }
+
     public function test_restore_endpoint_supports_sandbox_environment(): void
     {
         $GLOBALS['bjlg_test_transients'] = [];
