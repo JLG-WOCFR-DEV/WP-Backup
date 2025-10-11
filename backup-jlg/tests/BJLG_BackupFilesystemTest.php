@@ -180,7 +180,8 @@ final class BJLG_BackupFilesystemTest extends TestCase
 
         try {
             $incremental = new BJLG\BJLG_Incremental();
-            $modified_files = $incremental->get_modified_files($windows_dir);
+            $scan = $incremental->get_modified_files($windows_dir);
+            $modified_files = is_array($scan['modified'] ?? null) ? $scan['modified'] : [];
 
             $this->assertCount(1, $modified_files);
             $expected_path = str_replace('\\', '/', (string) realpath($file_path));

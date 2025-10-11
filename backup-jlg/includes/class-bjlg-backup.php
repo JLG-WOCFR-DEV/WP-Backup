@@ -888,28 +888,51 @@ class BJLG_Backup {
                 $progress = 20;
                 $components_count = count($components);
                 $progress_per_component = 70 / max(1, $components_count);
+                $deleted_paths_registry = [];
 
                 foreach ($components as $component) {
                     $this->update_task_progress($task_id, $progress, 'running', "Sauvegarde : $component");
+
+                    $directory_changes = null;
 
                     switch ($component) {
                         case 'db':
                             $this->backup_database($zip, $task_data['incremental']);
                             break;
                         case 'plugins':
-                            $this->backup_directory($zip, WP_PLUGIN_DIR, 'wp-content/plugins/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
+                            $directory_changes = $this->backup_directory($zip, WP_PLUGIN_DIR, 'wp-content/plugins/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
                             break;
                         case 'themes':
-                            $this->backup_directory($zip, get_theme_root(), 'wp-content/themes/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
+                            $directory_changes = $this->backup_directory($zip, get_theme_root(), 'wp-content/themes/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
                             break;
                         case 'uploads':
                             $upload_dir = wp_get_upload_dir();
-                            $this->backup_directory($zip, $upload_dir['basedir'], 'wp-content/uploads/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
+                            $directory_changes = $this->backup_directory($zip, $upload_dir['basedir'], 'wp-content/uploads/', $task_data['incremental'], $incremental_handler, $include_patterns, $exclude_overrides);
                             break;
+                    }
+
+                    if (is_array($directory_changes) && !empty($directory_changes['deleted'])) {
+                        $this->collect_deleted_paths($deleted_paths_registry, $directory_changes['deleted']);
                     }
 
                     $progress += $progress_per_component;
                     $this->update_task_progress($task_id, round($progress, 1), 'running', "Composant $component terminé");
+                }
+
+                if ($task_data['incremental'] && !empty($deleted_paths_registry)) {
+                    $deleted_metadata = [
+                        'generated_at' => function_exists('current_time') ? current_time('c') : date('c'),
+                        'count' => count($deleted_paths_registry),
+                        'paths' => array_values(array_keys($deleted_paths_registry)),
+                    ];
+
+                    $encoded_deleted = json_encode($deleted_metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+                    if ($encoded_deleted === false) {
+                        BJLG_Debug::log("Impossible d'encoder la liste des fichiers supprimés pour l'archive incrémentale.", 'error');
+                    } else {
+                        $zip->addFromString('deleted-files.json', $encoded_deleted);
+                    }
                 }
 
                 $close_result = @$zip->close();
@@ -1659,7 +1682,10 @@ class BJLG_Backup {
     ) {
         if (!is_dir($source_dir)) {
             BJLG_Debug::log("Répertoire introuvable : $source_dir");
-            return;
+            return [
+                'modified' => [],
+                'deleted' => [],
+            ];
         }
 
         BJLG_Debug::log("Sauvegarde du répertoire : " . basename($source_dir));
@@ -1668,6 +1694,7 @@ class BJLG_Backup {
 
         // Pour l'incrémental, obtenir la liste des fichiers modifiés
         $modified_files = [];
+        $deleted_files = [];
         if ($incremental) {
             if (!$incremental_handler instanceof BJLG_Incremental) {
                 $incremental_handler = BJLG_Incremental::get_latest_instance();
@@ -1677,11 +1704,27 @@ class BJLG_Backup {
                 $incremental_handler = new BJLG_Incremental();
             }
 
-            $modified_files = $incremental_handler->get_modified_files($source_dir);
+            $scan = $incremental_handler->get_modified_files($source_dir);
+            $modified_files = is_array($scan['modified'] ?? null) ? $scan['modified'] : [];
+            $deleted_files = is_array($scan['deleted'] ?? null) ? $scan['deleted'] : [];
 
             if (empty($modified_files)) {
-                BJLG_Debug::log("Aucun fichier modifié dans : " . basename($source_dir));
-                return;
+                if (!empty($deleted_files)) {
+                    BJLG_Debug::log(
+                        sprintf(
+                            "Aucun fichier modifié dans : %s (suppression détectée : %d)",
+                            basename($source_dir),
+                            count($deleted_files)
+                        )
+                    );
+                } else {
+                    BJLG_Debug::log("Aucun fichier modifié dans : " . basename($source_dir));
+                }
+
+                return [
+                    'modified' => [],
+                    'deleted' => $deleted_files,
+                ];
             }
 
             if (!empty($include_patterns)) {
@@ -1691,10 +1734,15 @@ class BJLG_Backup {
 
                 if (empty($modified_files)) {
                     BJLG_Debug::log("Aucun fichier modifié correspondant aux inclusions dans : " . basename($source_dir));
-                    return;
+                    return [
+                        'modified' => [],
+                        'deleted' => $deleted_files,
+                    ];
                 }
             }
         }
+
+        $modified_files = array_values($modified_files);
 
         try {
             $this->add_folder_to_zip($zip, $source_dir, $zip_path, $exclude_patterns, $incremental, $modified_files, $include_patterns);
@@ -1708,6 +1756,11 @@ class BJLG_Backup {
 
             throw new Exception($message, 0, $exception);
         }
+
+        return [
+            'modified' => $modified_files,
+            'deleted' => $deleted_files,
+        ];
     }
 
     /**
@@ -1881,6 +1934,47 @@ class BJLG_Backup {
             }
         } finally {
             closedir($handle);
+        }
+    }
+
+    /**
+     * Agrège les chemins supprimés détectés lors d'une sauvegarde incrémentale.
+     *
+     * @param array<string, bool> $collector
+     * @param array<int, string>  $paths
+     * @return void
+     */
+    private function collect_deleted_paths(array &$collector, array $paths): void {
+        if (empty($paths)) {
+            return;
+        }
+
+        $normalized_abspath = $this->normalize_path(ABSPATH);
+
+        foreach ($paths as $path) {
+            if (!is_string($path) || $path === '') {
+                continue;
+            }
+
+            $normalized = $this->normalize_path($path);
+
+            if ($normalized === '') {
+                continue;
+            }
+
+            $relative = $normalized;
+
+            if ($normalized_abspath !== '' && strpos($normalized, $normalized_abspath) === 0) {
+                $relative = ltrim(substr($normalized, strlen($normalized_abspath)), '/');
+            } else {
+                $relative = ltrim($normalized, '/');
+            }
+
+            if ($relative === '') {
+                continue;
+            }
+
+            $collector[$relative] = true;
         }
     }
 
