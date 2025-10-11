@@ -62,11 +62,13 @@ class BJLG_Remote_Purge_Worker {
             $queue = $incremental->get_remote_purge_queue();
 
             if (empty($queue)) {
+                $this->update_metrics([], [], time());
                 return;
             }
 
             $now = time();
             $processed = 0;
+            $results = [];
             foreach ($queue as $entry) {
                 if ($processed >= self::MAX_ENTRIES_PER_RUN) {
                     break;
@@ -81,8 +83,11 @@ class BJLG_Remote_Purge_Worker {
                 }
 
                 $handled = $this->handle_queue_entry($incremental, $entry, $now);
-                if ($handled) {
-                    $processed++;
+                if (is_array($handled)) {
+                    if (!empty($handled['processed'])) {
+                        $processed++;
+                    }
+                    $results[] = $handled;
                 }
             }
         } finally {
@@ -90,6 +95,7 @@ class BJLG_Remote_Purge_Worker {
         }
 
         $remaining = (new BJLG_Incremental())->get_remote_purge_queue();
+        $this->update_metrics($remaining, $results, isset($now) ? $now : time());
         $delay = $this->get_next_delay($remaining);
         if ($delay !== null) {
             wp_schedule_single_event(time() + $delay, self::HOOK);
@@ -104,7 +110,7 @@ class BJLG_Remote_Purge_Worker {
     private function handle_queue_entry(BJLG_Incremental $incremental, array $entry, $now) {
         $file = isset($entry['file']) ? basename((string) $entry['file']) : '';
         if ($file === '') {
-            return false;
+            return ['processed' => false];
         }
 
         $destinations = isset($entry['destinations']) && is_array($entry['destinations'])
@@ -112,7 +118,7 @@ class BJLG_Remote_Purge_Worker {
             : [];
 
         if (empty($destinations)) {
-            return false;
+            return ['processed' => false];
         }
 
         $attempts = isset($entry['attempts']) ? (int) $entry['attempts'] : 0;
@@ -223,7 +229,16 @@ class BJLG_Remote_Purge_Worker {
                 'attempts' => $current_attempt,
             ]);
 
-            return true;
+            return [
+                'processed' => true,
+                'outcome' => 'completed',
+                'file' => $file,
+                'registered_at' => $registered_at,
+                'timestamp' => $now,
+                'attempts' => $current_attempt,
+                'destinations' => $success,
+                'duration' => max(0, $now - $registered_at),
+            ];
         }
 
         if (!empty($errors)) {
@@ -274,6 +289,17 @@ class BJLG_Remote_Purge_Worker {
                 }
 
                 do_action('bjlg_remote_purge_permanent_failure', $file, $current_entry, $errors);
+
+                return [
+                    'processed' => true,
+                    'outcome' => 'failed',
+                    'file' => $file,
+                    'registered_at' => $registered_at,
+                    'timestamp' => $now,
+                    'attempts' => $current_attempt,
+                    'errors' => $errors,
+                    'max_delay' => $max_delay,
+                ];
             } else {
                 $delay = $this->compute_backoff($current_attempt);
                 $update['status'] = 'retry';
@@ -318,7 +344,16 @@ class BJLG_Remote_Purge_Worker {
             }
         }
 
-        return true;
+        return [
+            'processed' => true,
+            'outcome' => 'retry',
+            'file' => $file,
+            'registered_at' => $registered_at,
+            'timestamp' => $now,
+            'attempts' => $current_attempt,
+            'remaining_destinations' => $remaining,
+            'max_delay' => $max_delay,
+        ];
     }
 
     private function is_locked() {
@@ -353,6 +388,134 @@ class BJLG_Remote_Purge_Worker {
         }
 
         return $max_delay >= self::DELAY_ALERT_THRESHOLD;
+    }
+
+    private function update_metrics(array $queue, array $results, int $now) {
+        $pending_total = 0;
+        $pending_sum_age = 0;
+        $pending_oldest = 0;
+        $pending_over_threshold = 0;
+        $destinations = [];
+
+        foreach ($queue as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $status = isset($entry['status']) ? (string) $entry['status'] : 'pending';
+            if (!in_array($status, ['pending', 'retry', 'processing'], true)) {
+                continue;
+            }
+
+            $registered = isset($entry['registered_at']) ? (int) $entry['registered_at'] : 0;
+            if ($registered <= 0) {
+                $registered = $now;
+            }
+
+            $age = max(0, $now - $registered);
+            $pending_total++;
+            $pending_sum_age += $age;
+            $pending_oldest = max($pending_oldest, $age);
+
+            if ($age >= self::DELAY_ALERT_THRESHOLD) {
+                $pending_over_threshold++;
+            }
+
+            if (!empty($entry['destinations']) && is_array($entry['destinations'])) {
+                foreach ($entry['destinations'] as $destination_id) {
+                    if (!is_scalar($destination_id)) {
+                        continue;
+                    }
+
+                    $key = (string) $destination_id;
+                    if (!isset($destinations[$key])) {
+                        $destinations[$key] = 0;
+                    }
+                    $destinations[$key]++;
+                }
+            }
+        }
+
+        $average_age = $pending_total > 0 ? $pending_sum_age / $pending_total : 0;
+
+        $existing = function_exists('get_option') ? get_option('bjlg_remote_purge_sla_metrics', []) : [];
+        $existing = is_array($existing) ? $existing : [];
+
+        $throughput = isset($existing['throughput']) && is_array($existing['throughput']) ? $existing['throughput'] : [];
+        $completion_samples = isset($throughput['samples']) ? (int) $throughput['samples'] : 0;
+        $avg_completion = isset($throughput['average_completion_seconds']) ? (float) $throughput['average_completion_seconds'] : 0.0;
+        $avg_attempts = isset($throughput['average_attempts']) ? (float) $throughput['average_attempts'] : 0.0;
+        $last_completed_at = isset($throughput['last_completed_at']) ? (int) $throughput['last_completed_at'] : 0;
+        $last_completion_seconds = isset($throughput['last_completion_seconds']) ? (float) $throughput['last_completion_seconds'] : 0.0;
+
+        $failures = isset($existing['failures']) && is_array($existing['failures']) ? $existing['failures'] : [];
+        $failures_total = isset($failures['total']) ? (int) $failures['total'] : 0;
+        $last_failure_at = isset($failures['last_failure_at']) ? (int) $failures['last_failure_at'] : 0;
+        $last_failure_message = isset($failures['last_message']) ? (string) $failures['last_message'] : '';
+
+        foreach ($results as $result) {
+            if (!is_array($result) || empty($result['processed'])) {
+                continue;
+            }
+
+            $outcome = isset($result['outcome']) ? (string) $result['outcome'] : '';
+
+            if ($outcome === 'completed') {
+                $duration = isset($result['duration']) ? (int) $result['duration'] : 0;
+                if ($duration <= 0 && isset($result['registered_at'])) {
+                    $duration = max(0, $now - (int) $result['registered_at']);
+                }
+
+                $attempts = isset($result['attempts']) ? (int) $result['attempts'] : 1;
+                $completion_samples++;
+                if ($completion_samples > 0) {
+                    $avg_completion = $avg_completion + (($duration - $avg_completion) / $completion_samples);
+                    $avg_attempts = $avg_attempts + (($attempts - $avg_attempts) / $completion_samples);
+                }
+
+                $last_completed_at = isset($result['timestamp']) ? (int) $result['timestamp'] : $now;
+                $last_completion_seconds = $duration;
+            }
+
+            if ($outcome === 'failed') {
+                $failures_total++;
+                $last_failure_at = isset($result['timestamp']) ? (int) $result['timestamp'] : $now;
+
+                if (!empty($result['errors']) && is_array($result['errors'])) {
+                    $messages = array_filter(array_map('trim', array_map('strval', array_values($result['errors']))));
+                    if (!empty($messages)) {
+                        $last_failure_message = implode(' | ', $messages);
+                    }
+                }
+            }
+        }
+
+        $metrics = [
+            'updated_at' => $now,
+            'pending' => [
+                'total' => $pending_total,
+                'average_seconds' => $average_age,
+                'oldest_seconds' => $pending_oldest,
+                'over_threshold' => $pending_over_threshold,
+                'destinations' => $destinations,
+            ],
+            'throughput' => [
+                'average_completion_seconds' => $completion_samples > 0 ? $avg_completion : 0,
+                'average_attempts' => $completion_samples > 0 ? $avg_attempts : 0,
+                'samples' => $completion_samples,
+                'last_completed_at' => $last_completed_at,
+                'last_completion_seconds' => $last_completion_seconds,
+            ],
+            'failures' => [
+                'total' => $failures_total,
+                'last_failure_at' => $last_failure_at,
+                'last_message' => $last_failure_message,
+            ],
+        ];
+
+        if (function_exists('update_option')) {
+            update_option('bjlg_remote_purge_sla_metrics', $metrics, false);
+        }
     }
 
     private function format_delay_label(int $seconds): string {

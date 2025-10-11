@@ -92,6 +92,9 @@ class BJLG_Notification_Queue {
             $entry_next_attempt = isset($entry['next_attempt_at']) ? (int) $entry['next_attempt_at'] : 0;
             $last_error = isset($entry['last_error']) ? (string) $entry['last_error'] : '';
 
+            $escalation_next = null;
+            $escalation_pending = false;
+
             foreach ($entry['channels'] as $channel_key => $channel) {
                 if (!is_string($channel_key)) {
                     continue;
@@ -102,9 +105,17 @@ class BJLG_Notification_Queue {
                 $attempts = isset($channel['attempts']) ? (int) $channel['attempts'] : 0;
                 $channel_next_attempt = isset($channel['next_attempt_at']) ? (int) $channel['next_attempt_at'] : 0;
                 $channel_error = isset($channel['last_error']) ? (string) $channel['last_error'] : '';
+                $is_escalation = !empty($channel['escalation']);
 
                 if ($channel_next_attempt > 0) {
                     $entry_next_attempt = self::min_time_value($entry_next_attempt, $channel_next_attempt);
+                }
+
+                if ($is_escalation) {
+                    $escalation_next = self::min_time_value($escalation_next, $channel_next_attempt);
+                    if (in_array($status, ['pending', 'retry'], true)) {
+                        $escalation_pending = true;
+                    }
                 }
 
                 if ($channel_error !== '' && $last_error === '') {
@@ -124,6 +135,7 @@ class BJLG_Notification_Queue {
                     'attempts' => $attempts,
                     'last_error' => $channel_error,
                     'next_attempt_at' => $channel_next_attempt,
+                    'escalation' => $is_escalation,
                 ];
             }
 
@@ -168,6 +180,10 @@ class BJLG_Notification_Queue {
                 'next_attempt_at' => $entry_next_attempt,
                 'last_error' => $last_error,
                 'channels' => $channels,
+                'quiet_until' => isset($entry['quiet_until']) ? (int) $entry['quiet_until'] : 0,
+                'escalation' => isset($entry['escalation']) && is_array($entry['escalation']) ? $entry['escalation'] : [],
+                'has_escalation_pending' => $escalation_pending,
+                'escalation_next_attempt' => $escalation_next,
             ];
         }
 
@@ -743,6 +759,26 @@ class BJLG_Notification_Queue {
             'channels' => [],
         ];
 
+        if (isset($entry['quiet_until'])) {
+            $normalized['quiet_until'] = (int) $entry['quiet_until'];
+        }
+
+        if (isset($entry['quiet_hours']) && is_array($entry['quiet_hours'])) {
+            $normalized['quiet_hours'] = $entry['quiet_hours'];
+        }
+
+        if (isset($entry['escalation']) && is_array($entry['escalation'])) {
+            $channels = isset($entry['escalation']['channels']) && is_array($entry['escalation']['channels'])
+                ? array_map('sanitize_key', $entry['escalation']['channels'])
+                : [];
+
+            $normalized['escalation'] = [
+                'channels' => array_values(array_filter($channels)),
+                'delay' => isset($entry['escalation']['delay']) ? (int) $entry['escalation']['delay'] : 0,
+                'only_critical' => !empty($entry['escalation']['only_critical']),
+            ];
+        }
+
         foreach ($entry['channels'] as $key => $channel) {
             if (!is_string($key)) {
                 continue;
@@ -764,6 +800,10 @@ class BJLG_Notification_Queue {
 
             if (isset($channel['next_attempt_at'])) {
                 $normalized['channels'][$key]['next_attempt_at'] = (int) $channel['next_attempt_at'];
+            }
+
+            if (!empty($channel['escalation'])) {
+                $normalized['channels'][$key]['escalation'] = true;
             }
         }
 

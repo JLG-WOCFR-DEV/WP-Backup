@@ -363,6 +363,8 @@ class BJLG_Admin_Advanced {
         [$metrics['next_attempt_formatted'], $metrics['next_attempt_relative']] = $this->format_timestamp_pair($next_attempt, $now);
         [$metrics['oldest_entry_formatted'], $metrics['oldest_entry_relative']] = $this->format_timestamp_pair($oldest, $now);
 
+        $metrics['sla'] = $this->format_remote_purge_sla_metrics($now);
+
         return $metrics;
     }
 
@@ -390,6 +392,54 @@ class BJLG_Admin_Advanced {
 
             $status = isset($entry['status']) ? (string) $entry['status'] : 'pending';
 
+            $details = [];
+
+            if (!empty($entry['quiet_until'])) {
+                [$quiet_formatted, $quiet_relative] = $this->format_timestamp_pair($entry['quiet_until'], $now);
+                if ($quiet_relative !== '') {
+                    $details['quiet_until_relative'] = $quiet_relative;
+                }
+                if ($quiet_formatted !== '') {
+                    $details['quiet_until_formatted'] = $quiet_formatted;
+                }
+            }
+
+            if (!empty($entry['escalation']) && is_array($entry['escalation'])) {
+                $escalation_channels = [];
+                if (!empty($entry['escalation']['channels']) && is_array($entry['escalation']['channels'])) {
+                    foreach ($entry['escalation']['channels'] as $channel_key) {
+                        $label = $this->get_notification_channel_label($channel_key);
+                        if ($label !== '') {
+                            $escalation_channels[] = $label;
+                        }
+                    }
+                }
+
+                if (!empty($escalation_channels)) {
+                    $details['escalation_channels'] = implode(', ', array_unique($escalation_channels));
+                }
+
+                $delay_seconds = isset($entry['escalation']['delay']) ? (int) $entry['escalation']['delay'] : 0;
+                if ($delay_seconds > 0) {
+                    $details['escalation_delay'] = $this->format_duration_label($delay_seconds);
+                }
+            }
+
+            if (!empty($entry['has_escalation_pending']) && !empty($entry['escalation_next_attempt'])) {
+                [$escalation_formatted, $escalation_relative] = $this->format_timestamp_pair(
+                    $entry['escalation_next_attempt'],
+                    $now
+                );
+
+                if ($escalation_relative !== '') {
+                    $details['escalation_next_relative'] = $escalation_relative;
+                }
+
+                if ($escalation_formatted !== '') {
+                    $details['escalation_next_formatted'] = $escalation_formatted;
+                }
+            }
+
             $formatted[] = [
                 'id' => isset($entry['id']) ? sanitize_text_field((string) $entry['id']) : '',
                 'title' => sanitize_text_field($title),
@@ -403,10 +453,108 @@ class BJLG_Admin_Advanced {
                 'next_attempt_relative' => $next_relative,
                 'next_attempt_formatted' => $next_formatted,
                 'message' => isset($entry['last_error']) ? (string) $entry['last_error'] : '',
+                'details' => $details,
             ];
         }
 
         return $formatted;
+    }
+
+    private function format_remote_purge_sla_metrics(int $now): array {
+        if (!function_exists('get_option')) {
+            return [];
+        }
+
+        $raw = get_option('bjlg_remote_purge_sla_metrics', []);
+        if (!is_array($raw) || empty($raw)) {
+            return [];
+        }
+
+        [$updated_formatted, $updated_relative] = $this->format_timestamp_pair($raw['updated_at'] ?? null, $now);
+
+        $pending = isset($raw['pending']) && is_array($raw['pending']) ? $raw['pending'] : [];
+        $throughput = isset($raw['throughput']) && is_array($raw['throughput']) ? $raw['throughput'] : [];
+        $failures = isset($raw['failures']) && is_array($raw['failures']) ? $raw['failures'] : [];
+
+        $formatted = [
+            'updated_relative' => $updated_relative,
+            'updated_formatted' => $updated_formatted,
+            'pending_total' => isset($pending['total']) ? (int) $pending['total'] : 0,
+            'pending_average' => '',
+            'pending_oldest' => '',
+            'pending_over_threshold' => isset($pending['over_threshold']) ? (int) $pending['over_threshold'] : 0,
+            'pending_destinations' => '',
+            'throughput_average' => '',
+            'throughput_last_completion' => '',
+            'throughput_last_completion_relative' => '',
+            'failures_total' => isset($failures['total']) ? (int) $failures['total'] : 0,
+            'last_failure_relative' => '',
+            'last_failure_message' => isset($failures['last_message']) ? (string) $failures['last_message'] : '',
+        ];
+
+        if (!empty($pending['average_seconds'])) {
+            $formatted['pending_average'] = $this->format_duration_label((int) $pending['average_seconds']);
+        }
+
+        if (!empty($pending['oldest_seconds'])) {
+            $formatted['pending_oldest'] = $this->format_duration_label((int) $pending['oldest_seconds']);
+        }
+
+        if (!empty($pending['destinations']) && is_array($pending['destinations'])) {
+            $formatted['pending_destinations'] = $this->format_destination_counts($pending['destinations']);
+        }
+
+        if (!empty($throughput['average_completion_seconds'])) {
+            $formatted['throughput_average'] = $this->format_duration_label((int) $throughput['average_completion_seconds']);
+        }
+
+        if (!empty($throughput['last_completion_seconds'])) {
+            $formatted['throughput_last_completion'] = $this->format_duration_label((int) $throughput['last_completion_seconds']);
+        }
+
+        if (!empty($throughput['last_completed_at'])) {
+            [$last_completed_formatted, $last_completed_relative] = $this->format_timestamp_pair(
+                $throughput['last_completed_at'],
+                $now
+            );
+            $formatted['throughput_last_completion_relative'] = $last_completed_relative;
+            $formatted['throughput_last_completion_formatted'] = $last_completed_formatted;
+        }
+
+        if (!empty($failures['last_failure_at'])) {
+            [$failure_formatted, $failure_relative] = $this->format_timestamp_pair(
+                $failures['last_failure_at'],
+                $now
+            );
+            $formatted['last_failure_relative'] = $failure_relative;
+            $formatted['last_failure_formatted'] = $failure_formatted;
+        }
+
+        return $formatted;
+    }
+
+    private function format_destination_counts(array $counts): string {
+        if (empty($counts)) {
+            return '';
+        }
+
+        $formatted = [];
+        foreach ($counts as $destination => $value) {
+            if (!is_scalar($destination)) {
+                continue;
+            }
+
+            $count = (int) $value;
+            $label = (string) $destination;
+
+            if (class_exists(__NAMESPACE__ . '\\BJLG_Settings')) {
+                $label = BJLG_Settings::get_destination_label($destination);
+            }
+
+            $formatted[] = sprintf('%s (%s)', $label, number_format_i18n($count));
+        }
+
+        return implode(', ', $formatted);
     }
 
     /**
@@ -450,6 +598,71 @@ class BJLG_Admin_Advanced {
         }
 
         return $formatted;
+    }
+
+    private function format_duration_label(int $seconds): string {
+        $seconds = max(0, $seconds);
+
+        if ($seconds < MINUTE_IN_SECONDS) {
+            if ($seconds <= 1) {
+                return __('1 seconde', 'backup-jlg');
+            }
+
+            return sprintf(
+                _n('%s seconde', '%s secondes', $seconds, 'backup-jlg'),
+                number_format_i18n($seconds)
+            );
+        }
+
+        if ($seconds < HOUR_IN_SECONDS) {
+            $minutes = (int) floor($seconds / MINUTE_IN_SECONDS);
+            if ($minutes <= 1) {
+                return __('1 minute', 'backup-jlg');
+            }
+
+            return sprintf(
+                _n('%s minute', '%s minutes', $minutes, 'backup-jlg'),
+                number_format_i18n($minutes)
+            );
+        }
+
+        $hours = (int) floor($seconds / HOUR_IN_SECONDS);
+        $remaining_minutes = (int) floor(($seconds % HOUR_IN_SECONDS) / MINUTE_IN_SECONDS);
+
+        $parts = [
+            sprintf(
+                _n('%s heure', '%s heures', $hours, 'backup-jlg'),
+                number_format_i18n($hours)
+            ),
+        ];
+
+        if ($remaining_minutes > 0) {
+            $parts[] = sprintf(
+                _n('%s minute', '%s minutes', $remaining_minutes, 'backup-jlg'),
+                number_format_i18n($remaining_minutes)
+            );
+        }
+
+        return implode(' ', $parts);
+    }
+
+    private function get_notification_channel_label($channel) {
+        $channel = sanitize_key((string) $channel);
+
+        switch ($channel) {
+            case 'email':
+                return __('E-mail', 'backup-jlg');
+            case 'slack':
+                return __('Slack', 'backup-jlg');
+            case 'discord':
+                return __('Discord', 'backup-jlg');
+            case 'teams':
+                return __('Microsoft Teams', 'backup-jlg');
+            case 'sms':
+                return __('SMS', 'backup-jlg');
+            default:
+                return $channel !== '' ? ucfirst(str_replace('_', ' ', $channel)) : '';
+        }
     }
 
     private function get_queue_status_label(string $status): string {
@@ -526,52 +739,6 @@ class BJLG_Admin_Advanced {
             _n('%s tentative', '%s tentatives', $attempts, 'backup-jlg'),
             number_format_i18n($attempts)
         );
-    }
-
-    private function format_duration_label(int $seconds): string {
-        $seconds = max(0, $seconds);
-
-        if ($seconds === 0) {
-            return __('instantané', 'backup-jlg');
-        }
-
-        if ($seconds < MINUTE_IN_SECONDS) {
-            if ($seconds <= 1) {
-                return __('1 seconde', 'backup-jlg');
-            }
-
-            return sprintf(__('~%s secondes', 'backup-jlg'), number_format_i18n($seconds));
-        }
-
-        $now = function_exists('current_time') ? current_time('timestamp') : time();
-        if ($now <= 0) {
-            $now = time();
-        }
-
-        if (function_exists('human_time_diff')) {
-            $relative = human_time_diff(max(0, $now - $seconds), $now);
-            if (is_string($relative) && $relative !== '') {
-                return $relative;
-            }
-        }
-
-        $minutes = max(1, round($seconds / MINUTE_IN_SECONDS));
-        if ($minutes === 1) {
-            return __('1 minute', 'backup-jlg');
-        }
-
-        if ($minutes < 60) {
-            return sprintf(__('~%s minutes', 'backup-jlg'), number_format_i18n($minutes));
-        }
-
-        $hours = round($minutes / 60, 1);
-        if ($hours < 24) {
-            return sprintf(__('~%s heures', 'backup-jlg'), number_format_i18n($hours));
-        }
-
-        $days = round($hours / 24, 1);
-
-        return sprintf(__('~%s jours', 'backup-jlg'), number_format_i18n($days));
     }
 
     private function format_destination_label(array $destinations): string {

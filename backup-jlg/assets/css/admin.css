@@ -608,6 +608,31 @@
     font-weight: 600;
 }
 
+.bjlg-queue-card__metrics {
+    margin: 0 0 16px;
+    padding: 12px 14px;
+    background: #f6f7f7;
+    border-radius: 4px;
+    border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.bjlg-queue-card__metrics-caption {
+    margin: 0 0 6px;
+    font-size: 12px;
+    color: #6c7781;
+}
+
+.bjlg-queue-card__metrics-list {
+    margin: 0;
+    padding-left: 18px;
+    list-style: disc;
+}
+
+.bjlg-queue-card__metrics-list li {
+    margin: 2px 0;
+    font-size: 13px;
+}
+
 .bjlg-queue-card__entries {
     list-style: none;
     margin: 0;
@@ -1952,6 +1977,36 @@ border-color: #d1d5db;
 
 .bjlg-field-control {
     display: block;
+}
+
+.bjlg-field-control--inline {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bjlg-field-control--inline > label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bjlg-field-grid {
+    display: grid;
+    gap: 12px;
+    margin: 8px 0;
+}
+
+.bjlg-field-grid--compact {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+}
+
+.bjlg-field-label {
+    display: block;
+    font-size: 13px;
+    color: var(--bjlg-color-text-subtle);
+    margin-bottom: 4px;
 }
 
 /* Assistant de sauvegarde en étapes
