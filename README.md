@@ -12,6 +12,7 @@ Backup JLG est un plugin WordPress complet de sauvegarde et restauration qui com
 
 ### Sauvegarde & restauration
 - Assistant de sauvegarde manuel avec modèles réutilisables, sélection fine des composants, filtres d’inclusion/exclusion, vérification d’intégrité et envoi multi-destination.【F:backup-jlg/includes/class-bjlg-admin.php†L332-L507】【F:backup-jlg/includes/class-bjlg-backup.php†L944-L1006】【F:backup-jlg/includes/class-bjlg-backup.php†L2119-L2166】
+- Vérification proactive de l’espace disque avant la création d’une archive avec marge de sécurité configurable et retour d’erreur unifié (UI, API, webhooks) pour éviter les sauvegardes partielles.【F:backup-jlg/includes/class-bjlg-backup.php†L602-L726】
 - Chiffrement AES-256 avec gestion de clé, génération sécurisée et API Ajax pour tester/déverrouiller les archives.【F:backup-jlg/includes/class-bjlg-encryption.php†L17-L155】
 - Sauvegardes incrémentales pilotées par manifeste (rotation configurable, suivi des destinations distantes, analyse des changements) et mise à jour automatique à chaque archive.【F:backup-jlg/includes/class-bjlg-incremental.php†L16-L156】【F:backup-jlg/includes/class-bjlg-backup.php†L964-L995】
 - Restauration dans l’environnement de production ou en sandbox isolée via l’interface ou l’API REST, avec vérifications d’éligibilité des utilisateurs.【F:backup-jlg/includes/class-bjlg-rest-api.php†L192-L216】【F:backup-jlg/includes/class-bjlg-restore.php†L22-L263】【F:backup-jlg/includes/class-bjlg-restore.php†L1057-L1092】
