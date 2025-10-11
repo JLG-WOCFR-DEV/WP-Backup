@@ -968,6 +968,44 @@ class BJLG_Admin {
                                     </p>
                                 <?php endif; ?>
 
+                                <?php if ($queue_key === 'remote_purge' && !empty($queue['sla']) && is_array($queue['sla'])):
+                                    $sla = $queue['sla'];
+                                ?>
+                                    <div class="bjlg-queue-card__metrics" data-field="sla">
+                                        <?php if (!empty($sla['updated_relative'])): ?>
+                                            <p class="bjlg-queue-card__metrics-caption"><?php printf(esc_html__('Mise à jour %s', 'backup-jlg'), esc_html($sla['updated_relative'])); ?></p>
+                                        <?php endif; ?>
+                                        <ul class="bjlg-queue-card__metrics-list">
+                                            <?php if (!empty($sla['pending_average'])): ?>
+                                                <li><?php printf(esc_html__('Âge moyen en file : %s', 'backup-jlg'), esc_html($sla['pending_average'])); ?></li>
+                                            <?php endif; ?>
+                                            <?php if (!empty($sla['pending_oldest'])): ?>
+                                                <li><?php printf(esc_html__('Plus ancien : %s', 'backup-jlg'), esc_html($sla['pending_oldest'])); ?></li>
+                                            <?php endif; ?>
+                                            <?php if (!empty($sla['pending_over_threshold'])): ?>
+                                                <li><?php printf(esc_html__('%s entrée(s) au-delà du seuil', 'backup-jlg'), esc_html(number_format_i18n((int) $sla['pending_over_threshold']))); ?></li>
+                                            <?php endif; ?>
+                                            <?php if (!empty($sla['pending_destinations'])): ?>
+                                                <li><?php printf(esc_html__('Destinations impactées : %s', 'backup-jlg'), esc_html($sla['pending_destinations'])); ?></li>
+                                            <?php endif; ?>
+                                            <?php if (!empty($sla['throughput_average'])): ?>
+                                                <li><?php printf(esc_html__('Durée moyenne de purge : %s', 'backup-jlg'), esc_html($sla['throughput_average'])); ?></li>
+                                            <?php endif; ?>
+                                            <?php if (!empty($sla['throughput_last_completion_relative'])): ?>
+                                                <li><?php printf(esc_html__('Dernière purge réussie %s', 'backup-jlg'), esc_html($sla['throughput_last_completion_relative'])); ?></li>
+                                            <?php endif; ?>
+                                            <?php if (!empty($sla['failures_total'])): ?>
+                                                <li><?php printf(esc_html__('Échecs cumulés : %s', 'backup-jlg'), esc_html(number_format_i18n((int) $sla['failures_total']))); ?></li>
+                                            <?php endif; ?>
+                                            <?php if (!empty($sla['last_failure_relative']) && !empty($sla['last_failure_message'])): ?>
+                                                <li><?php printf(esc_html__('Dernier échec %1$s : %2$s', 'backup-jlg'), esc_html($sla['last_failure_relative']), esc_html($sla['last_failure_message'])); ?></li>
+                                            <?php elseif (!empty($sla['last_failure_relative'])): ?>
+                                                <li><?php printf(esc_html__('Dernier échec %s', 'backup-jlg'), esc_html($sla['last_failure_relative'])); ?></li>
+                                            <?php endif; ?>
+                                        </ul>
+                                    </div>
+                                <?php endif; ?>
+
                                 <ul class="bjlg-queue-card__entries" data-role="entries">
                                     <?php if (!empty($entries)): ?>
                                         <?php foreach ($entries as $entry):
@@ -1023,6 +1061,41 @@ class BJLG_Admin {
                                                         <?php else: ?>
                                                             <?php esc_html_e('Retard détecté', 'backup-jlg'); ?>
                                                         <?php endif; ?>
+                                                    </p>
+                                                <?php endif; ?>
+
+                                                <?php if (!empty($details['quiet_until_relative'])): ?>
+                                                    <p class="bjlg-queue-card__entry-flag" data-field="quiet-until">
+                                                        <?php printf(
+                                                            esc_html__('Silence actif jusqu’à %s', 'backup-jlg'),
+                                                            esc_html($details['quiet_until_relative'])
+                                                        ); ?>
+                                                    </p>
+                                                <?php endif; ?>
+
+                                                <?php if (!empty($details['escalation_channels'])): ?>
+                                                    <p class="bjlg-queue-card__entry-flag" data-field="escalation">
+                                                        <?php
+                                                        $escalation_parts = [];
+                                                        $escalation_parts[] = sprintf(
+                                                            esc_html__('Escalade vers %s', 'backup-jlg'),
+                                                            esc_html($details['escalation_channels'])
+                                                        );
+                                                        if (!empty($details['escalation_delay'])) {
+                                                            $escalation_parts[] = sprintf(
+                                                                esc_html__('délai : %s', 'backup-jlg'),
+                                                                esc_html($details['escalation_delay'])
+                                                            );
+                                                        }
+                                                        if (!empty($details['escalation_next_relative'])) {
+                                                            $escalation_parts[] = sprintf(
+                                                                esc_html__('prochaine tentative %s', 'backup-jlg'),
+                                                                esc_html($details['escalation_next_relative'])
+                                                            );
+                                                        }
+
+                                                        echo esc_html(implode(' • ', $escalation_parts));
+                                                        ?>
                                                     </p>
                                                 <?php endif; ?>
 
@@ -2333,6 +2406,20 @@ class BJLG_Admin {
             ? wp_parse_args($notification_settings['channels'], $notification_defaults['channels'])
             : $notification_defaults['channels'];
 
+        $notification_settings['quiet_hours'] = isset($notification_settings['quiet_hours']) && is_array($notification_settings['quiet_hours'])
+            ? wp_parse_args($notification_settings['quiet_hours'], $notification_defaults['quiet_hours'])
+            : $notification_defaults['quiet_hours'];
+
+        $notification_settings['escalation'] = isset($notification_settings['escalation']) && is_array($notification_settings['escalation'])
+            ? wp_parse_args($notification_settings['escalation'], $notification_defaults['escalation'])
+            : $notification_defaults['escalation'];
+
+        if (!isset($notification_settings['escalation']['channels']) || !is_array($notification_settings['escalation']['channels'])) {
+            $notification_settings['escalation']['channels'] = $notification_defaults['escalation']['channels'];
+        } else {
+            $notification_settings['escalation']['channels'] = wp_parse_args($notification_settings['escalation']['channels'], $notification_defaults['escalation']['channels']);
+        }
+
         foreach ($notification_defaults['channels'] as $channel_key => $channel_defaults) {
             if (!isset($notification_settings['channels'][$channel_key]) || !is_array($notification_settings['channels'][$channel_key])) {
                 $notification_settings['channels'][$channel_key] = $channel_defaults;
@@ -2349,6 +2436,12 @@ class BJLG_Admin {
                 $notification_recipients_display = implode("\n", $emails);
             }
         }
+
+        $quiet_settings = $notification_settings['quiet_hours'];
+        $escalation_settings = $notification_settings['escalation'];
+        $quiet_timezone_label = $quiet_settings['timezone'] !== ''
+            ? $quiet_settings['timezone']
+            : (function_exists('wp_timezone_string') ? wp_timezone_string() : 'UTC');
 
         $performance_defaults = [
             'multi_threading' => false,
@@ -2878,6 +2971,78 @@ class BJLG_Admin {
                             <div class="bjlg-field-control">
                                 <input type="url" name="sms_webhook_url" class="regular-text" value="<?php echo esc_attr($notification_settings['channels']['sms']['webhook_url']); ?>" placeholder="https://sms.example.com/hooks/...">
                                 <p class="description">URL du webhook de votre passerelle SMS (Twilio, etc.). Obligatoire si le canal SMS est activé.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Fenêtre de silence', 'backup-jlg'); ?></th>
+                        <td>
+                            <div class="bjlg-field-control bjlg-field-control--inline">
+                                <label>
+                                    <input type="checkbox" name="quiet_hours_enabled" <?php checked(!empty($quiet_settings['enabled'])); ?>>
+                                    <?php esc_html_e('Activer une fenêtre de silence quotidienne', 'backup-jlg'); ?>
+                                </label>
+                                <div class="bjlg-field-grid bjlg-field-grid--compact">
+                                    <label>
+                                        <span class="bjlg-field-label"><?php esc_html_e('Début', 'backup-jlg'); ?></span>
+                                        <input type="time" name="quiet_hours_start" value="<?php echo esc_attr($quiet_settings['start']); ?>" class="small-text">
+                                    </label>
+                                    <label>
+                                        <span class="bjlg-field-label"><?php esc_html_e('Fin', 'backup-jlg'); ?></span>
+                                        <input type="time" name="quiet_hours_end" value="<?php echo esc_attr($quiet_settings['end']); ?>" class="small-text">
+                                    </label>
+                                    <label>
+                                        <span class="bjlg-field-label"><?php esc_html_e('Fuseau horaire', 'backup-jlg'); ?></span>
+                                        <input type="text" name="quiet_hours_timezone" value="<?php echo esc_attr($quiet_settings['timezone']); ?>" class="regular-text" placeholder="<?php echo esc_attr($quiet_timezone_label); ?>">
+                                    </label>
+                                </div>
+                                <label>
+                                    <input type="checkbox" name="quiet_hours_allow_critical" <?php checked(!empty($quiet_settings['allow_critical'])); ?>>
+                                    <?php esc_html_e('Laisser passer les événements critiques (échecs, retards).', 'backup-jlg'); ?>
+                                </label>
+                                <p class="description"><?php esc_html_e('Les alertes non critiques seront différées jusqu’à la fin de la fenêtre de silence.', 'backup-jlg'); ?></p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Escalade des alertes', 'backup-jlg'); ?></th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <label>
+                                    <input type="checkbox" name="escalation_enabled" <?php checked(!empty($escalation_settings['enabled'])); ?>>
+                                    <?php esc_html_e('Relancer automatiquement les événements critiques sur d’autres canaux', 'backup-jlg'); ?>
+                                </label>
+                                <div class="bjlg-field-grid bjlg-field-grid--compact">
+                                    <label>
+                                        <span class="bjlg-field-label"><?php esc_html_e('Délai (minutes)', 'backup-jlg'); ?></span>
+                                        <input type="number" name="escalation_delay" class="small-text" min="1" value="<?php echo esc_attr((int) $escalation_settings['delay_minutes']); ?>">
+                                    </label>
+                                    <label>
+                                        <input type="checkbox" name="escalation_only_critical" <?php checked(!empty($escalation_settings['only_critical'])); ?>>
+                                        <span><?php esc_html_e('Limiter aux événements critiques', 'backup-jlg'); ?></span>
+                                    </label>
+                                </div>
+                                <fieldset>
+                                    <legend class="screen-reader-text"><?php esc_html_e('Canaux d’escalade', 'backup-jlg'); ?></legend>
+                                    <ul class="bjlg-checkbox-list" role="list">
+                                        <li>
+                                            <label><input type="checkbox" name="escalation_channel_email" <?php checked(!empty($escalation_settings['channels']['email'])); ?>> <?php esc_html_e('E-mail', 'backup-jlg'); ?></label>
+                                        </li>
+                                        <li>
+                                            <label><input type="checkbox" name="escalation_channel_slack" <?php checked(!empty($escalation_settings['channels']['slack'])); ?>> Slack</label>
+                                        </li>
+                                        <li>
+                                            <label><input type="checkbox" name="escalation_channel_discord" <?php checked(!empty($escalation_settings['channels']['discord'])); ?>> Discord</label>
+                                        </li>
+                                        <li>
+                                            <label><input type="checkbox" name="escalation_channel_teams" <?php checked(!empty($escalation_settings['channels']['teams'])); ?>> Microsoft Teams</label>
+                                        </li>
+                                        <li>
+                                            <label><input type="checkbox" name="escalation_channel_sms" <?php checked(!empty($escalation_settings['channels']['sms'])); ?>> <?php esc_html_e('SMS / webhook mobile', 'backup-jlg'); ?></label>
+                                        </li>
+                                    </ul>
+                                </fieldset>
+                                <p class="description"><?php esc_html_e('Sélectionnez les canaux supplémentaires qui seront sollicités après le délai configuré lorsque les alertes critiques ne sont pas résolues.', 'backup-jlg'); ?></p>
                             </div>
                         </td>
                     </tr>

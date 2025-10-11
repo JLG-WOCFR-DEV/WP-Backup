@@ -39,6 +39,25 @@ class BJLG_Notifications {
             'teams' => ['enabled' => false, 'webhook_url' => ''],
             'sms' => ['enabled' => false, 'webhook_url' => ''],
         ],
+        'quiet_hours' => [
+            'enabled' => false,
+            'start' => '22:00',
+            'end' => '07:00',
+            'allow_critical' => true,
+            'timezone' => '',
+        ],
+        'escalation' => [
+            'enabled' => false,
+            'delay_minutes' => 15,
+            'only_critical' => true,
+            'channels' => [
+                'email' => false,
+                'slack' => false,
+                'discord' => false,
+                'teams' => false,
+                'sms' => true,
+            ],
+        ],
     ];
 
     public static function instance() {
@@ -363,6 +382,42 @@ class BJLG_Notifications {
             ? wp_parse_args($merged['channels'], self::DEFAULTS['channels'])
             : self::DEFAULTS['channels'];
 
+        $merged['quiet_hours'] = isset($merged['quiet_hours']) && is_array($merged['quiet_hours'])
+            ? wp_parse_args($merged['quiet_hours'], self::DEFAULTS['quiet_hours'])
+            : self::DEFAULTS['quiet_hours'];
+
+        $merged['quiet_hours']['start'] = self::normalize_time_string(
+            $merged['quiet_hours']['start'],
+            self::DEFAULTS['quiet_hours']['start']
+        );
+        $merged['quiet_hours']['end'] = self::normalize_time_string(
+            $merged['quiet_hours']['end'],
+            self::DEFAULTS['quiet_hours']['end']
+        );
+        $merged['quiet_hours']['allow_critical'] = self::to_bool($merged['quiet_hours']['allow_critical']);
+        $merged['quiet_hours']['timezone'] = is_string($merged['quiet_hours']['timezone'])
+            ? trim((string) $merged['quiet_hours']['timezone'])
+            : '';
+
+        $merged['escalation'] = isset($merged['escalation']) && is_array($merged['escalation'])
+            ? wp_parse_args($merged['escalation'], self::DEFAULTS['escalation'])
+            : self::DEFAULTS['escalation'];
+
+        $merged['escalation']['enabled'] = self::to_bool($merged['escalation']['enabled']);
+        $merged['escalation']['only_critical'] = self::to_bool($merged['escalation']['only_critical']);
+        $merged['escalation']['delay_minutes'] = max(
+            1,
+            (int) $merged['escalation']['delay_minutes']
+        );
+
+        $channels = [];
+        $channel_defaults = self::DEFAULTS['escalation']['channels'];
+        foreach ($channel_defaults as $channel_key => $default_enabled) {
+            $candidate = $merged['escalation']['channels'][$channel_key] ?? $default_enabled;
+            $channels[$channel_key] = self::to_bool($candidate);
+        }
+        $merged['escalation']['channels'] = $channels;
+
         return $merged;
     }
 
@@ -423,7 +478,8 @@ class BJLG_Notifications {
         $subject = '[Backup JLG] ' . $payload['title'];
         $body = implode("\n", $payload['lines']);
 
-        $channels = $this->prepare_channels_payload($payload['title'], $payload['lines']);
+        $escalation = $this->compute_escalation_overrides($event, $payload['context'] ?? []);
+        $channels = $this->prepare_channels_payload($payload['title'], $payload['lines'], null, $escalation['overrides']);
 
         if (empty($channels)) {
             BJLG_Debug::log('Notification ignorée car aucun canal valide n\'est disponible.');
@@ -440,6 +496,12 @@ class BJLG_Notifications {
             'channels' => $channels,
             'created_at' => time(),
         ];
+
+        if (!empty($escalation['meta']['channels'])) {
+            $entry['escalation'] = $escalation['meta'];
+        }
+
+        $entry = $this->apply_quiet_hours_constraints($event, $entry);
 
         BJLG_Notification_Queue::enqueue($entry);
 
@@ -767,78 +829,51 @@ class BJLG_Notifications {
      *
      * @return array<string,array<string,mixed>>
      */
-    private function prepare_channels_payload($title, $lines, ?array $settings = null) {
+    private function prepare_channels_payload($title, $lines, ?array $settings = null, array $overrides = []) {
         $settings = $settings ?? $this->settings;
         $channels = [];
+        $now = time();
 
-        if ($this->is_channel_enabled('email', $settings)) {
-            $recipients = BJLG_Notification_Transport::normalize_email_recipients($settings['email_recipients']);
-            if (!empty($recipients)) {
-                $channels['email'] = [
-                    'enabled' => true,
-                    'recipients' => $recipients,
-                    'status' => 'pending',
-                    'attempts' => 0,
-                ];
-            } else {
-                BJLG_Debug::log('Canal email ignoré : aucun destinataire valide.');
+        $default_channels = ['email', 'slack', 'discord', 'teams', 'sms'];
+        foreach ($default_channels as $channel_key) {
+            $payload = $this->build_channel_payload($channel_key, $settings, false);
+            if ($payload !== null) {
+                $channels[$channel_key] = $payload;
             }
         }
 
-        if ($this->is_channel_enabled('slack', $settings)) {
-            $url = $settings['channels']['slack']['webhook_url'] ?? '';
-            if (BJLG_Notification_Transport::is_valid_url($url)) {
-                $channels['slack'] = [
-                    'enabled' => true,
-                    'webhook_url' => $url,
-                    'status' => 'pending',
-                    'attempts' => 0,
-                ];
-            } else {
-                BJLG_Debug::log('Canal Slack ignoré : URL invalide.');
+        foreach ($overrides as $channel_key => $override) {
+            if (!is_string($channel_key)) {
+                continue;
             }
-        }
 
-        if ($this->is_channel_enabled('discord', $settings)) {
-            $url = $settings['channels']['discord']['webhook_url'] ?? '';
-            if (BJLG_Notification_Transport::is_valid_url($url)) {
-                $channels['discord'] = [
-                    'enabled' => true,
-                    'webhook_url' => $url,
-                    'status' => 'pending',
-                    'attempts' => 0,
-                ];
-            } else {
-                BJLG_Debug::log('Canal Discord ignoré : URL invalide.');
+            $channel_key = sanitize_key($channel_key);
+            if ($channel_key === '') {
+                continue;
             }
-        }
 
-        if ($this->is_channel_enabled('teams', $settings)) {
-            $url = $settings['channels']['teams']['webhook_url'] ?? '';
-            if (BJLG_Notification_Transport::is_valid_url($url)) {
-                $channels['teams'] = [
-                    'enabled' => true,
-                    'webhook_url' => $url,
-                    'status' => 'pending',
-                    'attempts' => 0,
-                ];
-            } else {
-                BJLG_Debug::log('Canal Teams ignoré : URL invalide.');
+            if (isset($channels[$channel_key])) {
+                continue;
             }
-        }
 
-        if ($this->is_channel_enabled('sms', $settings)) {
-            $url = $settings['channels']['sms']['webhook_url'] ?? '';
-            if (BJLG_Notification_Transport::is_valid_url($url)) {
-                $channels['sms'] = [
-                    'enabled' => true,
-                    'webhook_url' => $url,
-                    'status' => 'pending',
-                    'attempts' => 0,
-                ];
-            } else {
-                BJLG_Debug::log('Canal SMS ignoré : URL invalide.');
+            $force = !empty($override['force']);
+            $payload = $this->build_channel_payload($channel_key, $settings, $force);
+            if ($payload === null) {
+                continue;
             }
+
+            if (isset($override['delay']) && is_numeric($override['delay'])) {
+                $delay = max(0, (int) $override['delay']);
+                if ($delay > 0) {
+                    $payload['next_attempt_at'] = $now + $delay;
+                }
+            }
+
+            if (!empty($override['escalation'])) {
+                $payload['escalation'] = true;
+            }
+
+            $channels[$channel_key] = $payload;
         }
 
         /**
@@ -855,6 +890,69 @@ class BJLG_Notifications {
         });
     }
 
+    private function build_channel_payload($channel_key, array $settings, $force = false) {
+        $channel_key = sanitize_key((string) $channel_key);
+        if ($channel_key === '') {
+            return null;
+        }
+
+        switch ($channel_key) {
+            case 'email':
+                if (!$force && !$this->is_channel_enabled('email', $settings)) {
+                    return null;
+                }
+
+                $recipients = BJLG_Notification_Transport::normalize_email_recipients(
+                    $settings['email_recipients'] ?? ''
+                );
+
+                if (empty($recipients)) {
+                    BJLG_Debug::log($force
+                        ? 'Canal email ignoré pour l\'escalade : aucun destinataire valide.'
+                        : 'Canal email ignoré : aucun destinataire valide.'
+                    );
+
+                    return null;
+                }
+
+                return [
+                    'enabled' => true,
+                    'recipients' => $recipients,
+                    'status' => 'pending',
+                    'attempts' => 0,
+                ];
+
+            case 'slack':
+            case 'discord':
+            case 'teams':
+            case 'sms':
+                if (!$force && !$this->is_channel_enabled($channel_key, $settings)) {
+                    return null;
+                }
+
+                $url = $settings['channels'][$channel_key]['webhook_url'] ?? '';
+                if (!BJLG_Notification_Transport::is_valid_url($url)) {
+                    BJLG_Debug::log(sprintf(
+                        $force
+                            ? 'Canal %s ignoré pour l\'escalade : URL invalide.'
+                            : 'Canal %s ignoré : URL invalide.',
+                        $channel_key
+                    ));
+
+                    return null;
+                }
+
+                return [
+                    'enabled' => true,
+                    'webhook_url' => $url,
+                    'status' => 'pending',
+                    'attempts' => 0,
+                ];
+        }
+
+        return null;
+    }
+
     /**
      * Nettoie la liste des composants envoyés dans les événements.
      *
@@ -862,6 +960,201 @@ class BJLG_Notifications {
      *
      * @return string[]
      */
+    private function compute_escalation_overrides($event, $context) {
+        $result = [
+            'overrides' => [],
+            'meta' => [
+                'channels' => [],
+                'delay' => 0,
+            ],
+        ];
+
+        $event = is_string($event) ? trim($event) : '';
+        if ($event === '') {
+            return $result;
+        }
+
+        $settings = isset($this->settings['escalation']) && is_array($this->settings['escalation'])
+            ? $this->settings['escalation']
+            : self::DEFAULTS['escalation'];
+
+        if (empty($settings['enabled'])) {
+            return $result;
+        }
+
+        $critical_events = $this->get_critical_events();
+        $only_critical = !empty($settings['only_critical']);
+        if ($only_critical && !in_array($event, $critical_events, true)) {
+            return $result;
+        }
+
+        $delay_minutes = isset($settings['delay_minutes']) ? (int) $settings['delay_minutes'] : 15;
+        $delay_minutes = max(1, $delay_minutes);
+        $delay_seconds = $delay_minutes * MINUTE_IN_SECONDS;
+
+        $overrides = [];
+        if (!empty($settings['channels']) && is_array($settings['channels'])) {
+            foreach ($settings['channels'] as $channel_key => $enabled) {
+                if (!self::to_bool($enabled)) {
+                    continue;
+                }
+
+                $channel_key = sanitize_key((string) $channel_key);
+                if ($channel_key === '') {
+                    continue;
+                }
+
+                $overrides[$channel_key] = [
+                    'force' => true,
+                    'delay' => $delay_seconds,
+                    'escalation' => true,
+                ];
+            }
+        }
+
+        if (empty($overrides)) {
+            return $result;
+        }
+
+        $result['overrides'] = $overrides;
+        $result['meta'] = [
+            'channels' => array_keys($overrides),
+            'delay' => $delay_seconds,
+            'only_critical' => $only_critical,
+        ];
+
+        return $result;
+    }
+
+    private function apply_quiet_hours_constraints($event, array $entry) {
+        $resume_at = $this->get_quiet_hours_resume_timestamp($event);
+        if ($resume_at === null) {
+            return $entry;
+        }
+
+        $entry['quiet_until'] = $resume_at;
+        $entry['next_attempt_at'] = isset($entry['next_attempt_at'])
+            ? max((int) $entry['next_attempt_at'], $resume_at)
+            : $resume_at;
+
+        if (!empty($entry['channels']) && is_array($entry['channels'])) {
+            foreach ($entry['channels'] as $channel_key => &$channel) {
+                if (!is_array($channel)) {
+                    continue;
+                }
+
+                $channel_next = isset($channel['next_attempt_at']) ? (int) $channel['next_attempt_at'] : 0;
+                if ($channel_next <= 0 || $channel_next < $resume_at) {
+                    $channel['next_attempt_at'] = $resume_at;
+                }
+            }
+            unset($channel);
+        }
+
+        $entry['quiet_hours'] = [
+            'resume_at' => $resume_at,
+        ];
+
+        return $entry;
+    }
+
+    private function get_quiet_hours_resume_timestamp($event) {
+        $event = is_string($event) ? trim($event) : '';
+        if ($event === '') {
+            return null;
+        }
+
+        $quiet = isset($this->settings['quiet_hours']) && is_array($this->settings['quiet_hours'])
+            ? $this->settings['quiet_hours']
+            : self::DEFAULTS['quiet_hours'];
+
+        if (empty($quiet['enabled'])) {
+            return null;
+        }
+
+        $critical_events = $this->get_critical_events();
+        if (!empty($quiet['allow_critical']) && in_array($event, $critical_events, true)) {
+            return null;
+        }
+
+        $start = self::normalize_time_string($quiet['start'] ?? '', self::DEFAULTS['quiet_hours']['start']);
+        $end = self::normalize_time_string($quiet['end'] ?? '', self::DEFAULTS['quiet_hours']['end']);
+
+        if ($start === $end) {
+            return null;
+        }
+
+        $timezone = $this->resolve_timezone($quiet['timezone'] ?? '');
+
+        try {
+            $now = new \DateTimeImmutable('now', $timezone);
+        } catch (\Exception $e) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+            $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        }
+
+        [$start_hour, $start_minute] = array_map('intval', explode(':', $start));
+        [$end_hour, $end_minute] = array_map('intval', explode(':', $end));
+
+        $start_dt = $now->setTime($start_hour, $start_minute, 0);
+        $end_dt = $now->setTime($end_hour, $end_minute, 0);
+
+        if ($start_dt <= $end_dt) {
+            if ($now >= $start_dt && $now < $end_dt) {
+                return $end_dt->getTimestamp();
+            }
+
+            return null;
+        }
+
+        if ($now >= $start_dt) {
+            $end_dt = $end_dt->modify('+1 day');
+            return $end_dt->getTimestamp();
+        }
+
+        if ($now < $end_dt) {
+            return $end_dt->getTimestamp();
+        }
+
+        return null;
+    }
+
+    private function resolve_timezone($timezone_string) {
+        if (is_string($timezone_string) && $timezone_string !== '') {
+            try {
+                return new \DateTimeZone($timezone_string);
+            } catch (\Exception $e) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+            }
+        }
+
+        if (function_exists('wp_timezone')) {
+            $wp_timezone = wp_timezone();
+            if ($wp_timezone instanceof \DateTimeZone) {
+                return $wp_timezone;
+            }
+        }
+
+        if (function_exists('get_option')) {
+            $tz_string = get_option('timezone_string');
+            if (is_string($tz_string) && $tz_string !== '') {
+                try {
+                    return new \DateTimeZone($tz_string);
+                } catch (\Exception $e) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+                }
+            }
+        }
+
+        return new \DateTimeZone('UTC');
+    }
+
+    private function get_critical_events() {
+        return [
+            'backup_failed',
+            'remote_purge_failed',
+            'remote_purge_delayed',
+            'restore_self_test_failed',
+        ];
+    }
+
     private function sanitize_components($components) {
         if (!is_array($components)) {
             return [];
@@ -902,6 +1195,57 @@ class BJLG_Notifications {
         }
 
         return array_values(array_unique($messages));
+    }
+
+    private static function normalize_time_string($value, $fallback) {
+        if (!is_string($value)) {
+            $value = '';
+        }
+
+        $value = trim((string) $value);
+        if ($value === '') {
+            return $fallback;
+        }
+
+        if (!preg_match('/^(\d{1,2}):(\d{2})$/', $value, $matches)) {
+            return $fallback;
+        }
+
+        $hour = (int) $matches[1];
+        $minute = (int) $matches[2];
+
+        if ($hour < 0 || $hour > 23) {
+            $hour = (int) max(0, min(23, $hour));
+        }
+
+        if ($minute < 0 || $minute > 59) {
+            $minute = (int) max(0, min(59, $minute));
+        }
+
+        return sprintf('%02d:%02d', $hour, $minute);
+    }
+
+    private static function to_bool($value): bool {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value === 1;
+        }
+
+        if (is_string($value)) {
+            $normalized = strtolower(trim($value));
+            if (in_array($normalized, ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+
+            if (in_array($normalized, ['0', 'false', 'no', 'off', ''], true)) {
+                return false;
+            }
+        }
+
+        return (bool) $value;
     }
 
 }

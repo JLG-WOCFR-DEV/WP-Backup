@@ -367,6 +367,67 @@ jQuery(function($) {
                 $oldestField.text('');
             }
 
+            const sla = queue.sla || null;
+            const $sla = $card.find('[data-field="sla"]');
+            if ($sla.length) {
+                if (sla && typeof sla === 'object') {
+                    const $caption = $sla.find('.bjlg-queue-card__metrics-caption');
+                    if (sla.updated_relative) {
+                        if ($caption.length) {
+                            $caption.text(sprintf(__('Mise à jour %s', 'backup-jlg'), sla.updated_relative));
+                        } else {
+                            $('<p/>', {
+                                'class': 'bjlg-queue-card__metrics-caption',
+                                text: sprintf(__('Mise à jour %s', 'backup-jlg'), sla.updated_relative)
+                            }).prependTo($sla);
+                        }
+                    } else if ($caption.length) {
+                        $caption.remove();
+                    }
+
+                    const $list = $sla.find('.bjlg-queue-card__metrics-list');
+                    if ($list.length) {
+                        $list.empty();
+
+                        if (sla.pending_average) {
+                            $('<li/>', { text: sprintf(__('Âge moyen en file : %s', 'backup-jlg'), sla.pending_average) }).appendTo($list);
+                        }
+
+                        if (sla.pending_oldest) {
+                            $('<li/>', { text: sprintf(__('Plus ancien : %s', 'backup-jlg'), sla.pending_oldest) }).appendTo($list);
+                        }
+
+                        if (sla.pending_over_threshold) {
+                            $('<li/>', { text: sprintf(__('%s entrée(s) au-delà du seuil', 'backup-jlg'), formatNumber(Number(sla.pending_over_threshold))) }).appendTo($list);
+                        }
+
+                        if (sla.pending_destinations) {
+                            $('<li/>', { text: sprintf(__('Destinations impactées : %s', 'backup-jlg'), sla.pending_destinations) }).appendTo($list);
+                        }
+
+                        if (sla.throughput_average) {
+                            $('<li/>', { text: sprintf(__('Durée moyenne de purge : %s', 'backup-jlg'), sla.throughput_average) }).appendTo($list);
+                        }
+
+                        if (sla.throughput_last_completion_relative) {
+                            $('<li/>', { text: sprintf(__('Dernière purge réussie %s', 'backup-jlg'), sla.throughput_last_completion_relative) }).appendTo($list);
+                        }
+
+                        if (sla.failures_total) {
+                            $('<li/>', { text: sprintf(__('Échecs cumulés : %s', 'backup-jlg'), formatNumber(Number(sla.failures_total))) }).appendTo($list);
+                        }
+
+                        if (sla.last_failure_relative && sla.last_failure_message) {
+                            $('<li/>', { text: sprintf(__('Dernier échec %1$s : %2$s', 'backup-jlg'), sla.last_failure_relative, sla.last_failure_message) }).appendTo($list);
+                        } else if (sla.last_failure_relative) {
+                            $('<li/>', { text: sprintf(__('Dernier échec %s', 'backup-jlg'), sla.last_failure_relative) }).appendTo($list);
+                        }
+                    }
+                } else {
+                    $sla.remove();
+                }
+            }
+
             const $entries = $card.find('[data-role="entries"]');
             if (!$entries.length) {
                 return;
@@ -421,6 +482,34 @@ jQuery(function($) {
                     $('<p/>', {
                         'class': 'bjlg-queue-card__entry-meta',
                         text: sprintf(__('Destinations : %s', 'backup-jlg'), entry.details.destinations)
+                    }).appendTo($entry);
+                }
+
+                if (entry.details && entry.details.quiet_until_relative) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-flag',
+                        'data-field': 'quiet-until',
+                        text: sprintf(__('Silence actif jusqu’à %s', 'backup-jlg'), entry.details.quiet_until_relative)
+                    }).appendTo($entry);
+                }
+
+                if (entry.details && entry.details.escalation_channels) {
+                    const escalationParts = [
+                        sprintf(__('Escalade vers %s', 'backup-jlg'), entry.details.escalation_channels)
+                    ];
+
+                    if (entry.details.escalation_delay) {
+                        escalationParts.push(sprintf(__('délai : %s', 'backup-jlg'), entry.details.escalation_delay));
+                    }
+
+                    if (entry.details.escalation_next_relative) {
+                        escalationParts.push(sprintf(__('prochaine tentative %s', 'backup-jlg'), entry.details.escalation_next_relative));
+                    }
+
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-flag',
+                        'data-field': 'escalation',
+                        text: escalationParts.join(' • ')
                     }).appendTo($entry);
                 }
 

@@ -67,7 +67,26 @@ class BJLG_Settings {
                 'discord' => ['enabled' => false, 'webhook_url' => ''],
                 'teams' => ['enabled' => false, 'webhook_url' => ''],
                 'sms' => ['enabled' => false, 'webhook_url' => ''],
-            ]
+            ],
+            'quiet_hours' => [
+                'enabled' => false,
+                'start' => '22:00',
+                'end' => '07:00',
+                'allow_critical' => true,
+                'timezone' => '',
+            ],
+            'escalation' => [
+                'enabled' => false,
+                'delay_minutes' => 15,
+                'only_critical' => true,
+                'channels' => [
+                    'email' => false,
+                    'slack' => false,
+                    'discord' => false,
+                    'teams' => false,
+                    'sms' => true,
+                ],
+            ],
         ],
         'performance' => [
             'multi_threading' => false,
@@ -2457,6 +2476,43 @@ class BJLG_Settings {
         );
         $email_validation = $this->normalize_email_recipients($email_source);
 
+        $quiet_defaults = $notification_defaults['quiet_hours'];
+        $quiet_current = isset($settings['quiet_hours']) && is_array($settings['quiet_hours']) ? $settings['quiet_hours'] : $quiet_defaults;
+        $quiet_enabled = $this->to_bool($this->get_scalar_request_value($request, 'quiet_hours_enabled', !empty($quiet_current['enabled']) ? '1' : '0'));
+        $quiet_start = $this->sanitize_time_field($this->get_scalar_request_value($request, 'quiet_hours_start', $quiet_current['start'] ?? $quiet_defaults['start']), $quiet_defaults['start']);
+        $quiet_end = $this->sanitize_time_field($this->get_scalar_request_value($request, 'quiet_hours_end', $quiet_current['end'] ?? $quiet_defaults['end']), $quiet_defaults['end']);
+        $quiet_allow = $this->to_bool($this->get_scalar_request_value($request, 'quiet_hours_allow_critical', !empty($quiet_current['allow_critical']) ? '1' : '0'));
+        $quiet_timezone = $this->sanitize_timezone_field($this->get_scalar_request_value($request, 'quiet_hours_timezone', $quiet_current['timezone'] ?? ''));
+
+        $settings['quiet_hours'] = [
+            'enabled' => $quiet_enabled,
+            'start' => $quiet_start,
+            'end' => $quiet_end,
+            'allow_critical' => $quiet_allow,
+            'timezone' => $quiet_timezone,
+        ];
+
+        $escalation_defaults = $notification_defaults['escalation'];
+        $escalation_current = isset($settings['escalation']) && is_array($settings['escalation']) ? $settings['escalation'] : $escalation_defaults;
+        $escalation_enabled = $this->to_bool($this->get_scalar_request_value($request, 'escalation_enabled', !empty($escalation_current['enabled']) ? '1' : '0'));
+        $escalation_delay_raw = (int) $this->get_scalar_request_value($request, 'escalation_delay', (string) ($escalation_current['delay_minutes'] ?? $escalation_defaults['delay_minutes']));
+        $escalation_delay = max(1, $escalation_delay_raw);
+        $escalation_only_critical = $this->to_bool($this->get_scalar_request_value($request, 'escalation_only_critical', !empty($escalation_current['only_critical']) ? '1' : '0'));
+
+        $escalation_channels = [];
+        foreach ($escalation_defaults['channels'] as $channel_key => $default_enabled) {
+            $field = 'escalation_channel_' . $channel_key;
+            $current = !empty($escalation_current['channels'][$channel_key]);
+            $escalation_channels[$channel_key] = $this->to_bool($this->get_scalar_request_value($request, $field, $current ? '1' : '0'));
+        }
+
+        $settings['escalation'] = [
+            'enabled' => $escalation_enabled,
+            'delay_minutes' => $escalation_delay,
+            'only_critical' => $escalation_only_critical,
+            'channels' => $escalation_channels,
+        ];
+
         if (!empty($email_validation['invalid'])) {
             throw new Exception(sprintf(
                 'Les adresses e-mail suivantes sont invalides : %s.',
@@ -2511,6 +2567,48 @@ class BJLG_Settings {
         }
 
         return is_scalar($value) ? wp_unslash((string) $value) : $default;
+    }
+
+    private function sanitize_time_field($value, $default) {
+        $value = is_string($value) ? trim($value) : '';
+        if ($value === '') {
+            $value = $default;
+        }
+
+        if (!preg_match('/^(\d{1,2}):(\d{2})$/', $value, $matches)) {
+            return $default;
+        }
+
+        $hour = min(23, max(0, (int) $matches[1]));
+        $minute = min(59, max(0, (int) $matches[2]));
+
+        return sprintf('%02d:%02d', $hour, $minute);
+    }
+
+    private function sanitize_timezone_field($value) {
+        $value = is_string($value) ? trim($value) : '';
+        if ($value === '') {
+            return '';
+        }
+
+        try {
+            new \DateTimeZone($value);
+            return $value;
+        } catch (\Exception $e) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+        }
+
+        if (function_exists('wp_timezone_string')) {
+            $timezone = wp_timezone_string();
+            if (is_string($timezone) && $timezone !== '') {
+                try {
+                    new \DateTimeZone($timezone);
+                    return $timezone;
+                } catch (\Exception $e) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+                }
+            }
+        }
+
+        return '';
     }
 
     /**
