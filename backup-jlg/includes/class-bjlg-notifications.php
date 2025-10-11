@@ -81,7 +81,51 @@ class BJLG_Notifications {
                 ],
             ],
         ],
+        'templates' => [],
     ];
+
+    /**
+     * Retourne les modèles par défaut utilisés pour chaque gravité.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    private static function default_severity_templates() {
+        return [
+            'info' => [
+                'label' => __('Information', 'backup-jlg'),
+                'intro' => __('Mise à jour de routine pour votre visibilité.', 'backup-jlg'),
+                'outro' => __('Aucune action immédiate n’est requise.', 'backup-jlg'),
+                'intent' => 'info',
+                'actions' => [
+                    __('Ajoutez un commentaire dans l’historique si une vérification manuelle a été effectuée.', 'backup-jlg'),
+                ],
+                'resolution' => __('Archivez l’événement une fois les vérifications terminées.', 'backup-jlg'),
+            ],
+            'warning' => [
+                'label' => __('Avertissement', 'backup-jlg'),
+                'intro' => __('Surveillez l’incident : une intervention préventive peut être nécessaire.', 'backup-jlg'),
+                'outro' => __('Planifiez une action de suivi si la situation persiste.', 'backup-jlg'),
+                'intent' => 'warning',
+                'actions' => [
+                    __('Vérifiez la capacité de stockage et les dernières purges distantes.', 'backup-jlg'),
+                    __('Planifiez un nouveau point de contrôle pour confirmer que l’alerte diminue.', 'backup-jlg'),
+                ],
+                'resolution' => __('Actualisez l’état dans le panneau Monitoring pour informer l’équipe.', 'backup-jlg'),
+            ],
+            'critical' => [
+                'label' => __('Critique', 'backup-jlg'),
+                'intro' => __('Action immédiate recommandée : l’incident est suivi et sera escaladé.', 'backup-jlg'),
+                'outro' => __('Une escalade automatique sera déclenchée si le statut ne change pas.', 'backup-jlg'),
+                'intent' => 'error',
+                'actions' => [
+                    __('Inspectez les journaux détaillés et identifiez la dernière action réussie.', 'backup-jlg'),
+                    __('Contactez l’astreinte et préparez un plan de remédiation ou de restauration.', 'backup-jlg'),
+                    __('Accusez réception de l’incident dans l’historique pour tracer la prise en charge.', 'backup-jlg'),
+                ],
+                'resolution' => __('Consignez la résolution dans le tableau de bord pour clôturer l’escalade.', 'backup-jlg'),
+            ],
+        ];
+    }
 
     /**
      * Gravité par défaut associée à chaque événement connu.
@@ -402,7 +446,11 @@ class BJLG_Notifications {
         $lines[] = sprintf(__('Horodatage : %s', 'backup-jlg'), $context['timestamp']);
 
         $body_lines = array_filter(array_map('trim', $lines));
-        $lines = $this->build_severity_lines('info', $body_lines);
+        $lines = $this->build_severity_lines('info', $body_lines, [
+            'event' => 'test_notification',
+            'title' => $title,
+            'context' => $context,
+        ]);
         $lines = apply_filters('bjlg_notification_message_lines', $lines, 'test_notification', $context);
         $base_lines = is_array($lines) ? array_values($lines) : [];
 
@@ -420,11 +468,17 @@ class BJLG_Notifications {
             return new WP_Error('bjlg_notification_payload_invalid', __('Impossible de préparer la notification de test.', 'backup-jlg'));
         }
 
+        $meta = [
+            'event' => 'test_notification',
+            'title' => (string) $payload['title'],
+            'context' => is_array($payload['context']) ? $payload['context'] : $context,
+        ];
+
         $severity = $this->normalize_severity($payload['severity'] ?? 'info');
         $title = (string) $payload['title'];
         $lines = array_map('strval', $payload['lines']);
         if ($severity !== 'info' && $lines === $base_lines) {
-            $lines = $this->build_severity_lines($severity, $body_lines);
+            $lines = $this->build_severity_lines($severity, $body_lines, $meta);
         }
 
         if (empty($lines)) {
@@ -444,7 +498,7 @@ class BJLG_Notifications {
             'subject' => '[Backup JLG] ' . $title,
             'lines' => $lines,
             'body' => implode("\n", $lines),
-            'context' => is_array($payload['context']) ? $payload['context'] : $context,
+            'context' => $meta['context'],
             'channels' => $channels,
             'created_at' => time(),
             'severity' => $severity,
@@ -555,6 +609,29 @@ class BJLG_Notifications {
 
         $merged['escalation']['stages'] = $stages;
 
+        $template_defaults = self::default_severity_templates();
+        $merged['templates'] = isset($merged['templates']) && is_array($merged['templates'])
+            ? $merged['templates']
+            : [];
+
+        $templates = [];
+        foreach ($template_defaults as $severity => $definition) {
+            $current = isset($merged['templates'][$severity]) && is_array($merged['templates'][$severity])
+                ? $merged['templates'][$severity]
+                : [];
+
+            $templates[$severity] = [
+                'label' => $this->sanitize_template_label($current['label'] ?? $definition['label']),
+                'intro' => $this->sanitize_template_text($current['intro'] ?? $definition['intro']),
+                'outro' => $this->sanitize_template_text($current['outro'] ?? $definition['outro']),
+                'resolution' => $this->sanitize_template_text($current['resolution'] ?? $definition['resolution']),
+                'intent' => $this->sanitize_template_intent($current['intent'] ?? $definition['intent']),
+                'actions' => $this->sanitize_template_actions($current['actions'] ?? $definition['actions']),
+            ];
+        }
+
+        $merged['templates'] = $templates;
+
         return $merged;
     }
 
@@ -594,7 +671,11 @@ class BJLG_Notifications {
         $title = $this->get_event_title($event, $context);
         $body_lines = $this->get_event_body_lines($event, $context);
         $severity = $this->get_event_severity($event);
-        $lines = $this->build_severity_lines($severity, $body_lines);
+        $lines = $this->build_severity_lines($severity, $body_lines, [
+            'event' => $event,
+            'title' => $title,
+            'context' => $context,
+        ]);
         $lines = apply_filters('bjlg_notification_message_lines', $lines, $event, $context);
         $base_lines = is_array($lines) ? array_values($lines) : [];
 
@@ -616,10 +697,16 @@ class BJLG_Notifications {
             return;
         }
 
+        $meta = [
+            'event' => $event,
+            'title' => $payload['title'],
+            'context' => $payload['context'],
+        ];
+
         $final_severity = $this->normalize_severity($payload['severity'] ?? $severity);
         $lines = array_map('strval', $payload['lines']);
         if ($final_severity !== $severity && $lines === $base_lines) {
-            $lines = $this->build_severity_lines($final_severity, $body_lines);
+            $lines = $this->build_severity_lines($final_severity, $body_lines, $meta);
         }
 
         if (empty($lines)) {
@@ -836,7 +923,11 @@ class BJLG_Notifications {
         $severity = $this->get_event_severity($event);
         $body_lines = $this->get_event_body_lines($event, $context);
 
-        return $this->build_severity_lines($severity, $body_lines);
+        return $this->build_severity_lines($severity, $body_lines, [
+            'event' => $event,
+            'title' => $this->get_event_title($event, $context),
+            'context' => $context,
+        ]);
     }
 
     /**
@@ -847,9 +938,10 @@ class BJLG_Notifications {
      *
      * @return string[]
      */
-    private function build_severity_lines($severity, array $body_lines) {
-        $definition = $this->describe_severity($severity);
+    private function build_severity_lines($severity, array $body_lines, array $meta = []) {
         $timestamp = current_time('mysql');
+        $meta['timestamp'] = $timestamp;
+        $definition = $this->describe_severity($severity, $meta);
 
         $lines = [];
 
@@ -909,48 +1001,215 @@ class BJLG_Notifications {
         return 'info';
     }
 
-    private function describe_severity($severity) {
+    private function describe_severity($severity, array $meta = []) {
         $severity = $this->normalize_severity($severity);
+        $templates = isset($this->settings['templates']) && is_array($this->settings['templates'])
+            ? $this->settings['templates']
+            : [];
+        $defaults_all = self::default_severity_templates();
+        $defaults = $defaults_all[$severity] ?? $defaults_all['info'];
 
-        switch ($severity) {
-            case 'critical':
-                return [
-                    'label' => __('Critique', 'backup-jlg'),
-                    'intro' => __('Action immédiate recommandée : l’incident est suivi et sera escaladé.', 'backup-jlg'),
-                    'outro' => __('Une escalade automatique sera déclenchée si le statut ne change pas.', 'backup-jlg'),
-                    'intent' => 'error',
-                    'actions' => [
-                        __('Inspectez les journaux détaillés et identifiez la dernière action réussie.', 'backup-jlg'),
-                        __('Contactez l’astreinte et préparez un plan de remédiation ou de restauration.', 'backup-jlg'),
-                        __('Accusez réception de l’incident dans l’historique pour tracer la prise en charge.', 'backup-jlg'),
-                    ],
-                    'resolution' => __('Consignez la résolution dans le tableau de bord pour clôturer l’escalade.', 'backup-jlg'),
-                ];
-            case 'warning':
-                return [
-                    'label' => __('Avertissement', 'backup-jlg'),
-                    'intro' => __('Surveillez l’incident : une intervention préventive peut être nécessaire.', 'backup-jlg'),
-                    'outro' => __('Planifiez une action de suivi si la situation persiste.', 'backup-jlg'),
-                    'intent' => 'warning',
-                    'actions' => [
-                        __('Vérifiez la capacité de stockage et les dernières purges distantes.', 'backup-jlg'),
-                        __('Planifiez un nouveau point de contrôle pour confirmer que l’alerte diminue.', 'backup-jlg'),
-                    ],
-                    'resolution' => __('Actualisez l’état dans le panneau Monitoring pour informer l’équipe.', 'backup-jlg'),
-                ];
-            case 'info':
-            default:
-                return [
-                    'label' => __('Information', 'backup-jlg'),
-                    'intro' => __('Mise à jour de routine pour votre visibilité.', 'backup-jlg'),
-                    'outro' => __('Aucune action immédiate n’est requise.', 'backup-jlg'),
-                    'intent' => 'info',
-                    'actions' => [
-                        __('Ajoutez un commentaire dans l’historique si une vérification manuelle a été effectuée.', 'backup-jlg'),
-                    ],
-                    'resolution' => __('Archivez l’événement une fois les vérifications terminées.', 'backup-jlg'),
-                ];
+        $template = isset($templates[$severity]) && is_array($templates[$severity])
+            ? wp_parse_args($templates[$severity], $defaults)
+            : $defaults;
+
+        $context = $this->prepare_template_context($severity, $meta, $template['label'] ?? $defaults['label']);
+
+        $label = $this->render_template_string($template['label'] ?? $defaults['label'], $context, $defaults['label']);
+        $intro = $this->render_template_string($template['intro'] ?? $defaults['intro'], $context, '');
+        $outro = $this->render_template_string($template['outro'] ?? $defaults['outro'], $context, '');
+        $resolution = $this->render_template_string($template['resolution'] ?? $defaults['resolution'], $context, '');
+
+        $actions = [];
+        if (!empty($template['actions']) && is_array($template['actions'])) {
+            foreach ($template['actions'] as $action_line) {
+                $action_line = $this->render_template_string($action_line, $context, '');
+                if ($action_line === '') {
+                    continue;
+                }
+
+                $actions[] = $action_line;
+            }
         }
+
+        return [
+            'label' => $label,
+            'intro' => $intro,
+            'outro' => $outro,
+            'intent' => $this->sanitize_template_intent($template['intent'] ?? $defaults['intent']),
+            'actions' => $actions,
+            'resolution' => $resolution,
+        ];
+    }
+
+    /**
+     * Prépare le contexte utilisable dans les modèles personnalisés.
+     *
+     * @param string $severity
+     * @param array<string,mixed> $meta
+     * @param string $fallback_label
+     *
+     * @return array<string,string>
+     */
+    private function prepare_template_context($severity, array $meta, $fallback_label) {
+        $event_key = isset($meta['event']) ? (string) $meta['event'] : '';
+        $event_title = isset($meta['title']) ? (string) $meta['title'] : '';
+        $event_context = isset($meta['context']) && is_array($meta['context']) ? $meta['context'] : [];
+        $timestamp = isset($meta['timestamp']) ? (string) $meta['timestamp'] : current_time('mysql');
+
+        $site_name = '';
+        if (!empty($event_context['site_name']) && is_string($event_context['site_name'])) {
+            $site_name = $event_context['site_name'];
+        } elseif (function_exists('get_bloginfo')) {
+            $site_name = (string) get_bloginfo('name');
+        }
+
+        $site_url = '';
+        if (!empty($event_context['site_url']) && is_string($event_context['site_url'])) {
+            $site_url = $event_context['site_url'];
+        } elseif (function_exists('home_url')) {
+            $site_url = (string) home_url('/'); // phpcs:ignore WordPress.WP.AlternativeFunctions.home_url_home_url
+        }
+
+        $initiator = '';
+        if (!empty($event_context['initiator']) && is_string($event_context['initiator'])) {
+            $initiator = $event_context['initiator'];
+        }
+
+        $severity_label = $fallback_label !== '' ? $fallback_label : ucfirst($severity);
+
+        return array_filter([
+            'event_key' => $event_key,
+            'event_title' => $event_title,
+            'site_name' => $site_name,
+            'site_url' => $site_url,
+            'initiator' => $initiator,
+            'severity' => $severity,
+            'severity_label' => $severity_label,
+            'timestamp' => $timestamp,
+        ], 'strlen');
+    }
+
+    /**
+     * Remplace les tokens {{token}} dans une chaîne.
+     *
+     * @param string $template
+     * @param array<string,string> $context
+     * @param string $fallback
+     */
+    private function render_template_string($template, array $context, $fallback) {
+        $template = is_string($template) ? trim($template) : '';
+        if ($template === '') {
+            return is_string($fallback) ? trim($fallback) : '';
+        }
+
+        $replacements = [];
+        foreach ($context as $key => $value) {
+            $replacements['{{' . $key . '}}'] = $value;
+        }
+
+        return strtr($template, $replacements);
+    }
+
+    /**
+     * Sanitize a template label.
+     *
+     * @param string $value
+     */
+    private function sanitize_template_label($value) {
+        $value = is_string($value) ? $value : '';
+
+        if (function_exists('sanitize_text_field')) {
+            return sanitize_text_field($value);
+        }
+
+        return trim($value);
+    }
+
+    /**
+     * Sanitize template multi-line text.
+     *
+     * @param string $value
+     */
+    private function sanitize_template_text($value) {
+        $value = is_string($value) ? $value : '';
+
+        if (function_exists('sanitize_textarea_field')) {
+            return sanitize_textarea_field($value);
+        }
+
+        return trim($value);
+    }
+
+    /**
+     * Sanitize template intent value.
+     *
+     * @param string $intent
+     */
+    private function sanitize_template_intent($intent) {
+        $intent = is_string($intent) ? strtolower(trim($intent)) : '';
+
+        if (!in_array($intent, ['info', 'warning', 'error'], true)) {
+            return 'info';
+        }
+
+        return $intent;
+    }
+
+    /**
+     * Sanitize template actions.
+     *
+     * @param mixed $value
+     *
+     * @return string[]
+     */
+    private function sanitize_template_actions($value) {
+        if (!is_array($value)) {
+            if (is_string($value)) {
+                $value = preg_split('/[\r\n]+/', $value);
+            } else {
+                $value = [];
+            }
+        }
+
+        $actions = [];
+        foreach ($value as $line) {
+            $line = is_string($line) ? $line : '';
+            if ($line === '') {
+                continue;
+            }
+
+            $actions[] = $this->sanitize_template_text($line);
+        }
+
+        return $actions;
+    }
+
+    /**
+     * Retourne le blueprint public pour les templates de gravité.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public static function get_severity_template_blueprint() {
+        return self::default_severity_templates();
+    }
+
+    /**
+     * Retourne la liste des tokens disponibles pour les modèles personnalisés.
+     *
+     * @return array<string,string>
+     */
+    public static function get_template_tokens() {
+        return [
+            'site_name' => __('Nom du site WordPress', 'backup-jlg'),
+            'site_url' => __('URL du site', 'backup-jlg'),
+            'event_title' => __('Titre lisible de l’événement', 'backup-jlg'),
+            'event_key' => __('Identifiant technique de l’événement', 'backup-jlg'),
+            'severity_label' => __('Libellé de gravité', 'backup-jlg'),
+            'severity' => __('Code de gravité (info, warning, critical)', 'backup-jlg'),
+            'initiator' => __('Utilisateur ou système à l’origine de l’action', 'backup-jlg'),
+            'timestamp' => __('Horodatage courant', 'backup-jlg'),
+        ];
     }
 
     /**

@@ -106,6 +106,7 @@ class BJLG_Settings {
                     ],
                 ],
             ],
+            'templates' => [],
         ],
         'performance' => [
             'multi_threading' => false,
@@ -217,6 +218,50 @@ class BJLG_Settings {
             'discord' => ['default_delay_minutes' => 15],
             'teams' => ['default_delay_minutes' => 15],
             'sms' => ['default_delay_minutes' => 30],
+        ];
+    }
+
+    /**
+     * Retourne la définition des modèles de notification pour les formulaires.
+     */
+    private function get_notification_template_blueprint(): array {
+        if (class_exists(BJLG_Notifications::class) && method_exists(BJLG_Notifications::class, 'get_severity_template_blueprint')) {
+            return BJLG_Notifications::get_severity_template_blueprint();
+        }
+
+        return [
+            'info' => [
+                'label' => __('Information', 'backup-jlg'),
+                'intro' => __('Mise à jour de routine pour votre visibilité.', 'backup-jlg'),
+                'outro' => __('Aucune action immédiate n’est requise.', 'backup-jlg'),
+                'resolution' => __('Archivez l’événement une fois les vérifications terminées.', 'backup-jlg'),
+                'intent' => 'info',
+                'actions' => [
+                    __('Ajoutez un commentaire dans l’historique si une vérification manuelle a été effectuée.', 'backup-jlg'),
+                ],
+            ],
+            'warning' => [
+                'label' => __('Avertissement', 'backup-jlg'),
+                'intro' => __('Surveillez l’incident : une intervention préventive peut être nécessaire.', 'backup-jlg'),
+                'outro' => __('Planifiez une action de suivi si la situation persiste.', 'backup-jlg'),
+                'resolution' => __('Actualisez l’état dans le panneau Monitoring pour informer l’équipe.', 'backup-jlg'),
+                'intent' => 'warning',
+                'actions' => [
+                    __('Vérifiez la capacité de stockage et les dernières purges distantes.', 'backup-jlg'),
+                    __('Planifiez un nouveau point de contrôle pour confirmer que l’alerte diminue.', 'backup-jlg'),
+                ],
+            ],
+            'critical' => [
+                'label' => __('Critique', 'backup-jlg'),
+                'intro' => __('Action immédiate recommandée : l’incident est suivi et sera escaladé.', 'backup-jlg'),
+                'outro' => __('Une escalade automatique sera déclenchée si le statut ne change pas.', 'backup-jlg'),
+                'resolution' => __('Consignez la résolution dans le tableau de bord pour clôturer l’escalade.', 'backup-jlg'),
+                'intent' => 'error',
+                'actions' => [
+                    __('Inspectez les journaux détaillés et identifiez la dernière action réussie.', 'backup-jlg'),
+                    __('Contactez l’astreinte et préparez un plan de remédiation ou de restauration.', 'backup-jlg'),
+                ],
+            ],
         ];
     }
 
@@ -2615,6 +2660,90 @@ class BJLG_Settings {
             'mode' => $mode_normalized,
             'stages' => $escalation_stages,
         ];
+
+        $template_blueprint = $this->get_notification_template_blueprint();
+        $template_current = isset($settings['templates']) && is_array($settings['templates'])
+            ? $settings['templates']
+            : [];
+
+        $templates = [];
+        foreach ($template_blueprint as $severity => $definition) {
+            if (!is_string($severity) || $severity === '') {
+                continue;
+            }
+
+            $current_template = isset($template_current[$severity]) && is_array($template_current[$severity])
+                ? $template_current[$severity]
+                : [];
+
+            $label_default = isset($current_template['label'])
+                ? (string) $current_template['label']
+                : (string) ($definition['label'] ?? '');
+            $intro_default = isset($current_template['intro'])
+                ? (string) $current_template['intro']
+                : (string) ($definition['intro'] ?? '');
+            $outro_default = isset($current_template['outro'])
+                ? (string) $current_template['outro']
+                : (string) ($definition['outro'] ?? '');
+            $resolution_default = isset($current_template['resolution'])
+                ? (string) $current_template['resolution']
+                : (string) ($definition['resolution'] ?? '');
+            $actions_default = isset($current_template['actions']) && is_array($current_template['actions'])
+                ? $current_template['actions']
+                : (isset($definition['actions']) && is_array($definition['actions']) ? $definition['actions'] : []);
+
+            $label_value = $this->get_scalar_request_value($request, 'template_' . $severity . '_label', $label_default);
+            $intro_value = $this->get_scalar_request_value($request, 'template_' . $severity . '_intro', $intro_default);
+            $outro_value = $this->get_scalar_request_value($request, 'template_' . $severity . '_outro', $outro_default);
+            $resolution_value = $this->get_scalar_request_value($request, 'template_' . $severity . '_resolution', $resolution_default);
+            $actions_value = $this->get_scalar_request_value(
+                $request,
+                'template_' . $severity . '_actions',
+                implode("\n", array_map('strval', $actions_default))
+            );
+
+            $actions_lines = [];
+            if (is_string($actions_value) && $actions_value !== '') {
+                $raw_lines = preg_split('/[\r\n]+/', $actions_value);
+                if (is_array($raw_lines)) {
+                    foreach ($raw_lines as $line) {
+                        $line = is_string($line) ? trim($line) : '';
+                        if ($line === '') {
+                            continue;
+                        }
+
+                        $actions_lines[] = function_exists('sanitize_textarea_field')
+                            ? sanitize_textarea_field($line)
+                            : trim($line);
+                    }
+                }
+            }
+
+            if (empty($actions_lines) && !empty($actions_default)) {
+                $actions_lines = array_map('strval', $actions_default);
+            }
+
+            $intent_default = isset($current_template['intent'])
+                ? (string) $current_template['intent']
+                : (string) ($definition['intent'] ?? 'info');
+            $intent_normalized = strtolower(trim($intent_default));
+            if (!in_array($intent_normalized, ['info', 'warning', 'error'], true)) {
+                $intent_normalized = 'info';
+            }
+
+            $templates[$severity] = [
+                'label' => function_exists('sanitize_text_field') ? sanitize_text_field($label_value) : trim((string) $label_value),
+                'intro' => function_exists('sanitize_textarea_field') ? sanitize_textarea_field($intro_value) : trim((string) $intro_value),
+                'outro' => function_exists('sanitize_textarea_field') ? sanitize_textarea_field($outro_value) : trim((string) $outro_value),
+                'resolution' => function_exists('sanitize_textarea_field') ? sanitize_textarea_field($resolution_value) : trim((string) $resolution_value),
+                'actions' => $actions_lines,
+                'intent' => $intent_normalized,
+            ];
+        }
+
+        if (!empty($templates)) {
+            $settings['templates'] = $templates;
+        }
 
         if (!empty($email_validation['invalid'])) {
             throw new Exception(sprintf(

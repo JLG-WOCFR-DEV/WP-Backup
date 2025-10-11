@@ -2002,6 +2002,10 @@ border-color: #d1d5db;
     gap: 10px;
 }
 
+.bjlg-field-grid--stacked {
+    grid-template-columns: 1fr;
+}
+
 .bjlg-field-label {
     display: block;
     font-size: 13px;
@@ -2054,6 +2058,34 @@ border-color: #d1d5db;
 .bjlg-escalation-stage__description {
     margin: 0;
     color: var(--bjlg-color-text-subtle);
+}
+
+.bjlg-template-token-list {
+    margin: 12px 0 0;
+    padding-left: 20px;
+    color: var(--bjlg-color-text-subtle);
+}
+
+.bjlg-template-token-list code {
+    font-size: 12px;
+}
+
+.bjlg-template-groups {
+    display: grid;
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.bjlg-template-group {
+    border: 1px solid color-mix(in srgb, var(--bjlg-color-border) 85%, transparent);
+    border-radius: 6px;
+    padding: 16px;
+    background: color-mix(in srgb, var(--bjlg-color-surface) 92%, transparent);
+}
+
+.bjlg-template-group legend {
+    font-weight: 600;
+    margin-bottom: 8px;
 }
 
 /* Assistant de sauvegarde en étapes
