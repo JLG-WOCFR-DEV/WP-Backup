@@ -2,11 +2,8 @@
 declare(strict_types=1);
 
 use BJLG\BJLG_Destination_Interface;
-use Exception;
+use BJLG\BJLG_Encryption;
 use PHPUnit\Framework\TestCase;
-use ReflectionMethod;
-use ReflectionProperty;
-use ZipArchive;
 
 require_once __DIR__ . '/../includes/class-bjlg-backup.php';
 require_once __DIR__ . '/../includes/destinations/interface-bjlg-destination.php';
@@ -279,40 +276,124 @@ final class BJLG_BackupTest extends TestCase
     {
         $backup = new BJLG\BJLG_Backup();
 
-        $zip_path = tempnam(sys_get_temp_dir(), 'bjlg-checks');
-        $this->assertIsString($zip_path);
-        $zip_path .= '.zip';
-
-        $zip = new ZipArchive();
-        $this->assertTrue($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE));
-        $zip->addFromString('backup-manifest.json', json_encode(['contains' => ['db'], 'type' => 'full']));
-        $zip->addFromString('database.sql', "SELECT 1;\n");
-        $zip->addFromString('file.txt', 'example');
-        $zip->close();
+        $plainArchive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'manifest' => ['type' => 'full', 'contains' => ['db']],
+            'database' => "SELECT 1;\n",
+            'files' => ['file.txt' => 'example'],
+        ]);
 
         $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'perform_post_backup_checks');
         $method->setAccessible(true);
 
-        try {
-            $results = $method->invoke($backup, $zip_path, ['checksum' => true, 'dry_run' => true], false);
-            $this->assertSame(hash_file('sha256', $zip_path), $results['checksum']);
-            $this->assertSame('sha256', $results['checksum_algorithm']);
-            $this->assertSame('passed', $results['dry_run']);
-            $this->assertSame('passed', $results['overall_status']);
-            $this->assertArrayHasKey('files', $results);
-            $this->assertArrayHasKey('backup-manifest.json', $results['files']);
-            $this->assertArrayHasKey('database.sql', $results['files']);
-            $this->assertSame('passed', $results['files']['backup-manifest.json']['status']);
-            $this->assertSame('passed', $results['files']['database.sql']['status']);
+        $results = $method->invoke($backup, $plainArchive['path'], ['checksum' => true, 'dry_run' => true], false);
+        $this->assertSame(hash_file('sha256', $plainArchive['path']), $results['checksum']);
+        $this->assertSame('sha256', $results['checksum_algorithm']);
+        $this->assertSame('passed', $results['dry_run']);
+        $this->assertSame('passed', $results['overall_status']);
+        $this->assertArrayHasKey('files', $results);
+        $this->assertArrayHasKey('backup-manifest.json', $results['files']);
+        $this->assertArrayHasKey('database.sql', $results['files']);
+        $this->assertSame('passed', $results['files']['backup-manifest.json']['status']);
+        $this->assertSame('passed', $results['files']['database.sql']['status']);
 
-            $encryptedResults = $method->invoke($backup, $zip_path, ['checksum' => true, 'dry_run' => true], true);
-            $this->assertSame('skipped', $encryptedResults['dry_run']);
-            $this->assertSame('skipped', $encryptedResults['overall_status']);
-            $this->assertSame('skipped', $encryptedResults['files']['backup-manifest.json']['status']);
-            $this->assertSame('skipped', $encryptedResults['files']['database.sql']['status']);
-        } finally {
-            @unlink($zip_path);
-        }
+        $password = 'secret-pass';
+        $encryptedArchive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'manifest' => ['type' => 'full', 'contains' => ['db']],
+            'database' => "SELECT 2;\n",
+            'files' => ['file.txt' => 'encrypted'],
+            'encrypt' => true,
+            'password' => $password,
+        ]);
+
+        $encryptedResults = $method->invoke(
+            new BJLG\BJLG_Backup(null, new BJLG_Encryption()),
+            $encryptedArchive['path'],
+            [
+                'checksum' => true,
+                'dry_run' => true,
+                'encryption' => ['password' => $password],
+            ],
+            true
+        );
+
+        $this->assertSame('passed', $encryptedResults['dry_run']);
+        $this->assertSame('passed', $encryptedResults['overall_status']);
+        $this->assertSame('passed', $encryptedResults['files']['backup-manifest.json']['status']);
+        $this->assertSame('passed', $encryptedResults['files']['database.sql']['status']);
+
+        @unlink($plainArchive['path']);
+        @unlink($encryptedArchive['path']);
+    }
+
+    public function test_perform_post_backup_checks_detects_invalid_hmac_on_encrypted_archive(): void
+    {
+        $password = 'integrity-check';
+        $encryptedArchive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'manifest' => ['type' => 'full', 'contains' => ['db']],
+            'database' => "SELECT 3;\n",
+            'files' => ['file.txt' => 'hmac'],
+            'encrypt' => true,
+            'password' => $password,
+        ]);
+
+        BJLG_Test_BackupFixtures::corruptEncryptedArchiveHmac($encryptedArchive['path']);
+
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'perform_post_backup_checks');
+        $method->setAccessible(true);
+
+        $results = $method->invoke(
+            new BJLG\BJLG_Backup(null, new BJLG_Encryption()),
+            $encryptedArchive['path'],
+            [
+                'checksum' => true,
+                'dry_run' => true,
+                'encryption' => ['password' => $password],
+            ],
+            true
+        );
+
+        $this->assertSame('failed', $results['dry_run']);
+        $this->assertSame('failed', $results['overall_status']);
+        $this->assertArrayHasKey('overall_message', $results);
+        $this->assertStringContainsString('Impossible de valider l\'archive chiffrée', $results['overall_message']);
+        $this->assertSame('failed', $results['files']['backup-manifest.json']['status']);
+        $this->assertSame('failed', $results['files']['database.sql']['status']);
+
+        @unlink($encryptedArchive['path']);
+    }
+
+    public function test_perform_post_backup_checks_detects_incorrect_password_for_encrypted_archive(): void
+    {
+        $encryptedArchive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'manifest' => ['type' => 'full', 'contains' => ['db']],
+            'database' => "SELECT 4;\n",
+            'files' => ['file.txt' => 'password'],
+            'encrypt' => true,
+            'password' => 'expected-password',
+        ]);
+
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'perform_post_backup_checks');
+        $method->setAccessible(true);
+
+        $results = $method->invoke(
+            new BJLG\BJLG_Backup(null, new BJLG_Encryption()),
+            $encryptedArchive['path'],
+            [
+                'checksum' => true,
+                'dry_run' => true,
+                'encryption' => ['password' => 'wrong-password'],
+            ],
+            true
+        );
+
+        $this->assertSame('failed', $results['dry_run']);
+        $this->assertSame('failed', $results['overall_status']);
+        $this->assertArrayHasKey('overall_message', $results);
+        $this->assertStringContainsString('Impossible de valider l\'archive chiffrée', $results['overall_message']);
+        $this->assertSame('failed', $results['files']['backup-manifest.json']['status']);
+        $this->assertSame('failed', $results['files']['database.sql']['status']);
+
+        @unlink($encryptedArchive['path']);
     }
 
     public function test_perform_post_backup_checks_detects_truncated_archive(): void
