@@ -635,10 +635,18 @@ jQuery(function($) {
                     }).appendTo($entry);
                 }
 
-                if (entry.details && entry.details.escalation_channels) {
-                    const escalationParts = [
-                        sprintf(__('Escalade vers %s', 'backup-jlg'), entry.details.escalation_channels)
-                    ];
+                if (entry.details && (entry.details.escalation_channels || entry.details.escalation_scenario)) {
+                    const escalationParts = [];
+
+                    if (entry.details.escalation_scenario) {
+                        escalationParts.push(sprintf(__('Escalade séquentielle : %s', 'backup-jlg'), entry.details.escalation_scenario));
+                    } else if (entry.details.escalation_channels) {
+                        escalationParts.push(sprintf(__('Escalade vers %s', 'backup-jlg'), entry.details.escalation_channels));
+                    }
+
+                    if (entry.details.escalation_scenario && entry.details.escalation_channels) {
+                        escalationParts.push(sprintf(__('Canaux activés : %s', 'backup-jlg'), entry.details.escalation_channels));
+                    }
 
                     if (entry.details.escalation_delay) {
                         escalationParts.push(sprintf(__('délai : %s', 'backup-jlg'), entry.details.escalation_delay));

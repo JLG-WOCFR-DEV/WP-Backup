@@ -423,6 +423,45 @@ class BJLG_Admin_Advanced {
                 if ($delay_seconds > 0) {
                     $details['escalation_delay'] = $this->format_duration_label($delay_seconds);
                 }
+
+                $strategy = isset($entry['escalation']['strategy']) ? (string) $entry['escalation']['strategy'] : '';
+                if ($strategy === 'staged' && !empty($entry['escalation']['steps']) && is_array($entry['escalation']['steps'])) {
+                    $step_summaries = [];
+                    foreach ($entry['escalation']['steps'] as $step) {
+                        if (!is_array($step)) {
+                            continue;
+                        }
+
+                        $channels = isset($step['channels']) && is_array($step['channels']) ? $step['channels'] : [];
+                        $channel_labels = [];
+                        foreach ($channels as $channel_key) {
+                            $label = $this->get_notification_channel_label($channel_key);
+                            if ($label !== '') {
+                                $channel_labels[] = $label;
+                            }
+                        }
+
+                        if (empty($channel_labels)) {
+                            continue;
+                        }
+
+                        $delay = isset($step['delay']) ? (int) $step['delay'] : 0;
+                        $delay_label = $delay > 0
+                            ? $this->format_duration_label($delay)
+                            : __('immédiat', 'backup-jlg');
+
+                        $label = isset($step['label']) && is_string($step['label']) && $step['label'] !== ''
+                            ? $step['label']
+                            : implode(', ', $channel_labels);
+
+                        $step_summaries[] = sprintf('%s — %s', $label, $delay_label);
+                    }
+
+                    if (!empty($step_summaries)) {
+                        $details['escalation_scenario'] = implode(' → ', $step_summaries);
+                        $details['escalation_strategy'] = 'staged';
+                    }
+                }
             }
 
             if (!empty($entry['has_escalation_pending']) && !empty($entry['escalation_next_attempt'])) {

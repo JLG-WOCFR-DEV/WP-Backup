@@ -628,6 +628,33 @@ jQuery(function($) {
         requestModules(['dashboard']);
     }
 
+    const updateEscalationModeUI = function() {
+        const $modeInputs = $('input[name="escalation_mode"]');
+        if (!$modeInputs.length) {
+            return;
+        }
+
+        const mode = $modeInputs.filter(':checked').val();
+        const $stages = $('.bjlg-escalation-stages');
+        if ($stages.length) {
+            const isStaged = mode === 'staged';
+            $stages.toggleClass('is-active', isStaged);
+            $stages.attr('aria-hidden', isStaged ? 'false' : 'true');
+
+            if (window.wp && window.wp.a11y && typeof window.wp.a11y.speak === 'function') {
+                const i18n = window.wp.i18n || {};
+                const __ = typeof i18n.__ === 'function' ? i18n.__ : function(str) { return str; };
+                const message = mode === 'staged'
+                    ? __('Mode séquentiel activé : configurez vos étapes d’escalade.', 'backup-jlg')
+                    : __('Mode simple activé : toutes les escalades utilisent le même délai.', 'backup-jlg');
+                window.wp.a11y.speak(message, 'polite');
+            }
+        }
+    };
+
+    $(document).on('change', 'input[name="escalation_mode"]', updateEscalationModeUI);
+    updateEscalationModeUI();
+
     $('.bjlg-autoload-module').each(function() {
         const modules = parseModuleAttribute($(this).data('bjlgModules'));
         requestModules(modules);

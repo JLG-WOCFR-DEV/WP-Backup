@@ -86,6 +86,25 @@ class BJLG_Settings {
                     'teams' => false,
                     'sms' => true,
                 ],
+                'mode' => 'simple',
+                'stages' => [
+                    'slack' => [
+                        'enabled' => false,
+                        'delay_minutes' => 15,
+                    ],
+                    'discord' => [
+                        'enabled' => false,
+                        'delay_minutes' => 15,
+                    ],
+                    'teams' => [
+                        'enabled' => false,
+                        'delay_minutes' => 15,
+                    ],
+                    'sms' => [
+                        'enabled' => false,
+                        'delay_minutes' => 30,
+                    ],
+                ],
             ],
         ],
         'performance' => [
@@ -182,6 +201,24 @@ class BJLG_Settings {
     ];
 
     private $default_backup_presets = [];
+
+    /**
+     * Retourne la définition des étapes d’escalade pour les formulaires.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    private function get_escalation_stage_blueprint(): array {
+        if (class_exists(BJLG_Notifications::class) && method_exists(BJLG_Notifications::class, 'get_escalation_stage_blueprint')) {
+            return BJLG_Notifications::get_escalation_stage_blueprint();
+        }
+
+        return [
+            'slack' => ['default_delay_minutes' => 15],
+            'discord' => ['default_delay_minutes' => 15],
+            'teams' => ['default_delay_minutes' => 15],
+            'sms' => ['default_delay_minutes' => 30],
+        ];
+    }
 
     /**
      * Fusionne récursivement les réglages existants avec les valeurs par défaut.
@@ -2506,11 +2543,77 @@ class BJLG_Settings {
             $escalation_channels[$channel_key] = $this->to_bool($this->get_scalar_request_value($request, $field, $current ? '1' : '0'));
         }
 
+        $allowed_modes = ['simple', 'staged'];
+        $mode_current = isset($escalation_current['mode']) ? (string) $escalation_current['mode'] : ($escalation_defaults['mode'] ?? 'simple');
+        $mode_raw = $this->get_scalar_request_value($request, 'escalation_mode', $mode_current);
+        $mode_normalized = strtolower(trim((string) $mode_raw));
+        if (!in_array($mode_normalized, $allowed_modes, true)) {
+            $mode_normalized = 'simple';
+        }
+
+        $stage_blueprint = $this->get_escalation_stage_blueprint();
+        $escalation_stage_defaults = isset($escalation_defaults['stages']) && is_array($escalation_defaults['stages'])
+            ? $escalation_defaults['stages']
+            : [];
+        $escalation_stage_current = isset($escalation_current['stages']) && is_array($escalation_current['stages'])
+            ? $escalation_current['stages']
+            : $escalation_stage_defaults;
+
+        $escalation_stages = [];
+        foreach ($stage_blueprint as $stage_key => $stage_definition) {
+            $default_stage = isset($escalation_stage_defaults[$stage_key]) && is_array($escalation_stage_defaults[$stage_key])
+                ? $escalation_stage_defaults[$stage_key]
+                : ['enabled' => false, 'delay_minutes' => (int) ($stage_definition['default_delay_minutes'] ?? 15)];
+            $current_stage = isset($escalation_stage_current[$stage_key]) && is_array($escalation_stage_current[$stage_key])
+                ? $escalation_stage_current[$stage_key]
+                : $default_stage;
+
+            $enabled_field = 'escalation_stage_' . $stage_key . '_enabled';
+            $delay_field = 'escalation_stage_' . $stage_key . '_delay';
+
+            $enabled_default = !empty($current_stage['enabled']);
+            $delay_default = isset($current_stage['delay_minutes'])
+                ? (int) $current_stage['delay_minutes']
+                : (int) ($stage_definition['default_delay_minutes'] ?? 15);
+
+            $stage_enabled = $this->to_bool($this->get_scalar_request_value($request, $enabled_field, $enabled_default ? '1' : '0'));
+            $stage_delay_raw = (int) $this->get_scalar_request_value($request, $delay_field, (string) $delay_default);
+
+            $escalation_stages[$stage_key] = [
+                'enabled' => $stage_enabled,
+                'delay_minutes' => max(0, $stage_delay_raw),
+            ];
+        }
+
+        if (!empty($escalation_stage_defaults)) {
+            foreach ($escalation_stage_defaults as $stage_key => $default_stage) {
+                if (isset($escalation_stages[$stage_key])) {
+                    continue;
+                }
+
+                $enabled_field = 'escalation_stage_' . $stage_key . '_enabled';
+                $delay_field = 'escalation_stage_' . $stage_key . '_delay';
+
+                $enabled_default = !empty($default_stage['enabled']);
+                $delay_default = isset($default_stage['delay_minutes']) ? (int) $default_stage['delay_minutes'] : 15;
+
+                $stage_enabled = $this->to_bool($this->get_scalar_request_value($request, $enabled_field, $enabled_default ? '1' : '0'));
+                $stage_delay_raw = (int) $this->get_scalar_request_value($request, $delay_field, (string) $delay_default);
+
+                $escalation_stages[$stage_key] = [
+                    'enabled' => $stage_enabled,
+                    'delay_minutes' => max(0, $stage_delay_raw),
+                ];
+            }
+        }
+
         $settings['escalation'] = [
             'enabled' => $escalation_enabled,
             'delay_minutes' => $escalation_delay,
             'only_critical' => $escalation_only_critical,
             'channels' => $escalation_channels,
+            'mode' => $mode_normalized,
+            'stages' => $escalation_stages,
         ];
 
         if (!empty($email_validation['invalid'])) {

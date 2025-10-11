@@ -2603,6 +2603,40 @@ class BJLG_Admin {
             ? $quiet_settings['timezone']
             : (function_exists('wp_timezone_string') ? wp_timezone_string() : 'UTC');
 
+        $escalation_mode = isset($escalation_settings['mode']) ? (string) $escalation_settings['mode'] : 'simple';
+        if (!in_array($escalation_mode, ['simple', 'staged'], true)) {
+            $escalation_mode = 'simple';
+        }
+
+        $escalation_stage_settings = isset($escalation_settings['stages']) && is_array($escalation_settings['stages'])
+            ? $escalation_settings['stages']
+            : [];
+
+        $escalation_blueprint = class_exists(BJLG_Notifications::class) && method_exists(BJLG_Notifications::class, 'get_escalation_stage_blueprint')
+            ? BJLG_Notifications::get_escalation_stage_blueprint()
+            : [
+                'slack' => [
+                    'label' => __('Escalade Slack', 'backup-jlg'),
+                    'description' => __('Diffuse l’alerte sur Slack pour mobiliser immédiatement le support.', 'backup-jlg'),
+                    'default_delay_minutes' => 15,
+                ],
+                'discord' => [
+                    'label' => __('Escalade Discord', 'backup-jlg'),
+                    'description' => __('Préviens l’équipe on-call ou la communauté technique via Discord.', 'backup-jlg'),
+                    'default_delay_minutes' => 15,
+                ],
+                'teams' => [
+                    'label' => __('Escalade Microsoft Teams', 'backup-jlg'),
+                    'description' => __('Alerte le helpdesk Teams et documente automatiquement l’incident.', 'backup-jlg'),
+                    'default_delay_minutes' => 20,
+                ],
+                'sms' => [
+                    'label' => __('Escalade SMS', 'backup-jlg'),
+                    'description' => __('Notifie les astreintes par SMS lorsque l’incident persiste.', 'backup-jlg'),
+                    'default_delay_minutes' => 30,
+                ],
+            ];
+
         $performance_defaults = [
             'multi_threading' => false,
             'max_workers' => 2,
@@ -3203,6 +3237,54 @@ class BJLG_Admin {
                                     </ul>
                                 </fieldset>
                                 <p class="description"><?php esc_html_e('Sélectionnez les canaux supplémentaires qui seront sollicités après le délai configuré lorsque les alertes critiques ne sont pas résolues.', 'backup-jlg'); ?></p>
+                                <div class="bjlg-escalation-mode" role="group" aria-label="<?php esc_attr_e('Stratégie d’escalade', 'backup-jlg'); ?>">
+                                    <label>
+                                        <input type="radio" name="escalation_mode" value="simple" <?php checked($escalation_mode, 'simple'); ?>>
+                                        <?php esc_html_e('Mode simple : relance tous les canaux sélectionnés après le délai.', 'backup-jlg'); ?>
+                                    </label>
+                                    <label>
+                                        <input type="radio" name="escalation_mode" value="staged" <?php checked($escalation_mode, 'staged'); ?>>
+                                        <?php esc_html_e('Mode séquentiel : construire un scénario multi-niveaux (ex. e-mail → Slack → SMS).', 'backup-jlg'); ?>
+                                    </label>
+                                </div>
+                                <div class="bjlg-escalation-stages<?php echo $escalation_mode === 'staged' ? ' is-active' : ''; ?>" data-bjlg-escalation-stages>
+                                    <p class="description"><?php esc_html_e('Activez les étapes souhaitées et précisez le délai entre chaque relance pour orchestrer vos escalades.', 'backup-jlg'); ?></p>
+                                    <?php foreach ($escalation_blueprint as $stage_key => $stage_definition):
+                                        if (!is_string($stage_key) || $stage_key === '') {
+                                            continue;
+                                        }
+
+                                        $stage_config = isset($escalation_stage_settings[$stage_key]) && is_array($escalation_stage_settings[$stage_key])
+                                            ? $escalation_stage_settings[$stage_key]
+                                            : [];
+                                        $stage_enabled = !empty($stage_config['enabled']);
+                                        $delay_default = isset($stage_definition['default_delay_minutes'])
+                                            ? (int) $stage_definition['default_delay_minutes']
+                                            : 15;
+                                        $stage_delay = isset($stage_config['delay_minutes'])
+                                            ? (int) $stage_config['delay_minutes']
+                                            : $delay_default;
+                                        $stage_delay = max(0, $stage_delay);
+                                        $stage_label = isset($stage_definition['label']) ? (string) $stage_definition['label'] : ucfirst($stage_key);
+                                        $stage_description = isset($stage_definition['description']) ? (string) $stage_definition['description'] : '';
+                                    ?>
+                                        <div class="bjlg-escalation-stage" data-escalation-stage="<?php echo esc_attr($stage_key); ?>">
+                                            <label class="bjlg-escalation-stage__toggle">
+                                                <input type="checkbox" name="escalation_stage_<?php echo esc_attr($stage_key); ?>_enabled" <?php checked($stage_enabled); ?>>
+                                                <span class="bjlg-escalation-stage__label"><?php echo esc_html($stage_label); ?></span>
+                                            </label>
+                                            <div class="bjlg-field-grid bjlg-field-grid--compact">
+                                                <label>
+                                                    <span class="bjlg-field-label"><?php esc_html_e('Délai avant envoi (minutes)', 'backup-jlg'); ?></span>
+                                                    <input type="number" class="small-text" min="0" name="escalation_stage_<?php echo esc_attr($stage_key); ?>_delay" value="<?php echo esc_attr($stage_delay); ?>">
+                                                </label>
+                                                <?php if ($stage_description !== ''): ?>
+                                                    <p class="description bjlg-escalation-stage__description"><?php echo esc_html($stage_description); ?></p>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
                             </div>
                         </td>
                     </tr>

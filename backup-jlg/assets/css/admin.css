@@ -2009,6 +2009,53 @@ border-color: #d1d5db;
     margin-bottom: 4px;
 }
 
+.bjlg-escalation-mode {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 12px;
+}
+
+.bjlg-escalation-mode label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+}
+
+.bjlg-escalation-stages {
+    margin-top: 12px;
+    padding-left: 16px;
+    border-left: 3px solid var(--bjlg-color-border);
+    display: none;
+}
+
+.bjlg-escalation-stages.is-active {
+    display: block;
+}
+
+.bjlg-escalation-stage {
+    padding: 12px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--bjlg-color-border) 85%, transparent);
+}
+
+.bjlg-escalation-stage:last-child {
+    border-bottom: none;
+}
+
+.bjlg-escalation-stage__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.bjlg-escalation-stage__description {
+    margin: 0;
+    color: var(--bjlg-color-text-subtle);
+}
+
 /* Assistant de sauvegarde en étapes
 --------------------------------------------- */
 
