@@ -440,6 +440,14 @@ class BJLG_Admin_Advanced {
                 }
             }
 
+            $severity = isset($entry['severity']) ? (string) $entry['severity'] : 'info';
+            $severity_label = $this->get_notification_severity_label($severity);
+            $severity_intent = $this->get_notification_severity_intent($severity);
+
+            if ($severity_label !== '') {
+                $details['severity_label'] = $severity_label;
+            }
+
             $formatted[] = [
                 'id' => isset($entry['id']) ? sanitize_text_field((string) $entry['id']) : '',
                 'title' => sanitize_text_field($title),
@@ -453,6 +461,9 @@ class BJLG_Admin_Advanced {
                 'next_attempt_relative' => $next_relative,
                 'next_attempt_formatted' => $next_formatted,
                 'message' => isset($entry['last_error']) ? (string) $entry['last_error'] : '',
+                'severity' => $severity,
+                'severity_label' => $severity_label,
+                'severity_intent' => $severity_intent,
                 'details' => $details,
             ];
         }
@@ -662,6 +673,30 @@ class BJLG_Admin_Advanced {
                 return __('SMS', 'backup-jlg');
             default:
                 return $channel !== '' ? ucfirst(str_replace('_', ' ', $channel)) : '';
+        }
+    }
+
+    private function get_notification_severity_label(string $severity): string {
+        switch (strtolower($severity)) {
+            case 'critical':
+                return __('Critique', 'backup-jlg');
+            case 'warning':
+                return __('Avertissement', 'backup-jlg');
+            case 'info':
+            default:
+                return __('Information', 'backup-jlg');
+        }
+    }
+
+    private function get_notification_severity_intent(string $severity): string {
+        switch (strtolower($severity)) {
+            case 'critical':
+                return 'error';
+            case 'warning':
+                return 'warning';
+            case 'info':
+            default:
+                return 'info';
         }
     }
 
