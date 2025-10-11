@@ -2552,6 +2552,25 @@ class BJLG_Admin {
                 'teams' => ['enabled' => false, 'webhook_url' => ''],
                 'sms' => ['enabled' => false, 'webhook_url' => ''],
             ],
+            'quiet_hours' => [
+                'enabled' => false,
+                'start' => '22:00',
+                'end' => '07:00',
+                'allow_critical' => true,
+                'timezone' => '',
+            ],
+            'escalation' => [
+                'enabled' => false,
+                'delay_minutes' => 15,
+                'only_critical' => true,
+                'channels' => [
+                    'email' => false,
+                    'slack' => false,
+                    'discord' => false,
+                    'teams' => false,
+                    'sms' => true,
+                ],
+            ],
         ];
 
         $notification_settings = get_option('bjlg_notification_settings', []);

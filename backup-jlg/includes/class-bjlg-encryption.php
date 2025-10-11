@@ -383,6 +383,77 @@ class BJLG_Encryption {
     }
     
     /**
+     * Déchiffre un fichier chiffré vers une copie temporaire sans modifier l'original.
+     *
+     * @param string $filepath
+     * @param string|null $password
+     * @return array{path:string,directory:string}
+     * @throws Exception
+     */
+    public function decrypt_to_temporary_copy($filepath, $password = null) {
+        if (!file_exists($filepath) || substr($filepath, -4) !== '.enc') {
+            throw new Exception("Fichier chiffré introuvable pour la copie temporaire.");
+        }
+
+        $header_handle = fopen($filepath, 'rb');
+        if ($header_handle === false) {
+            throw new Exception("Impossible de lire le fichier chiffré pour la copie temporaire.");
+        }
+
+        try {
+            $header = $this->read_encrypted_file_header($header_handle);
+        } finally {
+            fclose($header_handle);
+        }
+
+        $requires_password = $header['version'] >= 2
+            && (($header['flags'] ?? 0) & self::FILE_FLAG_PASSWORD) === self::FILE_FLAG_PASSWORD;
+
+        if ($requires_password && (!is_string($password) || $password === '')) {
+            throw new Exception('Mot de passe requis pour vérifier cette sauvegarde chiffrée.');
+        }
+
+        $temporary_directory = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR
+            . 'bjlg-decrypt-' . uniqid('', true);
+
+        if (!@mkdir($temporary_directory, 0777, true) && !is_dir($temporary_directory)) {
+            throw new Exception("Impossible de créer le répertoire temporaire pour le déchiffrement.");
+        }
+
+        $temporary_encrypted = $temporary_directory . DIRECTORY_SEPARATOR . basename($filepath);
+
+        if (!@copy($filepath, $temporary_encrypted)) {
+            $this->cleanup_temporary_directory($temporary_directory);
+            throw new Exception("Impossible de préparer la copie chiffrée temporaire.");
+        }
+
+        try {
+            $decrypted_path = $this->decrypt_backup_file($temporary_encrypted, $password);
+
+            if (!is_string($decrypted_path) || !file_exists($decrypted_path)) {
+                throw new Exception("La copie déchiffrée n'a pas pu être générée.");
+            }
+
+            if (file_exists($temporary_encrypted)) {
+                @unlink($temporary_encrypted);
+            }
+
+            return [
+                'path' => $decrypted_path,
+                'directory' => $temporary_directory,
+            ];
+        } catch (Exception $exception) {
+            if (file_exists($temporary_encrypted)) {
+                @unlink($temporary_encrypted);
+            }
+
+            $this->cleanup_temporary_directory($temporary_directory);
+
+            throw $exception;
+        }
+    }
+
+    /**
      * Déchiffre un fichier de sauvegarde
      */
     public function decrypt_backup_file($filepath, $password = null) {
@@ -564,6 +635,39 @@ class BJLG_Encryption {
             BJLG_History::log('backup_decrypted', 'failure', $e->getMessage());
             throw $e; // Propager l'erreur car la restauration ne peut pas continuer
         }
+    }
+
+    /**
+     * Supprime récursivement un répertoire temporaire utilisé pendant le déchiffrement.
+     *
+     * @param string $directory
+     * @return void
+     */
+    private function cleanup_temporary_directory($directory) {
+        if (!is_string($directory) || $directory === '' || !is_dir($directory)) {
+            return;
+        }
+
+        $items = scandir($directory);
+        if (!is_array($items)) {
+            return;
+        }
+
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+
+            $path = $directory . DIRECTORY_SEPARATOR . $item;
+
+            if (is_dir($path)) {
+                $this->cleanup_temporary_directory($path);
+            } elseif (file_exists($path)) {
+                @unlink($path);
+            }
+        }
+
+        @rmdir($directory);
     }
 
     /**

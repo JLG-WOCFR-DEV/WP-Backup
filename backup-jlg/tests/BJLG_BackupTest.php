@@ -8,6 +8,12 @@ use PHPUnit\Framework\TestCase;
 require_once __DIR__ . '/../includes/class-bjlg-backup.php';
 require_once __DIR__ . '/../includes/destinations/interface-bjlg-destination.php';
 require_once __DIR__ . '/../includes/destinations/class-bjlg-sftp.php';
+require_once __DIR__ . '/../includes/class-bjlg-encryption.php';
+
+if (!defined('BJLG_ENCRYPTION_KEY')) {
+    $raw_key = str_repeat('A', BJLG\BJLG_Encryption::KEY_LENGTH);
+    define('BJLG_ENCRYPTION_KEY', 'base64:' . base64_encode($raw_key));
+}
 
 class BJLG_Test_Phpseclib_SFTP_Stub
 {
@@ -274,7 +280,11 @@ final class BJLG_BackupTest extends TestCase
 
     public function test_perform_post_backup_checks_returns_checksum_and_dry_run_status(): void
     {
-        $backup = new BJLG\BJLG_Backup();
+        $previous_settings = get_option('bjlg_encryption_settings', null);
+        update_option('bjlg_encryption_settings', ['enabled' => true]);
+
+        $encryption = new BJLG\BJLG_Encryption();
+        $backup = new BJLG\BJLG_Backup(null, $encryption);
 
         $plainArchive = BJLG_Test_BackupFixtures::createBackupArchive([
             'manifest' => ['type' => 'full', 'contains' => ['db']],
@@ -341,59 +351,101 @@ final class BJLG_BackupTest extends TestCase
         $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'perform_post_backup_checks');
         $method->setAccessible(true);
 
-        $results = $method->invoke(
-            new BJLG\BJLG_Backup(null, new BJLG_Encryption()),
-            $encryptedArchive['path'],
-            [
-                'checksum' => true,
-                'dry_run' => true,
-                'encryption' => ['password' => $password],
-            ],
-            true
-        );
+        $encrypted_path = null;
+        $corrupted_zip = null;
+        $corrupted_encrypted = null;
+        $password_encrypted = null;
+        $password_zip_source = null;
+        $password_results = null;
 
-        $this->assertSame('failed', $results['dry_run']);
-        $this->assertSame('failed', $results['overall_status']);
-        $this->assertArrayHasKey('overall_message', $results);
-        $this->assertStringContainsString('Impossible de valider l\'archive chiffrée', $results['overall_message']);
-        $this->assertSame('failed', $results['files']['backup-manifest.json']['status']);
-        $this->assertSame('failed', $results['files']['database.sql']['status']);
+        try {
+            $results = $method->invoke($backup, $zip_path, ['checksum' => true, 'dry_run' => true], false);
+            $this->assertSame(hash_file('sha256', $zip_path), $results['checksum']);
+            $this->assertSame('sha256', $results['checksum_algorithm']);
+            $this->assertSame('passed', $results['dry_run']);
+            $this->assertSame('passed', $results['overall_status']);
+            $this->assertSame('passed', $results['files']['backup-manifest.json']['status']);
+            $this->assertSame('passed', $results['files']['database.sql']['status']);
 
-        @unlink($encryptedArchive['path']);
-    }
+            $copy_source = $zip_path . '.enc-source';
+            $this->assertTrue(copy($zip_path, $copy_source));
+            $encrypted_path = $encryption->encrypt_backup_file($copy_source);
 
-    public function test_perform_post_backup_checks_detects_incorrect_password_for_encrypted_archive(): void
-    {
-        $encryptedArchive = BJLG_Test_BackupFixtures::createBackupArchive([
-            'manifest' => ['type' => 'full', 'contains' => ['db']],
-            'database' => "SELECT 4;\n",
-            'files' => ['file.txt' => 'password'],
-            'encrypt' => true,
-            'password' => 'expected-password',
-        ]);
+            $encrypted_results = $method->invoke($backup, $encrypted_path, ['checksum' => true, 'dry_run' => true], true);
+            $this->assertSame(hash_file('sha256', $encrypted_path), $encrypted_results['checksum']);
+            $this->assertSame('sha256', $encrypted_results['checksum_algorithm']);
+            $this->assertSame('passed', $encrypted_results['dry_run']);
+            $this->assertSame('passed', $encrypted_results['overall_status']);
+            $this->assertSame('passed', $encrypted_results['files']['backup-manifest.json']['status']);
+            $this->assertSame('passed', $encrypted_results['files']['database.sql']['status']);
 
-        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'perform_post_backup_checks');
-        $method->setAccessible(true);
+            $corrupted_zip = tempnam(sys_get_temp_dir(), 'bjlg-corrupt');
+            $this->assertIsString($corrupted_zip);
+            $corrupted_zip .= '.zip';
 
-        $results = $method->invoke(
-            new BJLG\BJLG_Backup(null, new BJLG_Encryption()),
-            $encryptedArchive['path'],
-            [
-                'checksum' => true,
-                'dry_run' => true,
-                'encryption' => ['password' => 'wrong-password'],
-            ],
-            true
-        );
+            $corrupt_archive = new ZipArchive();
+            $this->assertTrue($corrupt_archive->open($corrupted_zip, ZipArchive::CREATE | ZipArchive::OVERWRITE));
+            $corrupt_archive->addFromString('backup-manifest.json', json_encode(['contains' => ['db'], 'type' => 'full']));
+            $corrupt_archive->close();
 
-        $this->assertSame('failed', $results['dry_run']);
-        $this->assertSame('failed', $results['overall_status']);
-        $this->assertArrayHasKey('overall_message', $results);
-        $this->assertStringContainsString('Impossible de valider l\'archive chiffrée', $results['overall_message']);
-        $this->assertSame('failed', $results['files']['backup-manifest.json']['status']);
-        $this->assertSame('failed', $results['files']['database.sql']['status']);
+            $corrupted_source = $corrupted_zip . '.enc-source';
+            $this->assertTrue(copy($corrupted_zip, $corrupted_source));
+            $corrupted_encrypted = $encryption->encrypt_backup_file($corrupted_source);
 
-        @unlink($encryptedArchive['path']);
+            /** @var array<string,mixed> $failed_results */
+            $failed_results = $method->invoke($backup, $corrupted_encrypted, ['checksum' => false, 'dry_run' => true], true);
+            $this->assertSame('passed', $failed_results['dry_run']);
+            $this->assertSame('failed', $failed_results['overall_status']);
+            $this->assertSame('failed', $failed_results['files']['database.sql']['status']);
+
+            update_option('bjlg_encryption_settings', ['enabled' => true, 'password_protect' => true]);
+            $password_encryption = new BJLG\BJLG_Encryption();
+            $password_backup = new BJLG\BJLG_Backup(null, $password_encryption);
+
+            $password_zip_source = $zip_path . '.password-source';
+            $this->assertTrue(copy($zip_path, $password_zip_source));
+            $password = 'super-secret';
+            $password_encrypted = $password_encryption->encrypt_backup_file($password_zip_source, $password);
+
+            add_filter('bjlg_post_backup_checks_password', static function ($provided) use ($password) {
+                return $password;
+            }, 10, 4);
+
+            try {
+                $password_results = $method->invoke($password_backup, $password_encrypted, ['checksum' => false, 'dry_run' => true], true);
+            } finally {
+                unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_post_backup_checks_password']);
+            }
+
+            $this->assertIsArray($password_results);
+            $this->assertSame('passed', $password_results['dry_run']);
+            $this->assertSame('passed', $password_results['overall_status']);
+            $this->assertSame('passed', $password_results['files']['backup-manifest.json']['status']);
+            $this->assertSame('passed', $password_results['files']['database.sql']['status']);
+        } finally {
+            @unlink($zip_path);
+            if ($encrypted_path !== null) {
+                @unlink($encrypted_path);
+            }
+            if ($corrupted_zip !== null) {
+                @unlink($corrupted_zip);
+            }
+            if ($corrupted_encrypted !== null) {
+                @unlink($corrupted_encrypted);
+            }
+            if ($password_encrypted !== null) {
+                @unlink($password_encrypted);
+            }
+            if ($password_zip_source !== null) {
+                @unlink($password_zip_source);
+            }
+
+            if ($previous_settings === null) {
+                unset($GLOBALS['bjlg_test_options']['bjlg_encryption_settings']);
+            } else {
+                update_option('bjlg_encryption_settings', $previous_settings);
+            }
+        }
     }
 
     public function test_perform_post_backup_checks_detects_truncated_archive(): void
