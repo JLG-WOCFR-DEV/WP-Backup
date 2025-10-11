@@ -1657,6 +1657,16 @@ class BJLG_REST_API {
             );
         }
 
+        foreach ($collection['schedules'] as $sanitized_entry) {
+            if (($sanitized_entry['recurrence'] ?? '') === 'custom' && empty($sanitized_entry['custom_cron'])) {
+                return new WP_Error(
+                    'invalid_schedule_cron',
+                    __('A valid Cron expression is required when using the custom recurrence.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+        }
+
         return $collection;
     }
 

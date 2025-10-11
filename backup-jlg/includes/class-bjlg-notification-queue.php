@@ -16,6 +16,7 @@ class BJLG_Notification_Queue {
     private const LOCK_DURATION = 45; // seconds
     private const MAX_ATTEMPTS = 5;
     private const MAX_ENTRIES_PER_RUN = 5;
+    private const VALID_SEVERITIES = ['info', 'warning', 'critical'];
 
     public function __construct() {
         add_action('init', [$this, 'ensure_schedule']);
@@ -184,6 +185,7 @@ class BJLG_Notification_Queue {
                 'escalation' => isset($entry['escalation']) && is_array($entry['escalation']) ? $entry['escalation'] : [],
                 'has_escalation_pending' => $escalation_pending,
                 'escalation_next_attempt' => $escalation_next,
+                'severity' => isset($entry['severity']) ? sanitize_key((string) $entry['severity']) : 'info',
             ];
         }
 
@@ -757,6 +759,7 @@ class BJLG_Notification_Queue {
             'created_at' => isset($entry['created_at']) ? (int) $entry['created_at'] : $now,
             'next_attempt_at' => isset($entry['next_attempt_at']) ? (int) $entry['next_attempt_at'] : $now,
             'channels' => [],
+            'severity' => self::normalize_severity_value($entry['severity'] ?? ''),
         ];
 
         if (isset($entry['quiet_until'])) {
@@ -812,6 +815,17 @@ class BJLG_Notification_Queue {
         }
 
         return $normalized;
+    }
+
+    private static function normalize_severity_value($value) {
+        if (is_string($value)) {
+            $candidate = strtolower(trim($value));
+            if (in_array($candidate, self::VALID_SEVERITIES, true)) {
+                return $candidate;
+            }
+        }
+
+        return 'info';
     }
 
     private function is_locked() {

@@ -125,6 +125,15 @@ class BJLG_Scheduler {
             ]);
         }
 
+        foreach ($schedules as $schedule_entry) {
+            if (($schedule_entry['recurrence'] ?? '') === 'custom' && empty($schedule_entry['custom_cron'])) {
+                wp_send_json_error([
+                    'message' => 'Impossible d\'enregistrer la planification.',
+                    'errors' => [__('L’expression Cron personnalisée est invalide.', 'backup-jlg')]
+                ]);
+            }
+        }
+
         $batch_size = $this->get_destination_batch_size();
         $all_secondary = [];
         foreach ($schedules as &$schedule) {

@@ -390,6 +390,13 @@ class BJLG_Remote_Purge_Worker {
         return $max_delay >= self::DELAY_ALERT_THRESHOLD;
     }
 
+    /**
+     * Agrège les métriques SLA exploitées par le tableau de bord d’observabilité.
+     *
+     * Les délais moyens, les destinations impactées et les dernières purges alimentent
+     * les alertes et le module multi-canal. Prochaine étape : brancher les prédictions
+     * de saturation et déclencher des actions correctives automatisées.
+     */
     private function update_metrics(array $queue, array $results, int $now) {
         $pending_total = 0;
         $pending_sum_age = 0;
