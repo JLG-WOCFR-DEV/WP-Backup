@@ -780,6 +780,42 @@ class BJLG_Notification_Queue {
                 'delay' => isset($entry['escalation']['delay']) ? (int) $entry['escalation']['delay'] : 0,
                 'only_critical' => !empty($entry['escalation']['only_critical']),
             ];
+
+            if (isset($entry['escalation']['strategy'])) {
+                $strategy = sanitize_key((string) $entry['escalation']['strategy']);
+                if ($strategy !== '') {
+                    $normalized['escalation']['strategy'] = $strategy;
+                }
+            }
+
+            if (!empty($entry['escalation']['steps']) && is_array($entry['escalation']['steps'])) {
+                $steps = [];
+                foreach ($entry['escalation']['steps'] as $step) {
+                    if (!is_array($step)) {
+                        continue;
+                    }
+
+                    $step_channels = [];
+                    if (!empty($step['channels']) && is_array($step['channels'])) {
+                        foreach ($step['channels'] as $channel_key) {
+                            $channel_key = sanitize_key((string) $channel_key);
+                            if ($channel_key !== '') {
+                                $step_channels[] = $channel_key;
+                            }
+                        }
+                    }
+
+                    $steps[] = [
+                        'label' => isset($step['label']) ? sanitize_text_field((string) $step['label']) : '',
+                        'channels' => array_values(array_unique($step_channels)),
+                        'delay' => isset($step['delay']) ? (int) $step['delay'] : 0,
+                    ];
+                }
+
+                if (!empty($steps)) {
+                    $normalized['escalation']['steps'] = $steps;
+                }
+            }
         }
 
         foreach ($entry['channels'] as $key => $channel) {

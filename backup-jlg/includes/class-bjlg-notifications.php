@@ -61,6 +61,25 @@ class BJLG_Notifications {
                 'teams' => false,
                 'sms' => true,
             ],
+            'mode' => 'simple',
+            'stages' => [
+                'slack' => [
+                    'enabled' => false,
+                    'delay_minutes' => 15,
+                ],
+                'discord' => [
+                    'enabled' => false,
+                    'delay_minutes' => 15,
+                ],
+                'teams' => [
+                    'enabled' => false,
+                    'delay_minutes' => 15,
+                ],
+                'sms' => [
+                    'enabled' => false,
+                    'delay_minutes' => 30,
+                ],
+            ],
         ],
     ];
 
@@ -80,6 +99,58 @@ class BJLG_Notifications {
         'restore_self_test_failed' => 'critical',
         'test_notification' => 'info',
     ];
+
+    /**
+     * Définit les étapes d'escalade séquentielle proposées par défaut.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    private static function get_stage_blueprint() {
+        return [
+            'slack' => [
+                'channels' => ['slack'],
+                'label' => __('Escalade Slack', 'backup-jlg'),
+                'description' => __('Diffuse l’alerte sur un canal Slack temps réel pour mobiliser l’équipe support.', 'backup-jlg'),
+                'default_delay_minutes' => 15,
+            ],
+            'discord' => [
+                'channels' => ['discord'],
+                'label' => __('Escalade Discord', 'backup-jlg'),
+                'description' => __('Préviens la communauté technique ou l’équipe on-call via Discord.', 'backup-jlg'),
+                'default_delay_minutes' => 15,
+            ],
+            'teams' => [
+                'channels' => ['teams'],
+                'label' => __('Escalade Microsoft Teams', 'backup-jlg'),
+                'description' => __('Transmets l’incident au helpdesk Microsoft Teams avec mention automatique.', 'backup-jlg'),
+                'default_delay_minutes' => 20,
+            ],
+            'sms' => [
+                'channels' => ['sms'],
+                'label' => __('Escalade SMS', 'backup-jlg'),
+                'description' => __('Envoie un SMS aux astreintes pour les incidents critiques prolongés.', 'backup-jlg'),
+                'default_delay_minutes' => 30,
+            ],
+        ];
+    }
+
+    /**
+     * Retourne le blueprint public pour les écrans d’administration.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public static function get_escalation_stage_blueprint() {
+        return self::get_stage_blueprint();
+    }
+
+    /**
+     * Retourne le blueprint interne.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    private function escalation_stage_blueprint() {
+        return self::get_stage_blueprint();
+    }
 
     public static function instance() {
         if (!self::$instance instanceof self) {
@@ -452,6 +523,38 @@ class BJLG_Notifications {
         }
         $merged['escalation']['channels'] = $channels;
 
+        $allowed_modes = ['simple', 'staged'];
+        $mode = isset($merged['escalation']['mode']) && is_string($merged['escalation']['mode'])
+            ? strtolower($merged['escalation']['mode'])
+            : self::DEFAULTS['escalation']['mode'];
+        if (!in_array($mode, $allowed_modes, true)) {
+            $mode = self::DEFAULTS['escalation']['mode'];
+        }
+        $merged['escalation']['mode'] = $mode;
+
+        $stage_blueprint = $this->escalation_stage_blueprint();
+        $raw_stages = isset($merged['escalation']['stages']) && is_array($merged['escalation']['stages'])
+            ? $merged['escalation']['stages']
+            : [];
+
+        $stages = [];
+        foreach ($stage_blueprint as $stage_key => $stage_defaults) {
+            $current = isset($raw_stages[$stage_key]) && is_array($raw_stages[$stage_key])
+                ? $raw_stages[$stage_key]
+                : [];
+
+            $delay_default = isset($stage_defaults['default_delay_minutes'])
+                ? (int) $stage_defaults['default_delay_minutes']
+                : 15;
+
+            $stages[$stage_key] = [
+                'enabled' => self::to_bool($current['enabled'] ?? false),
+                'delay_minutes' => max(0, (int) ($current['delay_minutes'] ?? $delay_default)),
+            ];
+        }
+
+        $merged['escalation']['stages'] = $stages;
+
         return $merged;
     }
 
@@ -760,6 +863,22 @@ class BJLG_Notifications {
 
         $lines = array_merge($lines, array_filter(array_map('trim', $body_lines)));
 
+        if (!empty($definition['actions']) && is_array($definition['actions'])) {
+            $lines[] = __('Actions recommandées :', 'backup-jlg');
+            foreach ($definition['actions'] as $action_line) {
+                $action_line = is_string($action_line) ? trim($action_line) : '';
+                if ($action_line === '') {
+                    continue;
+                }
+
+                $lines[] = sprintf('• %s', $action_line);
+            }
+        }
+
+        if (!empty($definition['resolution'])) {
+            $lines[] = $definition['resolution'];
+        }
+
         if ($definition['outro'] !== '') {
             $lines[] = $definition['outro'];
         }
@@ -800,6 +919,12 @@ class BJLG_Notifications {
                     'intro' => __('Action immédiate recommandée : l’incident est suivi et sera escaladé.', 'backup-jlg'),
                     'outro' => __('Une escalade automatique sera déclenchée si le statut ne change pas.', 'backup-jlg'),
                     'intent' => 'error',
+                    'actions' => [
+                        __('Inspectez les journaux détaillés et identifiez la dernière action réussie.', 'backup-jlg'),
+                        __('Contactez l’astreinte et préparez un plan de remédiation ou de restauration.', 'backup-jlg'),
+                        __('Accusez réception de l’incident dans l’historique pour tracer la prise en charge.', 'backup-jlg'),
+                    ],
+                    'resolution' => __('Consignez la résolution dans le tableau de bord pour clôturer l’escalade.', 'backup-jlg'),
                 ];
             case 'warning':
                 return [
@@ -807,6 +932,11 @@ class BJLG_Notifications {
                     'intro' => __('Surveillez l’incident : une intervention préventive peut être nécessaire.', 'backup-jlg'),
                     'outro' => __('Planifiez une action de suivi si la situation persiste.', 'backup-jlg'),
                     'intent' => 'warning',
+                    'actions' => [
+                        __('Vérifiez la capacité de stockage et les dernières purges distantes.', 'backup-jlg'),
+                        __('Planifiez un nouveau point de contrôle pour confirmer que l’alerte diminue.', 'backup-jlg'),
+                    ],
+                    'resolution' => __('Actualisez l’état dans le panneau Monitoring pour informer l’équipe.', 'backup-jlg'),
                 ];
             case 'info':
             default:
@@ -815,6 +945,10 @@ class BJLG_Notifications {
                     'intro' => __('Mise à jour de routine pour votre visibilité.', 'backup-jlg'),
                     'outro' => __('Aucune action immédiate n’est requise.', 'backup-jlg'),
                     'intent' => 'info',
+                    'actions' => [
+                        __('Ajoutez un commentaire dans l’historique si une vérification manuelle a été effectuée.', 'backup-jlg'),
+                    ],
+                    'resolution' => __('Archivez l’événement une fois les vérifications terminées.', 'backup-jlg'),
                 ];
         }
     }
@@ -1125,9 +1259,91 @@ class BJLG_Notifications {
             return $result;
         }
 
+        $minute_in_seconds = defined('MINUTE_IN_SECONDS') ? MINUTE_IN_SECONDS : 60;
+        $mode = isset($settings['mode']) && is_string($settings['mode'])
+            ? strtolower($settings['mode'])
+            : 'simple';
+
+        if ($mode === 'staged') {
+            $blueprint = $this->escalation_stage_blueprint();
+            $configured_stages = isset($settings['stages']) && is_array($settings['stages'])
+                ? $settings['stages']
+                : [];
+
+            $overrides = [];
+            $meta_channels = [];
+            $meta_steps = [];
+            $min_delay = null;
+
+            foreach ($blueprint as $stage_key => $stage_definition) {
+                $stage_settings = isset($configured_stages[$stage_key]) && is_array($configured_stages[$stage_key])
+                    ? $configured_stages[$stage_key]
+                    : [];
+
+                if (!self::to_bool($stage_settings['enabled'] ?? false)) {
+                    continue;
+                }
+
+                $delay_default = isset($stage_definition['default_delay_minutes'])
+                    ? (int) $stage_definition['default_delay_minutes']
+                    : 15;
+                $delay_minutes = max(0, (int) ($stage_settings['delay_minutes'] ?? $delay_default));
+                $delay_seconds = $delay_minutes * $minute_in_seconds;
+
+                $stage_channels = isset($stage_definition['channels']) && is_array($stage_definition['channels'])
+                    ? $stage_definition['channels']
+                    : [$stage_key];
+
+                $registered_channels = [];
+                foreach ($stage_channels as $channel_key) {
+                    $channel_key = sanitize_key((string) $channel_key);
+                    if ($channel_key === '') {
+                        continue;
+                    }
+
+                    $overrides[$channel_key] = [
+                        'force' => true,
+                        'delay' => $delay_seconds,
+                        'escalation' => true,
+                    ];
+                    $meta_channels[] = $channel_key;
+                    $registered_channels[] = $channel_key;
+                }
+
+                if (empty($registered_channels)) {
+                    continue;
+                }
+
+                $meta_steps[] = [
+                    'key' => $stage_key,
+                    'label' => isset($stage_definition['label']) ? (string) $stage_definition['label'] : ucfirst($stage_key),
+                    'channels' => array_values(array_unique($registered_channels)),
+                    'delay' => $delay_seconds,
+                    'description' => isset($stage_definition['description']) ? (string) $stage_definition['description'] : '',
+                ];
+
+                $min_delay = $min_delay === null ? $delay_seconds : min($min_delay, $delay_seconds);
+            }
+
+            if (empty($overrides)) {
+                return $result;
+            }
+
+            $result['overrides'] = $overrides;
+            $result['meta'] = [
+                'channels' => array_values(array_unique($meta_channels)),
+                'delay' => $min_delay ?? 0,
+                'only_critical' => $only_critical,
+                'strategy' => 'staged',
+                'steps' => $meta_steps,
+            ];
+
+            return $result;
+        }
+
         $delay_minutes = isset($settings['delay_minutes']) ? (int) $settings['delay_minutes'] : 15;
         $delay_minutes = max(1, $delay_minutes);
-        $delay_seconds = $delay_minutes * MINUTE_IN_SECONDS;
+        $delay_seconds = $delay_minutes * $minute_in_seconds;
 
         $overrides = [];
         if (!empty($settings['channels']) && is_array($settings['channels'])) {
@@ -1158,6 +1374,7 @@ class BJLG_Notifications {
             'channels' => array_keys($overrides),
             'delay' => $delay_seconds,
             'only_critical' => $only_critical,
+            'strategy' => 'simple',
         ];
 
         return $result;
