@@ -2656,6 +2656,50 @@ class BJLG_Admin {
                 ],
             ];
 
+        $template_blueprint = class_exists(BJLG_Notifications::class) && method_exists(BJLG_Notifications::class, 'get_severity_template_blueprint')
+            ? BJLG_Notifications::get_severity_template_blueprint()
+            : [
+                'info' => [
+                    'label' => __('Information', 'backup-jlg'),
+                    'intro' => __('Mise à jour de routine pour votre visibilité.', 'backup-jlg'),
+                    'outro' => __('Aucune action immédiate n’est requise.', 'backup-jlg'),
+                    'resolution' => __('Archivez l’événement une fois les vérifications terminées.', 'backup-jlg'),
+                    'actions' => [
+                        __('Ajoutez un commentaire dans l’historique si une vérification manuelle a été effectuée.', 'backup-jlg'),
+                    ],
+                ],
+                'warning' => [
+                    'label' => __('Avertissement', 'backup-jlg'),
+                    'intro' => __('Surveillez l’incident : une intervention préventive peut être nécessaire.', 'backup-jlg'),
+                    'outro' => __('Planifiez une action de suivi si la situation persiste.', 'backup-jlg'),
+                    'resolution' => __('Actualisez l’état dans le panneau Monitoring pour informer l’équipe.', 'backup-jlg'),
+                    'actions' => [
+                        __('Vérifiez la capacité de stockage et les dernières purges distantes.', 'backup-jlg'),
+                        __('Planifiez un nouveau point de contrôle pour confirmer que l’alerte diminue.', 'backup-jlg'),
+                    ],
+                ],
+                'critical' => [
+                    'label' => __('Critique', 'backup-jlg'),
+                    'intro' => __('Action immédiate recommandée : l’incident est suivi et sera escaladé.', 'backup-jlg'),
+                    'outro' => __('Une escalade automatique sera déclenchée si le statut ne change pas.', 'backup-jlg'),
+                    'resolution' => __('Consignez la résolution dans le tableau de bord pour clôturer l’escalade.', 'backup-jlg'),
+                    'actions' => [
+                        __('Inspectez les journaux détaillés et identifiez la dernière action réussie.', 'backup-jlg'),
+                        __('Contactez l’astreinte et préparez un plan de remédiation ou de restauration.', 'backup-jlg'),
+                    ],
+                ],
+            ];
+        $template_settings = isset($notification_settings['templates']) && is_array($notification_settings['templates'])
+            ? $notification_settings['templates']
+            : [];
+        $template_tokens = class_exists(BJLG_Notifications::class) && method_exists(BJLG_Notifications::class, 'get_template_tokens')
+            ? BJLG_Notifications::get_template_tokens()
+            : [
+                'site_name' => __('Nom du site WordPress', 'backup-jlg'),
+                'event_title' => __('Titre de l’événement', 'backup-jlg'),
+                'timestamp' => __('Horodatage courant', 'backup-jlg'),
+            ];
+
         $performance_defaults = [
             'multi_threading' => false,
             'max_workers' => 2,
@@ -3302,6 +3346,86 @@ class BJLG_Admin {
                                                 <?php endif; ?>
                                             </div>
                                         </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Modèles par gravité', 'backup-jlg'); ?></th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <p class="description"><?php esc_html_e('Personnalisez l’introduction, les actions et la conclusion envoyées pour chaque niveau de gravité. Utilisez les tokens ci-dessous pour injecter automatiquement des informations contextuelles.', 'backup-jlg'); ?></p>
+                                <?php if (!empty($template_tokens)): ?>
+                                    <ul class="bjlg-template-token-list" role="list">
+                                        <?php foreach ($template_tokens as $token_key => $token_label):
+                                            if (!is_string($token_key) || $token_key === '') {
+                                                continue;
+                                            }
+
+                                            $token_label = is_string($token_label) ? $token_label : '';
+                                        ?>
+                                            <li><code><?php echo esc_html('{{' . $token_key . '}}'); ?></code> — <?php echo esc_html($token_label); ?></li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                <?php endif; ?>
+                                <div class="bjlg-template-groups">
+                                    <?php foreach ($template_blueprint as $severity_key => $template_definition):
+                                        if (!is_string($severity_key) || $severity_key === '') {
+                                            continue;
+                                        }
+
+                                        $template_config = isset($template_settings[$severity_key]) && is_array($template_settings[$severity_key])
+                                            ? $template_settings[$severity_key]
+                                            : [];
+
+                                        $label_value = isset($template_config['label'])
+                                            ? (string) $template_config['label']
+                                            : (string) ($template_definition['label'] ?? ucfirst($severity_key));
+                                        $intro_value = isset($template_config['intro'])
+                                            ? (string) $template_config['intro']
+                                            : (string) ($template_definition['intro'] ?? '');
+                                        $outro_value = isset($template_config['outro'])
+                                            ? (string) $template_config['outro']
+                                            : (string) ($template_definition['outro'] ?? '');
+                                        $resolution_value = isset($template_config['resolution'])
+                                            ? (string) $template_config['resolution']
+                                            : (string) ($template_definition['resolution'] ?? '');
+                                        $actions_value = isset($template_config['actions']) && is_array($template_config['actions'])
+                                            ? implode("\n", array_map('strval', $template_config['actions']))
+                                            : (isset($template_definition['actions']) && is_array($template_definition['actions'])
+                                                ? implode("\n", array_map('strval', $template_definition['actions']))
+                                                : '');
+
+                                        $severity_label = isset($template_definition['label'])
+                                            ? (string) $template_definition['label']
+                                            : ucfirst($severity_key);
+                                    ?>
+                                        <fieldset class="bjlg-template-group">
+                                            <legend><?php echo esc_html(sprintf(__('Gravité : %s', 'backup-jlg'), $severity_label)); ?></legend>
+                                            <div class="bjlg-field-grid bjlg-field-grid--stacked">
+                                                <label>
+                                                    <span class="bjlg-field-label"><?php esc_html_e('Libellé affiché', 'backup-jlg'); ?></span>
+                                                    <input type="text" class="regular-text" name="template_<?php echo esc_attr($severity_key); ?>_label" value="<?php echo esc_attr($label_value); ?>">
+                                                </label>
+                                                <label>
+                                                    <span class="bjlg-field-label"><?php esc_html_e('Introduction', 'backup-jlg'); ?></span>
+                                                    <textarea name="template_<?php echo esc_attr($severity_key); ?>_intro" rows="3" class="large-text"><?php echo esc_textarea($intro_value); ?></textarea>
+                                                </label>
+                                                <label>
+                                                    <span class="bjlg-field-label"><?php esc_html_e('Actions recommandées (une par ligne)', 'backup-jlg'); ?></span>
+                                                    <textarea name="template_<?php echo esc_attr($severity_key); ?>_actions" rows="3" class="large-text"><?php echo esc_textarea($actions_value); ?></textarea>
+                                                </label>
+                                                <label>
+                                                    <span class="bjlg-field-label"><?php esc_html_e('Résolution / consignes de clôture', 'backup-jlg'); ?></span>
+                                                    <textarea name="template_<?php echo esc_attr($severity_key); ?>_resolution" rows="2" class="large-text"><?php echo esc_textarea($resolution_value); ?></textarea>
+                                                </label>
+                                                <label>
+                                                    <span class="bjlg-field-label"><?php esc_html_e('Conclusion', 'backup-jlg'); ?></span>
+                                                    <textarea name="template_<?php echo esc_attr($severity_key); ?>_outro" rows="2" class="large-text"><?php echo esc_textarea($outro_value); ?></textarea>
+                                                </label>
+                                            </div>
+                                        </fieldset>
                                     <?php endforeach; ?>
                                 </div>
                             </div>
