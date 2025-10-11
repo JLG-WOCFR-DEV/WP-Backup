@@ -32,7 +32,7 @@ class BJLG_Update_Guard {
      *
      * @return mixed
      */
-    public function handle_pre_install($response, $hook_extra, $upgrader) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter
+    public function handle_pre_install($response, $hook_extra, $upgrader = null) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter
         try {
             $this->maybe_trigger_pre_update_backup($hook_extra);
         } catch (\Throwable $exception) {
@@ -64,7 +64,6 @@ class BJLG_Update_Guard {
         if (isset($this->processed_signatures[$signature])) {
             return null;
         }
-        $this->processed_signatures[$signature] = true;
 
         if (BJLG_Backup::is_task_locked()) {
             BJLG_Debug::log('Sauvegarde pré-update ignorée : une autre sauvegarde est déjà en cours.');
@@ -106,6 +105,8 @@ class BJLG_Update_Guard {
             BJLG_Debug::log("Impossible d'initialiser la tâche de sauvegarde pré-update $task_id.");
             return null;
         }
+
+        $this->processed_signatures[$signature] = true;
 
         BJLG_History::log(
             'pre_update_backup',

@@ -33,6 +33,17 @@ final class BJLG_UpdateGuardTest extends TestCase
         $GLOBALS['bjlg_test_transients'] = [];
         $GLOBALS['bjlg_test_options'] = [];
         $GLOBALS['bjlg_test_filters'] = [];
+        unset($GLOBALS['bjlg_test_set_transient_mock']);
+
+        if (!isset($GLOBALS['bjlg_test_hooks'])) {
+            $GLOBALS['bjlg_test_hooks'] = [
+                'actions' => [],
+                'filters' => [],
+            ];
+        } else {
+            $GLOBALS['bjlg_test_hooks']['actions'] = [];
+            $GLOBALS['bjlg_test_hooks']['filters'] = [];
+        }
     }
 
     public function test_launches_backup_before_plugin_update(): void
@@ -107,5 +118,114 @@ final class BJLG_UpdateGuardTest extends TestCase
         $this->assertNull($task_id);
         $this->assertEmpty($backup_stub->task_ids);
         $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+    }
+
+    public function test_handle_pre_install_is_backward_compatible_with_two_arguments(): void
+    {
+        $backup_stub = new BJLG_Test_BackupStub();
+        new BJLG\BJLG_Update_Guard($backup_stub);
+
+        $hook_extra = [
+            'type' => 'plugin',
+            'action' => 'update',
+            'plugin' => 'akismet/akismet.php',
+        ];
+
+        $result = apply_filters('upgrader_pre_install', true, $hook_extra);
+
+        $this->assertTrue($result);
+        $this->assertCount(1, $backup_stub->task_ids);
+    }
+
+    public function test_disable_filter_prevents_backup_creation(): void
+    {
+        $backup_stub = new BJLG_Test_BackupStub();
+        $guard = new BJLG\BJLG_Update_Guard($backup_stub);
+
+        add_filter(
+            'bjlg_pre_update_backup_enabled',
+            static function ($enabled, array $context, $hook_extra) {
+                return false;
+            },
+            10,
+            3
+        );
+
+        $hook_extra = [
+            'type' => 'plugin',
+            'action' => 'update',
+            'plugin' => 'woocommerce/woocommerce.php',
+        ];
+
+        $task_id = $guard->maybe_trigger_pre_update_backup($hook_extra);
+
+        $this->assertNull($task_id);
+        $this->assertEmpty($backup_stub->task_ids);
+        $this->assertEmpty($GLOBALS['bjlg_test_transients']);
+
+        unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_pre_update_backup_enabled']);
+    }
+
+    public function test_signature_is_not_blocked_after_blueprint_rejection(): void
+    {
+        $backup_stub = new BJLG_Test_BackupStub();
+        $guard = new BJLG\BJLG_Update_Guard($backup_stub);
+
+        add_filter(
+            'bjlg_pre_update_backup_blueprint',
+            static function ($blueprint) {
+                $blueprint['components'] = [];
+
+                return $blueprint;
+            },
+            10,
+            3
+        );
+
+        $hook_extra = [
+            'type' => 'plugin',
+            'action' => 'update',
+            'plugin' => 'retry-plugin/retry.php',
+        ];
+
+        $first_attempt = $guard->maybe_trigger_pre_update_backup($hook_extra);
+
+        $this->assertNull($first_attempt);
+        $this->assertEmpty($backup_stub->task_ids);
+
+        unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_pre_update_backup_blueprint']);
+
+        $second_attempt = $guard->maybe_trigger_pre_update_backup($hook_extra);
+
+        $this->assertNotNull($second_attempt);
+        $this->assertCount(1, $backup_stub->task_ids);
+    }
+
+    public function test_signature_is_not_blocked_when_transient_creation_fails(): void
+    {
+        $backup_stub = new BJLG_Test_BackupStub();
+        $guard = new BJLG\BJLG_Update_Guard($backup_stub);
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function () {
+            return false;
+        };
+
+        $hook_extra = [
+            'type' => 'plugin',
+            'action' => 'update',
+            'plugin' => 'unstable-plugin/unstable.php',
+        ];
+
+        $first_attempt = $guard->maybe_trigger_pre_update_backup($hook_extra);
+
+        $this->assertNull($first_attempt);
+        $this->assertEmpty($backup_stub->task_ids);
+
+        unset($GLOBALS['bjlg_test_set_transient_mock']);
+
+        $second_attempt = $guard->maybe_trigger_pre_update_backup($hook_extra);
+
+        $this->assertNotNull($second_attempt);
+        $this->assertCount(1, $backup_stub->task_ids);
     }
 }
