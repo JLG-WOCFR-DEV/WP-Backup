@@ -18,7 +18,11 @@ class BJLG_Notifications {
     /** @var array<string,mixed> */
     private $settings = [];
 
-    /** @var array<string,mixed> */
+    /**
+     * Valeurs par défaut utilisées lorsque la configuration n'est pas encore initialisée.
+     *
+     * @var array<string,mixed>
+     */
     private const DEFAULTS = [
         'enabled' => false,
         'email_recipients' => '',
@@ -58,6 +62,23 @@ class BJLG_Notifications {
                 'sms' => true,
             ],
         ],
+    ];
+
+    /**
+     * Gravité par défaut associée à chaque événement connu.
+     *
+     * @var array<string,string>
+     */
+    private const EVENT_SEVERITIES = [
+        'backup_complete' => 'info',
+        'backup_failed' => 'critical',
+        'cleanup_complete' => 'info',
+        'storage_warning' => 'warning',
+        'remote_purge_failed' => 'critical',
+        'remote_purge_delayed' => 'critical',
+        'restore_self_test_passed' => 'info',
+        'restore_self_test_failed' => 'critical',
+        'test_notification' => 'info',
     ];
 
     public static function instance() {
@@ -309,14 +330,17 @@ class BJLG_Notifications {
 
         $lines[] = sprintf(__('Horodatage : %s', 'backup-jlg'), $context['timestamp']);
 
-        $lines = array_filter(array_map('trim', $lines));
+        $body_lines = array_filter(array_map('trim', $lines));
+        $lines = $this->build_severity_lines('info', $body_lines);
         $lines = apply_filters('bjlg_notification_message_lines', $lines, 'test_notification', $context);
+        $base_lines = is_array($lines) ? array_values($lines) : [];
 
         $payload = [
             'event' => 'test_notification',
             'title' => $title,
             'lines' => $lines,
             'context' => $context,
+            'severity' => 'info',
         ];
 
         $payload = apply_filters('bjlg_notification_payload', $payload, 'test_notification', $context);
@@ -325,8 +349,17 @@ class BJLG_Notifications {
             return new WP_Error('bjlg_notification_payload_invalid', __('Impossible de préparer la notification de test.', 'backup-jlg'));
         }
 
+        $severity = $this->normalize_severity($payload['severity'] ?? 'info');
         $title = (string) $payload['title'];
         $lines = array_map('strval', $payload['lines']);
+        if ($severity !== 'info' && $lines === $base_lines) {
+            $lines = $this->build_severity_lines($severity, $body_lines);
+        }
+
+        if (empty($lines)) {
+            return new WP_Error('bjlg_notification_payload_invalid', __('Impossible de préparer la notification de test.', 'backup-jlg'));
+        }
+
         $channels = $this->prepare_channels_payload($title, $lines, $settings);
 
         if (empty($channels)) {
@@ -343,6 +376,7 @@ class BJLG_Notifications {
             'context' => is_array($payload['context']) ? $payload['context'] : $context,
             'channels' => $channels,
             'created_at' => time(),
+            'severity' => $severity,
         ];
 
         BJLG_Notification_Queue::enqueue($entry);
@@ -455,14 +489,18 @@ class BJLG_Notifications {
         }
 
         $title = $this->get_event_title($event, $context);
-        $lines = $this->get_event_lines($event, $context);
+        $body_lines = $this->get_event_body_lines($event, $context);
+        $severity = $this->get_event_severity($event);
+        $lines = $this->build_severity_lines($severity, $body_lines);
         $lines = apply_filters('bjlg_notification_message_lines', $lines, $event, $context);
+        $base_lines = is_array($lines) ? array_values($lines) : [];
 
         $payload = [
             'event' => $event,
             'title' => $title,
             'lines' => $lines,
             'context' => $context,
+            'severity' => $severity,
         ];
 
         /**
@@ -475,11 +513,22 @@ class BJLG_Notifications {
             return;
         }
 
+        $final_severity = $this->normalize_severity($payload['severity'] ?? $severity);
+        $lines = array_map('strval', $payload['lines']);
+        if ($final_severity !== $severity && $lines === $base_lines) {
+            $lines = $this->build_severity_lines($final_severity, $body_lines);
+        }
+
+        if (empty($lines)) {
+            BJLG_Debug::log('Notification ignorée car aucune ligne valide n’a pu être générée.');
+            return;
+        }
+
         $subject = '[Backup JLG] ' . $payload['title'];
-        $body = implode("\n", $payload['lines']);
+        $body = implode("\n", $lines);
 
         $escalation = $this->compute_escalation_overrides($event, $payload['context'] ?? []);
-        $channels = $this->prepare_channels_payload($payload['title'], $payload['lines'], null, $escalation['overrides']);
+        $channels = $this->prepare_channels_payload($payload['title'], $lines, null, $escalation['overrides']);
 
         if (empty($channels)) {
             BJLG_Debug::log('Notification ignorée car aucun canal valide n\'est disponible.');
@@ -490,11 +539,12 @@ class BJLG_Notifications {
             'event' => $event,
             'title' => $payload['title'],
             'subject' => $subject,
-            'lines' => $payload['lines'],
+            'lines' => $lines,
             'body' => $body,
             'context' => $payload['context'],
             'channels' => $channels,
             'created_at' => time(),
+            'severity' => $final_severity,
         ];
 
         if (!empty($escalation['meta']['channels'])) {
@@ -542,9 +592,8 @@ class BJLG_Notifications {
      *
      * @return string[]
      */
-    private function get_event_lines($event, $context) {
+    private function get_event_body_lines($event, $context) {
         $lines = [];
-        $timestamp = current_time('mysql');
 
         switch ($event) {
             case 'backup_complete':
@@ -677,9 +726,97 @@ class BJLG_Notifications {
                 break;
         }
 
-        $lines[] = __('Horodatage : ', 'backup-jlg') . $timestamp;
+        return array_filter(array_map('trim', $lines));
+    }
+
+    private function get_event_lines($event, $context) {
+        $severity = $this->get_event_severity($event);
+        $body_lines = $this->get_event_body_lines($event, $context);
+
+        return $this->build_severity_lines($severity, $body_lines);
+    }
+
+    /**
+     * Applique le gabarit de gravité aux lignes de message.
+     *
+     * @param string   $severity
+     * @param string[] $body_lines
+     *
+     * @return string[]
+     */
+    private function build_severity_lines($severity, array $body_lines) {
+        $definition = $this->describe_severity($severity);
+        $timestamp = current_time('mysql');
+
+        $lines = [];
+
+        if ($definition['label'] !== '') {
+            $lines[] = sprintf(__('Gravité : %s', 'backup-jlg'), $definition['label']);
+        }
+
+        if ($definition['intro'] !== '') {
+            $lines[] = $definition['intro'];
+        }
+
+        $lines = array_merge($lines, array_filter(array_map('trim', $body_lines)));
+
+        if ($definition['outro'] !== '') {
+            $lines[] = $definition['outro'];
+        }
+
+        $lines[] = sprintf(__('Horodatage : %s', 'backup-jlg'), $timestamp);
 
         return array_filter(array_map('trim', $lines));
+    }
+
+    private function get_event_severity($event) {
+        $event = is_string($event) ? trim($event) : '';
+
+        if ($event !== '' && isset(self::EVENT_SEVERITIES[$event])) {
+            return self::EVENT_SEVERITIES[$event];
+        }
+
+        return 'info';
+    }
+
+    private function normalize_severity($value) {
+        if (is_string($value)) {
+            $candidate = strtolower(trim($value));
+            if (in_array($candidate, ['info', 'warning', 'critical'], true)) {
+                return $candidate;
+            }
+        }
+
+        return 'info';
+    }
+
+    private function describe_severity($severity) {
+        $severity = $this->normalize_severity($severity);
+
+        switch ($severity) {
+            case 'critical':
+                return [
+                    'label' => __('Critique', 'backup-jlg'),
+                    'intro' => __('Action immédiate recommandée : l’incident est suivi et sera escaladé.', 'backup-jlg'),
+                    'outro' => __('Une escalade automatique sera déclenchée si le statut ne change pas.', 'backup-jlg'),
+                    'intent' => 'error',
+                ];
+            case 'warning':
+                return [
+                    'label' => __('Avertissement', 'backup-jlg'),
+                    'intro' => __('Surveillez l’incident : une intervention préventive peut être nécessaire.', 'backup-jlg'),
+                    'outro' => __('Planifiez une action de suivi si la situation persiste.', 'backup-jlg'),
+                    'intent' => 'warning',
+                ];
+            case 'info':
+            default:
+                return [
+                    'label' => __('Information', 'backup-jlg'),
+                    'intro' => __('Mise à jour de routine pour votre visibilité.', 'backup-jlg'),
+                    'outro' => __('Aucune action immédiate n’est requise.', 'backup-jlg'),
+                    'intent' => 'info',
+                ];
+        }
     }
 
     /**
@@ -1147,12 +1284,15 @@ class BJLG_Notifications {
     }
 
     private function get_critical_events() {
-        return [
-            'backup_failed',
-            'remote_purge_failed',
-            'remote_purge_delayed',
-            'restore_self_test_failed',
-        ];
+        $critical = [];
+
+        foreach (self::EVENT_SEVERITIES as $event_key => $severity) {
+            if ($severity === 'critical') {
+                $critical[] = $event_key;
+            }
+        }
+
+        return array_values(array_unique($critical));
     }
 
     private function sanitize_components($components) {

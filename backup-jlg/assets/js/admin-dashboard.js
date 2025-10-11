@@ -229,6 +229,137 @@ jQuery(function($) {
         }
     };
 
+    const updateRemoteStorage = function(storage) {
+        const $card = $overview.find('[data-metric="remote-storage"]');
+        if (!$card.length) {
+            return;
+        }
+
+        storage = storage || {};
+        const destinations = Array.isArray(storage.remote_destinations) ? storage.remote_destinations : [];
+        const $list = $card.find('[data-field="remote_storage_list"]');
+
+        if (!destinations.length) {
+            setField('remote_storage_connected', __('Aucune destination distante configurée.', 'backup-jlg'));
+            setField('remote_storage_caption', __('Connectez une destination distante pour suivre les quotas.', 'backup-jlg'));
+            if ($list.length) {
+                $list.empty().append($('<li/>', {
+                    'class': 'bjlg-card__list-item',
+                    'data-empty': 'true',
+                    text: __('Aucune donnée distante disponible.', 'backup-jlg')
+                }));
+            }
+            return;
+        }
+
+        const connected = destinations.filter(function(dest) { return dest && dest.connected; }).length;
+        const summaryText = sprintf(
+            _n('%1$s destination distante active sur %2$s', '%1$s destinations distantes actives sur %2$s', connected),
+            formatNumber(connected),
+            formatNumber(destinations.length)
+        );
+        setField('remote_storage_connected', summaryText);
+
+        const watchList = [];
+        const offlineList = [];
+        const rendered = [];
+
+        destinations.forEach(function(dest) {
+            if (!dest || typeof dest !== 'object') {
+                return;
+            }
+
+            const name = (dest.name || dest.id || __('Destination inconnue', 'backup-jlg')).toString();
+            const connectedFlag = !!dest.connected;
+            const errors = Array.isArray(dest.errors) ? dest.errors.filter(function(message) {
+                return message && message.toString().trim() !== '';
+            }).map(function(message) { return message.toString(); }) : [];
+            const usedHuman = dest.used_human || '';
+            const quotaHuman = dest.quota_human || '';
+            const freeHuman = dest.free_human || '';
+            const backupsCount = Number(dest.backups_count || 0);
+            const usedBytes = Number(dest.used_bytes);
+            const quotaBytes = Number(dest.quota_bytes);
+
+            let ratio = null;
+            if (Number.isFinite(usedBytes) && Number.isFinite(quotaBytes) && quotaBytes > 0) {
+                ratio = Math.min(1, Math.max(0, usedBytes / quotaBytes));
+            }
+
+            if (!connectedFlag) {
+                offlineList.push(name);
+            }
+            if (errors.length) {
+                offlineList.push(name);
+            }
+            if (ratio !== null && ratio >= 0.85) {
+                watchList.push(name);
+            }
+
+            const details = [];
+            if (usedHuman && quotaHuman) {
+                details.push(sprintf(__('Utilisé : %1$s / %2$s', 'backup-jlg'), usedHuman, quotaHuman));
+            } else if (usedHuman) {
+                details.push(sprintf(__('Utilisé : %s', 'backup-jlg'), usedHuman));
+            }
+
+            if (freeHuman) {
+                details.push(sprintf(__('Libre : %s', 'backup-jlg'), freeHuman));
+            }
+
+            if (Number.isFinite(backupsCount) && backupsCount > 0) {
+                details.push(sprintf(_n('%s archive stockée', '%s archives stockées', backupsCount), formatNumber(backupsCount)));
+            }
+
+            if (ratio !== null) {
+                details.push(sprintf(__('Utilisation : %s%%', 'backup-jlg'), formatNumber(Math.round(ratio * 100))));
+            }
+
+            let intent = 'info';
+            if (!connectedFlag || errors.length) {
+                intent = 'error';
+            } else if (ratio !== null && ratio >= 0.85) {
+                intent = 'warning';
+            }
+
+            rendered.push({
+                name: name,
+                details: details,
+                errors: errors,
+                intent: intent
+            });
+        });
+
+        const uniqueOffline = offlineList.filter(function(value, index, array) { return array.indexOf(value) === index; });
+        const uniqueWatch = watchList.filter(function(value, index, array) { return array.indexOf(value) === index; });
+
+        if (uniqueOffline.length) {
+            setField('remote_storage_caption', sprintf(__('Attention : vérifier %s', 'backup-jlg'), uniqueOffline.join(', ')));
+        } else if (uniqueWatch.length) {
+            setField('remote_storage_caption', sprintf(__('Capacité > 85%% pour %s', 'backup-jlg'), uniqueWatch.join(', ')));
+        } else {
+            setField('remote_storage_caption', __('Capacité hors-site nominale.', 'backup-jlg'));
+        }
+
+        if ($list.length) {
+            $list.empty();
+            rendered.forEach(function(item) {
+                const $item = $('<li/>', {
+                    'class': 'bjlg-card__list-item bjlg-card__list-item--' + item.intent,
+                    'data-intent': item.intent
+                });
+                $('<strong/>', { text: item.name }).appendTo($item);
+                if (item.details.length) {
+                    $('<span/>', { 'class': 'bjlg-card__list-meta', text: item.details.join(' • ') }).appendTo($item);
+                }
+                if (item.errors.length) {
+                    $('<span/>', { 'class': 'bjlg-card__list-error', text: item.errors.join(' • ') }).appendTo($item);
+                }
+                $list.append($item);
+            });
+        }
+    };
+
     const updateReliability = function(reliability) {
         const $section = $overview.find('[data-role="reliability"]');
         if (!$section.length) {
@@ -456,6 +587,9 @@ jQuery(function($) {
                 if (entry.file) {
                     $entry.attr('data-entry-file', entry.file);
                 }
+                if (entry.severity) {
+                    $entry.attr('data-severity', entry.severity);
+                }
 
                 const $header = $('<div/>', { 'class': 'bjlg-queue-card__entry-header' }).appendTo($entry);
                 $('<span/>', { 'class': 'bjlg-queue-card__entry-title', text: entry.title || '' }).appendTo($header);
@@ -467,15 +601,23 @@ jQuery(function($) {
                     }).appendTo($header);
                 }
 
-                const $meta = $('<p/>', { 'class': 'bjlg-queue-card__entry-meta' }).appendTo($entry);
+                const $primaryMeta = $('<p/>', { 'class': 'bjlg-queue-card__entry-meta' }).appendTo($entry);
+                if (entry.severity_label) {
+                    $('<span/>', {
+                        'class': 'bjlg-queue-card__entry-severity bjlg-queue-card__entry-severity--' + (entry.severity_intent || 'info'),
+                        text: sprintf(__('Gravité : %s', 'backup-jlg'), entry.severity_label)
+                    }).appendTo($primaryMeta);
+                }
                 if (entry.attempt_label) {
-                    $('<span/>', { text: entry.attempt_label }).appendTo($meta);
+                    $('<span/>', { text: entry.attempt_label }).appendTo($primaryMeta);
+                }
+
+                const $timestamps = $('<p/>', { 'class': 'bjlg-queue-card__entry-meta', 'data-field': 'timestamps' }).appendTo($entry);
+                if (entry.created_relative) {
+                    $('<span/>', { text: sprintf(__('Créée %s', 'backup-jlg'), entry.created_relative) }).appendTo($timestamps);
                 }
                 if (entry.next_attempt_relative) {
-                    $('<span/>', { text: sprintf(__('Prochaine tentative %s', 'backup-jlg'), entry.next_attempt_relative) }).appendTo($meta);
-                }
-                if (entry.created_relative) {
-                    $('<span/>', { text: sprintf(__('Ajouté %s', 'backup-jlg'), entry.created_relative) }).appendTo($meta);
+                    $('<span/>', { text: sprintf(__('Rejouée %s', 'backup-jlg'), entry.next_attempt_relative) }).appendTo($timestamps);
                 }
 
                 if (entry.details && entry.details.destinations) {
@@ -965,6 +1107,7 @@ jQuery(function($) {
     updateAlerts(state.metrics.alerts || []);
     updateOnboarding(state.metrics.onboarding || []);
     updateActions(state.metrics);
+    updateRemoteStorage(state.metrics.storage || {});
     updateQueues(state.metrics.queues || {});
     updateCharts();
 
@@ -983,6 +1126,7 @@ jQuery(function($) {
         updateAlerts(state.metrics.alerts || []);
         updateOnboarding(state.metrics.onboarding || []);
         updateActions(state.metrics);
+        updateRemoteStorage(state.metrics.storage || {});
         updateQueues(state.metrics.queues || {});
         updateCharts();
 

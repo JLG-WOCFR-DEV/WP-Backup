@@ -860,6 +860,151 @@ class BJLG_Admin {
                         <span data-field="storage_backup_count"><?php echo esc_html(number_format_i18n($summary['storage_backup_count'] ?? 0)); ?></span>
                     </p>
                 </article>
+
+                <?php
+                $remote_destinations = isset($metrics['storage']['remote_destinations']) && is_array($metrics['storage']['remote_destinations'])
+                    ? $metrics['storage']['remote_destinations']
+                    : [];
+                $remote_total = count($remote_destinations);
+                $remote_connected = 0;
+                $remote_summary = __('Aucune destination distante configurée.', 'backup-jlg');
+                $remote_caption = __('Connectez une destination distante pour suivre les quotas.', 'backup-jlg');
+                $capacity_watch = [];
+                $offline_destinations = [];
+
+                if ($remote_total > 0) {
+                    foreach ($remote_destinations as $destination) {
+                        if (!is_array($destination)) {
+                            continue;
+                        }
+
+                        $name = isset($destination['name']) && $destination['name'] !== ''
+                            ? sanitize_text_field((string) $destination['name'])
+                            : sanitize_text_field((string) ($destination['id'] ?? __('Destination inconnue', 'backup-jlg')));
+
+                        $connected = !empty($destination['connected']);
+                        if ($connected) {
+                            $remote_connected++;
+                        } else {
+                            $offline_destinations[] = $name;
+                        }
+
+                        $errors = isset($destination['errors']) && is_array($destination['errors'])
+                            ? array_filter(array_map('sanitize_text_field', $destination['errors']))
+                            : [];
+
+                        if (!empty($errors)) {
+                            $offline_destinations[] = $name;
+                        }
+
+                        $used_bytes = isset($destination['used_bytes']) ? (int) $destination['used_bytes'] : null;
+                        $quota_bytes = isset($destination['quota_bytes']) ? (int) $destination['quota_bytes'] : null;
+
+                        if ($connected && $quota_bytes && $quota_bytes > 0 && $used_bytes !== null) {
+                            $ratio = $quota_bytes > 0 ? ($used_bytes / $quota_bytes) : null;
+                            if ($ratio !== null && $ratio >= 0.85) {
+                                $capacity_watch[] = $name;
+                            }
+                        }
+                    }
+
+                    $remote_summary = sprintf(
+                        _n('%1$s destination distante active sur %2$s', '%1$s destinations distantes actives sur %2$s', $remote_connected, 'backup-jlg'),
+                        number_format_i18n($remote_connected),
+                        number_format_i18n($remote_total)
+                    );
+
+                    $unique_offline = array_values(array_unique($offline_destinations));
+                    $unique_watch = array_values(array_unique($capacity_watch));
+
+                    if (!empty($unique_offline)) {
+                        $remote_caption = sprintf(
+                            __('Attention : vérifier %s', 'backup-jlg'),
+                            implode(', ', $unique_offline)
+                        );
+                    } elseif (!empty($unique_watch)) {
+                        $remote_caption = sprintf(
+                            __('Capacité > 85%% pour %s', 'backup-jlg'),
+                            implode(', ', $unique_watch)
+                        );
+                    } else {
+                        $remote_caption = __('Capacité hors-site nominale.', 'backup-jlg');
+                    }
+                }
+                ?>
+                <article class="bjlg-card bjlg-card--stat" data-metric="remote-storage">
+                    <span class="bjlg-card__kicker"><?php esc_html_e('Stockage distant', 'backup-jlg'); ?></span>
+                    <h3 class="bjlg-card__title"><?php esc_html_e('Capacité hors-site', 'backup-jlg'); ?></h3>
+                    <div class="bjlg-card__value" data-field="remote_storage_connected"><?php echo esc_html($remote_summary); ?></div>
+                    <p class="bjlg-card__meta" data-field="remote_storage_caption"><?php echo esc_html($remote_caption); ?></p>
+                    <ul class="bjlg-card__list" data-field="remote_storage_list">
+                        <?php if (empty($remote_destinations)): ?>
+                            <li class="bjlg-card__list-item" data-empty="true"><?php esc_html_e('Aucune donnée distante disponible.', 'backup-jlg'); ?></li>
+                        <?php else: ?>
+                            <?php foreach ($remote_destinations as $destination):
+                                if (!is_array($destination)) {
+                                    continue;
+                                }
+
+                                $name = isset($destination['name']) && $destination['name'] !== ''
+                                    ? sanitize_text_field((string) $destination['name'])
+                                    : sanitize_text_field((string) ($destination['id'] ?? __('Destination inconnue', 'backup-jlg')));
+
+                                $used_human = isset($destination['used_human']) ? (string) $destination['used_human'] : '';
+                                $quota_human = isset($destination['quota_human']) ? (string) $destination['quota_human'] : '';
+                                $free_human = isset($destination['free_human']) ? (string) $destination['free_human'] : '';
+                                $backups_count = isset($destination['backups_count']) ? (int) $destination['backups_count'] : 0;
+                                $used_bytes = isset($destination['used_bytes']) ? (int) $destination['used_bytes'] : null;
+                                $quota_bytes = isset($destination['quota_bytes']) ? (int) $destination['quota_bytes'] : null;
+                                $connected = !empty($destination['connected']);
+                                $errors = isset($destination['errors']) && is_array($destination['errors'])
+                                    ? array_filter(array_map('sanitize_text_field', $destination['errors']))
+                                    : [];
+
+                                $detail_parts = [];
+                                if ($used_human !== '' && $quota_human !== '') {
+                                    $detail_parts[] = sprintf(__('Utilisé : %1$s / %2$s', 'backup-jlg'), $used_human, $quota_human);
+                                } elseif ($used_human !== '') {
+                                    $detail_parts[] = sprintf(__('Utilisé : %s', 'backup-jlg'), $used_human);
+                                }
+
+                                if ($free_human !== '') {
+                                    $detail_parts[] = sprintf(__('Libre : %s', 'backup-jlg'), $free_human);
+                                }
+
+                                if ($backups_count > 0) {
+                                    $detail_parts[] = sprintf(
+                                        _n('%s archive stockée', '%s archives stockées', $backups_count, 'backup-jlg'),
+                                        number_format_i18n($backups_count)
+                                    );
+                                }
+
+                                $ratio = null;
+                                if ($quota_bytes && $quota_bytes > 0 && $used_bytes !== null) {
+                                    $ratio = max(0, min(1, $used_bytes / $quota_bytes));
+                                    $detail_parts[] = sprintf(__('Utilisation : %s%%', 'backup-jlg'), number_format_i18n((int) round($ratio * 100)));
+                                }
+
+                                $intent = 'info';
+                                if (!$connected || !empty($errors)) {
+                                    $intent = 'error';
+                                } elseif ($ratio !== null && $ratio >= 0.85) {
+                                    $intent = 'warning';
+                                }
+                                ?>
+                                <li class="bjlg-card__list-item bjlg-card__list-item--<?php echo esc_attr($intent); ?>" data-intent="<?php echo esc_attr($intent); ?>">
+                                    <strong><?php echo esc_html($name); ?></strong>
+                                    <?php if (!empty($detail_parts)): ?>
+                                        <span class="bjlg-card__list-meta"><?php echo esc_html(implode(' • ', $detail_parts)); ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($errors)): ?>
+                                        <span class="bjlg-card__list-error"><?php echo esc_html(implode(' • ', $errors)); ?></span>
+                                    <?php endif; ?>
+                                </li>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </ul>
+                </article>
             </div>
 
             <div class="bjlg-onboarding-checklist" id="bjlg-onboarding-checklist" role="region" aria-live="polite" aria-atomic="true"<?php echo $checklist_attr; ?>>
@@ -1006,6 +1151,10 @@ class BJLG_Admin {
                                     </div>
                                 <?php endif; ?>
 
+                                <?php if ($queue_key === 'remote_purge'): ?>
+                                    <p class="bjlg-queue-card__note"><?php esc_html_e('Prochaine étape : générer des prédictions de saturation et automatiser les corrections.', 'backup-jlg'); ?></p>
+                                <?php endif; ?>
+
                                 <ul class="bjlg-queue-card__entries" data-role="entries">
                                     <?php if (!empty($entries)): ?>
                                         <?php foreach ($entries as $entry):
@@ -1023,9 +1172,13 @@ class BJLG_Admin {
                                             $entry_file = isset($entry['file']) ? (string) $entry['file'] : '';
                                             $entry_delay_flag = !empty($entry['delayed']);
                                             $delay_label = isset($entry['delay_label']) ? (string) $entry['delay_label'] : '';
+                                            $severity_label = isset($entry['severity_label']) ? (string) $entry['severity_label'] : '';
+                                            $severity_intent = isset($entry['severity_intent']) ? (string) $entry['severity_intent'] : 'info';
+                                            $severity_value = isset($entry['severity']) ? (string) $entry['severity'] : '';
                                             ?>
                                             <li class="bjlg-queue-card__entry"
                                                 data-status="<?php echo esc_attr($status_intent); ?>"
+                                                data-severity="<?php echo esc_attr($severity_value); ?>"
                                                 data-entry-id="<?php echo esc_attr($entry_id); ?>"
                                                 data-entry-file="<?php echo esc_attr($entry_file); ?>">
                                                 <header class="bjlg-queue-card__entry-header">
@@ -1035,9 +1188,16 @@ class BJLG_Admin {
                                                     <?php endif; ?>
                                                 </header>
 
-                                                <?php if ($attempt_label !== ''): ?>
-                                                    <p class="bjlg-queue-card__entry-meta"><?php echo esc_html($attempt_label); ?></p>
-                                                <?php endif; ?>
+                                                <p class="bjlg-queue-card__entry-meta">
+                                                    <?php if ($severity_label !== ''): ?>
+                                                        <span class="bjlg-queue-card__entry-severity bjlg-queue-card__entry-severity--<?php echo esc_attr($severity_intent); ?>">
+                                                            <?php printf(esc_html__('Gravité : %s', 'backup-jlg'), esc_html($severity_label)); ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                    <?php if ($attempt_label !== ''): ?>
+                                                        <span><?php echo esc_html($attempt_label); ?></span>
+                                                    <?php endif; ?>
+                                                </p>
 
                                                 <p class="bjlg-queue-card__entry-meta" data-field="timestamps">
                                                     <?php if ($created_relative !== ''): ?>
