@@ -1389,6 +1389,25 @@ class BJLG_Restore {
 
             $components_to_restore = array_values(array_intersect($manifest_components, $requested_components));
 
+            $is_incremental_backup = false;
+            if (isset($manifest['type']) && is_string($manifest['type'])) {
+                $is_incremental_backup = sanitize_key($manifest['type']) === 'incremental';
+            }
+
+            $deleted_paths_by_component = [
+                'plugins' => [],
+                'themes' => [],
+                'uploads' => [],
+            ];
+
+            if ($is_incremental_backup) {
+                try {
+                    $deleted_paths_by_component = $this->extract_deleted_paths_from_archive($zip);
+                } catch (Throwable $deleted_exception) {
+                    BJLG_Debug::log('Impossible de charger la liste des fichiers supprimés : ' . $deleted_exception->getMessage(), 'error');
+                }
+            }
+
             if (class_exists('BJLG_Debug')) {
                 BJLG_Debug::log(
                     sprintf(
@@ -1527,7 +1546,10 @@ class BJLG_Restore {
                     continue;
                 }
 
-                $folders_to_restore[$component_type] = $destination;
+                $folders_to_restore[$component_type] = [
+                    'path' => $destination,
+                    'deleted' => $deleted_paths_by_component[$component_type] ?? [],
+                ];
             }
 
             $progress = $current_status['progress'] ?? 50;
@@ -1535,7 +1557,11 @@ class BJLG_Restore {
             if (!empty($folders_to_restore)) {
                 $progress_step = 40 / count($folders_to_restore);
 
-                foreach ($folders_to_restore as $type => $destination) {
+                foreach ($folders_to_restore as $type => $restore_payload) {
+                    $destination = is_array($restore_payload) && array_key_exists('path', $restore_payload)
+                        ? $restore_payload['path']
+                        : $restore_payload;
+
                     $progress += $progress_step;
 
                     $current_status = array_merge($current_status, [
@@ -1546,6 +1572,15 @@ class BJLG_Restore {
                     set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
 
                     $source_folder = "wp-content/{$type}";
+                    $component_deleted = [];
+                    if (is_array($restore_payload) && array_key_exists('deleted', $restore_payload)) {
+                        $component_deleted = is_array($restore_payload['deleted']) ? $restore_payload['deleted'] : [];
+                    }
+
+                    if (!empty($component_deleted)) {
+                        $this->apply_deleted_paths($type, $component_deleted, $destination, $environment);
+                    }
+
                     $files_to_extract = [];
 
                     for ($i = 0; $i < $zip->numFiles; $i++) {
@@ -1673,6 +1708,168 @@ class BJLG_Restore {
 
             BJLG_Backup::release_task_slot($task_id);
         }
+    }
+
+    /**
+     * Extrait les chemins marqués comme supprimés dans une archive incrémentale.
+     *
+     * @param ZipArchive $zip
+     * @return array<string, array<int, string>>
+     */
+    private function extract_deleted_paths_from_archive(ZipArchive $zip): array {
+        $result = [
+            'plugins' => [],
+            'themes' => [],
+            'uploads' => [],
+        ];
+
+        $deleted_index = $zip->locateName('deleted-files.json');
+
+        if ($deleted_index === false) {
+            return $result;
+        }
+
+        $deleted_json = $zip->getFromIndex($deleted_index);
+
+        if ($deleted_json === false) {
+            return $result;
+        }
+
+        $decoded = json_decode($deleted_json, true);
+
+        if (!is_array($decoded)) {
+            return $result;
+        }
+
+        $paths = [];
+
+        if (isset($decoded['paths']) && is_array($decoded['paths'])) {
+            $paths = $decoded['paths'];
+        } elseif (isset($decoded['deleted_paths']) && is_array($decoded['deleted_paths'])) {
+            $paths = $decoded['deleted_paths'];
+        }
+
+        foreach ($paths as $path) {
+            if (!is_string($path) || $path === '') {
+                continue;
+            }
+
+            $normalized = self::normalize_path($path);
+
+            if ($normalized === '') {
+                continue;
+            }
+
+            if (strpos($normalized, 'wp-content/plugins/') === 0) {
+                $result['plugins'][] = ltrim(substr($normalized, strlen('wp-content/plugins/')), '/');
+                continue;
+            }
+
+            if (strpos($normalized, 'wp-content/themes/') === 0) {
+                $result['themes'][] = ltrim(substr($normalized, strlen('wp-content/themes/')), '/');
+                continue;
+            }
+
+            if (strpos($normalized, 'wp-content/uploads/') === 0) {
+                $result['uploads'][] = ltrim(substr($normalized, strlen('wp-content/uploads/')), '/');
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Applique la suppression des fichiers marqués comme retirés pour un composant donné.
+     *
+     * @param string $component
+     * @param array<int, string> $relative_paths
+     * @param string $destination
+     * @param string $environment
+     * @return void
+     */
+    private function apply_deleted_paths($component, array $relative_paths, $destination, $environment): void {
+        if (empty($relative_paths) || !is_string($destination) || $destination === '') {
+            return;
+        }
+
+        $normalized_destination = $this->normalize_path_for_validation($destination);
+
+        if ($normalized_destination === '') {
+            return;
+        }
+
+        foreach ($relative_paths as $relative_path) {
+            if (!is_string($relative_path) || $relative_path === '') {
+                continue;
+            }
+
+            $sanitized_relative = ltrim(self::normalize_path($relative_path), '/');
+
+            if ($sanitized_relative === '') {
+                continue;
+            }
+
+            $target_path = $this->join_paths($destination, $sanitized_relative);
+            $normalized_target = $this->normalize_path_for_validation($target_path);
+
+            if ($normalized_target === '') {
+                continue;
+            }
+
+            if ($normalized_target !== $normalized_destination
+                && strpos($normalized_target, $normalized_destination . '/') !== 0
+            ) {
+                BJLG_Debug::log(sprintf('Chemin de suppression ignoré (%s) : %s', $component, $normalized_target));
+                continue;
+            }
+
+            $this->delete_path_atomically($target_path, $component, $environment);
+        }
+    }
+
+    /**
+     * Supprime un chemin en deux étapes afin de limiter les états intermédiaires.
+     *
+     * @param string $target_path
+     * @param string $component
+     * @param string $environment
+     * @return void
+     */
+    private function delete_path_atomically($target_path, $component, $environment): void {
+        $normalized_target = self::normalize_path($target_path);
+
+        $context = $environment === self::ENV_SANDBOX ? 'SANDBOX' : 'PROD';
+
+        if ($normalized_target === '') {
+            return;
+        }
+
+        if (!file_exists($target_path) && !is_dir($target_path) && !is_link($target_path)) {
+            BJLG_Debug::log(sprintf('[%s] Suppression ignorée (%s) : %s (absent)', $context, $component, $normalized_target));
+
+            return;
+        }
+
+        if (is_link($target_path)) {
+            throw new RuntimeException('Lien symbolique détecté lors de la suppression : ' . $target_path);
+        }
+
+        $parent_directory = dirname($target_path);
+        if ($parent_directory === '' || $parent_directory === '.' || $parent_directory === DIRECTORY_SEPARATOR) {
+            throw new RuntimeException('Chemin de suppression invalide : ' . $target_path);
+        }
+
+        $temporary_path = rtrim($parent_directory, '/\\') . '/.bjlg-restore-delete-' . uniqid('', true);
+
+        if (@rename($target_path, $temporary_path)) {
+            BJLG_Debug::log(sprintf('[%s] Suppression atomique (%s) : %s', $context, $component, $normalized_target));
+            $this->safe_delete_path($temporary_path);
+
+            return;
+        }
+
+        BJLG_Debug::log(sprintf('[%s] Suppression directe (%s) : %s', $context, $component, $normalized_target));
+        $this->safe_delete_path($target_path);
     }
 
     /**

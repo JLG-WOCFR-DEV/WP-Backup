@@ -483,6 +483,113 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $this->assertFalse($handler->mark_remote_purge_completed(basename($inc1Path), ['google_drive']));
     }
 
+    public function test_incremental_backup_tracks_deleted_files(): void
+    {
+        $handler = new BJLG\BJLG_Incremental();
+        $backup = new BJLG\BJLG_Backup();
+
+        $plugin_dir = WP_PLUGIN_DIR . '/sample-plugin';
+        if (!is_dir($plugin_dir)) {
+            mkdir($plugin_dir, 0777, true);
+        }
+
+        $tracked_file = $plugin_dir . '/deprecated-template.php';
+        file_put_contents($tracked_file, "<?php\n// deprecated file\n");
+        $this->createdPaths[] = $tracked_file;
+
+        $components = ['plugins'];
+
+        $full_task = 'bjlg_backup_' . uniqid('full', true);
+        set_transient($full_task, [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => 'Préparation',
+            'components' => $components,
+            'encrypt' => false,
+            'incremental' => false,
+            'source' => 'tests',
+            'start_time' => time(),
+        ], HOUR_IN_SECONDS);
+
+        $backup->run_backup_task($full_task);
+
+        $first_incremental = 'bjlg_backup_' . uniqid('inc1', true);
+        set_transient($first_incremental, [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => 'Préparation',
+            'components' => $components,
+            'encrypt' => false,
+            'incremental' => true,
+            'source' => 'tests',
+            'start_time' => time(),
+        ], HOUR_IN_SECONDS);
+
+        $backup->run_backup_task($first_incremental);
+
+        @unlink($tracked_file);
+
+        $second_incremental = 'bjlg_backup_' . uniqid('inc2', true);
+        set_transient($second_incremental, [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => 'Préparation',
+            'components' => $components,
+            'encrypt' => false,
+            'incremental' => true,
+            'source' => 'tests',
+            'start_time' => time(),
+        ], HOUR_IN_SECONDS);
+
+        $backup->run_backup_task($second_incremental);
+
+        $this->assertFileExists($this->manifestPath);
+        $manifest = json_decode((string) file_get_contents($this->manifestPath), true);
+
+        $this->assertIsArray($manifest);
+        $this->assertArrayHasKey('deleted_files', $manifest);
+        $relative_tracked = 'wp-content/plugins/sample-plugin/deprecated-template.php';
+        $this->assertContains($relative_tracked, $manifest['deleted_files']);
+        $this->assertArrayNotHasKey($relative_tracked, $manifest['file_hashes']);
+
+        $archive_paths = [];
+
+        if (!empty($manifest['full_backup']['path'])) {
+            $archive_paths[] = $manifest['full_backup']['path'];
+        }
+
+        if (!empty($manifest['incremental_backups']) && is_array($manifest['incremental_backups'])) {
+            foreach ($manifest['incremental_backups'] as $entry) {
+                if (isset($entry['path']) && is_string($entry['path'])) {
+                    $archive_paths[] = $entry['path'];
+                }
+            }
+        }
+
+        foreach ($archive_paths as $path) {
+            if (is_string($path) && $path !== '') {
+                $this->createdPaths[] = $path;
+            }
+        }
+
+        $latest_incremental = end($manifest['incremental_backups']);
+        $this->assertIsArray($latest_incremental);
+        $latest_path = $latest_incremental['path'] ?? '';
+        $this->assertNotEmpty($latest_path);
+
+        $zip = new ZipArchive();
+        $open_result = $zip->open($latest_path);
+        $this->assertTrue($open_result === true || $open_result === ZipArchive::ER_OK);
+        $deleted_metadata = $zip->getFromName('deleted-files.json');
+        $zip->close();
+
+        $this->assertNotFalse($deleted_metadata);
+        $decoded = json_decode((string) $deleted_metadata, true);
+        $this->assertIsArray($decoded);
+        $this->assertArrayHasKey('paths', $decoded);
+        $this->assertContains($relative_tracked, $decoded['paths']);
+    }
+
     private function ensureWordPressDirectories(): void
     {
         $directories = [
@@ -525,6 +632,7 @@ final class BJLG_IncrementalManifestTest extends TestCase
             'database_checksums' => [],
             'last_scan' => time(),
             'remote_purge_queue' => [],
+            'deleted_files' => [],
             'version' => '2.1',
         ];
 

@@ -28,6 +28,11 @@ class BJLG_Incremental {
     private $file_hash_cache = [];
 
     /**
+     * @var array<string, bool> Liste des chemins relatifs supprimés détectés lors du scan courant.
+     */
+    private $deleted_files_cache = [];
+
+    /**
      * @var string|null Empreinte de la dernière mise à jour pour éviter les doublons.
      */
     private $last_manifest_signature = null;
@@ -82,7 +87,7 @@ class BJLG_Incremental {
             return false;
         }
 
-        $required_keys = ['full_backup', 'incremental_backups', 'synthetic_full', 'file_hashes', 'database_checksums', 'remote_purge_queue'];
+        $required_keys = ['full_backup', 'incremental_backups', 'synthetic_full', 'file_hashes', 'database_checksums', 'remote_purge_queue', 'deleted_files'];
         foreach ($required_keys as $key) {
             if (!is_array($this->last_backup_data) || !array_key_exists($key, $this->last_backup_data)) {
                 return false;
@@ -115,6 +120,10 @@ class BJLG_Incremental {
 
         if (!isset($this->last_backup_data['remote_purge_queue']) || !is_array($this->last_backup_data['remote_purge_queue'])) {
             $this->last_backup_data['remote_purge_queue'] = [];
+        }
+
+        if (!isset($this->last_backup_data['deleted_files']) || !is_array($this->last_backup_data['deleted_files'])) {
+            $this->last_backup_data['deleted_files'] = [];
         }
 
         if (!isset($this->last_backup_data['version']) || version_compare((string) $this->last_backup_data['version'], self::MANIFEST_VERSION, '<')) {
@@ -657,6 +666,7 @@ class BJLG_Incremental {
             'database_checksums' => [],
             'last_scan' => null,
             'remote_purge_queue' => [],
+            'deleted_files' => [],
             'version' => self::MANIFEST_VERSION
         ];
         $this->last_manifest_signature = null;
@@ -761,19 +771,30 @@ class BJLG_Incremental {
      * Obtient les fichiers modifiés depuis la dernière sauvegarde
      */
     public function get_modified_files($directory) {
-        $modified_files = [];
+        $changes = [
+            'modified' => [],
+            'deleted' => [],
+        ];
+
         $last_scan_time = $this->last_backup_data['last_scan'] ?? 0;
-        
+
         // Scanner récursivement le répertoire
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($directory, RecursiveDirectoryIterator::SKIP_DOTS),
             RecursiveIteratorIterator::LEAVES_ONLY
         );
-        
+
         $normalized_abspath = $this->normalize_path(ABSPATH);
+        $normalized_directory = $this->normalize_path($directory);
+        $directory_prefix = $normalized_directory !== '' ? rtrim($normalized_directory, '/') . '/' : '';
+
+        $unique_modified = [];
+        $seen_relative_paths = [];
 
         foreach ($iterator as $file) {
-            if (!$file->isFile()) continue;
+            if (!$file->isFile()) {
+                continue;
+            }
 
             $filepath = $file->getRealPath();
             if ($filepath === false) {
@@ -786,22 +807,63 @@ class BJLG_Incremental {
                 $relative_path = ltrim(substr($normalized_filepath, strlen($normalized_abspath)), '/');
             }
 
+            $seen_relative_paths[$relative_path] = true;
+
             // Vérifier si le fichier a été modifié
             $mtime = $file->getMTime();
             $current_hash = $this->get_file_hash($filepath);
             $stored_hash = $this->last_backup_data['file_hashes'][$relative_path] ?? null;
 
             if ($mtime > $last_scan_time || $current_hash !== $stored_hash) {
-                $modified_files[] = $normalized_filepath;
+                $unique_modified[$normalized_filepath] = true;
+            }
 
-                // Mettre à jour le hash en cache
+            if ($current_hash !== null) {
                 $this->file_hash_cache[$relative_path] = $current_hash;
             }
         }
-        
-        BJLG_Debug::log("Fichiers modifiés trouvés : " . count($modified_files));
-        
-        return $modified_files;
+
+        $deleted_relatives = [];
+        if (!empty($this->last_backup_data['file_hashes']) && is_array($this->last_backup_data['file_hashes'])) {
+            foreach ($this->last_backup_data['file_hashes'] as $stored_relative => $hash) {
+                if (!is_string($stored_relative) || $stored_relative === '') {
+                    continue;
+                }
+
+                if (isset($seen_relative_paths[$stored_relative])) {
+                    continue;
+                }
+
+                $absolute_candidate = $stored_relative;
+                if ($normalized_abspath !== '') {
+                    $absolute_candidate = rtrim($normalized_abspath, '/') . '/' . ltrim($stored_relative, '/');
+                }
+
+                $absolute_candidate = $this->normalize_path($absolute_candidate);
+
+                if ($directory_prefix !== '' && strpos(rtrim($absolute_candidate, '/') . '/', $directory_prefix) !== 0) {
+                    continue;
+                }
+
+                if ($absolute_candidate === '' || file_exists($absolute_candidate)) {
+                    continue;
+                }
+
+                $deleted_relatives[$stored_relative] = true;
+                $this->deleted_files_cache[$stored_relative] = true;
+            }
+        }
+
+        $changes['modified'] = array_keys($unique_modified);
+        $changes['deleted'] = array_keys($deleted_relatives);
+
+        BJLG_Debug::log(sprintf(
+            'Fichiers modifiés : %d | Fichiers supprimés : %d',
+            count($changes['modified']),
+            count($changes['deleted'])
+        ));
+
+        return $changes;
     }
 
     /**
@@ -962,11 +1024,27 @@ class BJLG_Incremental {
             $this->last_backup_data['incremental_backups'] = [];
             $this->last_backup_data['synthetic_full'] = [];
             $this->update_all_checksums();
+            $this->last_backup_data['deleted_files'] = [];
         }
 
         foreach ($this->file_hash_cache as $path => $hash) {
             $this->last_backup_data['file_hashes'][$path] = $hash;
         }
+
+        $deleted_relatives = array_keys($this->deleted_files_cache);
+
+        if (!empty($deleted_relatives)) {
+            foreach ($deleted_relatives as $relative_path) {
+                unset($this->last_backup_data['file_hashes'][$relative_path]);
+            }
+        }
+
+        if ($is_incremental) {
+            $this->last_backup_data['deleted_files'] = array_values($deleted_relatives);
+        }
+
+        $this->deleted_files_cache = [];
+        $this->file_hash_cache = [];
 
         $this->last_backup_data['last_scan'] = time();
 
@@ -1196,9 +1274,13 @@ class BJLG_Incremental {
         ];
         
         foreach ($directories as $type => $dir) {
-            $modified = $this->get_modified_files($dir);
+            $scan = $this->get_modified_files($dir);
+            $modified = is_array($scan['modified'] ?? null) ? $scan['modified'] : [];
+            $deleted = is_array($scan['deleted'] ?? null) ? $scan['deleted'] : [];
+
             $changes['files']['modified'] += count($modified);
-            
+            $changes['files']['deleted'] += count($deleted);
+
             // Limiter la liste à 20 fichiers
             if (count($changes['files']['list']) < 20) {
                 foreach ($modified as $file) {
