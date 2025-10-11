@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BJLG\BJLG_Encryption;
 use BJLG\BJLG_Restore;
 use PHPUnit\Framework\TestCase;
 
@@ -554,6 +555,144 @@ final class BJLG_RestoreTaskTest extends TestCase
         bjlg_tests_recursive_delete($sandbox_base);
         bjlg_tests_recursive_delete($production_plugin_dir);
         delete_transient($task_id);
+        unset($_POST['task_id'], $_POST['nonce']);
+    }
+
+    public function test_encrypted_full_and_incremental_restore_flow_promotes_sandbox_changes(): void
+    {
+        $password = 'sandbox-secret';
+
+        $fullArchive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'filename' => 'full-backup-' . uniqid('', true) . '.zip',
+            'manifest' => ['type' => 'full', 'contains' => ['db', 'plugins', 'uploads']],
+            'database' => "CREATE TABLE `wp_posts` (id INT);\n",
+            'files' => [
+                'wp-content/plugins/sample-plugin/plugin.php' => "<?php // full backup\n", 
+                'wp-content/uploads/keep.txt' => 'full-keep',
+            ],
+            'encrypt' => true,
+            'password' => $password,
+        ]);
+
+        $incrementalArchive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'filename' => 'incremental-backup-' . uniqid('', true) . '.zip',
+            'manifest' => ['type' => 'incremental', 'contains' => ['plugins', 'uploads']],
+            'files' => [
+                'wp-content/plugins/sample-plugin/plugin.php' => "<?php // incremental\n",
+                'wp-content/uploads/new.txt' => 'new-upload',
+            ],
+            'encrypt' => true,
+            'password' => $password,
+        ]);
+
+        $pluginDir = WP_PLUGIN_DIR . '/sample-plugin';
+        bjlg_tests_recursive_delete($pluginDir);
+        if (!is_dir($pluginDir)) {
+            mkdir($pluginDir, 0777, true);
+        }
+
+        $productionPluginFile = $pluginDir . '/plugin.php';
+        $obsoleteProductionFile = $pluginDir . '/obsolete.php';
+        file_put_contents($productionPluginFile, "<?php // production\n");
+        file_put_contents($obsoleteProductionFile, 'to-remove');
+
+        $uploadsDir = wp_get_upload_dir()['basedir'];
+        $productionKeep = $uploadsDir . '/keep.txt';
+        $productionOld = $uploadsDir . '/old.txt';
+        file_put_contents($productionKeep, 'production-keep');
+        file_put_contents($productionOld, 'production-old');
+
+        $environmentConfig = BJLG\BJLG_Restore::prepare_environment(BJLG\BJLG_Restore::ENV_SANDBOX);
+
+        $restore = new class(new BJLG\BJLG_Backup(), new BJLG_Encryption()) extends BJLG\BJLG_Restore {
+            public function __construct($backup_manager = null, $encryption_handler = null)
+            {
+                parent::__construct($backup_manager, $encryption_handler);
+            }
+
+            protected function perform_pre_restore_backup(): array
+            {
+                return [
+                    'filename' => 'pre-restore.zip',
+                    'filepath' => BJLG_BACKUP_DIR . 'pre-restore.zip',
+                ];
+            }
+        };
+
+        $fullTaskId = 'bjlg_restore_' . uniqid('full', true);
+        set_transient($fullTaskId, [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => '',
+            'filename' => basename($fullArchive['path']),
+            'filepath' => $fullArchive['path'],
+            'password_encrypted' => BJLG\BJLG_Restore::encrypt_password_for_transient($password),
+            'components' => ['plugins', 'uploads', 'db'],
+            'environment' => $environmentConfig['environment'],
+            'routing_table' => $environmentConfig['routing_table'],
+            'sandbox' => $environmentConfig['sandbox'],
+        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
+
+        $restore->run_restore_task($fullTaskId);
+
+        $fullTaskState = get_transient($fullTaskId);
+        $this->assertIsArray($fullTaskState);
+        $this->assertSame('complete', $fullTaskState['status']);
+
+        $sandboxPlugin = $environmentConfig['routing_table']['plugins'] . '/sample-plugin/plugin.php';
+        $sandboxUploadsDir = $environmentConfig['routing_table']['uploads'];
+        $this->assertFileExists($sandboxPlugin);
+        $this->assertSame("<?php // full backup\n", file_get_contents($sandboxPlugin));
+        $this->assertFileExists($sandboxUploadsDir . '/keep.txt');
+
+        $incrementalTaskId = 'bjlg_restore_' . uniqid('incremental', true);
+        set_transient($incrementalTaskId, [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => '',
+            'filename' => basename($incrementalArchive['path']),
+            'filepath' => $incrementalArchive['path'],
+            'password_encrypted' => BJLG\BJLG_Restore::encrypt_password_for_transient($password),
+            'components' => ['plugins', 'uploads'],
+            'environment' => $environmentConfig['environment'],
+            'routing_table' => $environmentConfig['routing_table'],
+            'sandbox' => $environmentConfig['sandbox'],
+        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
+
+        $restore->run_restore_task($incrementalTaskId);
+
+        $incrementalTaskState = get_transient($incrementalTaskId);
+        $this->assertIsArray($incrementalTaskState);
+        $this->assertSame('complete', $incrementalTaskState['status']);
+        $this->assertSame("<?php // incremental\n", file_get_contents($sandboxPlugin));
+        $this->assertFileExists($sandboxUploadsDir . '/new.txt');
+
+        $_POST['task_id'] = $incrementalTaskId;
+        $_POST['nonce'] = 'publish';
+
+        try {
+            $restore->handle_publish_sandbox();
+            $this->fail('Expected JSON response');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertSame('Sandbox promue en production.', $response->data['message']);
+        }
+
+        $this->assertSame("<?php // incremental\n", file_get_contents($productionPluginFile));
+        $this->assertFalse(file_exists($obsoleteProductionFile));
+        $this->assertSame('full-keep', file_get_contents($productionKeep));
+        $this->assertFalse(file_exists($productionOld));
+        $this->assertSame('new-upload', file_get_contents($uploadsDir . '/new.txt'));
+
+        bjlg_tests_recursive_delete($environmentConfig['sandbox']['base_path'] ?? '');
+        bjlg_tests_recursive_delete($pluginDir);
+        @unlink($productionKeep);
+        @unlink($productionOld);
+        @unlink($uploadsDir . '/new.txt');
+        @unlink(BJLG_BACKUP_DIR . 'pre-restore.zip');
+        delete_transient($fullTaskId);
+        delete_transient($incrementalTaskId);
+        @unlink($fullArchive['path']);
+        @unlink($incrementalArchive['path']);
         unset($_POST['task_id'], $_POST['nonce']);
     }
 

@@ -445,6 +445,8 @@ if (!is_dir(BJLG_BACKUP_DIR)) {
 bjlg_tests_cleanup_backup_dir();
 bjlg_tests_ensure_backup_sentinels();
 
+require_once __DIR__ . '/Helpers/BJLG_Test_BackupFixtures.php';
+
 if (!defined('DB_NAME')) {
     define('DB_NAME', 'wordpress_test');
 }

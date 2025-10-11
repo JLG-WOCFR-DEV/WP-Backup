@@ -2094,28 +2094,86 @@ class BJLG_Backup {
             }
         };
 
+        $archive_path_for_checks = $filepath;
+        $temporary_paths = [];
+
         if ($encrypted) {
-            if (!empty($post_checks['dry_run'])) {
-                BJLG_Debug::log('Vérification de restauration ignorée pour une archive chiffrée.');
-                $results['dry_run'] = 'skipped';
+            if (!($this->encryption_handler instanceof BJLG_Encryption)) {
+                $message = 'Module de chiffrement indisponible pour valider une archive chiffrée.';
+                $results['dry_run'] = 'failed';
+                $results['overall_status'] = 'failed';
+                $results['overall_message'] = $message;
+
+                foreach (['backup-manifest.json', 'database.sql'] as $filename) {
+                    $log_file_check($filename, 'failed', $message);
+                }
+
+                return $results;
             }
 
-            $results['overall_status'] = 'skipped';
-            $results['overall_message'] = 'Archive chiffrée : vérifications impossibles.';
-
-            $skip_message = 'Archive chiffrée : vérification impossible.';
-            foreach (['backup-manifest.json', 'database.sql'] as $filename) {
-                $log_file_check($filename, 'skipped', $skip_message);
+            $password = null;
+            if (isset($post_checks['encryption']) && is_array($post_checks['encryption'])) {
+                $encryption_context = $post_checks['encryption'];
+                if (isset($encryption_context['password']) && is_string($encryption_context['password']) && $encryption_context['password'] !== '') {
+                    $password = $encryption_context['password'];
+                }
             }
 
-            return $results;
+            $temporary_base = function_exists('wp_tempnam') ? wp_tempnam('bjlg-encrypted-check') : tempnam(sys_get_temp_dir(), 'bjlg-encrypted-');
+            if ($temporary_base === false || $temporary_base === '') {
+                throw new Exception('Impossible de préparer le fichier temporaire pour la validation.');
+            }
+
+            if (file_exists($temporary_base)) {
+                @unlink($temporary_base);
+            }
+
+            $encrypted_copy = $temporary_base . '.enc';
+            if (!@copy($filepath, $encrypted_copy)) {
+                @unlink($encrypted_copy);
+                throw new Exception('Impossible de copier l\'archive chiffrée pour la validation.');
+            }
+
+            $temporary_paths[] = $encrypted_copy;
+
+            try {
+                $decrypted_path = $this->encryption_handler->decrypt_backup_file($encrypted_copy, $password);
+                $temporary_paths[] = $decrypted_path;
+                $archive_path_for_checks = $decrypted_path;
+                $results['dry_run'] = $results['dry_run'] === 'disabled' ? 'disabled' : $results['dry_run'];
+            } catch (Exception $exception) {
+                $error_message = 'Impossible de valider l\'archive chiffrée : ' . $exception->getMessage();
+                $results['dry_run'] = 'failed';
+                $results['overall_status'] = 'failed';
+                $results['overall_message'] = $error_message;
+
+                foreach (['backup-manifest.json', 'database.sql'] as $filename) {
+                    $log_file_check($filename, 'failed', $error_message);
+                }
+
+                foreach ($temporary_paths as $temporary_path) {
+                    if (is_string($temporary_path) && $temporary_path !== '' && file_exists($temporary_path)) {
+                        @unlink($temporary_path);
+                    }
+                }
+
+                return $results;
+            }
         }
 
         $zip = $this->create_zip_archive();
-        $open_result = $zip->open($filepath);
+        $open_result = $zip->open($archive_path_for_checks);
         if ($open_result !== true) {
+            foreach ($temporary_paths as $temporary_path) {
+                if (is_string($temporary_path) && $temporary_path !== '' && file_exists($temporary_path)) {
+                    @unlink($temporary_path);
+                }
+            }
+
             throw new Exception('La vérification post-sauvegarde a échoué : ' . $this->describe_zip_error($open_result));
         }
+
+        $zip_opened = true;
 
         try {
             if (!empty($post_checks['dry_run'])) {
@@ -2241,7 +2299,15 @@ class BJLG_Backup {
                 }
             }
         } finally {
-            $zip->close();
+            if ($zip_opened) {
+                $zip->close();
+            }
+
+            foreach ($temporary_paths as $temporary_path) {
+                if (is_string($temporary_path) && $temporary_path !== '' && file_exists($temporary_path)) {
+                    @unlink($temporary_path);
+                }
+            }
         }
 
         return $results;
