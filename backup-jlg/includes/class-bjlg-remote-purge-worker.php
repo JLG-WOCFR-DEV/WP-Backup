@@ -21,9 +21,32 @@ class BJLG_Remote_Purge_Worker {
     private const ALERT_ATTEMPT_THRESHOLD = 3;
 
     public function __construct() {
+        add_filter('cron_schedules', [$this, 'register_cron_schedule']);
         add_action(self::HOOK, [$this, 'process_queue']);
         add_action('bjlg_incremental_remote_purge', [$this, 'schedule_async_processing'], 10, 2);
         add_action('init', [$this, 'ensure_schedule']);
+    }
+
+    /**
+     * Garantit la disponibilité de l'intervalle personnalisé requis par la tâche.
+     *
+     * @param array<string, array<string, mixed>> $schedules
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    public function register_cron_schedule($schedules) {
+        if (!is_array($schedules)) {
+            $schedules = [];
+        }
+
+        if (!isset($schedules['every_five_minutes'])) {
+            $schedules['every_five_minutes'] = [
+                'interval' => 5 * MINUTE_IN_SECONDS,
+                'display' => __('Toutes les 5 minutes', 'backup-jlg'),
+            ];
+        }
+
+        return $schedules;
     }
 
     /**

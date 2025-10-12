@@ -19,8 +19,31 @@ class BJLG_Notification_Queue {
     private const VALID_SEVERITIES = ['info', 'warning', 'critical'];
 
     public function __construct() {
+        add_filter('cron_schedules', [$this, 'register_cron_schedule']);
         add_action('init', [$this, 'ensure_schedule']);
         add_action(self::HOOK, [$this, 'process_queue']);
+    }
+
+    /**
+     * Garantit que l'intervalle personnalisé utilisé par la file est disponible.
+     *
+     * @param array<string, array<string, mixed>> $schedules
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    public function register_cron_schedule($schedules) {
+        if (!is_array($schedules)) {
+            $schedules = [];
+        }
+
+        if (!isset($schedules['every_five_minutes'])) {
+            $schedules['every_five_minutes'] = [
+                'interval' => 5 * MINUTE_IN_SECONDS,
+                'display' => __('Toutes les 5 minutes', 'backup-jlg'),
+            ];
+        }
+
+        return $schedules;
     }
 
     /**
