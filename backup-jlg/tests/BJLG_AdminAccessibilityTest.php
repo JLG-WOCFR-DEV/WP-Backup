@@ -136,7 +136,7 @@ final class BJLG_AdminAccessibilityTest extends TestCase
         $nav = $xpath->query('//*[@id="bjlg-admin-app-nav"]')->item(0);
         $this->assertInstanceOf(\DOMElement::class, $nav, 'TabPanel placeholder missing.');
         /** @var \DOMElement $nav */
-        $this->assertSame('true', $nav->getAttribute('aria-hidden'));
+        $this->assertFalse($nav->hasAttribute('aria-hidden'));
 
         $panels = $xpath->query('//*[contains(concat(" ", normalize-space(@class), " "), " bjlg-shell-section ")]');
         $this->assertGreaterThan(0, $panels->length, 'No panels were rendered.');
