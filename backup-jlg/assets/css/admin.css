@@ -2595,21 +2595,41 @@ border-color: #d1d5db;
 }
 
 .bjlg-wrap.is-dark {
-    background-color: #111827;
-    color: #f9fafb;
+    --bjlg-color-app: #0b1120;
+    --bjlg-color-surface: #111c2f;
+    --bjlg-color-surface-subtle: #1b2843;
+    --bjlg-color-surface-muted: #223153;
+    --bjlg-color-border: rgba(148, 163, 184, 0.28);
+    --bjlg-color-border-strong: rgba(148, 163, 184, 0.45);
+    --bjlg-color-text: #f8fafc;
+    --bjlg-color-text-subtle: #cbd5f5;
+    --bjlg-color-accent: #60a5fa;
+    --bjlg-color-accent-strong: #3b82f6;
+    background-color: var(--bjlg-color-app);
+    color: var(--bjlg-color-text);
 }
 
 .bjlg-wrap.is-dark a {
-    color: #93c5fd;
+    color: var(--bjlg-color-accent);
+}
+
+.bjlg-wrap.is-dark a:focus,
+.bjlg-wrap.is-dark a:hover {
+    color: var(--bjlg-color-accent-strong);
 }
 
 .bjlg-wrap.is-dark .bjlg-section,
 .bjlg-wrap.is-dark .bjlg-card,
 .bjlg-wrap.is-dark .bjlg-chart-card,
 .bjlg-wrap.is-dark .bjlg-dashboard-overview {
-    background-color: #1f2937;
+    background-color: var(--bjlg-color-surface);
     color: inherit;
-    border-color: rgba(148, 163, 184, 0.25);
+    border-color: var(--bjlg-color-border);
+}
+
+.bjlg-wrap.is-dark .bjlg-dashboard-overview__timestamp {
+    background-color: rgba(96, 165, 250, 0.18);
+    color: var(--bjlg-color-text);
 }
 
 .bjlg-wrap.is-dark .bjlg-chart-card__title,
@@ -2619,40 +2639,79 @@ border-color: #d1d5db;
 }
 
 .bjlg-wrap.is-dark .bjlg-action-card {
-    background-color: #111827;
-    border-color: rgba(148, 163, 184, 0.35);
+    background-color: var(--bjlg-color-surface-subtle);
+    border-color: var(--bjlg-color-border-strong);
 }
 
 .bjlg-wrap.is-dark .bjlg-action-card--disabled {
-    background-color: rgba(55, 65, 81, 0.6);
+    background-color: rgba(34, 49, 83, 0.72);
 }
 
 .bjlg-wrap.is-dark .bjlg-chart-card__empty {
-    color: #e5e7eb;
+    color: var(--bjlg-color-text-subtle);
 }
 
 .bjlg-wrap.is-dark .notice {
-    background-color: #1f2937;
-    border-color: #374151;
-    color: #e5e7eb;
+    background-color: var(--bjlg-color-surface);
+    border-color: var(--bjlg-color-border-strong);
+    color: var(--bjlg-color-text);
 }
 
 .bjlg-wrap.is-dark .button.button-primary {
-    background-color: #2563eb;
-    border-color: #1d4ed8;
+    background-color: var(--bjlg-color-accent);
+    border-color: var(--bjlg-color-accent-strong);
+    color: #0b1120;
+}
+
+.bjlg-wrap.is-dark .button.button-primary:focus,
+.bjlg-wrap.is-dark .button.button-primary:hover {
+    background-color: var(--bjlg-color-accent-strong);
+    border-color: #1e40af;
+    color: #f8fafc;
 }
 
 .bjlg-wrap.is-dark .button.button-secondary {
-    background-color: #374151;
-    border-color: #4b5563;
-    color: #f9fafb;
+    background-color: var(--bjlg-color-surface-muted);
+    border-color: var(--bjlg-color-border-strong);
+    color: var(--bjlg-color-text);
+}
+
+.bjlg-wrap.is-dark .button.button-secondary:focus,
+.bjlg-wrap.is-dark .button.button-secondary:hover {
+    background-color: rgba(96, 165, 250, 0.24);
+    border-color: var(--bjlg-color-accent-strong);
 }
 
 .bjlg-wrap.is-dark .form-table th {
-    color: #f9fafb;
+    color: var(--bjlg-color-text);
 }
 
 .bjlg-wrap.is-dark .form-table td,
 .bjlg-wrap.is-dark .form-table td .description {
-    color: #e5e7eb;
+    color: var(--bjlg-color-text-subtle);
+}
+
+.bjlg-wrap.is-dark input[type="text"],
+.bjlg-wrap.is-dark input[type="password"],
+.bjlg-wrap.is-dark input[type="number"],
+.bjlg-wrap.is-dark input[type="time"],
+.bjlg-wrap.is-dark input[type="url"],
+.bjlg-wrap.is-dark input[type="email"],
+.bjlg-wrap.is-dark input[type="search"],
+.bjlg-wrap.is-dark textarea,
+.bjlg-wrap.is-dark select {
+    background-color: #0f172a;
+    border-color: var(--bjlg-color-border-strong);
+    color: var(--bjlg-color-text);
+}
+
+.bjlg-wrap.is-dark input[type="text"]::placeholder,
+.bjlg-wrap.is-dark input[type="password"]::placeholder,
+.bjlg-wrap.is-dark input[type="number"]::placeholder,
+.bjlg-wrap.is-dark input[type="time"]::placeholder,
+.bjlg-wrap.is-dark input[type="url"]::placeholder,
+.bjlg-wrap.is-dark input[type="email"]::placeholder,
+.bjlg-wrap.is-dark input[type="search"]::placeholder,
+.bjlg-wrap.is-dark textarea::placeholder {
+    color: rgba(203, 213, 225, 0.75);
 }
