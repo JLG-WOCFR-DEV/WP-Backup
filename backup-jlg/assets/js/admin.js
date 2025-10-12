@@ -453,21 +453,73 @@ jQuery(function($) {
             const progress = totalSteps > 0 ? Math.round((completedCount / totalSteps) * 100) : 0;
 
             useEffect(function() {
-                if (!apiFetch || !ajaxData || !ajaxData.ajax_url) {
+                if (!ajaxData || !ajaxData.ajax_url) {
                     return undefined;
                 }
 
                 const payload = Array.from(manualCompleted);
                 const timeout = window.setTimeout(function() {
-                    apiFetch({
-                        url: ajaxData.ajax_url,
-                        method: 'POST',
-                        data: {
+                    var requestBody;
+                    var URLSearchParamsCtor = typeof window.URLSearchParams === 'function' ? window.URLSearchParams : null;
+                    var FormDataCtor = typeof window.FormData === 'function' ? window.FormData : null;
+
+                    if (URLSearchParamsCtor) {
+                        requestBody = new URLSearchParamsCtor();
+                        requestBody.append('action', 'bjlg_update_onboarding_progress');
+                        requestBody.append('nonce', ajaxData.onboarding_nonce || '');
+                        payload.forEach(function(stepId) {
+                            requestBody.append('completed[]', stepId);
+                        });
+                    } else if (FormDataCtor) {
+                        requestBody = new FormDataCtor();
+                        requestBody.append('action', 'bjlg_update_onboarding_progress');
+                        requestBody.append('nonce', ajaxData.onboarding_nonce || '');
+                        payload.forEach(function(stepId) {
+                            requestBody.append('completed[]', stepId);
+                        });
+                    } else {
+                        requestBody = {
                             action: 'bjlg_update_onboarding_progress',
                             nonce: ajaxData.onboarding_nonce || '',
                             completed: payload,
-                        },
-                    }).catch(function() {});
+                        };
+                    }
+
+                    if (
+                        apiFetch &&
+                        typeof apiFetch === 'function' &&
+                        (
+                            (URLSearchParamsCtor && requestBody instanceof URLSearchParamsCtor) ||
+                            (FormDataCtor && requestBody instanceof FormDataCtor)
+                        )
+                    ) {
+                        apiFetch({
+                            url: ajaxData.ajax_url,
+                            method: 'POST',
+                            body: requestBody,
+                        }).catch(function() {});
+                        return;
+                    }
+
+                    var fetchFn = typeof window.fetch === 'function' ? window.fetch : null;
+                    if (
+                        fetchFn &&
+                        (
+                            (URLSearchParamsCtor && requestBody instanceof URLSearchParamsCtor) ||
+                            (FormDataCtor && requestBody instanceof FormDataCtor)
+                        )
+                    ) {
+                        fetchFn(ajaxData.ajax_url, {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            body: requestBody,
+                        }).catch(function() {});
+                        return;
+                    }
+
+                    if (window.jQuery && typeof window.jQuery.post === 'function') {
+                        window.jQuery.post(ajaxData.ajax_url, requestBody);
+                    }
                 }, 400);
 
                 return function() {
