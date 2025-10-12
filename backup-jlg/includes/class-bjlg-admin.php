@@ -652,7 +652,7 @@ class BJLG_Admin {
                     </div>
 
                     <div id="bjlg-admin-app" class="bjlg-admin-app" data-active-section="<?php echo esc_attr($active_section); ?>"<?php echo $app_sections_attr . $app_modules_attr . $app_onboarding_attr; ?>>
-                        <div id="bjlg-admin-app-nav" class="bjlg-admin-app__nav" aria-hidden="true"></div>
+                        <div id="bjlg-admin-app-nav" class="bjlg-admin-app__nav"></div>
                         <div class="bjlg-admin-app__panels">
                             <?php foreach ($sections as $section_key => $section):
                                 $panel_id = 'bjlg-section-' . $section_key;
