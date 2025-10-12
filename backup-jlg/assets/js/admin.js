@@ -429,6 +429,115 @@ jQuery(function($) {
         };
         const apiFetch = window.wp.apiFetch;
 
+        const buildOnboardingFormData = function(selectedSteps) {
+            if (typeof window.FormData !== 'function') {
+                return null;
+            }
+
+            const formData = new window.FormData();
+            formData.append('action', 'bjlg_update_onboarding_progress');
+            formData.append('nonce', ajaxData.onboarding_nonce || '');
+
+            selectedSteps.forEach(function(stepId) {
+                if (stepId) {
+                    formData.append('completed[]', stepId);
+                }
+            });
+
+            return formData;
+        };
+
+        const buildOnboardingParams = function(selectedSteps) {
+            if (typeof window.URLSearchParams !== 'function') {
+                return null;
+            }
+
+            const params = new window.URLSearchParams();
+            params.append('action', 'bjlg_update_onboarding_progress');
+            params.append('nonce', ajaxData.onboarding_nonce || '');
+
+            selectedSteps.forEach(function(stepId) {
+                params.append('completed[]', stepId);
+            });
+
+            return params;
+        };
+
+        const submitOnboardingProgress = function(selectedSteps) {
+            if (!ajaxData || !ajaxData.ajax_url) {
+                return;
+            }
+
+            const normalizedSteps = Array.isArray(selectedSteps) ? selectedSteps : [];
+            const sanitizedSteps = normalizedSteps.reduce(function(list, stepId) {
+                if (stepId === undefined || stepId === null) {
+                    return list;
+                }
+
+                const value = String(stepId).trim();
+                if (value !== '') {
+                    list.push(value);
+                }
+
+                return list;
+            }, []);
+
+            const performFetch = function(requestBody) {
+                if (typeof window.fetch === 'function') {
+                    const body = requestBody || buildOnboardingParams(sanitizedSteps);
+                    if (body) {
+                        const isFormData = typeof window.FormData === 'function' && body instanceof window.FormData;
+                        const options = {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            body: body,
+                        };
+
+                        if (!isFormData) {
+                            options.headers = {
+                                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                            };
+                        }
+
+                        window.fetch(ajaxData.ajax_url, options).catch(function() {});
+                        return;
+                    }
+                }
+
+                if (window.jQuery && typeof window.jQuery.ajax === 'function') {
+                    window.jQuery.ajax({
+                        url: ajaxData.ajax_url,
+                        method: 'POST',
+                        data: {
+                            action: 'bjlg_update_onboarding_progress',
+                            nonce: ajaxData.onboarding_nonce || '',
+                            completed: sanitizedSteps,
+                        },
+                        traditional: false,
+                    });
+                }
+            };
+
+            if (apiFetch && typeof apiFetch === 'function') {
+                const formData = buildOnboardingFormData(sanitizedSteps);
+                if (formData) {
+                    apiFetch({
+                        url: ajaxData.ajax_url,
+                        method: 'POST',
+                        body: formData,
+                        parse: false,
+                    }).catch(function() {
+                        performFetch(buildOnboardingFormData(sanitizedSteps));
+                    });
+                } else {
+                    performFetch(null);
+                }
+                return;
+            }
+
+            performFetch(buildOnboardingFormData(sanitizedSteps));
+        };
+
         const autoCompleted = new Set(steps.filter(function(step) { return step && step.completed; }).map(function(step) { return step.id; }));
         const initialManual = new Set((Array.isArray(data.completed) ? data.completed : []).filter(function(id) {
             return !autoCompleted.has(id);
@@ -453,21 +562,13 @@ jQuery(function($) {
             const progress = totalSteps > 0 ? Math.round((completedCount / totalSteps) * 100) : 0;
 
             useEffect(function() {
-                if (!apiFetch || !ajaxData || !ajaxData.ajax_url) {
+                if (!ajaxData || !ajaxData.ajax_url) {
                     return undefined;
                 }
 
                 const payload = Array.from(manualCompleted);
                 const timeout = window.setTimeout(function() {
-                    apiFetch({
-                        url: ajaxData.ajax_url,
-                        method: 'POST',
-                        data: {
-                            action: 'bjlg_update_onboarding_progress',
-                            nonce: ajaxData.onboarding_nonce || '',
-                            completed: payload,
-                        },
-                    }).catch(function() {});
+                    submitOnboardingProgress(payload);
                 }, 400);
 
                 return function() {
@@ -584,6 +685,7 @@ jQuery(function($) {
                                         handleToggle(step, checked);
                                     },
                                     disabled: isLocked,
+                                    __nextHasNoMarginBottom: true,
                                 }),
                                 step.description ? createElement('p', { className: 'bjlg-onboarding-card__description' }, step.description) : null,
                                 (isLocked && !autoCompleted.has(step.id)) ? createElement('p', { className: 'bjlg-onboarding-card__hint' }, __('Terminez l’action associée pour valider cette étape.', 'backup-jlg')) : null
