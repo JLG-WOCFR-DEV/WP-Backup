@@ -356,6 +356,35 @@ jQuery(function($) {
         const { createElement, render, useEffect, useState } = window.wp.element;
         const { TabPanel } = window.wp.components;
 
+        const syncTabAccessibility = function() {
+            const tabElements = navContainer.querySelectorAll('.components-tab-panel__tabs-item');
+
+            tabElements.forEach(function(tabEl) {
+                const tabId = tabEl.getAttribute('id');
+                if (!tabId) {
+                    return;
+                }
+
+                const match = tabId.match(/^tab-panel-\d+-(.+)$/);
+                const sectionKey = match ? match[1] : '';
+                if (!sectionKey) {
+                    return;
+                }
+
+                const panel = document.querySelector('.bjlg-shell-section[data-section="' + sectionKey + '"]');
+                if (!panel) {
+                    return;
+                }
+
+                if (!panel.id) {
+                    panel.id = 'bjlg-section-' + sectionKey;
+                }
+
+                panel.setAttribute('aria-labelledby', tabId);
+                tabEl.setAttribute('aria-controls', panel.id);
+            });
+        };
+
         const AdminSectionTabs = function(props) {
             const [active, setActive] = useState(props.initialSection);
 
@@ -370,6 +399,12 @@ jQuery(function($) {
                     props.registerExternal(setActive);
                 }
             }, [props.registerExternal]);
+
+            useEffect(function() {
+                if (typeof props.onRender === 'function') {
+                    props.onRender();
+                }
+            });
 
             const tabs = props.sections.map(function(section) {
                 return {
@@ -403,8 +438,13 @@ jQuery(function($) {
                     callback(sectionKey);
                 };
             },
+            onRender: function() {
+                syncTabAccessibility();
+            },
         }), navContainer);
 
+        navContainer.removeAttribute('aria-hidden');
+        syncTabAccessibility();
         setActiveSection(initialSection, false, true);
     };
 
