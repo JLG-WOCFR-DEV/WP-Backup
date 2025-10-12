@@ -2639,6 +2639,17 @@ border-color: #d1d5db;
     color: inherit;
 }
 
+.bjlg-wrap.is-dark .bjlg-progress-bar {
+    background-color: color-mix(in srgb, var(--bjlg-color-surface) 65%, rgba(96, 165, 250, 0.16));
+    border-color: color-mix(in srgb, var(--bjlg-color-accent) 32%, var(--bjlg-color-border));
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.32);
+}
+
+.bjlg-wrap.is-dark .bjlg-progress-bar-inner {
+    color: #0b1120;
+    text-shadow: none;
+}
+
 .bjlg-wrap.is-dark .bjlg-action-card {
     background-color: var(--bjlg-color-surface-subtle);
     border-color: var(--bjlg-color-border-strong);
