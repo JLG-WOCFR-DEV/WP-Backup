@@ -391,7 +391,60 @@ class BJLG_Performance {
         
         return $temp_files;
     }
-    
+
+    /**
+     * Exécution "parallèle" des tâches.
+     *
+     * Dans certains environnements, les fonctions nécessaires au multi-processing
+     * peuvent être désactivées. Afin d'éviter une erreur fatale (méthode
+     * inexistante) lors de l'appel depuis create_optimized_backup(), nous
+     * fournissons une implémentation qui regroupe les tâches par worker et les
+     * traite séquentiellement lorsque le véritable parallélisme n'est pas
+     * disponible.
+     */
+    private function execute_parallel_tasks($tasks, $task_id) {
+        if (!$this->can_use_parallel_processing()) {
+            BJLG_Debug::log('Traitement parallèle indisponible, repli en mode séquentiel.');
+
+            return $this->execute_sequential_optimized($tasks, $task_id);
+        }
+
+        $grouped = [];
+        foreach ($tasks as $task) {
+            $worker_id = isset($task['worker_id']) ? (int) $task['worker_id'] : 0;
+            if (!isset($grouped[$worker_id])) {
+                $grouped[$worker_id] = [];
+            }
+
+            $grouped[$worker_id][] = $task;
+        }
+
+        $temp_files = [];
+        $worker_count = count($grouped);
+        $current_worker = 0;
+
+        foreach ($grouped as $worker_id => $worker_tasks) {
+            $current_worker++;
+            BJLG_Debug::log(sprintf(
+                'Traitement optimisé - worker %d/%d (%d tâches).',
+                $worker_id,
+                $worker_count,
+                count($worker_tasks)
+            ));
+
+            try {
+                $worker_results = $this->execute_sequential_optimized($worker_tasks, $task_id);
+                if (!empty($worker_results)) {
+                    $temp_files = array_merge($temp_files, $worker_results);
+                }
+            } catch (Exception $e) {
+                BJLG_Debug::log('Erreur sur worker parallèle : ' . $e->getMessage());
+            }
+        }
+
+        return $temp_files;
+    }
+
     /**
      * Exécute une tâche unique
      */
