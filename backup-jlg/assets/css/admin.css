@@ -2646,8 +2646,8 @@ border-color: #d1d5db;
 }
 
 .bjlg-wrap.is-dark .bjlg-progress-bar-inner {
-    color: #0b1120;
-    text-shadow: none;
+    color: #f8fafc;
+    text-shadow: 0 1px 2px rgba(8, 11, 20, 0.4);
 }
 
 .bjlg-wrap.is-dark .bjlg-action-card {
