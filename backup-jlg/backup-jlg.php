@@ -352,7 +352,7 @@ final class BJLG_Plugin {
         $this->include_files();
         $this->init_services();
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
-        add_action('init', [$this, 'load_textdomain']);
+        add_action('init', [$this, 'load_textdomain'], 5);
     }
     
     private function include_files() {
@@ -424,7 +424,7 @@ final class BJLG_Plugin {
         new BJLG\BJLG_Webhooks();
         new BJLG\BJLG_Incremental();
         new BJLG\BJLG_Notification_Queue();
-        BJLG\BJLG_Notifications::instance();
+        add_action('init', [\BJLG\BJLG_Notifications::class, 'instance'], 20);
         new BJLG\BJLG_REST_API();
         new BJLG\BJLG_Settings();
         new BJLG\BJLG_API_Keys();
