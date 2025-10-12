@@ -2830,6 +2830,7 @@ class BJLG_Admin {
                                    readonly
                                    value="<?php echo esc_attr($webhook_key); ?>"
                                    class="regular-text code"
+                                   autocomplete="current-password"
                                    data-lpignore="true">
                         </div>
                         <div class="bjlg-form-field-actions">
