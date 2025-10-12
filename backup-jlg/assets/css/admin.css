@@ -784,6 +784,7 @@
     font-size: 2rem;
     font-weight: 600;
     color: var(--bjlg-color-text);
+    line-height: 1.25;
 }
 
 .bjlg-card__meta,
