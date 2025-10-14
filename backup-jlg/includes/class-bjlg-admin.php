@@ -411,9 +411,9 @@ class BJLG_Admin {
             [
                 'id' => 'enable-encryption',
                 'title' => __('Activer le chiffrement AES-256', 'backup-jlg'),
-                'description' => __('Protégez vos archives en activant le chiffrement côté serveur.', 'backup-jlg'),
+                'description' => __('Protégez vos archives en générant une clé AES-256 puis en activant l’option « Sauvegarde chiffrée » dans Paramètres → Chiffrement.', 'backup-jlg'),
                 'cta' => [
-                    'label' => __('Activer le chiffrement', 'backup-jlg'),
+                    'label' => __('Ouvrir Paramètres → Chiffrement', 'backup-jlg'),
                     'href' => add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php')) . '#bjlg-encryption-settings',
                 ],
                 'completed' => $encryption_enabled,
@@ -1658,6 +1658,15 @@ class BJLG_Admin {
             admin_url('admin.php')
         );
         $backup_redirect .= '#bjlg-backup-step-3';
+
+        $encryption_settings_url = add_query_arg(
+            [
+                'page' => 'backup-jlg',
+                'section' => 'settings',
+            ],
+            admin_url('admin.php')
+        );
+        $encryption_settings_url .= '#bjlg-encryption-settings';
         ?>
         <div class="bjlg-section">
             <h2>Créer une sauvegarde</h2>
@@ -1751,7 +1760,21 @@ class BJLG_Admin {
                                                     Chiffrer la sauvegarde (AES-256)
                                                 </label>
                                                 <p id="bjlg-encrypt-backup-description" class="description">
-                                                    Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers.
+                                                    <?php
+                                                    echo wp_kses(
+                                                        sprintf(
+                                                            /* translators: %s: URL to encryption settings */
+                                                            __('Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers. <strong>Pour activer le module</strong>, ouvrez <a href="%s">Paramètres → Chiffrement</a>, générez une clé AES-256 puis activez l’option « Sauvegarde chiffrée ».', 'backup-jlg'),
+                                                            esc_url($encryption_settings_url)
+                                                        ),
+                                                        [
+                                                            'strong' => [],
+                                                            'a' => [
+                                                                'href' => [],
+                                                            ],
+                                                        ]
+                                                    );
+                                                    ?>
                                                 </p>
                                                 <br>
                                                 <label for="bjlg-incremental-backup">

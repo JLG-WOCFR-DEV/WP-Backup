@@ -1079,7 +1079,11 @@ class BJLG_Admin_Advanced {
             $encryption_message = __('Le chiffrement AES-256 est désactivé.', 'backup-jlg');
             $score -= 18;
             $insights[] = __('Activer le chiffrement des sauvegardes', 'backup-jlg');
-            $this->add_recommendation($recommendations, __('Activer le chiffrement AES-256', 'backup-jlg'), add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php')));
+            $this->add_recommendation(
+                $recommendations,
+                __('Activer le chiffrement AES-256', 'backup-jlg'),
+                add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php')) . '#bjlg-encryption-settings'
+            );
         } else {
             $percentage = (int) round($encrypted_ratio * 100);
             $encryption_message = sprintf(__('Chiffrement actif • %s%% des archives sécurisées', 'backup-jlg'), number_format_i18n($percentage));
