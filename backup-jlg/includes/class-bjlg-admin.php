@@ -2837,7 +2837,7 @@ class BJLG_Admin {
                     <label for="bjlg-webhook-endpoint" class="bjlg-label-block bjlg-fw-600">Point de terminaison</label>
                     <div class="bjlg-form-field-group">
                         <div class="bjlg-form-field-control">
-                            <input type="text" id="bjlg-webhook-endpoint" readonly value="<?php echo esc_url(BJLG_Webhooks::get_webhook_endpoint()); ?>" class="regular-text code">
+                            <input type="text" id="bjlg-webhook-endpoint" readonly value="<?php echo esc_url(BJLG_Webhooks::get_webhook_endpoint()); ?>" class="regular-text code" autocomplete="url">
                         </div>
                         <div class="bjlg-form-field-actions">
                             <button type="button" class="button bjlg-copy-field" data-copy-target="#bjlg-webhook-endpoint">Copier l'URL</button>
