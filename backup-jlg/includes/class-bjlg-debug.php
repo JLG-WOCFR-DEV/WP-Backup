@@ -1,6 +1,8 @@
 <?php
 namespace BJLG;
 
+use Exception;
+
 if (!defined('ABSPATH')) {
     exit;
 }
@@ -9,6 +11,8 @@ if (!defined('ABSPATH')) {
  * Classe statique pour la gestion des logs de débogage.
  */
 class BJLG_Debug {
+
+    private const MEMORY_LOG_LIMIT = 500;
 
     /**
      * Journal en mémoire utilisé principalement pour les tests automatisés.
@@ -31,6 +35,9 @@ class BJLG_Debug {
         }
 
         self::$logs[] = $formatted_message;
+        if (count(self::$logs) > self::MEMORY_LOG_LIMIT) {
+            self::$logs = array_slice(self::$logs, -self::MEMORY_LOG_LIMIT);
+        }
 
         // Vérifier si le débogage est activé
         if (!defined('BJLG_DEBUG') || BJLG_DEBUG !== true) {
