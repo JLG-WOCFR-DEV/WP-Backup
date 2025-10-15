@@ -3,6 +3,8 @@ namespace BJLG;
 
 use Exception;
 
+require_once __DIR__ . '/class-bjlg-api-keys.php';
+
 if (!defined('ABSPATH')) {
     exit;
 }
@@ -74,14 +76,19 @@ class BJLG_Cleanup {
             // Nettoyage des transients expirés
             $this->cleanup_transients();
 
+            // Suppression des clés API expirées
+            $api_keys_cleanup = $this->cleanup_expired_api_keys();
+            $expired_api_keys = isset($api_keys_cleanup['removed']) ? (int) $api_keys_cleanup['removed'] : 0;
+
             $this->report_remote_cleanup($remote_cleanup);
 
             $summary = sprintf(
-                '%d sauvegarde(s) locales, %d sauvegarde(s) distantes, %d fichier(s) temporaire(s), %d entrée(s) d\'historique supprimés',
+                '%d sauvegarde(s) locales, %d sauvegarde(s) distantes, %d fichier(s) temporaire(s), %d entrée(s) d\'historique supprimés, %d clé(s) API expirée(s)',
                 $deleted_backups,
                 $remote_deleted,
                 $deleted_temp,
-                $deleted_history
+                $deleted_history,
+                $expired_api_keys
             );
 
             BJLG_History::log('cleanup_task_finished', 'success', $summary);
@@ -92,7 +99,8 @@ class BJLG_Cleanup {
                 'backups_deleted' => $deleted_backups,
                 'remote_backups_deleted' => $remote_deleted,
                 'temp_files_deleted' => $deleted_temp,
-                'history_entries_deleted' => $deleted_history
+                'history_entries_deleted' => $deleted_history,
+                'api_keys_removed' => $expired_api_keys,
             ]);
 
         } catch (Exception $e) {
@@ -127,15 +135,19 @@ class BJLG_Cleanup {
                 case 'history':
                     $results['history'] = $this->cleanup_old_history();
                     break;
+                case 'api_keys':
+                    $results['api_keys'] = $this->cleanup_expired_api_keys();
+                    break;
                 case 'all':
                 default:
                     $results['backups'] = $this->cleanup_backups();
                     $results['temp'] = $this->cleanup_temp_files();
                     $results['logs'] = $this->rotate_log_file(true);
                     $results['history'] = $this->cleanup_old_history();
+                    $results['api_keys'] = $this->cleanup_expired_api_keys();
                     break;
             }
-            
+
             wp_send_json_success([
                 'message' => 'Nettoyage effectué avec succès.',
                 'results' => $results
@@ -275,6 +287,30 @@ class BJLG_Cleanup {
         }
         
         return $deleted_count;
+    }
+
+    private function cleanup_expired_api_keys() {
+        if (!class_exists(BJLG_API_Keys::class)) {
+            return [
+                'removed' => 0,
+                'remaining' => 0,
+                'total' => 0,
+                'removed_ids' => [],
+            ];
+        }
+
+        $result = BJLG_API_Keys::purge_expired_keys();
+
+        if (!empty($result['removed'])) {
+            $ids = array_filter(array_map('sanitize_text_field', $result['removed_ids']));
+            BJLG_Debug::log(sprintf(
+                'Suppression de %d clé(s) API expirée(s) : %s',
+                (int) $result['removed'],
+                implode(', ', $ids)
+            ));
+        }
+
+        return $result;
     }
 
     private function cleanup_remote_destinations() {
