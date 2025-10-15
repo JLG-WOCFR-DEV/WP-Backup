@@ -12,6 +12,7 @@ class BJLG_Debug_UI {
         add_action('admin_menu', [$this, 'menu'], 9); // priorité haute pour garantir l’enregistrement
         add_action('admin_post_bjlg_save_modules', [$this, 'save_modules']);
         add_action('wp_ajax_bjlg_module_selfcheck', [$this, 'ajax_selfcheck']);
+        add_action('wp_ajax_bjlg_log_module_selfcheck_error', [$this, 'ajax_log_module_failure']);
     }
 
     public function menu() {
@@ -230,6 +231,41 @@ class BJLG_Debug_UI {
 
                 applyFilter();
 
+                function reportNetworkFailure(moduleFile, error) {
+                    var reason = '';
+                    if (error && error.message) {
+                        reason = String(error.message);
+                    }
+
+                    if (window.URLSearchParams && navigator.sendBeacon) {
+                        var params = new URLSearchParams();
+                        params.append('action', 'bjlg_log_module_selfcheck_error');
+                        params.append('nonce', nonce);
+                        params.append('file', moduleFile || '');
+                        params.append('message', reason);
+                        params.append('status', 'network-error');
+                        var blob = new Blob([params.toString()], { type: 'application/x-www-form-urlencoded; charset=UTF-8' });
+                        navigator.sendBeacon(ajaxURL, blob);
+                        return;
+                    }
+
+                    var payload = new FormData();
+                    payload.append('action', 'bjlg_log_module_selfcheck_error');
+                    payload.append('nonce', nonce);
+                    payload.append('file', moduleFile || '');
+                    payload.append('message', reason);
+                    payload.append('status', 'network-error');
+
+                    fetch(ajaxURL, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        body: payload,
+                        keepalive: true
+                    }).catch(function() {
+                        // Ignorer silencieusement si le reporting échoue également.
+                    });
+                }
+
                 buttons.forEach(function(btn){
                     btn.addEventListener('click', function(){
                         if (btn.disabled) {
@@ -274,12 +310,13 @@ class BJLG_Debug_UI {
                                     result.setAttribute('data-status', 'error');
                                 }
                             })
-                            .catch(function(){
+                            .catch(function(error){
                                 if (!result) {
                                     return;
                                 }
                                 result.textContent = 'Erreur réseau';
                                 result.setAttribute('data-status', 'error');
+                                reportNetworkFailure(btn.getAttribute('data-file'), error);
                             })
                             .then(function(){
                                 btn.disabled = false;
@@ -331,6 +368,35 @@ class BJLG_Debug_UI {
             wp_send_json_error(['message'=>"Accolades non équilibrées ($open/$close)"]);
         }
         wp_send_json_success(['message'=>'Lint léger OK']);
+    }
+
+    public function ajax_log_module_failure() {
+        if (!check_ajax_referer(self::NONCE_ACTION, 'nonce', false)) {
+            wp_send_json_error(['message' => 'Nonce invalide'], 403);
+        }
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Capacité insuffisante'], 403);
+        }
+
+        $file = isset($_POST['file']) ? sanitize_text_field(wp_unslash($_POST['file'])) : '';
+        $status = isset($_POST['status']) ? sanitize_text_field(wp_unslash($_POST['status'])) : 'network-error';
+        $message = isset($_POST['message']) ? sanitize_text_field(wp_unslash($_POST['message'])) : '';
+
+        $label = $file !== '' ? $file : 'fichier non communiqué';
+        $reason = $message !== '' ? $message : 'Erreur réseau inconnue';
+
+        if (class_exists('\\BJLG\\BJLG_Debug')) {
+            \BJLG\BJLG_Debug::warning(sprintf(
+                'Selfcheck AJAX %1$s sur %2$s : %3$s (utilisateur #%4$d)',
+                $status,
+                $label,
+                $reason,
+                get_current_user_id()
+            ));
+        }
+
+        wp_send_json_success(['logged' => true]);
     }
 }
 new BJLG_Debug_UI();
