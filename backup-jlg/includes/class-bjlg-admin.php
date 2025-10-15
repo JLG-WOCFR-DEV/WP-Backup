@@ -1009,6 +1009,166 @@ class BJLG_Admin {
                         <?php endif; ?>
                     </ul>
                 </article>
+
+                <?php
+                $remote_purge_queue = isset($metrics['queues']['remote_purge']) && is_array($metrics['queues']['remote_purge'])
+                    ? $metrics['queues']['remote_purge']
+                    : [];
+                $remote_purge_sla = isset($remote_purge_queue['sla']) && is_array($remote_purge_queue['sla'])
+                    ? $remote_purge_queue['sla']
+                    : [];
+
+                if (!empty($remote_purge_sla)) {
+                    $pending_total = isset($remote_purge_sla['pending_total']) ? (int) $remote_purge_sla['pending_total'] : 0;
+                    $pending_total_label = number_format_i18n($pending_total);
+                    $pending_over_threshold = isset($remote_purge_sla['pending_over_threshold'])
+                        ? (int) $remote_purge_sla['pending_over_threshold']
+                        : 0;
+                    $pending_average = isset($remote_purge_sla['pending_average']) && $remote_purge_sla['pending_average'] !== ''
+                        ? (string) $remote_purge_sla['pending_average']
+                        : '—';
+                    $pending_oldest = isset($remote_purge_sla['pending_oldest']) && $remote_purge_sla['pending_oldest'] !== ''
+                        ? (string) $remote_purge_sla['pending_oldest']
+                        : '—';
+                    $pending_destinations = isset($remote_purge_sla['pending_destinations'])
+                        ? (string) $remote_purge_sla['pending_destinations']
+                        : '';
+                    $throughput_average = isset($remote_purge_sla['throughput_average']) && $remote_purge_sla['throughput_average'] !== ''
+                        ? (string) $remote_purge_sla['throughput_average']
+                        : '—';
+                    $last_completion = isset($remote_purge_sla['throughput_last_completion']) && $remote_purge_sla['throughput_last_completion'] !== ''
+                        ? (string) $remote_purge_sla['throughput_last_completion']
+                        : '—';
+                    $last_completion_relative = isset($remote_purge_sla['throughput_last_completion_relative'])
+                        ? (string) $remote_purge_sla['throughput_last_completion_relative']
+                        : '';
+                    $failures_total = isset($remote_purge_sla['failures_total']) ? (int) $remote_purge_sla['failures_total'] : 0;
+                    $failures_total_label = number_format_i18n($failures_total);
+                    $last_failure_relative = isset($remote_purge_sla['last_failure_relative'])
+                        ? (string) $remote_purge_sla['last_failure_relative']
+                        : '';
+                    $last_failure_message = isset($remote_purge_sla['last_failure_message'])
+                        ? (string) $remote_purge_sla['last_failure_message']
+                        : '';
+                    $updated_relative = isset($remote_purge_sla['updated_relative'])
+                        ? (string) $remote_purge_sla['updated_relative']
+                        : '';
+                    $updated_formatted = isset($remote_purge_sla['updated_formatted'])
+                        ? (string) $remote_purge_sla['updated_formatted']
+                        : '';
+
+                    $pending_intent = $pending_over_threshold > 0 ? 'warning' : 'info';
+                    $failures_intent = $failures_total > 0 ? 'error' : 'info';
+                    ?>
+                    <article class="bjlg-card bjlg-card--sla" data-metric="remote-purge-sla">
+                        <span class="bjlg-card__kicker"><?php esc_html_e('Purge distante', 'backup-jlg'); ?></span>
+                        <h3 class="bjlg-card__title"><?php esc_html_e('SLA opérationnel', 'backup-jlg'); ?></h3>
+
+                        <div class="bjlg-card__stats">
+                            <div class="bjlg-card__stat" data-intent="<?php echo esc_attr($pending_intent); ?>">
+                                <span class="bjlg-card__stat-label"><?php esc_html_e('Entrées en file', 'backup-jlg'); ?></span>
+                                <span class="bjlg-card__stat-value"><?php echo esc_html($pending_total_label); ?></span>
+                            </div>
+                            <?php if ($pending_over_threshold > 0): ?>
+                                <p class="bjlg-card__stat-meta" data-intent="warning">
+                                    <?php
+                                    printf(
+                                        /* translators: %s: number of entries above SLA threshold. */
+                                        esc_html__('Seuil dépassé pour %s entrée(s).', 'backup-jlg'),
+                                        esc_html(number_format_i18n($pending_over_threshold))
+                                    );
+                                    ?>
+                                </p>
+                            <?php endif; ?>
+
+                            <div class="bjlg-card__stat">
+                                <span class="bjlg-card__stat-label"><?php esc_html_e('Attente moyenne', 'backup-jlg'); ?></span>
+                                <span class="bjlg-card__stat-value"><?php echo esc_html($pending_average); ?></span>
+                            </div>
+
+                            <div class="bjlg-card__stat" data-intent="<?php echo esc_attr($pending_intent); ?>">
+                                <span class="bjlg-card__stat-label"><?php esc_html_e('Plus ancien en file', 'backup-jlg'); ?></span>
+                                <span class="bjlg-card__stat-value"><?php echo esc_html($pending_oldest); ?></span>
+                            </div>
+
+                            <div class="bjlg-card__stat">
+                                <span class="bjlg-card__stat-label"><?php esc_html_e('Durée moyenne d’une purge', 'backup-jlg'); ?></span>
+                                <span class="bjlg-card__stat-value"><?php echo esc_html($throughput_average); ?></span>
+                            </div>
+
+                            <div class="bjlg-card__stat">
+                                <span class="bjlg-card__stat-label"><?php esc_html_e('Dernière purge finalisée', 'backup-jlg'); ?></span>
+                                <span class="bjlg-card__stat-value"><?php echo esc_html($last_completion); ?></span>
+                            </div>
+                            <?php if ($last_completion_relative !== ''): ?>
+                                <p class="bjlg-card__stat-meta">
+                                    <?php
+                                    printf(
+                                        /* translators: %s: relative time. */
+                                        esc_html__('Terminée %s', 'backup-jlg'),
+                                        esc_html($last_completion_relative)
+                                    );
+                                    ?>
+                                </p>
+                            <?php endif; ?>
+
+                            <div class="bjlg-card__stat" data-intent="<?php echo esc_attr($failures_intent); ?>">
+                                <span class="bjlg-card__stat-label"><?php esc_html_e('Échecs détectés', 'backup-jlg'); ?></span>
+                                <span class="bjlg-card__stat-value"><?php echo esc_html($failures_total_label); ?></span>
+                            </div>
+                            <?php if ($last_failure_relative !== ''): ?>
+                                <p class="bjlg-card__stat-meta" data-intent="<?php echo esc_attr($failures_intent); ?>">
+                                    <?php
+                                    printf(
+                                        /* translators: %s: relative time. */
+                                        esc_html__('Dernier incident %s', 'backup-jlg'),
+                                        esc_html($last_failure_relative)
+                                    );
+                                    ?>
+                                </p>
+                            <?php endif; ?>
+                        </div>
+
+                        <?php if ($pending_destinations !== ''): ?>
+                            <p class="bjlg-card__note">
+                                <?php
+                                printf(
+                                    /* translators: %s: list of destinations. */
+                                    esc_html__('Destinations impactées : %s', 'backup-jlg'),
+                                    esc_html($pending_destinations)
+                                );
+                                ?>
+                            </p>
+                        <?php endif; ?>
+
+                        <?php if ($last_failure_message !== ''): ?>
+                            <p class="bjlg-card__note" data-intent="<?php echo esc_attr($failures_intent); ?>">
+                                <?php echo esc_html($last_failure_message); ?>
+                            </p>
+                        <?php endif; ?>
+
+                        <?php if ($updated_relative !== '' || $updated_formatted !== ''): ?>
+                            <p class="bjlg-card__meta">
+                                <?php
+                                if ($updated_relative !== '') {
+                                    printf(
+                                        /* translators: %s: relative time. */
+                                        esc_html__('Actualisé %s', 'backup-jlg'),
+                                        esc_html($updated_relative)
+                                    );
+                                } elseif ($updated_formatted !== '') {
+                                    printf(
+                                        /* translators: %s: formatted date. */
+                                        esc_html__('Actualisé le %s', 'backup-jlg'),
+                                        esc_html($updated_formatted)
+                                    );
+                                }
+                                ?>
+                            </p>
+                        <?php endif; ?>
+                    </article>
+                <?php }
+                ?>
             </div>
 
             <div class="bjlg-onboarding-checklist" id="bjlg-onboarding-checklist" role="region" aria-live="polite" aria-atomic="true"<?php echo $checklist_attr; ?>>
