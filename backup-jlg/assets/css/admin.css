@@ -788,6 +788,54 @@
     line-height: 1.25;
 }
 
+.bjlg-card__stats {
+    display: grid;
+    gap: 10px;
+    margin: 8px 0 4px;
+}
+
+.bjlg-card__stat {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+}
+
+.bjlg-card__stat-label {
+    color: var(--bjlg-color-text-subtle);
+    font-size: 0.9em;
+}
+
+.bjlg-card__stat-value {
+    font-weight: 600;
+    font-size: 1.05em;
+    color: var(--bjlg-color-text);
+}
+
+.bjlg-card__stat-meta {
+    margin: -4px 0 0;
+    font-size: 0.85em;
+    color: var(--bjlg-color-text-subtle);
+}
+
+.bjlg-card__note {
+    margin: 8px 0 0;
+    font-size: 0.9em;
+    color: var(--bjlg-color-text-subtle);
+}
+
+.bjlg-card__stat[data-intent="warning"] .bjlg-card__stat-value,
+.bjlg-card__stat-meta[data-intent="warning"],
+.bjlg-card__note[data-intent="warning"] {
+    color: var(--bjlg-warning-text, #92400e);
+}
+
+.bjlg-card__stat[data-intent="error"] .bjlg-card__stat-value,
+.bjlg-card__stat-meta[data-intent="error"],
+.bjlg-card__note[data-intent="error"] {
+    color: var(--wp-admin-theme-color-darker-20, #b32d2e);
+}
+
 .bjlg-card__meta,
 .bjlg-card__footnote {
     margin: 0;
