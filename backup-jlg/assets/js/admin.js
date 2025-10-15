@@ -109,6 +109,22 @@ jQuery(function($) {
     const ajaxData = (typeof window.bjlg_ajax === 'object' && window.bjlg_ajax) ? window.bjlg_ajax : {};
     const sectionModulesMap = ajaxData.section_modules || ajaxData.tab_modules || {};
     const loadedModules = new Set();
+    const panelAnnouncer = document.getElementById('bjlg-section-announcer');
+    const wpA11y = (window.wp && window.wp.a11y) ? window.wp.a11y : null;
+    const speak = wpA11y && typeof wpA11y.speak === 'function' ? wpA11y.speak.bind(wpA11y) : null;
+    const i18n = (window.wp && window.wp.i18n) ? window.wp.i18n : {};
+    const __ = typeof i18n.__ === 'function' ? i18n.__ : function(str) { return str; };
+    const sprintf = typeof i18n.sprintf === 'function' ? i18n.sprintf : function(format) {
+        const args = Array.prototype.slice.call(arguments, 1);
+        let index = 0;
+
+        return format.replace(/%s/g, function() {
+            const value = args[index];
+            index += 1;
+            return typeof value === 'undefined' ? '' : value;
+        });
+    };
+    const sectionLabels = {};
 
     const parseJSONSafe = function(raw, fallback) {
         if (typeof raw !== 'string' || raw === '') {
@@ -251,6 +267,7 @@ jQuery(function($) {
             return;
         }
 
+        const isInitialRender = currentSection === '';
         if (currentSection === sectionKey && !fromTab) {
             return;
         }
@@ -258,15 +275,28 @@ jQuery(function($) {
         currentSection = sectionKey;
 
         const panels = document.querySelectorAll('.bjlg-shell-section');
+        let activePanel = null;
+        let activeLabel = sectionLabels[sectionKey] || '';
         panels.forEach(function(panel) {
             const matches = panel.getAttribute('data-section') === sectionKey;
             if (matches) {
                 panel.removeAttribute('hidden');
                 panel.setAttribute('aria-hidden', 'false');
                 panel.setAttribute('tabindex', '0');
+                activePanel = panel;
+                if (!activeLabel) {
+                    const labelledby = panel.getAttribute('aria-labelledby');
+                    if (labelledby) {
+                        const labelElement = document.getElementById(labelledby);
+                        if (labelElement) {
+                            activeLabel = labelElement.textContent.trim();
+                        }
+                    }
+                }
             } else {
                 panel.setAttribute('hidden', 'hidden');
                 panel.setAttribute('aria-hidden', 'true');
+                panel.removeAttribute('tabindex');
             }
         });
 
@@ -323,6 +353,24 @@ jQuery(function($) {
         }
 
         setSidebarExpanded(false);
+
+        if (panelAnnouncer) {
+            panelAnnouncer.textContent = activeLabel || '';
+        }
+
+        if (!isInitialRender) {
+            if (activePanel && typeof activePanel.focus === 'function') {
+                try {
+                    activePanel.focus({ preventScroll: true });
+                } catch (error) {
+                    activePanel.focus();
+                }
+            }
+
+            if (speak && activeLabel) {
+                speak(sprintf(__('Section activée : %s', 'backup-jlg'), activeLabel));
+            }
+        }
     };
 
     window.bjlgSetActiveSection = function(sectionKey) {
@@ -338,6 +386,17 @@ jQuery(function($) {
         if (!sections.length) {
             return;
         }
+
+        sections.forEach(function(section) {
+            if (!section || typeof section.key === 'undefined') {
+                return;
+            }
+
+            const key = String(section.key);
+            if (key) {
+                sectionLabels[key] = typeof section.label === 'string' ? section.label : '';
+            }
+        });
 
         const navContainer = document.getElementById('bjlg-admin-app-nav');
         if (!navContainer) {

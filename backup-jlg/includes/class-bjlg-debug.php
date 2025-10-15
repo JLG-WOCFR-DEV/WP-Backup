@@ -1,6 +1,8 @@
 <?php
 namespace BJLG;
 
+use Exception;
+
 if (!defined('ABSPATH')) {
     exit;
 }
