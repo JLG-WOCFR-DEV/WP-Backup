@@ -14,6 +14,7 @@ class BJLG_API_Keys {
 
     public const OPTION_NAME = 'bjlg_api_keys';
     private const SECRET_LENGTH = 40;
+    private const API_KEY_STATS_TRANSIENT_PREFIX = 'bjlg_api_key_stats_';
 
     public function __construct() {
         add_action('wp_ajax_bjlg_create_api_key', [$this, 'handle_create_key']);
@@ -267,7 +268,17 @@ class BJLG_API_Keys {
 
         $user_meta = self::extract_user_metadata($record);
 
-        return array_merge(
+        $expires_at = 0;
+
+        if (isset($record['expires'])) {
+            $expires_at = self::sanitize_expiration_value($record['expires']);
+        } elseif (isset($record['expires_at'])) {
+            $expires_at = self::sanitize_expiration_value($record['expires_at']);
+        }
+
+        $current_time = time();
+
+        $output = array_merge(
             [
                 'id' => (string) $record['id'],
                 'label' => $label,
@@ -280,9 +291,15 @@ class BJLG_API_Keys {
                 'last_rotated_at_iso' => gmdate('c', $rotated_at),
                 'created_at_human' => gmdate('Y-m-d H:i:s', $created_at),
                 'last_rotated_at_human' => gmdate('Y-m-d H:i:s', $rotated_at),
+                'expires_at' => $expires_at,
+                'expires_at_iso' => $expires_at > 0 ? gmdate('c', $expires_at) : '',
+                'expires_at_human' => $expires_at > 0 ? gmdate('Y-m-d H:i:s', $expires_at) : '',
+                'is_expired' => $expires_at > 0 && $expires_at <= $current_time,
             ],
             $user_meta
         );
+
+        return $output;
     }
 
     /**
@@ -373,11 +390,105 @@ class BJLG_API_Keys {
             $user_meta
         );
 
+        $expires_at = 0;
+
+        if (isset($record['expires'])) {
+            $expires_at = self::sanitize_expiration_value($record['expires']);
+        } elseif (isset($record['expires_at'])) {
+            $expires_at = self::sanitize_expiration_value($record['expires_at']);
+        }
+
+        if ($expires_at > 0) {
+            $normalized['expires'] = $expires_at;
+        } elseif ($for_storage) {
+            unset($normalized['expires']);
+        }
+
         if (!$for_storage && $has_display_secret_field && $plain_secret !== '') {
             $normalized['display_secret'] = $plain_secret;
         }
 
         return $normalized;
+    }
+
+    /**
+     * Supprime les clés API expirées.
+     *
+     * @param int|null $current_time
+     * @return array{removed:int,remaining:int,total:int,removed_ids:array<int,string>}
+     */
+    public static function purge_expired_keys($current_time = null) {
+        $timestamp = is_int($current_time) ? $current_time : time();
+
+        if ($timestamp <= 0) {
+            $timestamp = time();
+        }
+
+        $keys = self::get_indexed_keys();
+
+        if (empty($keys)) {
+            return [
+                'removed' => 0,
+                'remaining' => 0,
+                'total' => 0,
+                'removed_ids' => [],
+            ];
+        }
+
+        $removed_ids = [];
+
+        foreach ($keys as $id => $record) {
+            $expires_at = isset($record['expires']) ? self::sanitize_expiration_value($record['expires']) : 0;
+
+            if ($expires_at > 0 && $expires_at <= $timestamp) {
+                self::delete_usage_stats_for_record($record);
+                unset($keys[$id]);
+                $removed_ids[] = (string) $id;
+            }
+        }
+
+        if (!empty($removed_ids)) {
+            self::save_indexed_keys($keys);
+        }
+
+        return [
+            'removed' => count($removed_ids),
+            'remaining' => count($keys),
+            'total' => count($keys) + count($removed_ids),
+            'removed_ids' => $removed_ids,
+        ];
+    }
+
+    /**
+     * Normalise une valeur d'expiration.
+     *
+     * @param mixed $value
+     */
+    private static function sanitize_expiration_value($value) {
+        if ($value instanceof \DateTimeInterface) {
+            $timestamp = $value->getTimestamp();
+        } elseif (is_numeric($value)) {
+            $timestamp = (int) $value;
+        } elseif (is_string($value)) {
+            $timestamp = (int) strtotime($value);
+        } else {
+            $timestamp = 0;
+        }
+
+        if ($timestamp < 0) {
+            $timestamp = 0;
+        }
+
+        return $timestamp;
+    }
+
+    private static function delete_usage_stats_for_record(array $record) {
+        if (!isset($record['key']) || !is_string($record['key']) || $record['key'] === '') {
+            return;
+        }
+
+        $transient_key = self::API_KEY_STATS_TRANSIENT_PREFIX . md5($record['key']);
+        delete_transient($transient_key);
     }
 
     /**

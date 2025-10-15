@@ -175,4 +175,86 @@ final class BJLG_API_KeysTest extends TestCase
         $this->assertGreaterThan($existing['last_rotated_at'], $stored['last_rotated_at']);
         $this->assertSame(1, $stored['user_id']);
     }
+
+    public function test_purge_expired_keys_removes_expired_entries(): void
+    {
+        $now = time();
+
+        $expired = [
+            'id' => 'expired',
+            'label' => 'Clé expirée',
+            'key' => wp_hash_password('EXPIRED'),
+            'created_at' => $now - 600,
+            'last_rotated_at' => $now - 300,
+            'user_id' => 1,
+            'user_login' => 'admin',
+            'user_email' => 'admin@example.com',
+            'expires' => $now - 60,
+        ];
+
+        $active = [
+            'id' => 'active',
+            'label' => 'Clé active',
+            'key' => wp_hash_password('ACTIVE'),
+            'created_at' => $now - 400,
+            'last_rotated_at' => $now - 200,
+            'user_id' => 1,
+            'user_login' => 'admin',
+            'user_email' => 'admin@example.com',
+            'expires' => $now + 600,
+        ];
+
+        $GLOBALS['bjlg_test_options'][BJLG\BJLG_API_Keys::OPTION_NAME] = [
+            'expired' => $expired,
+            'active' => $active,
+        ];
+
+        set_transient('bjlg_api_key_stats_' . md5($expired['key']), ['usage_count' => 3], 0);
+        set_transient('bjlg_api_key_stats_' . md5($active['key']), ['usage_count' => 5], 0);
+
+        $result = BJLG\BJLG_API_Keys::purge_expired_keys($now);
+
+        $this->assertSame(1, $result['removed']);
+        $this->assertSame(1, $result['remaining']);
+        $this->assertSame(2, $result['total']);
+        $this->assertSame(['expired'], $result['removed_ids']);
+
+        $stored = $GLOBALS['bjlg_test_options'][BJLG\BJLG_API_Keys::OPTION_NAME] ?? [];
+        $this->assertArrayNotHasKey('expired', $stored);
+        $this->assertArrayHasKey('active', $stored);
+
+        $this->assertFalse(get_transient('bjlg_api_key_stats_' . md5($expired['key'])));
+        $this->assertNotFalse(get_transient('bjlg_api_key_stats_' . md5($active['key'])));
+    }
+
+    public function test_purge_expired_keys_with_no_expired_entries_is_noop(): void
+    {
+        $now = time();
+
+        $active = [
+            'id' => 'active',
+            'label' => 'Toujours valide',
+            'key' => wp_hash_password('ACTIVE'),
+            'created_at' => $now - 200,
+            'last_rotated_at' => $now - 100,
+            'user_id' => 1,
+            'user_login' => 'admin',
+            'user_email' => 'admin@example.com',
+            'expires' => $now + 600,
+        ];
+
+        $GLOBALS['bjlg_test_options'][BJLG\BJLG_API_Keys::OPTION_NAME] = [
+            'active' => $active,
+        ];
+
+        $result = BJLG\BJLG_API_Keys::purge_expired_keys($now);
+
+        $this->assertSame(0, $result['removed']);
+        $this->assertSame(1, $result['remaining']);
+        $this->assertSame(1, $result['total']);
+        $this->assertSame([], $result['removed_ids']);
+
+        $stored = $GLOBALS['bjlg_test_options'][BJLG\BJLG_API_Keys::OPTION_NAME] ?? [];
+        $this->assertArrayHasKey('active', $stored);
+    }
 }
