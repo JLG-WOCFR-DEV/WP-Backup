@@ -245,6 +245,12 @@ class BJLG_Notifications {
     public function handle_backup_complete($filename, $details) {
         $details = is_array($details) ? $details : [];
 
+        $post_checks = $this->normalize_post_check_results($details['post_checks'] ?? []);
+        $delivery = $this->normalize_destination_delivery(
+            $details['destinations'] ?? [],
+            $details['destination_results'] ?? []
+        );
+
         $context = [
             'filename' => (string) $filename,
             'size' => isset($details['size']) ? (int) $details['size'] : null,
@@ -252,6 +258,13 @@ class BJLG_Notifications {
             'encrypted' => !empty($details['encrypted']),
             'incremental' => !empty($details['incremental']),
             'duration' => isset($details['duration']) ? (float) $details['duration'] : null,
+            'checksum' => $post_checks['checksum'],
+            'checksum_algorithm' => $post_checks['checksum_algorithm'],
+            'post_checks' => $post_checks,
+            'post_checks_summary' => isset($details['post_checks_summary']) && is_string($details['post_checks_summary'])
+                ? $details['post_checks_summary']
+                : $post_checks['summary'],
+            'destination_delivery' => $delivery,
         ];
 
         $this->notify('backup_complete', $context);
@@ -802,6 +815,81 @@ class BJLG_Notifications {
                 if (!empty($context['duration'])) {
                     $lines[] = __('Durée : ', 'backup-jlg') . number_format_i18n((float) $context['duration'], 2) . ' s';
                 }
+                if (!empty($context['checksum'])) {
+                    $algorithm = !empty($context['checksum_algorithm'])
+                        ? strtoupper((string) $context['checksum_algorithm'])
+                        : 'SHA-256';
+                    $lines[] = sprintf(
+                        /* translators: 1: checksum algorithm, 2: hash value. */
+                        __('Checksum (%1$s) : %2$s', 'backup-jlg'),
+                        $algorithm,
+                        $context['checksum']
+                    );
+                }
+
+                $post_checks = isset($context['post_checks']) && is_array($context['post_checks']) ? $context['post_checks'] : [];
+                $post_checks_summary = isset($context['post_checks_summary']) && is_string($context['post_checks_summary'])
+                    ? $context['post_checks_summary']
+                    : ($post_checks['summary'] ?? '');
+
+                if ($post_checks_summary !== '') {
+                    $lines[] = __('Vérifications post-sauvegarde : ', 'backup-jlg') . $post_checks_summary;
+                }
+
+                if (!empty($post_checks['files']) && is_array($post_checks['files'])) {
+                    foreach ($post_checks['files'] as $file_report) {
+                        if (!is_array($file_report)) {
+                            continue;
+                        }
+
+                        $status = isset($file_report['status']) ? (string) $file_report['status'] : '';
+                        if ($status === 'passed') {
+                            continue;
+                        }
+
+                        $filename = isset($file_report['filename']) ? (string) $file_report['filename'] : '';
+                        if ($filename === '') {
+                            continue;
+                        }
+
+                        $message = isset($file_report['message']) ? (string) $file_report['message'] : '';
+                        $lines[] = sprintf(
+                            /* translators: 1: file name, 2: status, 3: message. */
+                            __('%1$s — %2$s%3$s', 'backup-jlg'),
+                            $filename,
+                            $status,
+                            $message !== '' ? ' : ' . $message : ''
+                        );
+                    }
+                }
+
+                $delivery = isset($context['destination_delivery']) && is_array($context['destination_delivery'])
+                    ? $context['destination_delivery']
+                    : [];
+
+                if (!empty($delivery['summary'])) {
+                    $lines[] = __('Destinations distantes : ', 'backup-jlg') . $delivery['summary'];
+                }
+
+                if (!empty($delivery['failures']) && is_array($delivery['failures'])) {
+                    foreach ($delivery['failures'] as $failure) {
+                        if (empty($failure['label'])) {
+                            continue;
+                        }
+
+                        $failure_message = isset($failure['message']) && $failure['message'] !== ''
+                            ? $failure['message']
+                            : __('erreur inconnue', 'backup-jlg');
+
+                        $lines[] = sprintf(
+                            /* translators: 1: destination label, 2: error message. */
+                            __('Échec vers %1$s : %2$s', 'backup-jlg'),
+                            $failure['label'],
+                            $failure_message
+                        );
+                    }
+                }
+
                 break;
             case 'backup_failed':
                 $lines[] = __('Une sauvegarde a échoué.', 'backup-jlg');
@@ -1769,6 +1857,203 @@ class BJLG_Notifications {
         }
 
         return array_values(array_unique($critical));
+    }
+
+    private function normalize_post_check_results($post_checks): array {
+        $result = [
+            'summary' => '',
+            'checksum' => '',
+            'checksum_algorithm' => '',
+            'files' => [],
+            'passed' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+        ];
+
+        if (!is_array($post_checks)) {
+            return $result;
+        }
+
+        if (!empty($post_checks['checksum'])) {
+            $result['checksum'] = (string) $post_checks['checksum'];
+        }
+
+        if (!empty($post_checks['checksum_algorithm'])) {
+            $result['checksum_algorithm'] = (string) $post_checks['checksum_algorithm'];
+        }
+
+        $files = isset($post_checks['files']) && is_array($post_checks['files']) ? $post_checks['files'] : [];
+
+        foreach ($files as $filename => $data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $status = isset($data['status']) ? (string) $data['status'] : '';
+            if (isset($result[$status])) {
+                $result[$status]++;
+            }
+
+            if ($status === 'passed') {
+                continue;
+            }
+
+            $clean_name = is_string($filename) ? sanitize_text_field($filename) : '';
+            $message = isset($data['message']) ? sanitize_text_field((string) $data['message']) : '';
+
+            $result['files'][] = [
+                'filename' => $clean_name,
+                'status' => $status !== '' ? $status : 'unknown',
+                'message' => $message,
+            ];
+        }
+
+        $parts = [];
+
+        if ($result['passed'] > 0) {
+            $parts[] = sprintf(
+                _n('%s contrôle réussi', '%s contrôles réussis', $result['passed'], 'backup-jlg'),
+                number_format_i18n($result['passed'])
+            );
+        }
+
+        if ($result['failed'] > 0) {
+            $parts[] = sprintf(
+                _n('%s échec détecté', '%s échecs détectés', $result['failed'], 'backup-jlg'),
+                number_format_i18n($result['failed'])
+            );
+        }
+
+        if ($result['skipped'] > 0) {
+            $parts[] = sprintf(
+                _n('%s contrôle ignoré', '%s contrôles ignorés', $result['skipped'], 'backup-jlg'),
+                number_format_i18n($result['skipped'])
+            );
+        }
+
+        if (empty($parts) && ($result['passed'] + $result['failed'] + $result['skipped']) > 0) {
+            $parts[] = __('Contrôles post-sauvegarde exécutés.', 'backup-jlg');
+        }
+
+        $result['summary'] = implode(' • ', $parts);
+
+        return $result;
+    }
+
+    private function normalize_destination_delivery($expected, $results): array {
+        $expected_ids = [];
+        if (is_array($expected)) {
+            foreach ($expected as $destination_id) {
+                if (!is_scalar($destination_id)) {
+                    continue;
+                }
+
+                $expected_ids[] = (string) $destination_id;
+            }
+        }
+
+        $success_entries = [];
+        $raw_success = isset($results['success']) && is_array($results['success']) ? $results['success'] : [];
+        foreach ($raw_success as $destination_id) {
+            if (!is_scalar($destination_id)) {
+                continue;
+            }
+
+            $destination_id = (string) $destination_id;
+            $success_entries[] = [
+                'id' => $destination_id,
+                'label' => $this->resolve_destination_label($destination_id),
+            ];
+        }
+
+        $failure_entries = [];
+        $raw_failures = isset($results['failures']) && is_array($results['failures']) ? $results['failures'] : [];
+        foreach ($raw_failures as $destination_id => $message) {
+            if (!is_scalar($destination_id)) {
+                continue;
+            }
+
+            $destination_id = (string) $destination_id;
+            $failure_entries[] = [
+                'id' => $destination_id,
+                'label' => $this->resolve_destination_label($destination_id),
+                'message' => sanitize_text_field(is_string($message) ? $message : ''),
+            ];
+        }
+
+        $registered = array_merge(
+            array_column($success_entries, 'id'),
+            array_column($failure_entries, 'id')
+        );
+
+        $pending_entries = [];
+        foreach ($expected_ids as $destination_id) {
+            if (in_array($destination_id, $registered, true)) {
+                continue;
+            }
+
+            $pending_entries[] = [
+                'id' => $destination_id,
+                'label' => $this->resolve_destination_label($destination_id),
+            ];
+        }
+
+        $summary_parts = [];
+
+        if (!empty($success_entries)) {
+            $summary_parts[] = sprintf(
+                /* translators: 1: number of successful destinations, 2: destination labels. */
+                __('Réussites (%1$s) : %2$s', 'backup-jlg'),
+                number_format_i18n(count($success_entries)),
+                implode(', ', array_filter(array_column($success_entries, 'label')))
+            );
+        }
+
+        if (!empty($failure_entries)) {
+            $failure_labels = [];
+            foreach ($failure_entries as $failure) {
+                $label = $failure['label'] !== '' ? $failure['label'] : $failure['id'];
+                $message = $failure['message'] !== '' ? $failure['message'] : __('erreur inconnue', 'backup-jlg');
+                $failure_labels[] = sprintf('%1$s — %2$s', $label, $message);
+            }
+
+            $summary_parts[] = sprintf(
+                /* translators: 1: number of failed destinations, 2: labels with error messages. */
+                __('Échecs (%1$s) : %2$s', 'backup-jlg'),
+                number_format_i18n(count($failure_entries)),
+                implode(' | ', $failure_labels)
+            );
+        }
+
+        if (!empty($pending_entries)) {
+            $summary_parts[] = sprintf(
+                /* translators: 1: number of pending destinations, 2: destination labels. */
+                __('En attente (%1$s) : %2$s', 'backup-jlg'),
+                number_format_i18n(count($pending_entries)),
+                implode(', ', array_filter(array_column($pending_entries, 'label')))
+            );
+        }
+
+        return [
+            'summary' => implode(' • ', array_filter($summary_parts)),
+            'success' => $success_entries,
+            'failures' => $failure_entries,
+            'pending' => $pending_entries,
+        ];
+    }
+
+    private function resolve_destination_label($destination_id): string {
+        if (!class_exists(BJLG_Settings::class)) {
+            return (string) $destination_id;
+        }
+
+        $label = BJLG_Settings::get_destination_label($destination_id);
+
+        if ($label === '') {
+            return (string) $destination_id;
+        }
+
+        return $label;
     }
 
     private function sanitize_components($components) {

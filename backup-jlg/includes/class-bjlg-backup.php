@@ -1134,13 +1134,35 @@ class BJLG_Backup {
             $duration = time() - $task_data['start_time'];
 
             // Enregistrer le succès
-            BJLG_History::log('backup_created', 'success', sprintf(
-                'Fichier : %s | Taille : %s | Durée : %ds | Chiffrement : %s',
+            $post_check_history = $this->format_post_check_history_summary($check_results);
+            $destination_history = $this->format_destination_history_summary($destination_results, $destination_queue);
+
+            $history_message = sprintf(
+                /* translators: 1: backup file name, 2: file size, 3: duration in seconds, 4: yes/no. */
+                __('Fichier : %1$s | Taille : %2$s | Durée : %3$ds | Chiffrement : %4$s', 'backup-jlg'),
                 $backup_filename,
                 size_format($file_size),
                 $duration,
-                $effective_encryption ? 'oui' : 'non'
-            ));
+                $effective_encryption ? __('oui', 'backup-jlg') : __('non', 'backup-jlg')
+            );
+
+            if ($post_check_history !== '') {
+                $history_message .= ' | ' . sprintf(
+                    /* translators: %s: post-backup verification summary. */
+                    __('Vérifications : %s', 'backup-jlg'),
+                    $post_check_history
+                );
+            }
+
+            if ($destination_history !== '') {
+                $history_message .= ' | ' . sprintf(
+                    /* translators: %s: destination delivery summary. */
+                    __('Destinations : %s', 'backup-jlg'),
+                    $destination_history
+                );
+            }
+
+            BJLG_History::log('backup_created', 'success', $history_message);
 
             $completion_timestamp = time();
             $manifest_details = [
@@ -1159,7 +1181,9 @@ class BJLG_Backup {
                 $manifest_details['checksum_algorithm'] = $check_results['checksum_algorithm'];
             }
             $manifest_details['post_checks'] = $check_results;
+            $manifest_details['post_checks_summary'] = $post_check_history;
             $manifest_details['destinations'] = $destination_queue;
+            $manifest_details['destination_results'] = $destination_results;
 
             // Notification de succès
             do_action('bjlg_backup_complete', $backup_filename, $manifest_details);
@@ -2863,6 +2887,169 @@ class BJLG_Backup {
                 $this->remove_directory_tree($temporary_directory);
             }
         }
+    }
+
+    private function format_post_check_history_summary(array $check_results): string {
+        if (empty($check_results['files']) || !is_array($check_results['files'])) {
+            return '';
+        }
+
+        $counters = [
+            'passed' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+        ];
+
+        foreach ($check_results['files'] as $file_result) {
+            if (!is_array($file_result)) {
+                continue;
+            }
+
+            $status = isset($file_result['status']) ? (string) $file_result['status'] : '';
+            if (isset($counters[$status])) {
+                $counters[$status]++;
+            }
+        }
+
+        $parts = [];
+
+        if ($counters['passed'] > 0) {
+            $parts[] = sprintf(
+                _n('%s contrôle réussi', '%s contrôles réussis', $counters['passed'], 'backup-jlg'),
+                number_format_i18n($counters['passed'])
+            );
+        }
+
+        if ($counters['failed'] > 0) {
+            $parts[] = sprintf(
+                _n('%s échec détecté', '%s échecs détectés', $counters['failed'], 'backup-jlg'),
+                number_format_i18n($counters['failed'])
+            );
+        }
+
+        if ($counters['skipped'] > 0) {
+            $parts[] = sprintf(
+                _n('%s contrôle ignoré', '%s contrôles ignorés', $counters['skipped'], 'backup-jlg'),
+                number_format_i18n($counters['skipped'])
+            );
+        }
+
+        if (empty($parts)) {
+            return '';
+        }
+
+        if (!empty($check_results['checksum'])) {
+            $algorithm = isset($check_results['checksum_algorithm'])
+                ? strtoupper((string) $check_results['checksum_algorithm'])
+                : 'SHA-256';
+
+            $hash = (string) $check_results['checksum'];
+            if (strlen($hash) > 12) {
+                $hash = substr($hash, 0, 12) . '…';
+            }
+
+            $parts[] = sprintf(
+                __('Checksum %1$s (%2$s)', 'backup-jlg'),
+                $hash,
+                $algorithm
+            );
+        }
+
+        return implode(' • ', $parts);
+    }
+
+    private function format_destination_history_summary(array $destination_results, array $expected_destinations): string {
+        $success = isset($destination_results['success']) && is_array($destination_results['success'])
+            ? $destination_results['success']
+            : [];
+        $failures = isset($destination_results['failures']) && is_array($destination_results['failures'])
+            ? $destination_results['failures']
+            : [];
+
+        $success_labels = [];
+        foreach ($success as $destination_id) {
+            $label = $this->get_destination_label($destination_id);
+            if ($label !== '') {
+                $success_labels[] = $label;
+            }
+        }
+
+        $failure_labels = [];
+        foreach ($failures as $destination_id => $error_message) {
+            $label = $this->get_destination_label($destination_id);
+            if ($label === '') {
+                $label = (string) $destination_id;
+            }
+
+            $message = is_string($error_message) && $error_message !== ''
+                ? $error_message
+                : __('erreur inconnue', 'backup-jlg');
+
+            $failure_labels[] = sprintf('%1$s — %2$s', $label, $message);
+        }
+
+        $pending = [];
+        foreach ($expected_destinations as $destination_id) {
+            $destination_id = is_scalar($destination_id) ? (string) $destination_id : '';
+            if ($destination_id === '') {
+                continue;
+            }
+
+            if (in_array($destination_id, $success, true)) {
+                continue;
+            }
+
+            if (array_key_exists($destination_id, $failures)) {
+                continue;
+            }
+
+            $pending[] = $this->get_destination_label($destination_id) ?: $destination_id;
+        }
+
+        $parts = [];
+
+        if (!empty($success_labels)) {
+            $parts[] = sprintf(
+                /* translators: 1: number of successful destinations, 2: destination labels. */
+                __('Réussites (%1$s) : %2$s', 'backup-jlg'),
+                number_format_i18n(count($success_labels)),
+                implode(', ', $success_labels)
+            );
+        }
+
+        if (!empty($failure_labels)) {
+            $parts[] = sprintf(
+                /* translators: 1: number of failed destinations, 2: labels with error messages. */
+                __('Échecs (%1$s) : %2$s', 'backup-jlg'),
+                number_format_i18n(count($failure_labels)),
+                implode(' | ', $failure_labels)
+            );
+        }
+
+        if (!empty($pending)) {
+            $parts[] = sprintf(
+                /* translators: 1: number of pending destinations, 2: destination labels. */
+                __('En attente (%1$s) : %2$s', 'backup-jlg'),
+                number_format_i18n(count($pending)),
+                implode(', ', $pending)
+            );
+        }
+
+        return implode(' • ', array_filter($parts));
+    }
+
+    private function get_destination_label($destination_id): string {
+        if (!class_exists(BJLG_Settings::class)) {
+            return is_scalar($destination_id) ? (string) $destination_id : '';
+        }
+
+        $label = BJLG_Settings::get_destination_label($destination_id);
+
+        if ($label === '' && is_scalar($destination_id)) {
+            return (string) $destination_id;
+        }
+
+        return $label;
     }
 
     private function dispatch_to_destinations($filepath, array $destinations, $task_id, array $batches = []) {
