@@ -651,11 +651,14 @@ class BJLG_Admin {
                         </div>
                     </div>
 
+                    <div id="bjlg-section-announcer" class="screen-reader-text" aria-live="polite" aria-atomic="true"></div>
+
                     <div id="bjlg-admin-app" class="bjlg-admin-app" data-active-section="<?php echo esc_attr($active_section); ?>"<?php echo $app_sections_attr . $app_modules_attr . $app_onboarding_attr; ?>>
                         <div id="bjlg-admin-app-nav" class="bjlg-admin-app__nav"></div>
                         <div class="bjlg-admin-app__panels">
                             <?php foreach ($sections as $section_key => $section):
                                 $panel_id = 'bjlg-section-' . $section_key;
+                                $panel_label_id = $panel_id . '-title';
                                 $is_active = ($section_key === $active_section);
                                 $panel_modules = isset($section_modules_map[$section_key]) ? array_filter(array_map('sanitize_key', (array) $section_modules_map[$section_key])) : [];
                                 $panel_modules_attr = $panel_modules ? ' data-bjlg-modules="' . esc_attr(implode(' ', array_unique($panel_modules))) . '"' : '';
@@ -666,8 +669,9 @@ class BJLG_Admin {
                                     data-section="<?php echo esc_attr($section_key); ?>"
                                     role="tabpanel"
                                     aria-hidden="<?php echo $is_active ? 'false' : 'true'; ?>"
-                                    aria-labelledby="bjlg-tab-<?php echo esc_attr($section_key); ?>"
+                                    aria-labelledby="<?php echo esc_attr($panel_label_id); ?>"
                                     tabindex="0"<?php echo $is_active ? '' : ' hidden'; ?><?php echo $panel_modules_attr; ?>>
+                                    <h2 id="<?php echo esc_attr($panel_label_id); ?>" class="screen-reader-text"><?php echo esc_html($section['label']); ?></h2>
                                     <?php $this->render_section_content($section_key, $active_section, $metrics, $onboarding_payload); ?>
                                 </section>
                             <?php endforeach; ?>
