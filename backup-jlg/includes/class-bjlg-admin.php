@@ -3767,17 +3767,27 @@ class BJLG_Admin {
                 <?php esc_html_e('Tous les tests doivent être verts avant de mettre le plugin en production.', 'backup-jlg'); ?>
             </p>
 
-            <h3>Journal d'activité du Plugin</h3>
+            <h3 id="bjlg-plugin-log-heading">Journal d'activité du Plugin</h3>
             <p class="description">
                 Pour activer : ajoutez <code>define('BJLG_DEBUG', true);</code> dans votre <code>wp-config.php</code>
             </p>
-            <textarea class="bjlg-log-textarea" readonly><?php echo esc_textarea(class_exists(BJLG_Debug::class) ? BJLG_Debug::get_plugin_log_content() : 'Classe BJLG_Debug non trouvée.'); ?></textarea>
+            <textarea
+                id="bjlg-plugin-log"
+                class="bjlg-log-textarea"
+                readonly
+                aria-labelledby="bjlg-plugin-log-heading"
+            ><?php echo esc_textarea(class_exists(BJLG_Debug::class) ? BJLG_Debug::get_plugin_log_content() : 'Classe BJLG_Debug non trouvée.'); ?></textarea>
 
-            <h3>Journal d'erreurs PHP de WordPress</h3>
+            <h3 id="bjlg-wp-error-log-heading">Journal d'erreurs PHP de WordPress</h3>
             <p class="description">
                 Pour activer : ajoutez <code>define('WP_DEBUG_LOG', true);</code> dans votre <code>wp-config.php</code>
             </p>
-            <textarea class="bjlg-log-textarea" readonly><?php echo esc_textarea(class_exists(BJLG_Debug::class) ? BJLG_Debug::get_wp_error_log_content() : 'Classe BJLG_Debug non trouvée.'); ?></textarea>
+            <textarea
+                id="bjlg-wp-error-log"
+                class="bjlg-log-textarea"
+                readonly
+                aria-labelledby="bjlg-wp-error-log-heading"
+            ><?php echo esc_textarea(class_exists(BJLG_Debug::class) ? BJLG_Debug::get_wp_error_log_content() : 'Classe BJLG_Debug non trouvée.'); ?></textarea>
             
             <h3>Outils de Support</h3>
             <p>Générez un pack de support contenant les journaux et les informations système pour faciliter le diagnostic.</p>
