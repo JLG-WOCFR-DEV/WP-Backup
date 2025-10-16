@@ -835,7 +835,7 @@ class BJLG_Incremental {
                 }
 
                 $absolute_candidate = $stored_relative;
-                if ($normalized_abspath !== '') {
+                if (!$this->is_absolute_path($stored_relative) && $normalized_abspath !== '') {
                     $absolute_candidate = rtrim($normalized_abspath, '/') . '/' . ltrim($stored_relative, '/');
                 }
 
@@ -1040,7 +1040,15 @@ class BJLG_Incremental {
         }
 
         if ($is_incremental) {
-            $this->last_backup_data['deleted_files'] = array_values($deleted_relatives);
+            $normalized_deleted = [];
+            foreach ($deleted_relatives as $relative_path) {
+                $normalized = $this->normalize_deleted_relative_path($relative_path);
+                if ($normalized !== '') {
+                    $normalized_deleted[] = $normalized;
+                }
+            }
+
+            $this->last_backup_data['deleted_files'] = $normalized_deleted;
         }
 
         $this->deleted_files_cache = [];
@@ -1051,6 +1059,29 @@ class BJLG_Incremental {
         if ($this->save_manifest()) {
             BJLG_Debug::log("Manifeste incrémental mis à jour");
         }
+    }
+
+    private function normalize_deleted_relative_path($path) {
+        $normalized = $this->normalize_path($path);
+        if ($normalized === '') {
+            return '';
+        }
+
+        $normalized_abspath = $this->normalize_path(ABSPATH);
+        if ($normalized_abspath !== '' && strpos($normalized, $normalized_abspath) === 0) {
+            return ltrim(substr($normalized, strlen($normalized_abspath)), '/');
+        }
+
+        if (defined('WP_CONTENT_DIR')) {
+            $content_dir = $this->normalize_path(WP_CONTENT_DIR);
+            if ($content_dir !== '' && strpos($normalized, rtrim($content_dir, '/') . '/') === 0) {
+                $subpath = ltrim(substr($normalized, strlen($content_dir)), '/');
+
+                return $subpath !== '' ? 'wp-content/' . $subpath : 'wp-content';
+            }
+        }
+
+        return ltrim($normalized, '/');
     }
 
     /**

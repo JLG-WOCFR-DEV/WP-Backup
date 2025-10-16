@@ -2402,6 +2402,12 @@ class BJLG_Backup {
 
             if ($normalized_abspath !== '' && strpos($normalized, $normalized_abspath) === 0) {
                 $relative = ltrim(substr($normalized, strlen($normalized_abspath)), '/');
+            } elseif (defined('WP_CONTENT_DIR')) {
+                $content_dir = $this->normalize_path(WP_CONTENT_DIR);
+                if ($content_dir !== '' && strpos($normalized, rtrim($content_dir, '/') . '/') === 0) {
+                    $subpath = ltrim(substr($normalized, strlen($content_dir)), '/');
+                    $relative = $subpath !== '' ? 'wp-content/' . $subpath : 'wp-content';
+                }
             } else {
                 $relative = ltrim($normalized, '/');
             }
@@ -2460,6 +2466,27 @@ class BJLG_Backup {
      */
     private function resolve_post_backup_checks_password($filepath, array $post_checks) {
         $password = null;
+
+        if (isset($post_checks['encryption'])) {
+            $encryption_context = $post_checks['encryption'];
+
+            if (is_array($encryption_context)) {
+                if (isset($encryption_context['password']) && is_string($encryption_context['password']) && $encryption_context['password'] !== '') {
+                    $password = $encryption_context['password'];
+                } elseif (isset($encryption_context['password_callback']) && is_callable($encryption_context['password_callback'])) {
+                    try {
+                        $candidate = call_user_func($encryption_context['password_callback'], $filepath, $post_checks, $this);
+                        if (is_string($candidate) && $candidate !== '') {
+                            $password = $candidate;
+                        }
+                    } catch (\Throwable $exception) {
+                        BJLG_Debug::log('Erreur lors de la récupération du mot de passe via le callback : ' . $exception->getMessage());
+                    }
+                }
+            } elseif (is_string($encryption_context) && $encryption_context !== '') {
+                $password = $encryption_context;
+            }
+        }
 
         if (function_exists('apply_filters')) {
             $filtered = apply_filters('bjlg_post_backup_checks_password', null, $filepath, $post_checks, $this);
@@ -2915,21 +2942,21 @@ class BJLG_Backup {
 
         if ($counters['passed'] > 0) {
             $parts[] = sprintf(
-                _n('%s contrôle réussi', '%s contrôles réussis', $counters['passed'], 'backup-jlg'),
+                $this->translate_plural('%s contrôle réussi', '%s contrôles réussis', $counters['passed'], 'backup-jlg'),
                 number_format_i18n($counters['passed'])
             );
         }
 
         if ($counters['failed'] > 0) {
             $parts[] = sprintf(
-                _n('%s échec détecté', '%s échecs détectés', $counters['failed'], 'backup-jlg'),
+                $this->translate_plural('%s échec détecté', '%s échecs détectés', $counters['failed'], 'backup-jlg'),
                 number_format_i18n($counters['failed'])
             );
         }
 
         if ($counters['skipped'] > 0) {
             $parts[] = sprintf(
-                _n('%s contrôle ignoré', '%s contrôles ignorés', $counters['skipped'], 'backup-jlg'),
+                $this->translate_plural('%s contrôle ignoré', '%s contrôles ignorés', $counters['skipped'], 'backup-jlg'),
                 number_format_i18n($counters['skipped'])
             );
         }
@@ -2956,6 +2983,14 @@ class BJLG_Backup {
         }
 
         return implode(' • ', $parts);
+    }
+
+    private function translate_plural($singular, $plural, $count, $domain = 'default') {
+        if (function_exists('_n')) {
+            return _n($singular, $plural, $count, $domain);
+        }
+
+        return $count === 1 ? (string) $singular : (string) $plural;
     }
 
     private function format_destination_history_summary(array $destination_results, array $expected_destinations): string {

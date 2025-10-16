@@ -1926,7 +1926,7 @@ class BJLG_Admin {
                                                 </label>
                                                 <p id="bjlg-encrypt-backup-description" class="description">
                                                     <?php
-                                                    echo wp_kses(
+                                                    echo $this->sanitize_with_kses(
                                                         sprintf(
                                                             /* translators: %s: URL to encryption settings */
                                                             __('Sécurise votre fichier de sauvegarde avec un chiffrement robuste. Indispensable si vous stockez vos sauvegardes sur un service cloud tiers. <strong>Pour activer le module</strong>, ouvrez <a href="%s">Paramètres → Chiffrement</a>, générez une clé AES-256 puis activez l’option « Sauvegarde chiffrée ».', 'backup-jlg'),
@@ -4575,5 +4575,30 @@ class BJLG_Admin {
             esc_attr(implode(' ', $classes)),
             esc_html($label)
         );
+    }
+
+    private function sanitize_with_kses($content, array $allowed_tags = []) {
+        if (function_exists('wp_kses')) {
+            return wp_kses($content, $allowed_tags);
+        }
+
+        if (function_exists('wp_kses_post')) {
+            return wp_kses_post($content);
+        }
+
+        if (empty($allowed_tags)) {
+            return strip_tags((string) $content);
+        }
+
+        $allowed = '';
+        foreach (array_keys($allowed_tags) as $tag) {
+            if (!is_string($tag) || $tag === '') {
+                continue;
+            }
+
+            $allowed .= '<' . $tag . '>';
+        }
+
+        return strip_tags((string) $content, $allowed);
     }
 }

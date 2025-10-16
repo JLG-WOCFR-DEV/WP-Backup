@@ -338,6 +338,15 @@ final class BJLG_BackupTest extends TestCase
     public function test_perform_post_backup_checks_detects_invalid_hmac_on_encrypted_archive(): void
     {
         $password = 'integrity-check';
+
+        $plainArchive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'manifest' => ['type' => 'full', 'contains' => ['db']],
+            'database' => "SELECT 3;\n",
+            'files' => ['file.txt' => 'hmac'],
+        ]);
+
+        $zip_path = $plainArchive['path'];
+
         $encryptedArchive = BJLG_Test_BackupFixtures::createBackupArchive([
             'manifest' => ['type' => 'full', 'contains' => ['db']],
             'database' => "SELECT 3;\n",
@@ -350,6 +359,10 @@ final class BJLG_BackupTest extends TestCase
 
         $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'perform_post_backup_checks');
         $method->setAccessible(true);
+
+        $encryption = new BJLG\BJLG_Encryption();
+        $backup = new BJLG\BJLG_Backup(null, $encryption);
+        $previous_settings = get_option('bjlg_encryption_settings', null);
 
         $encrypted_path = null;
         $corrupted_zip = null;
@@ -439,6 +452,8 @@ final class BJLG_BackupTest extends TestCase
             if ($password_zip_source !== null) {
                 @unlink($password_zip_source);
             }
+
+            @unlink($encryptedArchive['path']);
 
             if ($previous_settings === null) {
                 unset($GLOBALS['bjlg_test_options']['bjlg_encryption_settings']);
