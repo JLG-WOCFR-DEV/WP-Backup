@@ -2423,6 +2423,28 @@ border-color: #d1d5db;
 }
 
 @media screen and (max-width: 782px) {
+    .bjlg-backup-table + .tablenav.bottom {
+        display: block;
+        clear: both;
+        padding-top: 16px;
+        margin-top: 0;
+    }
+
+    #bjlg-backup-pagination {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+        float: none;
+    }
+
+    #bjlg-backup-pagination .pagination-links {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+    }
+
     .bjlg-backup-toolbar {
         flex-direction: column;
         align-items: stretch;
