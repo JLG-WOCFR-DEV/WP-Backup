@@ -1013,10 +1013,14 @@
 }
 
 .bjlg-sidebar__close {
-    display: none;
+    display: none !important;
     border: none;
     background: transparent;
     color: var(--bjlg-color-text-subtle);
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    line-height: 1;
 }
 
 .bjlg-sidebar-summary-list {
@@ -1117,7 +1121,16 @@
 .bjlg-shell-topbar__toggle {
     display: none;
     align-items: center;
+    justify-content: center;
     gap: 6px;
+    line-height: 1;
+}
+
+.bjlg-shell-topbar__toggle .dashicons {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
 }
 
 @media (min-width: 961px) {
@@ -1389,7 +1402,7 @@
     }
 
     .bjlg-sidebar__close {
-        display: inline-flex;
+        display: inline-flex !important;
     }
 
     .bjlg-shell-topbar__toggle {
