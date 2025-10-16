@@ -667,6 +667,7 @@ class BJLG_Admin {
                                     id="<?php echo esc_attr($panel_id); ?>"
                                     class="bjlg-shell-section"
                                     data-section="<?php echo esc_attr($section_key); ?>"
+                                    data-bjlg-label-id="<?php echo esc_attr($panel_label_id); ?>"
                                     role="tabpanel"
                                     aria-hidden="<?php echo $is_active ? 'false' : 'true'; ?>"
                                     aria-labelledby="<?php echo esc_attr($panel_label_id); ?>"

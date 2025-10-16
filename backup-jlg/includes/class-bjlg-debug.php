@@ -1,7 +1,7 @@
 <?php
 namespace BJLG;
 
-use Exception;
+use Throwable;
 
 if (!defined('ABSPATH')) {
     exit;
@@ -317,7 +317,7 @@ class BJLG_Debug {
     /**
      * Log une exception avec trace complète
      */
-    public static function log_exception(Exception $e) {
+    public static function log_exception(Throwable $e) {
         $message = sprintf(
             "Exception: %s\nFile: %s:%d\nTrace:\n%s",
             $e->getMessage(),

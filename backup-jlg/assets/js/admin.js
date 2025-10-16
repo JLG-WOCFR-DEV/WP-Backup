@@ -439,7 +439,14 @@ jQuery(function($) {
                     panel.id = 'bjlg-section-' + sectionKey;
                 }
 
-                panel.setAttribute('aria-labelledby', tabId);
+                const labelId = panel.getAttribute('data-bjlg-label-id');
+
+                if (labelId) {
+                    tabEl.setAttribute('aria-describedby', labelId);
+                } else {
+                    tabEl.removeAttribute('aria-describedby');
+                }
+
                 tabEl.setAttribute('aria-controls', panel.id);
             });
         };
