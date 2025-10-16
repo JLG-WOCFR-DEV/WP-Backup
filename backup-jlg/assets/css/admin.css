@@ -2220,6 +2220,16 @@ border-color: #d1d5db;
     margin-top: 18px;
 }
 
+.bjlg-backup-step__actions #bjlg-create-backup {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bjlg-backup-step__actions #bjlg-create-backup .dashicons {
+    line-height: 1;
+}
+
 .bjlg-backup-summary {
     border: 1px solid var(--bjlg-color-border);
     border-radius: var(--bjlg-radius-md);
