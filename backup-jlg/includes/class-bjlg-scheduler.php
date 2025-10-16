@@ -62,30 +62,44 @@ class BJLG_Scheduler {
     public function add_custom_schedules($schedules) {
         $schedules['every_five_minutes'] = [
             'interval' => 5 * MINUTE_IN_SECONDS,
-            'display' => __('Toutes les 5 minutes', 'backup-jlg')
+            'display' => $this->get_schedule_label('Toutes les 5 minutes')
         ];
 
         $schedules['every_fifteen_minutes'] = [
             'interval' => 15 * MINUTE_IN_SECONDS,
-            'display' => __('Toutes les 15 minutes', 'backup-jlg')
+            'display' => $this->get_schedule_label('Toutes les 15 minutes')
         ];
 
         $schedules['weekly'] = [
             'interval' => WEEK_IN_SECONDS,
-            'display' => __('Une fois par semaine', 'backup-jlg')
+            'display' => $this->get_schedule_label('Une fois par semaine')
         ];
-        
+
         $schedules['monthly'] = [
             'interval' => MONTH_IN_SECONDS,
-            'display' => __('Une fois par mois', 'backup-jlg')
+            'display' => $this->get_schedule_label('Une fois par mois')
         ];
-        
+
         $schedules['twice_daily'] = [
             'interval' => 12 * HOUR_IN_SECONDS,
-            'display' => __('Deux fois par jour', 'backup-jlg')
+            'display' => $this->get_schedule_label('Deux fois par jour')
         ];
-        
+
         return $schedules;
+    }
+
+    /**
+     * Returns a schedule label, deferring translations until init has run.
+     *
+     * @param string $text
+     * @return string
+     */
+    private function get_schedule_label($text) {
+        if (did_action('init')) {
+            return __($text, 'backup-jlg');
+        }
+
+        return $text;
     }
     
     /**
