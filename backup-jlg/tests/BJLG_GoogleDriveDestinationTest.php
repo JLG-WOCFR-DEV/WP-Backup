@@ -374,6 +374,108 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $this->assertCount(1, $drive_files->createdRequests, 'Le premier fichier aurait dû être envoyé avant l\'échec.');
     }
 
+    public function test_list_remote_backups_handles_shared_drive_folder(): void
+    {
+        $client = new FakeGoogleClient();
+        $drive_files = new FakeDriveFiles();
+        $drive_service = new FakeDriveService($drive_files);
+        $media_factory = new FakeMediaUploadFactory();
+        $destination = $this->createDestination($client, $drive_service, $media_factory);
+
+        update_option('bjlg_gdrive_settings', [
+            'client_id' => 'client-id',
+            'client_secret' => 'client-secret',
+            'folder_id' => 'drive-123:folder-456',
+            'enabled' => true,
+        ]);
+
+        update_option('bjlg_gdrive_token', [
+            'access_token' => 'token',
+            'refresh_token' => 'refresh-token',
+            'created' => time(),
+            'expires_in' => 3600,
+        ]);
+
+        $now = time();
+        $drive_files->queueListResponse([
+            [
+                'id' => 'shared-1',
+                'name' => 'backup-shared.zip',
+                'createdTime' => gmdate('c', $now - 120),
+                'modifiedTime' => gmdate('c', $now - 60),
+                'size' => 2048,
+            ],
+            [
+                'id' => 'skip-me',
+                'name' => 'notes.txt',
+                'createdTime' => gmdate('c', $now - 30),
+                'modifiedTime' => gmdate('c', $now - 30),
+                'size' => 100,
+            ],
+        ]);
+
+        $backups = $destination->list_remote_backups();
+
+        $this->assertCount(1, $backups);
+        $this->assertSame('shared-1', $backups[0]['id']);
+        $this->assertSame('backup-shared.zip', $backups[0]['name']);
+
+        $params = $drive_files->lastListParams;
+        $this->assertIsArray($params);
+        $this->assertArrayHasKey('supportsAllDrives', $params);
+        $this->assertTrue($params['supportsAllDrives']);
+        $this->assertArrayHasKey('includeItemsFromAllDrives', $params);
+        $this->assertTrue($params['includeItemsFromAllDrives']);
+        $this->assertSame('drive', $params['corpora']);
+        $this->assertSame('drive-123', $params['driveId']);
+        $this->assertStringContainsString("'folder-456' in parents", $params['q']);
+    }
+
+    public function test_delete_remote_backup_passes_shared_drive_flags(): void
+    {
+        $client = new FakeGoogleClient();
+        $drive_files = new FakeDriveFiles();
+        $drive_service = new FakeDriveService($drive_files);
+        $destination = $this->createDestination($client, $drive_service, new FakeMediaUploadFactory());
+
+        update_option('bjlg_gdrive_settings', [
+            'client_id' => 'client-id',
+            'client_secret' => 'client-secret',
+            'folder_id' => 'drive-789:folder-000',
+            'enabled' => true,
+        ]);
+
+        update_option('bjlg_gdrive_token', [
+            'access_token' => 'token',
+            'refresh_token' => 'refresh-token',
+            'created' => time(),
+            'expires_in' => 3600,
+        ]);
+
+        $now = time();
+        $drive_files->queueListResponse([
+            [
+                'id' => 'delete-me',
+                'name' => 'backup-team-drive.zip',
+                'createdTime' => gmdate('c', $now - 3600),
+                'modifiedTime' => gmdate('c', $now - 3600),
+                'size' => 512,
+            ],
+        ]);
+
+        $result = $destination->delete_remote_backup_by_name('backup-team-drive.zip');
+
+        $this->assertTrue($result['success']);
+        $this->assertNotEmpty($drive_files->deleteCalls);
+
+        $delete_call = $drive_files->deleteCalls[0];
+        $this->assertSame('delete-me', $delete_call['id']);
+        $this->assertArrayHasKey('supportsAllDrives', $delete_call['params']);
+        $this->assertTrue($delete_call['params']['supportsAllDrives']);
+        $this->assertArrayHasKey('supportsTeamDrives', $delete_call['params']);
+        $this->assertTrue($delete_call['params']['supportsTeamDrives']);
+    }
+
     private function createDestination(FakeGoogleClient $client, FakeDriveService $drive_service, FakeMediaUploadFactory $media_factory): BJLG_Google_Drive
     {
         $test_case = $this;
@@ -551,14 +653,20 @@ final class FakeDriveFiles
     /** @var array<string, mixed>|null */
     public $lastParams = null;
 
+    /** @var array<string, mixed>|null */
+    public $lastListParams = null;
+
     /** @var \Exception|null */
     public $exception = null;
 
     /** @var array<int, FakeGoogleHttpRequest> */
     public $createdRequests = [];
 
-    /** @var bool */
-    public $requireDriveSupport = false;
+    /** @var array<int, FakeDriveFileList> */
+    private $listResponses = [];
+
+    /** @var array<int, array{id:string,params:array<string,mixed>}> */
+    public $deleteCalls = [];
 
     public function create($metadata, $params)
     {
@@ -579,6 +687,66 @@ final class FakeDriveFiles
         $this->createdRequests[] = $request;
 
         return $request;
+    }
+
+    public function queueListResponse(array $files, ?string $nextPageToken = null): void
+    {
+        $this->listResponses[] = new FakeDriveFileList($files, $nextPageToken);
+    }
+
+    public function listFiles($params)
+    {
+        if ($this->exception instanceof \Exception) {
+            throw $this->exception;
+        }
+
+        $this->lastListParams = $params;
+
+        if (!empty($this->listResponses)) {
+            return array_shift($this->listResponses);
+        }
+
+        return new FakeDriveFileList([]);
+    }
+
+    public function delete($id, array $optParams = [])
+    {
+        if ($this->exception instanceof \Exception) {
+            throw $this->exception;
+        }
+
+        $this->deleteCalls[] = [
+            'id' => (string) $id,
+            'params' => $optParams,
+        ];
+    }
+}
+
+final class FakeDriveFileList
+{
+    /** @var array<int, array<string, mixed>> */
+    private $files;
+
+    /** @var string|null */
+    private $nextPageToken;
+
+    /**
+     * @param array<int, array<string, mixed>> $files
+     */
+    public function __construct(array $files, ?string $nextPageToken = null)
+    {
+        $this->files = $files;
+        $this->nextPageToken = $nextPageToken;
+    }
+
+    public function getFiles(): array
+    {
+        return $this->files;
+    }
+
+    public function getNextPageToken(): ?string
+    {
+        return $this->nextPageToken;
     }
 }
 

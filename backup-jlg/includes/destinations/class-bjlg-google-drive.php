@@ -510,7 +510,8 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
 
     private function fetch_remote_backups($drive_service) {
         $settings = $this->get_settings();
-        $folder_id = $settings['folder_id'] !== '' ? $settings['folder_id'] : 'root';
+        $drive_context = $this->extract_drive_context($settings['folder_id']);
+        $folder_id = $drive_context['folder_id'] !== '' ? $drive_context['folder_id'] : 'root';
 
         $query_parts = ['trashed = false'];
         $query_parts[] = sprintf("'%s' in parents", str_replace("'", "\\'", $folder_id === '' ? 'root' : $folder_id));
@@ -524,7 +525,14 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
                 'fields' => 'nextPageToken, files(id, name, createdTime, modifiedTime, size)',
                 'pageSize' => 1000,
                 'orderBy' => 'modifiedTime desc',
+                'supportsAllDrives' => true,
+                'includeItemsFromAllDrives' => true,
             ];
+
+            if ($drive_context['drive_id'] !== null) {
+                $params['corpora'] = 'drive';
+                $params['driveId'] = $drive_context['drive_id'];
+            }
 
             if ($page_token !== null && $page_token !== '') {
                 $params['pageToken'] = $page_token;
@@ -592,7 +600,10 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         }
 
         try {
-            $drive_service->files->delete($identifier);
+            $drive_service->files->delete($identifier, [
+                'supportsAllDrives' => true,
+                'supportsTeamDrives' => true,
+            ]);
         } catch (Google_Service_Exception $exception) {
             throw new Exception('Suppression Google Drive impossible : ' . $exception->getMessage(), 0, $exception);
         }
@@ -1086,6 +1097,43 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             'client_secret' => '',
             'folder_id' => '',
             'enabled' => false,
+        ];
+    }
+
+    /**
+     * Détermine le dossier et le Drive cible à partir d'un identifiant fourni.
+     *
+     * @param string $raw_folder_id
+     * @return array{folder_id:string,drive_id:?string}
+     */
+    private function extract_drive_context($raw_folder_id) {
+        $raw_folder_id = is_string($raw_folder_id) ? trim($raw_folder_id) : '';
+
+        if ($raw_folder_id === '') {
+            return [
+                'folder_id' => 'root',
+                'drive_id' => null,
+            ];
+        }
+
+        if (strpos($raw_folder_id, ':') !== false) {
+            [$drive_id, $folder_id] = array_pad(explode(':', $raw_folder_id, 2), 2, '');
+            $drive_id = trim($drive_id);
+            $folder_id = trim($folder_id);
+
+            if ($folder_id === '') {
+                $folder_id = $drive_id !== '' ? $drive_id : 'root';
+            }
+
+            return [
+                'folder_id' => $folder_id === '' ? 'root' : $folder_id,
+                'drive_id' => $drive_id !== '' ? $drive_id : null,
+            ];
+        }
+
+        return [
+            'folder_id' => $raw_folder_id === '' ? 'root' : $raw_folder_id,
+            'drive_id' => null,
         ];
     }
 
