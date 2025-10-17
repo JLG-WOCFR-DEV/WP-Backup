@@ -273,6 +273,8 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
                     'mimeType' => $mime_type,
                     'uploadType' => 'resumable',
                     'fields' => 'id,name,size',
+                    'supportsAllDrives' => true,
+                    'supportsTeamDrives' => true,
                 ]
             );
 
