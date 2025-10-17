@@ -62,6 +62,8 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $this->assertSame('resumable', $drive_files->lastParams['uploadType']);
         $this->assertSame('application/zip', $drive_files->lastParams['mimeType']);
         $this->assertSame('id,name,size', $drive_files->lastParams['fields']);
+        $this->assertTrue($drive_files->lastParams['supportsAllDrives']);
+        $this->assertTrue($drive_files->lastParams['supportsTeamDrives']);
 
         $this->assertCount(1, $media_factory->uploads);
         $upload = $media_factory->uploads[0];
@@ -278,6 +280,43 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         }
 
         $this->assertCount(1, $drive_files->createdRequests);
+    }
+
+    public function test_upload_file_handles_shared_drive_folder_without_exception(): void
+    {
+        $client = new FakeGoogleClient();
+        $drive_files = new FakeDriveFiles();
+        $drive_files->requireDriveSupport = true;
+        $media_factory = new FakeMediaUploadFactory();
+
+        $destination = $this->createDestination($client, new FakeDriveService($drive_files), $media_factory);
+
+        update_option('bjlg_gdrive_settings', [
+            'client_id' => 'client-id',
+            'client_secret' => 'client-secret',
+            'folder_id' => 'shared-folder-id',
+            'enabled' => true,
+        ]);
+
+        update_option('bjlg_gdrive_token', [
+            'access_token' => 'token',
+            'refresh_token' => 'refresh-token',
+            'created' => time(),
+            'expires_in' => 3600,
+        ]);
+
+        $file = tempnam(sys_get_temp_dir(), 'bjlg');
+        file_put_contents($file, 'shared-drive-backup');
+
+        try {
+            $destination->upload_file($file, 'task-shared-drive');
+        } finally {
+            @unlink($file);
+        }
+
+        $this->assertCount(1, $drive_files->createdRequests, 'Un seul envoi devrait être initié.');
+        $this->assertTrue($drive_files->lastParams['supportsAllDrives']);
+        $this->assertTrue($drive_files->lastParams['supportsTeamDrives']);
     }
 
     public function test_upload_file_array_aggregates_errors(): void
@@ -503,10 +542,19 @@ final class FakeDriveFiles
     /** @var array<int, FakeGoogleHttpRequest> */
     public $createdRequests = [];
 
+    /** @var bool */
+    public $requireDriveSupport = false;
+
     public function create($metadata, $params)
     {
         if ($this->exception instanceof \Exception) {
             throw $this->exception;
+        }
+
+        if ($this->requireDriveSupport) {
+            if (empty($params['supportsAllDrives']) || empty($params['supportsTeamDrives'])) {
+                throw new \Exception('Shared Drive support flags are missing.');
+            }
         }
 
         $this->lastMetadata = $metadata;
