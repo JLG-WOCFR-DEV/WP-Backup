@@ -160,6 +160,12 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
 
         update_option('bjlg_gdrive_state', 'state-token');
 
+        update_option('bjlg_gdrive_status', [
+            'last_result' => 'error',
+            'tested_at' => 123,
+            'message' => 'Une erreur précédente',
+        ]);
+
         $_GET['bjlg_gdrive_auth'] = '1';
         $_GET['code'] = 'auth-code';
         $_GET['state'] = 'state-token';
@@ -171,6 +177,15 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $this->assertSame('auth-refresh', $token['refresh_token']);
         $this->assertSame('auth-code', $client->authCodeReceived);
         $this->assertSame('', get_option('bjlg_gdrive_state', ''));
+        $this->assertSame('success', $_GET['bjlg_notice']);
+        $this->assertSame('Compte Google Drive connecté.', $_GET['bjlg_notice_message']);
+
+        $status = get_option('bjlg_gdrive_status');
+        $this->assertSame([
+            'last_result' => null,
+            'tested_at' => 0,
+            'message' => '',
+        ], $status);
     }
 
     public function test_handle_oauth_callback_ignores_invalid_state(): void
