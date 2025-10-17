@@ -273,6 +273,8 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
                     'mimeType' => $mime_type,
                     'uploadType' => 'resumable',
                     'fields' => 'id,name,size',
+                    'supportsAllDrives' => true,
+                    'supportsTeamDrives' => true,
                 ]
             );
 
@@ -902,16 +904,62 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
         $client->addScope(self::SCOPE);
 
         $token = $client->fetchAccessTokenWithAuthCode($code);
+
+        $notice_type = '';
+        $notice_message = '';
+
         if (isset($token['error'])) {
-            return;
+            $error = isset($token['error_description']) ? $token['error_description'] : $token['error'];
+            $error = is_string($error) ? $error : '';
+
+            if ($error !== '' && class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('ERREUR connexion Google Drive : ' . $error);
+            }
+
+            $notice_type = 'error';
+            $notice_message = $error !== ''
+                ? sprintf(
+                    /* translators: %s is the error message returned by Google. */
+                    __('Impossible de connecter Google Drive : %s', 'backup-jlg'),
+                    $error
+                )
+                : __('Impossible de connecter Google Drive. Réessayez.', 'backup-jlg');
+        } else {
+            $this->store_token($token);
+
+            if (function_exists('delete_option')) {
+                delete_option(self::OPTION_STATE);
+            } else {
+                update_option(self::OPTION_STATE, '');
+            }
+
+            $this->store_status([
+                'last_result' => null,
+                'tested_at' => 0,
+                'message' => '',
+            ]);
+
+            $notice_type = 'success';
+            $notice_message = __('Compte Google Drive connecté.', 'backup-jlg');
         }
 
-        $this->store_token($token);
+        if ($notice_type !== '') {
+            $redirect_base = admin_url('admin.php?page=backup-jlg&section=settings');
+            $redirect_url = add_query_arg(
+                [
+                    'bjlg_notice' => $notice_type,
+                    'bjlg_notice_message' => rawurlencode($notice_message),
+                ],
+                $redirect_base
+            );
 
-        if (function_exists('delete_option')) {
-            delete_option(self::OPTION_STATE);
-        } else {
-            update_option(self::OPTION_STATE, '');
+            if (function_exists('wp_safe_redirect')) {
+                wp_safe_redirect($redirect_url);
+                exit;
+            }
+
+            $_GET['bjlg_notice'] = $notice_type;
+            $_GET['bjlg_notice_message'] = $notice_message;
         }
     }
 
