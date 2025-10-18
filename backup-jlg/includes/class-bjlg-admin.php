@@ -21,16 +21,14 @@ class BJLG_Admin {
     private $advanced_admin;
     private $google_drive_notice;
     private $onboarding_progress = [];
+    private $is_network_screen = false;
 
     public function __construct() {
         $this->load_destinations();
         $this->advanced_admin = class_exists(BJLG_Admin_Advanced::class) ? new BJLG_Admin_Advanced() : null;
         $this->onboarding_progress = $this->get_user_onboarding_progress();
         add_action('admin_menu', [$this, 'create_admin_page']);
-        if (function_exists('is_multisite') && is_multisite()) {
-            add_action('network_admin_menu', [$this, 'register_network_admin_menu']);
-            add_action('admin_post_bjlg_sync_network_settings', [$this, 'handle_network_settings_sync']);
-        }
+        add_action('network_admin_menu', [$this, 'create_network_admin_page']);
         add_filter('bjlg_admin_tabs', [$this, 'get_default_tabs']);
         add_filter('bjlg_admin_sections', [$this, 'get_default_sections']);
         add_action('wp_dashboard_setup', [$this, 'register_dashboard_widget']);
@@ -208,7 +206,7 @@ class BJLG_Admin {
      * Crée la page de menu dans l'administration.
      */
     public function create_admin_page() {
-        $wl_settings = bjlg_get_option('bjlg_whitelabel_settings', []);
+        $wl_settings = \bjlg_get_option('bjlg_whitelabel_settings', []);
         $plugin_name = !empty($wl_settings['plugin_name']) ? $wl_settings['plugin_name'] : 'Backup - JLG';
 
         add_menu_page(
@@ -222,184 +220,34 @@ class BJLG_Admin {
         );
     }
 
-    public function register_network_admin_menu() {
-        $menu_capability = \bjlg_get_required_capability();
-        $settings_capability = \bjlg_get_required_capability('manage_settings');
-
-        add_menu_page(
-            __('Backup JLG', 'backup-jlg'),
-            __('Backup JLG', 'backup-jlg'),
-            $menu_capability,
-            'backup-jlg-network',
-            [$this, 'render_network_sites_page'],
-            'dashicons-database',
-            70
-        );
-
-        add_submenu_page(
-            'backup-jlg-network',
-            __('Sites', 'backup-jlg'),
-            __('Sites', 'backup-jlg'),
-            $menu_capability,
-            'backup-jlg-network',
-            [$this, 'render_network_sites_page']
-        );
-
-        add_submenu_page(
-            'backup-jlg-network',
-            __('Synchronisation des réglages', 'backup-jlg'),
-            __('Synchronisation', 'backup-jlg'),
-            $settings_capability,
-            'backup-jlg-network-sync',
-            [$this, 'render_network_sync_page']
-        );
-    }
-
-    public function render_network_sites_page() {
-        if (!\bjlg_can_manage_plugin()) {
-            wp_die(__('Permission refusée.', 'backup-jlg'));
-        }
-
-        $sites = function_exists('get_sites') ? get_sites(['number' => 0]) : [];
-        $sites = is_array($sites) ? $sites : [];
-
-        echo '<div class="wrap">';
-        echo '<h1>' . esc_html__('Backup JLG — Gestion réseau', 'backup-jlg') . '</h1>';
-
-        if (empty($sites)) {
-            echo '<p>' . esc_html__('Aucun site n’a été détecté sur ce réseau.', 'backup-jlg') . '</p>';
-            echo '</div>';
-
+    public function create_network_admin_page() {
+        if (!function_exists('is_multisite') || !is_multisite()) {
             return;
         }
 
-        echo '<p>' . esc_html__('Consultez l’état des sites du réseau et accédez rapidement aux réglages locaux.', 'backup-jlg') . '</p>';
+        $wl_settings = \bjlg_get_option('bjlg_whitelabel_settings', [], ['network' => true]);
+        $plugin_name = !empty($wl_settings['plugin_name']) ? $wl_settings['plugin_name'] : 'Backup - JLG';
 
-        echo '<table class="widefat striped">';
-        echo '<thead><tr>';
-        echo '<th>' . esc_html__('Site', 'backup-jlg') . '</th>';
-        echo '<th>' . esc_html__('URL', 'backup-jlg') . '</th>';
-        echo '<th>' . esc_html__('Actions', 'backup-jlg') . '</th>';
-        echo '</tr></thead><tbody>';
-
-        foreach ($sites as $site) {
-            $site_id = isset($site->blog_id) ? (int) $site->blog_id : 0;
-            $domain = isset($site->domain) ? $site->domain : '';
-            $path = isset($site->path) ? $site->path : '';
-            $admin_url = $site_id > 0 ? get_admin_url($site_id, 'admin.php?page=backup-jlg') : '';
-            $home_url = $site_id > 0 ? get_home_url($site_id) : '';
-
-            echo '<tr>';
-            echo '<td>' . esc_html($domain . $path) . '</td>';
-            echo '<td>' . ($home_url ? '<a href="' . esc_url($home_url) . '" target="_blank" rel="noopener">' . esc_html($home_url) . '</a>' : '&mdash;') . '</td>';
-            echo '<td>';
-            if ($admin_url) {
-                echo '<a class="button" href="' . esc_url($admin_url) . '">' . esc_html__('Ouvrir le panneau', 'backup-jlg') . '</a> ';
-            }
-            echo '<a class="button" href="' . esc_url(network_admin_url('site-info.php?id=' . $site_id)) . '">' . esc_html__('Détails du site', 'backup-jlg') . '</a>';
-            echo '</td>';
-            echo '</tr>';
-        }
-
-        echo '</tbody></table>';
-        echo '</div>';
-    }
-
-    public function render_network_sync_page() {
-        if (!\bjlg_can_manage_settings()) {
-            wp_die(__('Permission refusée.', 'backup-jlg'));
-        }
-
-        $synced = isset($_GET['bjlg_synced']) ? absint($_GET['bjlg_synced']) : 0;
-        $options = array_keys($this->get_network_sync_options());
-
-        echo '<div class="wrap">';
-        echo '<h1>' . esc_html__('Synchronisation des réglages réseau', 'backup-jlg') . '</h1>';
-
-        if ($synced > 0) {
-            printf('<div class="notice notice-success"><p>%s</p></div>', esc_html(sprintf(__('Synchronisation effectuée sur %d site(s).', 'backup-jlg'), $synced)));
-        }
-
-        echo '<p>' . esc_html__('Répliquez les réglages globaux définis au niveau réseau vers l’ensemble des sites.', 'backup-jlg') . '</p>';
-
-        echo '<h2>' . esc_html__('Options synchronisées', 'backup-jlg') . '</h2>';
-        echo '<ul class="ul-disc">';
-        foreach ($options as $option_name) {
-            echo '<li><code>' . esc_html($option_name) . '</code></li>';
-        }
-        echo '</ul>';
-
-        echo '<form method="post" action="' . esc_url(network_admin_url('admin-post.php')) . '">';
-        wp_nonce_field('bjlg_sync_network_settings');
-        echo '<input type="hidden" name="action" value="bjlg_sync_network_settings" />';
-        echo '<p>' . esc_html__('Cette action remplacera les réglages existants sur chaque site par les valeurs du réseau.', 'backup-jlg') . '</p>';
-        echo '<p><button type="submit" class="button button-primary">' . esc_html__('Synchroniser maintenant', 'backup-jlg') . '</button></p>';
-        echo '</form>';
-        echo '</div>';
-    }
-
-    public function handle_network_settings_sync() {
-        if (!\bjlg_can_manage_settings()) {
-            wp_die(__('Permission refusée.', 'backup-jlg'));
-        }
-
-        check_admin_referer('bjlg_sync_network_settings');
-
-        if (!function_exists('get_sites')) {
-            wp_die(__('La fonctionnalité multisite est indisponible.', 'backup-jlg'));
-        }
-
-        $options_to_sync = $this->get_network_sync_options();
-        $network_values = [];
-
-        foreach ($options_to_sync as $option => $default) {
-            $network_values[$option] = bjlg_get_option($option, $default, null, true);
-        }
-
-        $site_ids = get_sites(['fields' => 'ids']);
-        $site_ids = is_array($site_ids) ? $site_ids : [];
-        $synced_sites = 0;
-
-        foreach ($site_ids as $site_id) {
-            $site_id = (int) $site_id;
-            if ($site_id <= 0) {
-                continue;
-            }
-
-            switch_to_blog($site_id);
-            foreach ($network_values as $option => $value) {
-                bjlg_update_option($option, $value, null, false);
-            }
-            restore_current_blog();
-            $synced_sites++;
-        }
-
-        $redirect = add_query_arg(
-            ['page' => 'backup-jlg-network-sync', 'bjlg_synced' => $synced_sites],
-            network_admin_url('admin.php')
+        add_menu_page(
+            $plugin_name,
+            $plugin_name,
+            'bjlg_manage_plugin',
+            'backup-jlg-network',
+            [$this, 'render_network_admin_page'],
+            'dashicons-database-export',
+            81
         );
-
-        wp_safe_redirect($redirect);
-        exit;
     }
 
-    private function get_network_sync_options(): array {
-        return [
-            'bjlg_settings' => [],
-            'bjlg_cleanup_settings' => ['by_number' => 3, 'by_age' => 0],
-            'bjlg_schedule_settings' => [],
-            'bjlg_encryption_settings' => [],
-            'bjlg_notification_settings' => [],
-            'bjlg_performance_settings' => [],
-            'bjlg_webhook_settings' => [],
-            'bjlg_incremental_settings' => [],
-            'bjlg_backup_include_patterns' => [],
-            'bjlg_backup_exclude_patterns' => [],
-            'bjlg_backup_secondary_destinations' => [],
-            'bjlg_backup_post_checks' => [],
-            'bjlg_backup_presets' => [],
-            'bjlg_ajax_debug_enabled' => false,
-        ];
+    public function render_network_admin_page() {
+        $previous_state = $this->is_network_screen;
+        $this->is_network_screen = true;
+
+        bjlg_with_network(function () {
+            $this->render_admin_page();
+        });
+
+        $this->is_network_screen = $previous_state;
     }
 
     /**
@@ -624,6 +472,7 @@ class BJLG_Admin {
      * Affiche le contenu de la page principale et gère le routage des onglets.
      */
     public function render_admin_page() {
+        $admin_url_callback = $this->is_network_screen ? 'network_admin_url' : 'admin_url';
         $requested_section = isset($_GET['section']) ? sanitize_key($_GET['section']) : '';
         $legacy_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : '';
         if ($requested_section === '' && $legacy_tab !== '') {
@@ -665,10 +514,10 @@ class BJLG_Admin {
                 'icon' => sanitize_html_class($icon_candidate),
                 'url' => add_query_arg(
                     [
-                        'page' => 'backup-jlg',
+                        'page' => $this->is_network_screen ? 'backup-jlg-network' : 'backup-jlg',
                         'section' => $slug,
                     ],
-                    admin_url('admin.php')
+                    $admin_url_callback('admin.php')
                 ),
             ];
         }
@@ -720,7 +569,9 @@ class BJLG_Admin {
         $breadcrumb_items = [
             [
                 'label' => __('Console Backup JLG', 'backup-jlg'),
-                'url' => add_query_arg(['page' => 'backup-jlg'], admin_url('admin.php')),
+                'url' => add_query_arg([
+                    'page' => $this->is_network_screen ? 'backup-jlg-network' : 'backup-jlg',
+                ], $admin_url_callback('admin.php')),
             ],
             [
                 'label' => $sections[$active_section]['label'],
