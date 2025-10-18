@@ -530,7 +530,7 @@ class BJLG_Notifications {
      * Recharge les réglages depuis la base de données.
      */
     private function reload_settings() {
-        $stored = get_option('bjlg_notification_settings', []);
+        $stored = bjlg_get_option('bjlg_notification_settings', []);
         $this->settings = $this->merge_settings($stored);
     }
 

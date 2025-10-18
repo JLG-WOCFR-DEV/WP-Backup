@@ -24,7 +24,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
     {
         $destination = $this->createDestination();
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AKIDEXAMPLE',
             'secret_key' => 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY',
             'region' => 'us-east-1',
@@ -73,7 +73,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
 
         $destination = $this->createDestination($handler);
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AK',
             'secret_key' => 'SECRET',
             'region' => 'eu-west-3',
@@ -105,7 +105,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
 
         $destination = $this->createDestination($handler);
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AK',
             'secret_key' => 'SECRET',
             'region' => 'eu-west-1',
@@ -158,7 +158,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
         $this->assertSame('HEAD', $captured[0]['args']['method']);
         $this->assertSame('https://demo-bucket.s3.eu-west-3.amazonaws.com/', $captured[0]['url']);
 
-        $status = get_option('bjlg_s3_status');
+        $status = bjlg_get_option('bjlg_s3_status');
         $this->assertSame('success', $status['last_result']);
         $this->assertStringContainsString('demo-bucket', $status['message']);
     }
@@ -180,7 +180,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
 
         $destination = $this->createDestination($handler);
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AK',
             'secret_key' => 'SECRET',
             'region' => 'eu-central-1',
@@ -200,7 +200,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
     {
         $destination = $this->createDestination();
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AKIDKMS',
             'secret_key' => 'kms-secret',
             'region' => 'eu-west-3',
@@ -229,7 +229,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
     {
         $destination = $this->createDestination();
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AKID',
             'secret_key' => 'SECRET',
             'region' => 'us-east-1',
@@ -256,7 +256,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
     {
         $destination = $this->createDestination();
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AKID',
             'secret_key' => 'SECRET',
             'region' => 'us-east-1',
