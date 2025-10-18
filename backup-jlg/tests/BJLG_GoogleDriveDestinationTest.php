@@ -38,14 +38,14 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
 
         $destination = $this->createDestination($client, $drive_service, $media_factory);
 
-        update_option('bjlg_gdrive_settings', [
+        bjlg_update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
             'client_secret' => 'client-secret',
             'folder_id' => 'folder-42',
             'enabled' => true,
         ]);
 
-        update_option('bjlg_gdrive_token', [
+        bjlg_update_option('bjlg_gdrive_token', [
             'access_token' => 'token',
             'refresh_token' => 'refresh-token',
             'created' => time(),
@@ -85,14 +85,14 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $drive_service = new FakeDriveService(new FakeDriveFiles());
         $destination = $this->createDestination($client, $drive_service, new FakeMediaUploadFactory());
 
-        update_option('bjlg_gdrive_settings', [
+        bjlg_update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
             'client_secret' => 'client-secret',
             'folder_id' => '',
             'enabled' => true,
         ]);
 
-        update_option('bjlg_gdrive_token', [
+        bjlg_update_option('bjlg_gdrive_token', [
             'access_token' => 'old-token',
             'refresh_token' => 'refresh-token',
             'created' => time() - 7200,
@@ -104,7 +104,7 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
 
         $destination->upload_file($file, 'task-refresh');
 
-        $stored = get_option('bjlg_gdrive_token');
+        $stored = bjlg_get_option('bjlg_gdrive_token');
         $this->assertSame('fresh-token', $stored['access_token']);
         $this->assertSame('refresh-token', $stored['refresh_token']);
         $this->assertSame(['https://www.googleapis.com/auth/drive.file'], $client->scopes);
@@ -119,14 +119,14 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
 
         $destination = $this->createDestination($client, new FakeDriveService($drive_files), new FakeMediaUploadFactory());
 
-        update_option('bjlg_gdrive_settings', [
+        bjlg_update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
             'client_secret' => 'client-secret',
             'folder_id' => '',
             'enabled' => true,
         ]);
 
-        update_option('bjlg_gdrive_token', [
+        bjlg_update_option('bjlg_gdrive_token', [
             'access_token' => 'token',
             'refresh_token' => 'refresh',
             'created' => time(),
@@ -153,16 +153,16 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
 
         $destination = $this->createDestination($client, new FakeDriveService(new FakeDriveFiles()), new FakeMediaUploadFactory());
 
-        update_option('bjlg_gdrive_settings', [
+        bjlg_update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
             'client_secret' => 'client-secret',
             'folder_id' => '',
             'enabled' => true,
         ]);
 
-        update_option('bjlg_gdrive_state', 'state-token');
+        bjlg_update_option('bjlg_gdrive_state', 'state-token');
 
-        update_option('bjlg_gdrive_status', [
+        bjlg_update_option('bjlg_gdrive_status', [
             'last_result' => 'error',
             'tested_at' => 123,
             'message' => 'Une erreur précédente',
@@ -174,15 +174,15 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
 
         $destination->handle_oauth_callback();
 
-        $token = get_option('bjlg_gdrive_token');
+        $token = bjlg_get_option('bjlg_gdrive_token');
         $this->assertSame('auth-token', $token['access_token']);
         $this->assertSame('auth-refresh', $token['refresh_token']);
         $this->assertSame('auth-code', $client->authCodeReceived);
-        $this->assertSame('', get_option('bjlg_gdrive_state', ''));
+        $this->assertSame('', bjlg_get_option('bjlg_gdrive_state', ''));
         $this->assertSame('success', $_GET['bjlg_notice']);
         $this->assertSame('Compte Google Drive connecté.', $_GET['bjlg_notice_message']);
 
-        $status = get_option('bjlg_gdrive_status');
+        $status = bjlg_get_option('bjlg_gdrive_status');
         $this->assertSame([
             'last_result' => null,
             'tested_at' => 0,
@@ -195,14 +195,14 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $client = new FakeGoogleClient();
         $destination = $this->createDestination($client, new FakeDriveService(new FakeDriveFiles()), new FakeMediaUploadFactory());
 
-        update_option('bjlg_gdrive_settings', [
+        bjlg_update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
             'client_secret' => 'client-secret',
             'folder_id' => '',
             'enabled' => true,
         ]);
 
-        update_option('bjlg_gdrive_state', 'expected-state');
+        bjlg_update_option('bjlg_gdrive_state', 'expected-state');
 
         $_GET['bjlg_gdrive_auth'] = '1';
         $_GET['code'] = 'auth-code';
@@ -210,7 +210,7 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
 
         $destination->handle_oauth_callback();
 
-        $this->assertSame([], get_option('bjlg_gdrive_token', []));
+        $this->assertSame([], bjlg_get_option('bjlg_gdrive_token', []));
         $this->assertNull($client->authCodeReceived);
     }
 
@@ -221,14 +221,14 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $media_factory = new FakeMediaUploadFactory();
         $destination = $this->createDestination($client, new FakeDriveService($drive_files), $media_factory);
 
-        update_option('bjlg_gdrive_settings', [
+        bjlg_update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
             'client_secret' => 'client-secret',
             'folder_id' => '',
             'enabled' => true,
         ]);
 
-        update_option('bjlg_gdrive_token', [
+        bjlg_update_option('bjlg_gdrive_token', [
             'access_token' => 'token',
             'refresh_token' => 'refresh-token',
             'created' => time(),
@@ -271,14 +271,14 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
 
         $destination = $this->createDestination($client, new FakeDriveService($drive_files), $media_factory);
 
-        update_option('bjlg_gdrive_settings', [
+        bjlg_update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
             'client_secret' => 'client-secret',
             'folder_id' => 'folder',
             'enabled' => true,
         ]);
 
-        update_option('bjlg_gdrive_token', [
+        bjlg_update_option('bjlg_gdrive_token', [
             'access_token' => 'token',
             'refresh_token' => 'refresh-token',
             'created' => time(),
@@ -306,14 +306,14 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
 
         $destination = $this->createDestination($client, new FakeDriveService($drive_files), $media_factory);
 
-        update_option('bjlg_gdrive_settings', [
+        bjlg_update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
             'client_secret' => 'client-secret',
             'folder_id' => 'shared-folder-id',
             'enabled' => true,
         ]);
 
-        update_option('bjlg_gdrive_token', [
+        bjlg_update_option('bjlg_gdrive_token', [
             'access_token' => 'token',
             'refresh_token' => 'refresh-token',
             'created' => time(),
@@ -342,14 +342,14 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
 
         $destination = $this->createDestination($client, new FakeDriveService($drive_files), $media_factory);
 
-        update_option('bjlg_gdrive_settings', [
+        bjlg_update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
             'client_secret' => 'client-secret',
             'folder_id' => '',
             'enabled' => true,
         ]);
 
-        update_option('bjlg_gdrive_token', [
+        bjlg_update_option('bjlg_gdrive_token', [
             'access_token' => 'token',
             'refresh_token' => 'refresh-token',
             'created' => time(),
@@ -382,14 +382,14 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $media_factory = new FakeMediaUploadFactory();
         $destination = $this->createDestination($client, $drive_service, $media_factory);
 
-        update_option('bjlg_gdrive_settings', [
+        bjlg_update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
             'client_secret' => 'client-secret',
             'folder_id' => 'drive-123:folder-456',
             'enabled' => true,
         ]);
 
-        update_option('bjlg_gdrive_token', [
+        bjlg_update_option('bjlg_gdrive_token', [
             'access_token' => 'token',
             'refresh_token' => 'refresh-token',
             'created' => time(),
@@ -438,14 +438,14 @@ final class BJLG_GoogleDriveDestinationTest extends TestCase
         $drive_service = new FakeDriveService($drive_files);
         $destination = $this->createDestination($client, $drive_service, new FakeMediaUploadFactory());
 
-        update_option('bjlg_gdrive_settings', [
+        bjlg_update_option('bjlg_gdrive_settings', [
             'client_id' => 'client-id',
             'client_secret' => 'client-secret',
             'folder_id' => 'drive-789:folder-000',
             'enabled' => true,
         ]);
 
-        update_option('bjlg_gdrive_token', [
+        bjlg_update_option('bjlg_gdrive_token', [
             'access_token' => 'token',
             'refresh_token' => 'refresh-token',
             'created' => time(),

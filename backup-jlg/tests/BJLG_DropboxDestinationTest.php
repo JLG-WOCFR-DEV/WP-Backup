@@ -35,7 +35,7 @@ final class BJLG_DropboxDestinationTest extends TestCase
             return 1_700_000_000;
         });
 
-        update_option('bjlg_dropbox_settings', [
+        bjlg_update_option('bjlg_dropbox_settings', [
             'access_token' => 'token-123',
             'folder' => '/Backups',
             'enabled' => true,
@@ -116,7 +116,7 @@ final class BJLG_DropboxDestinationTest extends TestCase
             return $now;
         });
 
-        update_option('bjlg_dropbox_settings', [
+        bjlg_update_option('bjlg_dropbox_settings', [
             'access_token' => 'token-123',
             'folder' => '/Backups',
             'enabled' => true,

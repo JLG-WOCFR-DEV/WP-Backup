@@ -35,7 +35,7 @@ final class BJLG_OneDriveDestinationTest extends TestCase
             return 1_700_000_000;
         });
 
-        update_option('bjlg_onedrive_settings', [
+        bjlg_update_option('bjlg_onedrive_settings', [
             'access_token' => 'access-token',
             'folder' => '/Archives',
             'enabled' => true,
@@ -111,7 +111,7 @@ final class BJLG_OneDriveDestinationTest extends TestCase
             return $now;
         });
 
-        update_option('bjlg_onedrive_settings', [
+        bjlg_update_option('bjlg_onedrive_settings', [
             'access_token' => 'access-token',
             'folder' => '/Archives',
             'enabled' => true,
