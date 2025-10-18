@@ -733,7 +733,7 @@ class BJLG_Notification_Queue {
      * @return array<int,array<string,mixed>>
      */
     private static function get_queue() {
-        $queue = get_option(self::OPTION, []);
+        $queue = bjlg_get_option(self::OPTION, []);
 
         if (!is_array($queue)) {
             return [];
@@ -755,7 +755,7 @@ class BJLG_Notification_Queue {
      * @param array<int,array<string,mixed>> $queue
      */
     private static function save_queue(array $queue) {
-        update_option(self::OPTION, array_values($queue), false);
+        bjlg_update_option(self::OPTION, array_values($queue), null, null, false);
     }
 
     /**

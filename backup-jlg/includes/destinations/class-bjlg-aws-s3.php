@@ -63,12 +63,12 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
 
     public function disconnect() {
         $defaults = $this->get_default_settings();
-        update_option(self::OPTION_SETTINGS, $defaults);
+        bjlg_update_option(self::OPTION_SETTINGS, $defaults);
 
         if (function_exists('delete_option')) {
-            delete_option(self::OPTION_STATUS);
+            bjlg_delete_option(self::OPTION_STATUS);
         } else {
-            update_option(self::OPTION_STATUS, []);
+            bjlg_update_option(self::OPTION_STATUS, []);
         }
     }
 
@@ -546,6 +546,27 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
 
         check_ajax_referer('bjlg_nonce', 'nonce');
 
+        $site_switched = false;
+        if (function_exists('is_multisite') && is_multisite()) {
+            $requested = isset($_POST['site_id']) ? absint(wp_unslash($_POST['site_id'])) : 0;
+
+            if ($requested > 0) {
+                if (!current_user_can('manage_network_options')) {
+                    wp_send_json_error(['message' => __('Droits réseau insuffisants.', 'backup-jlg')], 403);
+                }
+
+                if (!function_exists('get_site') || !get_site($requested)) {
+                    wp_send_json_error(['message' => __('Site introuvable.', 'backup-jlg')], 404);
+                }
+
+                $site_switched = BJLG_Site_Context::switch_to_site($requested);
+
+                if (!$site_switched && (!function_exists('get_current_blog_id') || get_current_blog_id() !== $requested)) {
+                    wp_send_json_error(['message' => __('Impossible de basculer sur le site demandé.', 'backup-jlg')], 500);
+                }
+            }
+        }
+
         $settings = [
             'access_key' => isset($_POST['s3_access_key']) ? sanitize_text_field(wp_unslash($_POST['s3_access_key'])) : '',
             'secret_key' => isset($_POST['s3_secret_key']) ? sanitize_text_field(wp_unslash($_POST['s3_secret_key'])) : '',
@@ -564,6 +585,10 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         try {
             $this->test_connection($settings);
             $message = sprintf('Connexion établie avec le bucket "%s".', $settings['bucket']);
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
+
             wp_send_json_success(['message' => $message]);
         } catch (Exception $exception) {
             $this->store_status([
@@ -571,6 +596,10 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
                 'tested_at' => $this->get_time(),
                 'message' => $exception->getMessage(),
             ]);
+
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
 
             wp_send_json_error(['message' => $exception->getMessage()]);
         }
@@ -743,7 +772,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
     }
 
     private function get_settings() {
-        $stored = get_option(self::OPTION_SETTINGS, []);
+        $stored = bjlg_get_option(self::OPTION_SETTINGS, []);
         if (!is_array($stored)) {
             $stored = [];
         }
@@ -769,7 +798,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
     }
 
     private function get_status() {
-        $status = get_option(self::OPTION_STATUS, [
+        $status = bjlg_get_option(self::OPTION_STATUS, [
             'last_result' => null,
             'tested_at' => 0,
             'message' => '',
@@ -790,7 +819,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
 
     private function store_status(array $status) {
         $current = $this->get_status();
-        update_option(self::OPTION_STATUS, array_merge($current, $status));
+        bjlg_update_option(self::OPTION_STATUS, array_merge($current, $status));
     }
 
     private function normalize_header_value($value) {

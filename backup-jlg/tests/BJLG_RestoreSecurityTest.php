@@ -586,7 +586,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
 
     public function test_restoring_encrypted_backup_removes_plaintext_archive(): void
     {
-        update_option('bjlg_encryption_settings', ['enabled' => true]);
+        bjlg_update_option('bjlg_encryption_settings', ['enabled' => true]);
 
         $zip_path = BJLG_BACKUP_DIR . 'encrypted-restore-' . uniqid('', true) . '.zip';
         $zip = new ZipArchive();
@@ -636,6 +636,6 @@ final class BJLG_RestoreSecurityTest extends TestCase
             unlink($decrypted_path);
         }
 
-        update_option('bjlg_encryption_settings', ['enabled' => false]);
+        bjlg_update_option('bjlg_encryption_settings', ['enabled' => false]);
     }
 }

@@ -106,11 +106,11 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
 
     public function disconnect() {
         if (function_exists('delete_option')) {
-            delete_option(self::OPTION_TOKEN);
-            delete_option(self::OPTION_STATUS);
+            bjlg_delete_option(self::OPTION_TOKEN);
+            bjlg_delete_option(self::OPTION_STATUS);
         } else {
-            update_option(self::OPTION_TOKEN, []);
-            update_option(self::OPTION_STATUS, []);
+            bjlg_update_option(self::OPTION_TOKEN, []);
+            bjlg_update_option(self::OPTION_STATUS, []);
         }
     }
 
@@ -822,6 +822,27 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
 
         check_ajax_referer('bjlg_nonce', 'nonce');
 
+        $site_switched = false;
+        if (function_exists('is_multisite') && is_multisite()) {
+            $requested = isset($_POST['site_id']) ? absint(wp_unslash($_POST['site_id'])) : 0;
+
+            if ($requested > 0) {
+                if (!current_user_can('manage_network_options')) {
+                    wp_send_json_error(['message' => __('Droits réseau insuffisants.', 'backup-jlg')], 403);
+                }
+
+                if (!function_exists('get_site') || !get_site($requested)) {
+                    wp_send_json_error(['message' => __('Site introuvable.', 'backup-jlg')], 404);
+                }
+
+                $site_switched = BJLG_Site_Context::switch_to_site($requested);
+
+                if (!$site_switched && (!function_exists('get_current_blog_id') || get_current_blog_id() !== $requested)) {
+                    wp_send_json_error(['message' => __('Impossible de basculer sur le site demandé.', 'backup-jlg')], 500);
+                }
+            }
+        }
+
         $settings = [
             'client_id' => isset($_POST['gdrive_client_id']) ? sanitize_text_field(wp_unslash($_POST['gdrive_client_id'])) : '',
             'client_secret' => isset($_POST['gdrive_client_secret']) ? sanitize_text_field(wp_unslash($_POST['gdrive_client_secret'])) : '',
@@ -843,6 +864,10 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
                 BJLG_Debug::log('Test de connexion Google Drive réussi. ' . $result['message']);
             }
 
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
+
             wp_send_json_success($response);
         } catch (Exception $exception) {
             $tested_at = time();
@@ -861,6 +886,10 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
 
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log('ERREUR test connexion Google Drive : ' . $exception->getMessage());
+            }
+
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
             }
 
             wp_send_json_error($response, 400);
@@ -890,7 +919,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             return;
         }
 
-        $expected_state = get_option(self::OPTION_STATE, '');
+        $expected_state = bjlg_get_option(self::OPTION_STATE, '');
         if ($expected_state === '' || !hash_equals($expected_state, $state)) {
             return;
         }
@@ -928,9 +957,9 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             $this->store_token($token);
 
             if (function_exists('delete_option')) {
-                delete_option(self::OPTION_STATE);
+                bjlg_delete_option(self::OPTION_STATE);
             } else {
-                update_option(self::OPTION_STATE, '');
+                bjlg_update_option(self::OPTION_STATE, '');
             }
 
             $this->store_status([
@@ -1057,7 +1086,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             $client->setState($state);
         }
 
-        update_option(self::OPTION_STATE, $state);
+        bjlg_update_option(self::OPTION_STATE, $state);
 
         return $client->createAuthUrl();
     }
@@ -1068,7 +1097,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      * @return array{client_id:string,client_secret:string,folder_id:string,enabled:bool}
      */
     private function get_settings() {
-        $settings = get_option(self::OPTION_SETTINGS, []);
+        $settings = bjlg_get_option(self::OPTION_SETTINGS, []);
         if (!is_array($settings)) {
             $settings = [];
         }
@@ -1143,7 +1172,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      * @return array<string, mixed>
      */
     private function get_stored_token() {
-        $token = get_option(self::OPTION_TOKEN, []);
+        $token = bjlg_get_option(self::OPTION_TOKEN, []);
 
         return is_array($token) ? $token : [];
     }
@@ -1155,7 +1184,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      * @return void
      */
     private function store_token(array $token) {
-        update_option(self::OPTION_TOKEN, $token);
+        bjlg_update_option(self::OPTION_TOKEN, $token);
     }
 
     /**
@@ -1170,7 +1199,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             'message' => '',
         ];
 
-        $status = get_option(self::OPTION_STATUS, $defaults);
+        $status = bjlg_get_option(self::OPTION_STATUS, $defaults);
         if (!is_array($status)) {
             $status = [];
         }
@@ -1186,7 +1215,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      */
     private function store_status(array $status) {
         $current = $this->get_status();
-        update_option(self::OPTION_STATUS, array_merge($current, $status));
+        bjlg_update_option(self::OPTION_STATUS, array_merge($current, $status));
     }
 
     /**

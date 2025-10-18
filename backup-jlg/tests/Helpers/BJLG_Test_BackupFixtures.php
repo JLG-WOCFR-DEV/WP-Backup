@@ -126,8 +126,8 @@ final class BJLG_Test_BackupFixtures
         }
 
         $password = $config['password'];
-        $previousSettings = get_option('bjlg_encryption_settings', null);
-        update_option('bjlg_encryption_settings', ['enabled' => true]);
+        $previousSettings = bjlg_get_option('bjlg_encryption_settings', null);
+        bjlg_update_option('bjlg_encryption_settings', ['enabled' => true]);
 
         if (!defined('BJLG_ENCRYPTION_KEY')) {
             $rawKey = str_repeat("\0", BJLG_Encryption::KEY_LENGTH);
@@ -140,7 +140,7 @@ final class BJLG_Test_BackupFixtures
         if ($previousSettings === null) {
             unset($GLOBALS['bjlg_test_options']['bjlg_encryption_settings']);
         } else {
-            update_option('bjlg_encryption_settings', $previousSettings);
+            bjlg_update_option('bjlg_encryption_settings', $previousSettings);
         }
 
         return [

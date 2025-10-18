@@ -54,12 +54,12 @@ class BJLG_Azure_Blob implements BJLG_Destination_Interface {
 
     public function disconnect() {
         $defaults = $this->get_default_settings();
-        update_option(self::OPTION_SETTINGS, $defaults);
+        bjlg_update_option(self::OPTION_SETTINGS, $defaults);
 
         if (function_exists('delete_option')) {
-            delete_option(self::OPTION_STATUS);
+            bjlg_delete_option(self::OPTION_STATUS);
         } else {
-            update_option(self::OPTION_STATUS, []);
+            bjlg_update_option(self::OPTION_STATUS, []);
         }
     }
 
@@ -708,7 +708,7 @@ class BJLG_Azure_Blob implements BJLG_Destination_Interface {
     }
 
     private function get_settings() {
-        $stored = get_option(self::OPTION_SETTINGS, []);
+        $stored = bjlg_get_option(self::OPTION_SETTINGS, []);
         if (!is_array($stored)) {
             $stored = [];
         }
@@ -734,7 +734,7 @@ class BJLG_Azure_Blob implements BJLG_Destination_Interface {
     }
 
     private function get_status() {
-        $status = get_option(self::OPTION_STATUS, [
+        $status = bjlg_get_option(self::OPTION_STATUS, [
             'last_result' => null,
             'tested_at' => 0,
             'message' => '',
@@ -755,7 +755,7 @@ class BJLG_Azure_Blob implements BJLG_Destination_Interface {
 
     private function store_status(array $status) {
         $current = $this->get_status();
-        update_option(self::OPTION_STATUS, array_merge($current, $status));
+        bjlg_update_option(self::OPTION_STATUS, array_merge($current, $status));
     }
 
     private function select_backups_to_delete(array $backups, int $retain_by_number, int $retain_by_age_days) {
