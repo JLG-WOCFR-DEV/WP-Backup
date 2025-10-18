@@ -44,7 +44,7 @@ class BJLG_Client_IP_Helper {
      * @return array<int, string>
      */
     public static function get_trusted_proxy_headers($filter_hooks = 'bjlg_rate_limiter_trusted_proxy_headers', $option_name = 'bjlg_trusted_proxy_headers') {
-        $option_headers = get_option($option_name, []);
+        $option_headers = bjlg_get_option($option_name, []);
 
         if (is_string($option_headers)) {
             $option_headers = array_filter(array_map('trim', explode(',', $option_headers)));

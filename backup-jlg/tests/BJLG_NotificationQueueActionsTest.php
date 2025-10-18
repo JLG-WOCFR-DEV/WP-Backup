@@ -12,14 +12,14 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        update_option('bjlg_notification_queue', []);
+        bjlg_update_option('bjlg_notification_queue', []);
         $GLOBALS['bjlg_test_scheduled_events']['single'] = [];
     }
 
     public function test_retry_entry_resets_channels_and_schedules_event(): void
     {
         $created = time() - 600;
-        update_option('bjlg_notification_queue', [
+        bjlg_update_option('bjlg_notification_queue', [
             [
                 'id' => 'entry-1',
                 'event' => 'backup_failed',
@@ -46,7 +46,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::retry_entry('entry-1'));
 
-        $queue = get_option('bjlg_notification_queue');
+        $queue = bjlg_get_option('bjlg_notification_queue');
         $this->assertCount(1, $queue);
         $entry = $queue[0];
         $this->assertSame('entry-1', $entry['id']);
@@ -68,7 +68,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
     public function test_delete_entry_removes_entry(): void
     {
-        update_option('bjlg_notification_queue', [
+        bjlg_update_option('bjlg_notification_queue', [
             [
                 'id' => 'delete-me',
                 'event' => 'backup_complete',
@@ -89,7 +89,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         ]);
 
         $this->assertTrue(BJLG_Notification_Queue::delete_entry('delete-me'));
-        $queue = get_option('bjlg_notification_queue');
+        $queue = bjlg_get_option('bjlg_notification_queue');
         $this->assertSame([], $queue);
     }
 }

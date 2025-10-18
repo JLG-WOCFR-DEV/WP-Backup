@@ -95,7 +95,7 @@ if (!function_exists('bjlg_get_capability_map')) {
         ];
 
         if (function_exists('get_option')) {
-            $legacy_permission = get_option('bjlg_required_capability', '');
+            $legacy_permission = bjlg_get_option('bjlg_required_capability', '');
         } else {
             $legacy_permission = $GLOBALS['bjlg_test_options']['bjlg_required_capability'] ?? '';
         }
@@ -105,7 +105,7 @@ if (!function_exists('bjlg_get_capability_map')) {
         }
 
         if (function_exists('get_option')) {
-            $stored = get_option('bjlg_capability_map', []);
+            $stored = bjlg_get_option('bjlg_capability_map', []);
         } else {
             $stored = $GLOBALS['bjlg_test_options']['bjlg_capability_map'] ?? [];
         }
@@ -1008,6 +1008,12 @@ if (!function_exists('get_option')) {
     }
 }
 
+if (!function_exists('bjlg_get_option')) {
+    function bjlg_get_option($option, $default = false) {
+        return get_option($option, $default);
+    }
+}
+
 if (!function_exists('add_option')) {
     function add_option($option, $value, $deprecated = '', $autoload = 'yes') {
         if (isset($GLOBALS['bjlg_test_options'][$option])) {
@@ -1028,6 +1034,16 @@ if (!function_exists('add_option')) {
         if (strpos($option, '_transient_') === 0) {
             $transient = substr($option, strlen('_transient_'));
             $GLOBALS['bjlg_test_transients'][$transient] = $value;
+        }
+
+        return true;
+    }
+}
+
+if (!function_exists('bjlg_delete_option')) {
+    function bjlg_delete_option($option) {
+        if (isset($GLOBALS['bjlg_test_options'][$option])) {
+            unset($GLOBALS['bjlg_test_options'][$option]);
         }
 
         return true;
@@ -1056,10 +1072,40 @@ if (!function_exists('get_home_url')) {
     }
 }
 
+if (!function_exists('get_admin_url')) {
+    function get_admin_url($blog_id = null, $path = '', $scheme = 'admin') {
+        return 'https://example.test/wp-admin/' . ltrim($path, '/');
+    }
+}
+
+if (!function_exists('network_admin_url')) {
+    function network_admin_url($path = '', $scheme = 'admin') {
+        return 'https://example.test/wp-admin/network/' . ltrim($path, '/');
+    }
+}
+
 if (!function_exists('home_url')) {
     function home_url($path = '', $scheme = null) {
         return get_home_url(null, $path, $scheme);
     }
+}
+
+if (!isset($GLOBALS['bjlg_tests_multisite'])) {
+    $GLOBALS['bjlg_tests_multisite'] = false;
+}
+
+if (!isset($GLOBALS['bjlg_tests_blog_stack'])) {
+    $GLOBALS['bjlg_tests_blog_stack'] = [1];
+}
+
+if (!isset($GLOBALS['bjlg_tests_sites'])) {
+    $GLOBALS['bjlg_tests_sites'] = [
+        1 => (object) [
+            'blog_id' => 1,
+            'domain' => 'example.test',
+            'path' => '/',
+        ],
+    ];
 }
 
 if (!function_exists('is_multisite')) {
@@ -1194,6 +1240,12 @@ if (!function_exists('update_option')) {
         }
 
         return true;
+    }
+}
+
+if (!function_exists('bjlg_update_option')) {
+    function bjlg_update_option($option, $value) {
+        return update_option($option, $value);
     }
 }
 

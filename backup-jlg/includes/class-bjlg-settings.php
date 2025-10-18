@@ -28,6 +28,8 @@ class BJLG_Settings {
     ];
     private const VALID_SCHEDULE_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
+    private const DEFAULT_REMOTE_STORAGE_THRESHOLD = 0.85;
+
     private $default_settings = [
         'cleanup' => [
             'by_number' => 3,
@@ -191,7 +193,8 @@ class BJLG_Settings {
             'debug_mode' => false,
             'ajax_debug' => false,
             'exclude_patterns' => [],
-            'custom_backup_dir' => ''
+            'custom_backup_dir' => '',
+            'remote_storage_threshold' => self::DEFAULT_REMOTE_STORAGE_THRESHOLD,
         ]
     ];
 
@@ -921,6 +924,10 @@ class BJLG_Settings {
         } catch (Exception $e) {
             BJLG_History::log('settings_updated', 'failure', 'Erreur : ' . $e->getMessage());
             wp_send_json_error(['message' => $e->getMessage()]);
+        } finally {
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
         }
     }
 
@@ -1757,6 +1764,12 @@ class BJLG_Settings {
                     if (isset($value['custom_backup_dir'])) {
                         $sanitized['custom_backup_dir'] = sanitize_text_field((string) $value['custom_backup_dir']);
                     }
+                    if (isset($value['remote_storage_threshold'])) {
+                        $sanitized['remote_storage_threshold'] = self::normalize_ratio(
+                            $value['remote_storage_threshold'],
+                            (float) $defaults['remote_storage_threshold']
+                        );
+                    }
                 }
 
                 return $sanitized;
@@ -2591,6 +2604,22 @@ class BJLG_Settings {
         }
 
         return ucwords(str_replace(['_', '-'], ' ', $slug));
+    }
+
+    /**
+     * Retourne le seuil d'alerte pour les destinations distantes.
+     */
+    public static function get_remote_storage_threshold(): float {
+        $settings = get_option('bjlg_advanced_settings', []);
+        $default = self::DEFAULT_REMOTE_STORAGE_THRESHOLD;
+
+        if (!is_array($settings)) {
+            return $default;
+        }
+
+        $value = $settings['remote_storage_threshold'] ?? $default;
+
+        return self::normalize_ratio($value, $default);
     }
 
     /**

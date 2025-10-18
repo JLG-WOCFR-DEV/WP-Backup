@@ -51,12 +51,12 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
     }
 
     public function disconnect() {
-        update_option(self::OPTION_SETTINGS, $this->get_default_settings());
+        bjlg_update_option(self::OPTION_SETTINGS, $this->get_default_settings());
 
         if (function_exists('delete_option')) {
-            delete_option(self::OPTION_STATUS);
+            bjlg_delete_option(self::OPTION_STATUS);
         } else {
-            update_option(self::OPTION_STATUS, []);
+            bjlg_update_option(self::OPTION_STATUS, []);
         }
     }
 
@@ -351,6 +351,27 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
 
         check_ajax_referer('bjlg_nonce', 'nonce');
 
+        $site_switched = false;
+        if (function_exists('is_multisite') && is_multisite()) {
+            $requested = isset($_POST['site_id']) ? absint(wp_unslash($_POST['site_id'])) : 0;
+
+            if ($requested > 0) {
+                if (!current_user_can('manage_network_options')) {
+                    wp_send_json_error(['message' => __('Droits réseau insuffisants.', 'backup-jlg')], 403);
+                }
+
+                if (!function_exists('get_site') || !get_site($requested)) {
+                    wp_send_json_error(['message' => __('Site introuvable.', 'backup-jlg')], 404);
+                }
+
+                $site_switched = BJLG_Site_Context::switch_to_site($requested);
+
+                if (!$site_switched && (!function_exists('get_current_blog_id') || get_current_blog_id() !== $requested)) {
+                    wp_send_json_error(['message' => __('Impossible de basculer sur le site demandé.', 'backup-jlg')], 500);
+                }
+            }
+        }
+
         $settings = [
             'access_token' => isset($_POST['pcloud_access_token']) ? sanitize_text_field(wp_unslash($_POST['pcloud_access_token'])) : '',
             'folder' => isset($_POST['pcloud_folder']) ? sanitize_text_field(wp_unslash($_POST['pcloud_folder'])) : '',
@@ -365,6 +386,10 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
                 'message' => $result['message'],
             ]);
 
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
+
             wp_send_json_success([
                 'message' => $result['message'],
                 'status_message' => $result['message'],
@@ -378,6 +403,10 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
                 'tested_at' => $tested_at,
                 'message' => $exception->getMessage(),
             ]);
+
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
 
             wp_send_json_error([
                 'message' => $exception->getMessage(),
@@ -403,7 +432,7 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
     }
 
     private function get_settings() {
-        $stored = get_option(self::OPTION_SETTINGS, []);
+        $stored = bjlg_get_option(self::OPTION_SETTINGS, []);
         if (!is_array($stored)) {
             $stored = [];
         }
@@ -420,7 +449,7 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
     }
 
     private function get_status() {
-        $status = get_option(self::OPTION_STATUS, [
+        $status = bjlg_get_option(self::OPTION_STATUS, [
             'last_result' => null,
             'tested_at' => 0,
             'message' => '',
@@ -441,7 +470,7 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
 
     private function store_status(array $status) {
         $current = $this->get_status();
-        update_option(self::OPTION_STATUS, array_merge($current, $status));
+        bjlg_update_option(self::OPTION_STATUS, array_merge($current, $status));
     }
 
     private function guard_response($response, $error_prefix) {

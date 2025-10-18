@@ -78,7 +78,7 @@ final class BJLG_SettingsDefaultsTest extends TestCase
         $settings = new BJLG_Settings();
         $settings->init_default_settings();
 
-        $wasabi = get_option('bjlg_wasabi_settings');
+        $wasabi = bjlg_get_option('bjlg_wasabi_settings');
         $this->assertIsArray($wasabi);
         $this->assertArrayHasKey('bucket', $wasabi);
         $this->assertSame('', $wasabi['bucket']);
@@ -86,7 +86,7 @@ final class BJLG_SettingsDefaultsTest extends TestCase
 
     public function test_init_default_settings_preserves_existing_values(): void
     {
-        update_option('bjlg_notification_settings', [
+        bjlg_update_option('bjlg_notification_settings', [
             'enabled' => true,
             'channels' => [
                 'email' => ['enabled' => true],
@@ -96,7 +96,7 @@ final class BJLG_SettingsDefaultsTest extends TestCase
         $settings = new BJLG_Settings();
         $settings->init_default_settings();
 
-        $stored = get_option('bjlg_notification_settings');
+        $stored = bjlg_get_option('bjlg_notification_settings');
         $this->assertTrue($stored['enabled']);
         $this->assertSame(
             ['enabled' => true],
