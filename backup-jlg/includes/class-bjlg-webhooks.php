@@ -35,7 +35,7 @@ class BJLG_Webhooks {
      * @return string La clé secrète.
      */
     public static function get_webhook_key() {
-        $key = get_option('bjlg_webhook_key');
+        $key = bjlg_get_option('bjlg_webhook_key');
         if (empty($key)) {
             $key = self::regenerate_key();
         }
@@ -48,7 +48,7 @@ class BJLG_Webhooks {
      */
     public static function regenerate_key() {
         $new_key = wp_generate_password(40, false, false);
-        update_option('bjlg_webhook_key', $new_key);
+        bjlg_update_option('bjlg_webhook_key', $new_key);
 
         BJLG_Debug::log("Nouvelle clé de webhook générée.");
         BJLG_History::log('webhook_key_regenerated', 'info', 'Clé de webhook régénérée');
@@ -386,7 +386,7 @@ class BJLG_Webhooks {
             return false;
         }
         
-        $webhook_settings = get_option('bjlg_webhook_settings', []);
+        $webhook_settings = bjlg_get_option('bjlg_webhook_settings', []);
         $secret = $webhook_settings['secret'] ?? '';
         
         // Préparer le payload
@@ -433,7 +433,7 @@ class BJLG_Webhooks {
      * Notifie la fin d'une sauvegarde réussie
      */
     public function notify_backup_complete($filename, $details) {
-        $webhook_settings = get_option('bjlg_webhook_settings', []);
+        $webhook_settings = bjlg_get_option('bjlg_webhook_settings', []);
         
         if (empty($webhook_settings['enabled']) || empty($webhook_settings['urls']['backup_complete'])) {
             return;
@@ -457,7 +457,7 @@ class BJLG_Webhooks {
      * Notifie l'échec d'une sauvegarde
      */
     public function notify_backup_failed($error_message, $details) {
-        $webhook_settings = get_option('bjlg_webhook_settings', []);
+        $webhook_settings = bjlg_get_option('bjlg_webhook_settings', []);
         
         if (empty($webhook_settings['enabled']) || empty($webhook_settings['urls']['backup_failed'])) {
             return;

@@ -92,13 +92,16 @@ if (!function_exists('bjlg_get_capability_map')) {
      * @return array<string,string>
      */
     function bjlg_get_capability_map() {
+        $is_network_context = function_exists('is_multisite') && is_multisite() && function_exists('is_network_admin') && is_network_admin();
+        $default_capability = $is_network_context ? 'manage_network_options' : BJLG_DEFAULT_CAPABILITY;
+
         $defaults = [
-            'manage_plugin' => BJLG_DEFAULT_CAPABILITY,
-            'manage_backups' => BJLG_DEFAULT_CAPABILITY,
-            'restore' => BJLG_DEFAULT_CAPABILITY,
-            'manage_settings' => BJLG_DEFAULT_CAPABILITY,
-            'manage_integrations' => BJLG_DEFAULT_CAPABILITY,
-            'view_logs' => BJLG_DEFAULT_CAPABILITY,
+            'manage_plugin' => $default_capability,
+            'manage_backups' => $default_capability,
+            'restore' => $default_capability,
+            'manage_settings' => $default_capability,
+            'manage_integrations' => $default_capability,
+            'view_logs' => $default_capability,
         ];
 
         if (function_exists('is_multisite') && is_multisite()) {
@@ -110,7 +113,7 @@ if (!function_exists('bjlg_get_capability_map')) {
             $defaults['manage_plugin'] = sanitize_text_field($legacy_permission);
         }
 
-        $stored = get_option('bjlg_capability_map', []);
+        $stored = bjlg_get_option('bjlg_capability_map', [], null, $is_network_context ? true : null);
         if (!is_array($stored)) {
             $stored = [];
         }
@@ -308,6 +311,33 @@ if (!defined('BJLG_CAPABILITY')) {
 if (!defined('BJLG_BACKUP_DIR')) {
     $uploads = wp_get_upload_dir();
     define('BJLG_BACKUP_DIR', trailingslashit($uploads['basedir']) . 'bjlg-backups/');
+}
+
+if (!function_exists('bjlg_get_option')) {
+    /**
+     * Wrapper pour récupérer une option sensible au contexte multisite.
+     */
+    function bjlg_get_option($option, $default = false, $site_id = null, $network = null) {
+        return BJLG\BJLG_Site_Context::get_option($option, $default, $site_id, $network);
+    }
+}
+
+if (!function_exists('bjlg_update_option')) {
+    /**
+     * Wrapper pour mettre à jour une option sensible au contexte multisite.
+     */
+    function bjlg_update_option($option, $value, $site_id = null, $network = null, $autoload = null) {
+        return BJLG\BJLG_Site_Context::update_option($option, $value, $site_id, $network, $autoload);
+    }
+}
+
+if (!function_exists('bjlg_delete_option')) {
+    /**
+     * Wrapper pour supprimer une option sensible au contexte multisite.
+     */
+    function bjlg_delete_option($option, $site_id = null, $network = null) {
+        return BJLG\BJLG_Site_Context::delete_option($option, $site_id, $network);
+    }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -517,6 +547,7 @@ final class BJLG_Plugin {
         new BJLG\BJLG_Restore($backup_manager, $encryption_service);
 
         BJLG\BJLG_Scheduler::instance();
+        BJLG\BJLG_Scheduler::init_hooks();
         BJLG\BJLG_Cleanup::instance();
         new BJLG\BJLG_Health_Check();
         new BJLG\BJLG_Diagnostics();

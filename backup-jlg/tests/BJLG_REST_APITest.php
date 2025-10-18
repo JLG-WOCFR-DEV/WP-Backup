@@ -317,7 +317,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
             $api_key = 'missing-key-auth';
 
-            update_option('bjlg_api_keys', [[
+            bjlg_update_option('bjlg_api_keys', [[
                 'key' => wp_hash_password($api_key),
                 'user_id' => $user->ID,
                 'roles' => $user->roles,
@@ -970,7 +970,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $user->ID => $user,
         ];
 
-        update_option('bjlg_api_keys', [[
+        bjlg_update_option('bjlg_api_keys', [[
             'key' => $hashed_key,
             'usage_count' => $initial_usage_count,
             'last_used' => $initial_last_used,
@@ -985,7 +985,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $before_verification = time();
         $result = $method->invoke($api, $api_key);
 
-        $updated_keys = get_option('bjlg_api_keys');
+        $updated_keys = bjlg_get_option('bjlg_api_keys');
         $storage_key_method = $reflection->getMethod('get_api_key_stats_storage_key');
         $storage_key_method->setAccessible(true);
         $stats_storage_key = $storage_key_method->invoke($api, $hashed_key);
@@ -1017,7 +1017,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $user->ID => $user,
         ];
 
-        update_option('bjlg_api_keys', [[
+        bjlg_update_option('bjlg_api_keys', [[
             'key' => $api_key,
             'usage_count' => 0,
             'user_login' => $user->user_login,
@@ -1032,7 +1032,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $this->assertIsObject($result);
         $this->assertSame($user->ID, $result->ID);
 
-        $updated_keys = get_option('bjlg_api_keys');
+        $updated_keys = bjlg_get_option('bjlg_api_keys');
         $storage_key_method = $reflection->getMethod('get_api_key_stats_storage_key');
         $storage_key_method->setAccessible(true);
         $stats_storage_key = $storage_key_method->invoke($api, $updated_keys[0]['key']);
@@ -1160,7 +1160,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $api_key = 'strict-key';
 
-        update_option('bjlg_api_keys', [[
+        bjlg_update_option('bjlg_api_keys', [[
             'key' => wp_hash_password($api_key),
             'user_id' => $owner->ID,
             'roles' => $owner->roles,
@@ -1222,12 +1222,12 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         ];
 
         $api_key = 'integration-api-key';
-        update_option('bjlg_api_keys', []);
+        bjlg_update_option('bjlg_api_keys', []);
 
         $headers = [];
 
         if ($auth_method === 'api_key') {
-            update_option('bjlg_api_keys', [
+            bjlg_update_option('bjlg_api_keys', [
                 [
                     'key' => wp_hash_password($api_key),
                     'user_id' => $admin->ID,
@@ -1294,7 +1294,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $this->assertIsArray($response);
         $this->assertArrayHasKey('success', $response);
         $this->assertTrue($response['success']);
-        $this->assertSame($payload['cleanup'], get_option('bjlg_cleanup_settings'));
+        $this->assertSame($payload['cleanup'], bjlg_get_option('bjlg_cleanup_settings'));
 
         $this->assertNotEmpty($GLOBALS['bjlg_history_entries']);
         $last_entry = $GLOBALS['bjlg_history_entries'][count($GLOBALS['bjlg_history_entries']) - 1];
@@ -2684,16 +2684,16 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $_POST = $previous_post;
         }
 
-        $whitelabel = get_option('bjlg_whitelabel_settings');
+        $whitelabel = bjlg_get_option('bjlg_whitelabel_settings');
         $this->assertIsArray($whitelabel);
         $this->assertTrue($whitelabel['hide_from_non_admins']);
 
-        $encryption = get_option('bjlg_encryption_settings');
+        $encryption = bjlg_get_option('bjlg_encryption_settings');
         $this->assertTrue($encryption['enabled']);
         $this->assertTrue($encryption['auto_encrypt']);
         $this->assertTrue($encryption['password_protect']);
 
-        $notifications = get_option('bjlg_notification_settings');
+        $notifications = bjlg_get_option('bjlg_notification_settings');
         $this->assertTrue($notifications['enabled']);
         $this->assertTrue($notifications['events']['backup_complete']);
         $this->assertFalse($notifications['events']['backup_failed']);
@@ -2711,16 +2711,16 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $this->assertSame('https://example.com/teams', $notifications['channels']['teams']['webhook_url']);
         $this->assertSame('https://sms.example.com/hook', $notifications['channels']['sms']['webhook_url']);
 
-        $performance = get_option('bjlg_performance_settings');
+        $performance = bjlg_get_option('bjlg_performance_settings');
         $this->assertTrue($performance['multi_threading']);
 
-        $gdrive = get_option('bjlg_gdrive_settings');
+        $gdrive = bjlg_get_option('bjlg_gdrive_settings');
         $this->assertTrue($gdrive['enabled']);
 
-        $webhooks = get_option('bjlg_webhook_settings');
+        $webhooks = bjlg_get_option('bjlg_webhook_settings');
         $this->assertTrue($webhooks['enabled']);
 
-        $this->assertTrue(get_option('bjlg_ajax_debug_enabled'));
+        $this->assertTrue(bjlg_get_option('bjlg_ajax_debug_enabled'));
     }
 
     public function test_handle_save_settings_returns_success_payload(): void
@@ -2749,7 +2749,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $this->assertSame([
             'by_number' => 5,
             'by_age' => 9,
-        ], get_option('bjlg_cleanup_settings'));
+        ], bjlg_get_option('bjlg_cleanup_settings'));
     }
 
         public function test_update_settings_rejects_empty_payload(): void
@@ -2770,7 +2770,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
             $this->assertInstanceOf(WP_Error::class, $result);
             $this->assertSame('invalid_payload', $result->get_error_code());
-            $this->assertSame($original_cleanup, get_option('bjlg_cleanup_settings'));
+            $this->assertSame($original_cleanup, bjlg_get_option('bjlg_cleanup_settings'));
         }
 
         public function test_update_settings_rejects_invalid_cleanup_structure(): void
@@ -2793,7 +2793,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
             $this->assertInstanceOf(WP_Error::class, $result);
             $this->assertSame('invalid_cleanup_settings', $result->get_error_code());
-            $this->assertSame($original_cleanup, get_option('bjlg_cleanup_settings'));
+            $this->assertSame($original_cleanup, bjlg_get_option('bjlg_cleanup_settings'));
         }
 
         public function test_update_settings_sanitizes_payload_before_saving(): void
@@ -2874,9 +2874,9 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $this->assertSame([
                 'by_number' => 15,
                 'by_age' => 0,
-            ], get_option('bjlg_cleanup_settings'));
+            ], bjlg_get_option('bjlg_cleanup_settings'));
 
-            $schedule_collection = get_option('bjlg_schedule_settings');
+            $schedule_collection = bjlg_get_option('bjlg_schedule_settings');
             $this->assertIsArray($schedule_collection);
             $this->assertSame(2, $schedule_collection['version']);
             $this->assertIsArray($schedule_collection['schedules']);
@@ -2898,7 +2898,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
                 'auto_encrypt' => true,
                 'password_protect' => false,
                 'compression_level' => 15,
-            ], get_option('bjlg_encryption_settings'));
+            ], bjlg_get_option('bjlg_encryption_settings'));
 
             $this->assertSame([
                 'enabled' => true,
@@ -2932,14 +2932,14 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
                         'webhook_url' => '',
                     ],
                 ],
-            ], get_option('bjlg_notification_settings'));
+            ], bjlg_get_option('bjlg_notification_settings'));
 
             $this->assertSame([
                 'multi_threading' => true,
                 'max_workers' => 1,
                 'chunk_size' => 1,
                 'compression_level' => 9,
-            ], get_option('bjlg_performance_settings'));
+            ], bjlg_get_option('bjlg_performance_settings'));
 
             $this->assertSame([
                 'enabled' => true,
@@ -2949,7 +2949,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
                     'cleanup_complete' => 'https://example.com/cleanup',
                 ],
                 'secret' => 'secret',
-            ], get_option('bjlg_webhook_settings'));
+            ], bjlg_get_option('bjlg_webhook_settings'));
         }
 
         public function test_create_schedule_rejects_incomplete_payload(): void
@@ -2992,7 +2992,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
             $this->assertInstanceOf(WP_Error::class, $result);
             $this->assertSame('invalid_schedule_settings', $result->get_error_code());
-            $this->assertSame($original_schedule, get_option('bjlg_schedule_settings'));
+            $this->assertSame($original_schedule, bjlg_get_option('bjlg_schedule_settings'));
         }
 
     public function test_create_backup_stores_incremental_flag_from_rest_request(): void
@@ -3452,7 +3452,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
     public function test_webhook_backup_duration_is_positive_and_reasonable(): void
     {
         $webhook_key = 'webhook-test-key';
-        update_option('bjlg_webhook_key', $webhook_key);
+        bjlg_update_option('bjlg_webhook_key', $webhook_key);
 
         $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
         $_SERVER['HTTP_USER_AGENT'] = 'PHPUnit Test';
@@ -3504,7 +3504,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $user = $this->makeUser(1, 'admin');
         $GLOBALS['bjlg_test_users'][$user->ID] = $user;
 
-        update_option('bjlg_api_keys', [
+        bjlg_update_option('bjlg_api_keys', [
             [
                 'key' => wp_hash_password($apiKey),
                 'user_id' => $user->ID,

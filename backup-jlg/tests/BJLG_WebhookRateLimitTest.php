@@ -63,7 +63,7 @@ final class BJLG_WebhookRateLimitTest extends TestCase
 
     public function test_webhook_is_rate_limited_before_reserving_slot(): void
     {
-        update_option('bjlg_webhook_key', 'webhook-test-key');
+        bjlg_update_option('bjlg_webhook_key', 'webhook-test-key');
 
         $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
         $_SERVER['HTTP_USER_AGENT'] = 'PHPUnit Test';

@@ -45,7 +45,7 @@ class BJLG_Encryption {
      * Charge les paramètres de chiffrement
      */
     private function load_settings() {
-        $settings = get_option('bjlg_encryption_settings', []);
+        $settings = bjlg_get_option('bjlg_encryption_settings', []);
         $this->is_enabled = $settings['enabled'] ?? false;
         
         // Récupérer la clé depuis un endroit sécurisé
@@ -65,7 +65,7 @@ class BJLG_Encryption {
         }
 
         // Option 2: Depuis la base de données (moins sécurisé)
-        $stored_key = get_option('bjlg_encryption_key');
+        $stored_key = bjlg_get_option('bjlg_encryption_key');
         if ($stored_key) {
             $key = $this->decode_encryption_key($stored_key, 'bjlg_encryption_key');
             if ($key !== null) {
@@ -146,7 +146,7 @@ class BJLG_Encryption {
         }
         
         // Sauvegarder la clé
-        update_option('bjlg_encryption_key', base64_encode($key));
+        bjlg_update_option('bjlg_encryption_key', base64_encode($key));
         
         // Log l'événement
         BJLG_History::log('encryption_key_generated', 'info', 'Nouvelle clé de chiffrement générée');
@@ -765,10 +765,10 @@ class BJLG_Encryption {
      */
     private function derive_key_from_password($password, $salt = null) {
         if ($salt === null) {
-            $salt = get_option('bjlg_encryption_salt');
+            $salt = bjlg_get_option('bjlg_encryption_salt');
             if (!$salt) {
                 $salt = openssl_random_pseudo_bytes(self::PASSWORD_SALT_LENGTH);
-                update_option('bjlg_encryption_salt', $salt);
+                bjlg_update_option('bjlg_encryption_salt', $salt);
             }
         }
 
