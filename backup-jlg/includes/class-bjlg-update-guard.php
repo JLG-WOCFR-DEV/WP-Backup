@@ -181,7 +181,7 @@ class BJLG_Update_Guard {
      * @return array<string,mixed>
      */
     private function resolve_blueprint(array $context, $hook_extra) {
-        $collection = \get_option('bjlg_schedule_settings', []);
+        $collection = \bjlg_get_option('bjlg_schedule_settings', []);
         $sanitized_collection = BJLG_Settings::sanitize_schedule_collection($collection);
         $schedules = isset($sanitized_collection['schedules']) && is_array($sanitized_collection['schedules'])
             ? $sanitized_collection['schedules']

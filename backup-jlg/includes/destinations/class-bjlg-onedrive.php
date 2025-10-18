@@ -138,6 +138,27 @@ class BJLG_OneDrive implements BJLG_Destination_Interface {
 
         check_ajax_referer('bjlg_nonce', 'nonce');
 
+        $site_switched = false;
+        if (function_exists('is_multisite') && is_multisite()) {
+            $requested = isset($_POST['site_id']) ? absint(wp_unslash($_POST['site_id'])) : 0;
+
+            if ($requested > 0) {
+                if (!current_user_can('manage_network_options')) {
+                    wp_send_json_error(['message' => __('Droits réseau insuffisants.', 'backup-jlg')], 403);
+                }
+
+                if (!function_exists('get_site') || !get_site($requested)) {
+                    wp_send_json_error(['message' => __('Site introuvable.', 'backup-jlg')], 404);
+                }
+
+                $site_switched = BJLG_Site_Context::switch_to_site($requested);
+
+                if (!$site_switched && (!function_exists('get_current_blog_id') || get_current_blog_id() !== $requested)) {
+                    wp_send_json_error(['message' => __('Impossible de basculer sur le site demandé.', 'backup-jlg')], 500);
+                }
+            }
+        }
+
         $settings = [
             'access_token' => isset($_POST['onedrive_access_token']) ? sanitize_text_field(wp_unslash($_POST['onedrive_access_token'])) : '',
             'folder' => isset($_POST['onedrive_folder']) ? sanitize_text_field(wp_unslash($_POST['onedrive_folder'])) : '',
@@ -146,6 +167,10 @@ class BJLG_OneDrive implements BJLG_Destination_Interface {
 
         try {
             $result = $this->test_connection($settings);
+
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
 
             wp_send_json_success([
                 'message' => $result['message'],
@@ -160,6 +185,10 @@ class BJLG_OneDrive implements BJLG_Destination_Interface {
                 'tested_at' => $tested_at,
                 'message' => $exception->getMessage(),
             ]);
+
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
 
             wp_send_json_error([
                 'message' => $exception->getMessage(),

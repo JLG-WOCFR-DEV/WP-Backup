@@ -201,7 +201,7 @@ class BJLG_Scheduler {
 
         $collection['schedules'] = $schedules;
 
-        update_option('bjlg_schedule_settings', $collection);
+        bjlg_update_option('bjlg_schedule_settings', $collection);
 
         $primary = $this->get_primary_schedule($schedules);
         $aggregated_secondary = array_values(array_unique($all_secondary));
@@ -1020,11 +1020,11 @@ class BJLG_Scheduler {
     }
 
     public function get_schedule_settings() {
-        $stored = get_option('bjlg_schedule_settings', []);
+        $stored = bjlg_get_option('bjlg_schedule_settings', []);
         $collection = BJLG_Settings::sanitize_schedule_collection($stored);
 
         if ($stored !== $collection) {
-            update_option('bjlg_schedule_settings', $collection);
+            bjlg_update_option('bjlg_schedule_settings', $collection);
         }
 
         return $collection;
@@ -1087,7 +1087,7 @@ class BJLG_Scheduler {
         }
 
         $collection = BJLG_Settings::sanitize_schedule_collection(['schedules' => $schedules]);
-        update_option('bjlg_schedule_settings', $collection);
+        bjlg_update_option('bjlg_schedule_settings', $collection);
 
         $this->sync_schedules($collection['schedules']);
         $next_runs = $this->get_next_runs_summary($collection['schedules']);
@@ -1139,7 +1139,7 @@ class BJLG_Scheduler {
         $schedules[] = $duplicate;
 
         $collection = BJLG_Settings::sanitize_schedule_collection(['schedules' => $schedules]);
-        update_option('bjlg_schedule_settings', $collection);
+        bjlg_update_option('bjlg_schedule_settings', $collection);
 
         $this->sync_schedules($collection['schedules']);
         $next_runs = $this->get_next_runs_summary($collection['schedules']);

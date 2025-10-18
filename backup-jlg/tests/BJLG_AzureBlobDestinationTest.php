@@ -40,7 +40,7 @@ final class BJLG_AzureBlobDestinationTest extends TestCase
 
         $destination = $this->createDestination($handler);
 
-        update_option('bjlg_azure_blob_settings', [
+        bjlg_update_option('bjlg_azure_blob_settings', [
             'account_name' => 'myaccount',
             'account_key' => base64_encode('example-key-123456'),
             'container' => 'backups',
@@ -122,7 +122,7 @@ final class BJLG_AzureBlobDestinationTest extends TestCase
             'enabled' => true,
         ]);
 
-        $status = get_option('bjlg_azure_blob_status');
+        $status = bjlg_get_option('bjlg_azure_blob_status');
         $this->assertSame('success', $status['last_result']);
         $this->assertStringContainsString('demo-container', (string) $status['message']);
     }
@@ -131,7 +131,7 @@ final class BJLG_AzureBlobDestinationTest extends TestCase
     {
         $destination = $this->createDestination();
 
-        update_option('bjlg_azure_blob_settings', [
+        bjlg_update_option('bjlg_azure_blob_settings', [
             'account_name' => 'myaccount',
             'account_key' => base64_encode('another-secret-key'),
             'container' => 'backups',

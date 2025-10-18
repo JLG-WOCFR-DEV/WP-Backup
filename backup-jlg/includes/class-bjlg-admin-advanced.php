@@ -518,7 +518,7 @@ class BJLG_Admin_Advanced {
             return [];
         }
 
-        $raw = get_option('bjlg_remote_purge_sla_metrics', []);
+        $raw = bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
         if (!is_array($raw) || empty($raw)) {
             return [];
         }
