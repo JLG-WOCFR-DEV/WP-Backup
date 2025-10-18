@@ -103,6 +103,32 @@ window.bjlgEnsureChart = (function() {
     };
 })();
 
+(function setupUnhandledRejectionGuard(global) {
+    if (!global || typeof global.addEventListener !== 'function') {
+        return;
+    }
+
+    const suppressedMessage = 'A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received';
+
+    global.addEventListener('unhandledrejection', function(event) {
+        if (!event) {
+            return;
+        }
+
+        let message = '';
+
+        if (event.reason && typeof event.reason === 'object' && typeof event.reason.message === 'string') {
+            message = event.reason.message;
+        } else if (typeof event.reason === 'string') {
+            message = event.reason;
+        }
+
+        if (message && message.indexOf(suppressedMessage) !== -1) {
+            event.preventDefault();
+        }
+    });
+})(window);
+
 jQuery(function($) {
     'use strict';
 
