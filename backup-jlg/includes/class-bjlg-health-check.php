@@ -380,12 +380,19 @@ XML;
      */
     private function check_database_size() {
         global $wpdb;
-        
+
+        if (!is_object($wpdb) || !method_exists($wpdb, 'get_row')) {
+            return [
+                'status' => 'warning',
+                'message' => "Base de données inaccessible (instance \$wpdb indisponible).",
+            ];
+        }
+
         $size_query = $wpdb->get_row(
-            "SELECT 
+            "SELECT
                 SUM(data_length + index_length) as size,
                 COUNT(*) as tables
-             FROM information_schema.TABLES 
+             FROM information_schema.TABLES
              WHERE table_schema = '" . DB_NAME . "'"
         );
         

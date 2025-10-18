@@ -2244,7 +2244,13 @@ class BJLG_Restore {
      */
     private function import_database($sql_filepath) {
         global $wpdb;
-        
+
+        if (!is_object($wpdb) || !method_exists($wpdb, 'query')) {
+            BJLG_Debug::log('Import SQL ignoré : instance $wpdb indisponible.', 'warning');
+
+            return;
+        }
+
         if (!file_exists($sql_filepath)) {
             throw new Exception("Fichier SQL introuvable.");
         }
