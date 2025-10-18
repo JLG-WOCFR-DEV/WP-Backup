@@ -278,7 +278,7 @@ private function get_php_info() {
     
     // Ajoutez les autres méthodes manquantes
     private function get_plugin_configuration() {
-        return bjlg_get_option('bjlg_settings', []);
+        return \bjlg_get_option('bjlg_settings', []);
     }
     
     private function format_history_as_csv($history) {

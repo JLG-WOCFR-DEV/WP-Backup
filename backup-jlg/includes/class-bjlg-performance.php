@@ -41,7 +41,7 @@ class BJLG_Performance {
      * Charge les paramètres
      */
     private function load_settings() {
-        $settings = bjlg_get_option('bjlg_performance_settings', []);
+        $settings = \bjlg_get_option('bjlg_performance_settings', []);
         $this->use_background_processing = isset($settings['multi_threading']) ? $settings['multi_threading'] : false;
         $this->max_workers = isset($settings['max_workers']) ? $settings['max_workers'] : 2;
         $this->chunk_size = isset($settings['chunk_size']) ? $settings['chunk_size'] : 50;
@@ -925,7 +925,7 @@ class BJLG_Performance {
 
         $raw_capability = $can_spawn_process && $has_workers;
 
-        $settings = bjlg_get_option('bjlg_performance_settings', []);
+        $settings = \bjlg_get_option('bjlg_performance_settings', []);
         $this->parallel_capable = (bool) apply_filters(
             'bjlg_can_use_parallel_processing',
             $raw_capability,
@@ -978,7 +978,7 @@ class BJLG_Performance {
      * Enregistre les statistiques de performance
      */
     private function record_performance_stats($stats) {
-        $all_stats = bjlg_get_option('bjlg_performance_stats', []);
+        $all_stats = \bjlg_get_option('bjlg_performance_stats', []);
         
         $all_stats[] = array_merge($stats, [
             'timestamp' => time()
@@ -989,7 +989,7 @@ class BJLG_Performance {
             $all_stats = array_slice($all_stats, -100);
         }
         
-        bjlg_update_option('bjlg_performance_stats', $all_stats);
+        \bjlg_update_option('bjlg_performance_stats', $all_stats);
     }
     
     /**
@@ -1052,7 +1052,7 @@ class BJLG_Performance {
             wp_send_json_error(['message' => 'Permission refusée']);
         }
         
-        $stats = bjlg_get_option('bjlg_performance_stats', []);
+        $stats = \bjlg_get_option('bjlg_performance_stats', []);
         
         // Calculer les moyennes
         $avg_duration = 0;

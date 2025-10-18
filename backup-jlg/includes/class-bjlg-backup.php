@@ -2217,7 +2217,7 @@ class BJLG_Backup {
 
         $option_patterns = [];
         if (function_exists('get_option')) {
-            $stored_patterns = bjlg_get_option('bjlg_backup_exclude_patterns', []);
+            $stored_patterns = \bjlg_get_option('bjlg_backup_exclude_patterns', []);
             $option_patterns = $this->normalize_exclude_patterns($stored_patterns);
         }
 
@@ -2496,7 +2496,7 @@ class BJLG_Backup {
         }
 
         if ($password === null && function_exists('get_option')) {
-            $settings = bjlg_get_option('bjlg_encryption_settings', []);
+            $settings = \bjlg_get_option('bjlg_encryption_settings', []);
             if (is_array($settings)) {
                 if (isset($settings['password']) && is_string($settings['password']) && $settings['password'] !== '') {
                     $password = $settings['password'];
@@ -2563,7 +2563,7 @@ class BJLG_Backup {
         if (isset($task_data['include_patterns']) && is_array($task_data['include_patterns'])) {
             $raw_patterns = $task_data['include_patterns'];
         } elseif (function_exists('get_option')) {
-            $raw_patterns = bjlg_get_option('bjlg_backup_include_patterns', []);
+            $raw_patterns = \bjlg_get_option('bjlg_backup_include_patterns', []);
         }
 
         $sanitized = BJLG_Settings::sanitize_pattern_list($raw_patterns);
@@ -2591,7 +2591,7 @@ class BJLG_Backup {
         if (isset($task_data['exclude_patterns']) && is_array($task_data['exclude_patterns'])) {
             $raw_patterns = $task_data['exclude_patterns'];
         } elseif (function_exists('get_option')) {
-            $raw_patterns = bjlg_get_option('bjlg_backup_exclude_patterns', []);
+            $raw_patterns = \bjlg_get_option('bjlg_backup_exclude_patterns', []);
         }
 
         return BJLG_Settings::sanitize_pattern_list($raw_patterns);
@@ -2603,7 +2603,7 @@ class BJLG_Backup {
         if (isset($task_data['post_checks']) && is_array($task_data['post_checks'])) {
             $raw = $task_data['post_checks'];
         } elseif (function_exists('get_option')) {
-            $raw = bjlg_get_option('bjlg_backup_post_checks', BJLG_Settings::get_default_backup_post_checks());
+            $raw = \bjlg_get_option('bjlg_backup_post_checks', BJLG_Settings::get_default_backup_post_checks());
         }
 
         return BJLG_Settings::sanitize_post_checks($raw, BJLG_Settings::get_default_backup_post_checks());
@@ -2615,7 +2615,7 @@ class BJLG_Backup {
         if (isset($task_data['secondary_destinations']) && is_array($task_data['secondary_destinations'])) {
             $raw = $task_data['secondary_destinations'];
         } elseif (function_exists('get_option')) {
-            $raw = bjlg_get_option('bjlg_backup_secondary_destinations', []);
+            $raw = \bjlg_get_option('bjlg_backup_secondary_destinations', []);
         }
 
         return BJLG_Settings::sanitize_destination_list($raw, BJLG_Settings::get_known_destination_ids());

@@ -121,7 +121,7 @@ class BJLG_Remote_Storage_Metrics {
      * @return array<string, mixed>
      */
     public static function get_snapshot(bool $force_refresh = false): array {
-        $snapshot = get_option(self::OPTION_KEY, []);
+        $snapshot = \bjlg_get_option(self::OPTION_KEY, []);
         if (!is_array($snapshot)) {
             $snapshot = [];
         }
@@ -152,7 +152,7 @@ class BJLG_Remote_Storage_Metrics {
      */
     public static function refresh_snapshot(): array {
         if (get_transient(self::LOCK_TRANSIENT)) {
-            return get_option(self::OPTION_KEY, []);
+            return \bjlg_get_option(self::OPTION_KEY, []);
         }
 
         set_transient(self::LOCK_TRANSIENT, 1, 5 * MINUTE_IN_SECONDS);
@@ -165,7 +165,7 @@ class BJLG_Remote_Storage_Metrics {
 
         if (!class_exists(BJLG_Destination_Factory::class) || !class_exists(BJLG_Settings::class)) {
             delete_transient(self::LOCK_TRANSIENT);
-            update_option(self::OPTION_KEY, $results);
+            \bjlg_update_option(self::OPTION_KEY, $results);
 
             return $results;
         }
@@ -180,7 +180,7 @@ class BJLG_Remote_Storage_Metrics {
             $results['destinations'][] = self::collect_destination_snapshot($destination_id, $destination);
         }
 
-        update_option(self::OPTION_KEY, $results);
+        \bjlg_update_option(self::OPTION_KEY, $results);
         delete_transient(self::LOCK_TRANSIENT);
 
         /**

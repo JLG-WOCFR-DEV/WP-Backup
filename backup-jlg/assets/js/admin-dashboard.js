@@ -393,6 +393,11 @@ jQuery(function($) {
                 details.push(sprintf(__('Relevé en %s ms', 'backup-jlg'), formatNumber(Math.round(latency))));
             }
 
+            const latency = Number(dest.latency_ms);
+            if (Number.isFinite(latency) && latency > 0) {
+                details.push(sprintf(__('Relevé en %s ms', 'backup-jlg'), formatNumber(Math.round(latency))));
+            }
+
             let intent = 'info';
             if (!connectedFlag || errors.length) {
                 intent = 'error';

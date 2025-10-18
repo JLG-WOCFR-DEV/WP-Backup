@@ -1832,13 +1832,13 @@ class BJLG_Admin {
      * Section : Création de sauvegarde
      */
     private function render_backup_creation_section() {
-        $include_patterns = bjlg_get_option('bjlg_backup_include_patterns', []);
-        $exclude_patterns = bjlg_get_option('bjlg_backup_exclude_patterns', []);
-        $post_checks = bjlg_get_option('bjlg_backup_post_checks', ['checksum' => true, 'dry_run' => false]);
+        $include_patterns = \bjlg_get_option('bjlg_backup_include_patterns', []);
+        $exclude_patterns = \bjlg_get_option('bjlg_backup_exclude_patterns', []);
+        $post_checks = \bjlg_get_option('bjlg_backup_post_checks', ['checksum' => true, 'dry_run' => false]);
         if (!is_array($post_checks)) {
             $post_checks = ['checksum' => true, 'dry_run' => false];
         }
-        $secondary_destinations = bjlg_get_option('bjlg_backup_secondary_destinations', []);
+        $secondary_destinations = \bjlg_get_option('bjlg_backup_secondary_destinations', []);
         if (!is_array($secondary_destinations)) {
             $secondary_destinations = [];
         }
@@ -2745,13 +2745,13 @@ class BJLG_Admin {
      * Section : Réglages
      */
     private function render_settings_section() {
-        $cleanup_settings = bjlg_get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
+        $cleanup_settings = \bjlg_get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
         $incremental_defaults = [
             'max_incrementals' => 10,
             'max_full_age_days' => 30,
             'rotation_enabled' => true,
         ];
-        $incremental_settings = bjlg_get_option('bjlg_incremental_settings', []);
+        $incremental_settings = \bjlg_get_option('bjlg_incremental_settings', []);
         if (!is_array($incremental_settings)) {
             $incremental_settings = [];
         }
@@ -2780,7 +2780,7 @@ class BJLG_Admin {
             'next_run_relative' => '',
         ];
         $destination_choices = $this->get_destination_choices();
-        $wl_settings = bjlg_get_option('bjlg_whitelabel_settings', ['plugin_name' => '', 'hide_from_non_admins' => false]);
+        $wl_settings = \bjlg_get_option('bjlg_whitelabel_settings', ['plugin_name' => '', 'hide_from_non_admins' => false]);
         $required_permission = \bjlg_get_required_capability();
         $permission_choices = $this->get_permission_choices();
         $is_custom_permission = $required_permission !== ''
@@ -2829,7 +2829,7 @@ class BJLG_Admin {
             ],
         ];
 
-        $notification_settings = bjlg_get_option('bjlg_notification_settings', []);
+        $notification_settings = \bjlg_get_option('bjlg_notification_settings', []);
         if (!is_array($notification_settings)) {
             $notification_settings = [];
         }
@@ -2962,7 +2962,7 @@ class BJLG_Admin {
             'chunk_size' => 50,
             'compression_level' => 6,
         ];
-        $performance_settings = bjlg_get_option('bjlg_performance_settings', []);
+        $performance_settings = \bjlg_get_option('bjlg_performance_settings', []);
         if (!is_array($performance_settings)) {
             $performance_settings = [];
         }
@@ -2977,7 +2977,7 @@ class BJLG_Admin {
             ],
             'secret' => '',
         ];
-        $webhook_settings = bjlg_get_option('bjlg_webhook_settings', []);
+        $webhook_settings = \bjlg_get_option('bjlg_webhook_settings', []);
         if (!is_array($webhook_settings)) {
             $webhook_settings = [];
         }
@@ -4110,7 +4110,7 @@ class BJLG_Admin {
         }
 
         if (empty($schedules)) {
-            $stored = bjlg_get_option('bjlg_schedule_settings', []);
+            $stored = \bjlg_get_option('bjlg_schedule_settings', []);
             $collection = BJLG_Settings::sanitize_schedule_collection($stored);
             $schedules = $collection['schedules'];
         }

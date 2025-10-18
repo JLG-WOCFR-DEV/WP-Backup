@@ -108,12 +108,12 @@ if (!function_exists('bjlg_get_capability_map')) {
             $defaults['manage_network'] = 'manage_network_options';
         }
 
-        $legacy_permission = get_option('bjlg_required_capability', '');
+        $legacy_permission = bjlg_get_option('bjlg_required_capability', '', ['network' => true]);
         if (is_string($legacy_permission) && $legacy_permission !== '') {
             $defaults['manage_plugin'] = sanitize_text_field($legacy_permission);
         }
 
-        $stored = bjlg_get_option('bjlg_capability_map', [], null, $is_network_context ? true : null);
+        $stored = bjlg_get_option('bjlg_capability_map', [], ['network' => true]);
         if (!is_array($stored)) {
             $stored = [];
         }

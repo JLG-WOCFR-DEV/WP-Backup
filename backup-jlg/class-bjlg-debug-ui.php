@@ -59,8 +59,8 @@ class BJLG_Debug_UI {
         if (!current_user_can('manage_options')) wp_die('Forbidden');
 
         // Valeurs
-        $safe_mode = (int) bjlg_get_option('bjlg_safe_mode', 1);
-        $enabled   = function_exists('BJLG_Module_Manager::enabled_slugs') ? BJLG_Module_Manager::enabled_slugs() : bjlg_get_option('bjlg_enabled_modules', []);
+        $safe_mode = (int) \bjlg_get_option('bjlg_safe_mode', 1);
+        $enabled   = function_exists('BJLG_Module_Manager::enabled_slugs') ? BJLG_Module_Manager::enabled_slugs() : \bjlg_get_option('bjlg_enabled_modules', []);
         $enabled   = is_array($enabled) ? $enabled : [];
         $files     = function_exists('BJLG_Module_Manager::get_all_files') ? BJLG_Module_Manager::get_all_files() : [];
 
@@ -335,10 +335,10 @@ class BJLG_Debug_UI {
         check_admin_referer('bjlg_save_modules');
 
         $safe_mode = !empty($_POST['safe_mode']) ? 1 : 0;
-        bjlg_update_option('bjlg_safe_mode', $safe_mode);
+        \bjlg_update_option('bjlg_safe_mode', $safe_mode);
 
         $modules = isset($_POST['modules']) && is_array($_POST['modules']) ? array_values(array_unique(array_map('sanitize_text_field', $_POST['modules']))) : [];
-        bjlg_update_option('bjlg_enabled_modules', $modules);
+        \bjlg_update_option('bjlg_enabled_modules', $modules);
 
         wp_safe_redirect(admin_url('admin.php?page=bjlg-debug-modules&saved=1'));
         exit;
