@@ -207,7 +207,7 @@ class BJLG_Cleanup {
      * @return int Le nombre de fichiers supprimés.
      */
     private function cleanup_backups() {
-        $settings = get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
+        $settings = \bjlg_get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
         $retain_by_number = intval($settings['by_number']);
         $retain_by_age_days = intval($settings['by_age']);
 
@@ -314,7 +314,7 @@ class BJLG_Cleanup {
     }
 
     private function cleanup_remote_destinations() {
-        $settings = get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
+        $settings = \bjlg_get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
         $retain_by_number = isset($settings['by_number']) ? (int) $settings['by_number'] : 0;
         $retain_by_age_days = isset($settings['by_age']) ? (int) $settings['by_age'] : 0;
 

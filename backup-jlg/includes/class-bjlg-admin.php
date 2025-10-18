@@ -21,12 +21,14 @@ class BJLG_Admin {
     private $advanced_admin;
     private $google_drive_notice;
     private $onboarding_progress = [];
+    private $is_network_screen = false;
 
     public function __construct() {
         $this->load_destinations();
         $this->advanced_admin = class_exists(BJLG_Admin_Advanced::class) ? new BJLG_Admin_Advanced() : null;
         $this->onboarding_progress = $this->get_user_onboarding_progress();
         add_action('admin_menu', [$this, 'create_admin_page']);
+        add_action('network_admin_menu', [$this, 'create_network_admin_page']);
         add_filter('bjlg_admin_tabs', [$this, 'get_default_tabs']);
         add_filter('bjlg_admin_sections', [$this, 'get_default_sections']);
         add_action('wp_dashboard_setup', [$this, 'register_dashboard_widget']);
@@ -204,7 +206,7 @@ class BJLG_Admin {
      * Crée la page de menu dans l'administration.
      */
     public function create_admin_page() {
-        $wl_settings = get_option('bjlg_whitelabel_settings', []);
+        $wl_settings = \bjlg_get_option('bjlg_whitelabel_settings', []);
         $plugin_name = !empty($wl_settings['plugin_name']) ? $wl_settings['plugin_name'] : 'Backup - JLG';
 
         add_menu_page(
@@ -216,6 +218,36 @@ class BJLG_Admin {
             'dashicons-database-export',
             81
         );
+    }
+
+    public function create_network_admin_page() {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return;
+        }
+
+        $wl_settings = \bjlg_get_option('bjlg_whitelabel_settings', [], ['network' => true]);
+        $plugin_name = !empty($wl_settings['plugin_name']) ? $wl_settings['plugin_name'] : 'Backup - JLG';
+
+        add_menu_page(
+            $plugin_name,
+            $plugin_name,
+            'bjlg_manage_plugin',
+            'backup-jlg-network',
+            [$this, 'render_network_admin_page'],
+            'dashicons-database-export',
+            81
+        );
+    }
+
+    public function render_network_admin_page() {
+        $previous_state = $this->is_network_screen;
+        $this->is_network_screen = true;
+
+        bjlg_with_network(function () {
+            $this->render_admin_page();
+        });
+
+        $this->is_network_screen = $previous_state;
     }
 
     /**
@@ -440,6 +472,7 @@ class BJLG_Admin {
      * Affiche le contenu de la page principale et gère le routage des onglets.
      */
     public function render_admin_page() {
+        $admin_url_callback = $this->is_network_screen ? 'network_admin_url' : 'admin_url';
         $requested_section = isset($_GET['section']) ? sanitize_key($_GET['section']) : '';
         $legacy_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : '';
         if ($requested_section === '' && $legacy_tab !== '') {
@@ -481,10 +514,10 @@ class BJLG_Admin {
                 'icon' => sanitize_html_class($icon_candidate),
                 'url' => add_query_arg(
                     [
-                        'page' => 'backup-jlg',
+                        'page' => $this->is_network_screen ? 'backup-jlg-network' : 'backup-jlg',
                         'section' => $slug,
                     ],
-                    admin_url('admin.php')
+                    $admin_url_callback('admin.php')
                 ),
             ];
         }
@@ -536,7 +569,9 @@ class BJLG_Admin {
         $breadcrumb_items = [
             [
                 'label' => __('Console Backup JLG', 'backup-jlg'),
-                'url' => add_query_arg(['page' => 'backup-jlg'], admin_url('admin.php')),
+                'url' => add_query_arg([
+                    'page' => $this->is_network_screen ? 'backup-jlg-network' : 'backup-jlg',
+                ], $admin_url_callback('admin.php')),
             ],
             [
                 'label' => $sections[$active_section]['label'],
@@ -876,6 +911,25 @@ class BJLG_Admin {
                 $remote_caption = __('Connectez une destination distante pour suivre les quotas.', 'backup-jlg');
                 $capacity_watch = [];
                 $offline_destinations = [];
+                $remote_threshold = isset($metrics['storage']['remote_warning_threshold'])
+                    ? max(1.0, min(100.0, (float) $metrics['storage']['remote_warning_threshold']))
+                    : 85.0;
+                $remote_threshold_ratio = $remote_threshold / 100;
+                $remote_last_refresh_formatted = isset($metrics['storage']['remote_last_refreshed_formatted'])
+                    ? (string) $metrics['storage']['remote_last_refreshed_formatted']
+                    : '';
+                $remote_last_refresh_relative = isset($metrics['storage']['remote_last_refreshed_relative'])
+                    ? (string) $metrics['storage']['remote_last_refreshed_relative']
+                    : '';
+                $remote_refresh_stale = !empty($metrics['storage']['remote_refresh_stale']);
+                if ($remote_last_refresh_formatted !== '' && $remote_last_refresh_relative === '') {
+                    $remote_last_refresh_relative = $remote_last_refresh_formatted;
+                }
+                $remote_refresh_text = $remote_last_refresh_formatted !== ''
+                    ? ($remote_refresh_stale
+                        ? sprintf(__('Rafraîchi %s — données à actualiser', 'backup-jlg'), $remote_last_refresh_relative)
+                        : sprintf(__('Rafraîchi %s', 'backup-jlg'), $remote_last_refresh_relative))
+                    : __('Aucun rafraîchissement enregistré.', 'backup-jlg');
 
                 if ($remote_total > 0) {
                     foreach ($remote_destinations as $destination) {
@@ -904,12 +958,14 @@ class BJLG_Admin {
 
                         $used_bytes = isset($destination['used_bytes']) ? (int) $destination['used_bytes'] : null;
                         $quota_bytes = isset($destination['quota_bytes']) ? (int) $destination['quota_bytes'] : null;
+                        $ratio = isset($destination['utilization_ratio']) ? (float) $destination['utilization_ratio'] : null;
 
-                        if ($connected && $quota_bytes && $quota_bytes > 0 && $used_bytes !== null) {
-                            $ratio = $quota_bytes > 0 ? ($used_bytes / $quota_bytes) : null;
-                            if ($ratio !== null && $ratio >= 0.85) {
-                                $capacity_watch[] = $name;
-                            }
+                        if ($ratio === null && $connected && $quota_bytes && $quota_bytes > 0 && $used_bytes !== null) {
+                            $ratio = max(0, min(1, $used_bytes / $quota_bytes));
+                        }
+
+                        if ($ratio !== null && $ratio >= $remote_threshold_ratio) {
+                            $capacity_watch[] = $name;
                         }
                     }
 
@@ -929,7 +985,8 @@ class BJLG_Admin {
                         );
                     } elseif (!empty($unique_watch)) {
                         $remote_caption = sprintf(
-                            __('Capacité > 85%% pour %s', 'backup-jlg'),
+                            __('Capacité > %1$s%% pour %2$s', 'backup-jlg'),
+                            number_format_i18n((int) round($remote_threshold)),
                             implode(', ', $unique_watch)
                         );
                     } else {
@@ -942,6 +999,7 @@ class BJLG_Admin {
                     <h3 class="bjlg-card__title"><?php esc_html_e('Capacité hors-site', 'backup-jlg'); ?></h3>
                     <div class="bjlg-card__value" data-field="remote_storage_connected"><?php echo esc_html($remote_summary); ?></div>
                     <p class="bjlg-card__meta" data-field="remote_storage_caption"><?php echo esc_html($remote_caption); ?></p>
+                    <p class="bjlg-card__footnote" data-field="remote_storage_refresh"><?php echo esc_html($remote_refresh_text); ?></p>
                     <ul class="bjlg-card__list" data-field="remote_storage_list">
                         <?php if (empty($remote_destinations)): ?>
                             <li class="bjlg-card__list-item" data-empty="true"><?php esc_html_e('Aucune donnée distante disponible.', 'backup-jlg'); ?></li>
@@ -984,16 +1042,22 @@ class BJLG_Admin {
                                     );
                                 }
 
-                                $ratio = null;
-                                if ($quota_bytes && $quota_bytes > 0 && $used_bytes !== null) {
+                                $ratio = isset($destination['utilization_ratio']) ? (float) $destination['utilization_ratio'] : null;
+                                if ($ratio === null && $quota_bytes && $quota_bytes > 0 && $used_bytes !== null) {
                                     $ratio = max(0, min(1, $used_bytes / $quota_bytes));
+                                }
+                                if ($ratio !== null) {
                                     $detail_parts[] = sprintf(__('Utilisation : %s%%', 'backup-jlg'), number_format_i18n((int) round($ratio * 100)));
+                                }
+                                $latency_ms = isset($destination['latency_ms']) ? (int) $destination['latency_ms'] : null;
+                                if ($latency_ms !== null && $latency_ms > 0) {
+                                    $detail_parts[] = sprintf(__('Relevé en %s ms', 'backup-jlg'), number_format_i18n($latency_ms));
                                 }
 
                                 $intent = 'info';
                                 if (!$connected || !empty($errors)) {
                                     $intent = 'error';
-                                } elseif ($ratio !== null && $ratio >= 0.85) {
+                                } elseif ($ratio !== null && $ratio >= $remote_threshold_ratio) {
                                     $intent = 'warning';
                                 }
                                 ?>
@@ -1009,6 +1073,10 @@ class BJLG_Admin {
                             <?php endforeach; ?>
                         <?php endif; ?>
                     </ul>
+                    <div class="bjlg-card__actions" data-field="remote_storage_actions">
+                        <a class="button button-secondary" href="<?php echo esc_url(add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php'))); ?>"><?php esc_html_e('Configurer les destinations', 'backup-jlg'); ?></a>
+                        <a class="button button-link" href="<?php echo esc_url(add_query_arg(['page' => 'backup-jlg', 'section' => 'monitoring'], admin_url('admin.php'))); ?>"><?php esc_html_e('Ouvrir le monitoring', 'backup-jlg'); ?></a>
+                    </div>
                 </article>
 
                 <?php
@@ -1764,13 +1832,13 @@ class BJLG_Admin {
      * Section : Création de sauvegarde
      */
     private function render_backup_creation_section() {
-        $include_patterns = get_option('bjlg_backup_include_patterns', []);
-        $exclude_patterns = get_option('bjlg_backup_exclude_patterns', []);
-        $post_checks = get_option('bjlg_backup_post_checks', ['checksum' => true, 'dry_run' => false]);
+        $include_patterns = \bjlg_get_option('bjlg_backup_include_patterns', []);
+        $exclude_patterns = \bjlg_get_option('bjlg_backup_exclude_patterns', []);
+        $post_checks = \bjlg_get_option('bjlg_backup_post_checks', ['checksum' => true, 'dry_run' => false]);
         if (!is_array($post_checks)) {
             $post_checks = ['checksum' => true, 'dry_run' => false];
         }
-        $secondary_destinations = get_option('bjlg_backup_secondary_destinations', []);
+        $secondary_destinations = \bjlg_get_option('bjlg_backup_secondary_destinations', []);
         if (!is_array($secondary_destinations)) {
             $secondary_destinations = [];
         }
@@ -2677,13 +2745,13 @@ class BJLG_Admin {
      * Section : Réglages
      */
     private function render_settings_section() {
-        $cleanup_settings = get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
+        $cleanup_settings = \bjlg_get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
         $incremental_defaults = [
             'max_incrementals' => 10,
             'max_full_age_days' => 30,
             'rotation_enabled' => true,
         ];
-        $incremental_settings = get_option('bjlg_incremental_settings', []);
+        $incremental_settings = \bjlg_get_option('bjlg_incremental_settings', []);
         if (!is_array($incremental_settings)) {
             $incremental_settings = [];
         }
@@ -2712,7 +2780,7 @@ class BJLG_Admin {
             'next_run_relative' => '',
         ];
         $destination_choices = $this->get_destination_choices();
-        $wl_settings = get_option('bjlg_whitelabel_settings', ['plugin_name' => '', 'hide_from_non_admins' => false]);
+        $wl_settings = \bjlg_get_option('bjlg_whitelabel_settings', ['plugin_name' => '', 'hide_from_non_admins' => false]);
         $required_permission = \bjlg_get_required_capability();
         $permission_choices = $this->get_permission_choices();
         $is_custom_permission = $required_permission !== ''
@@ -2761,7 +2829,7 @@ class BJLG_Admin {
             ],
         ];
 
-        $notification_settings = get_option('bjlg_notification_settings', []);
+        $notification_settings = \bjlg_get_option('bjlg_notification_settings', []);
         if (!is_array($notification_settings)) {
             $notification_settings = [];
         }
@@ -2894,7 +2962,7 @@ class BJLG_Admin {
             'chunk_size' => 50,
             'compression_level' => 6,
         ];
-        $performance_settings = get_option('bjlg_performance_settings', []);
+        $performance_settings = \bjlg_get_option('bjlg_performance_settings', []);
         if (!is_array($performance_settings)) {
             $performance_settings = [];
         }
@@ -2909,7 +2977,7 @@ class BJLG_Admin {
             ],
             'secret' => '',
         ];
-        $webhook_settings = get_option('bjlg_webhook_settings', []);
+        $webhook_settings = \bjlg_get_option('bjlg_webhook_settings', []);
         if (!is_array($webhook_settings)) {
             $webhook_settings = [];
         }
@@ -4042,7 +4110,7 @@ class BJLG_Admin {
         }
 
         if (empty($schedules)) {
-            $stored = get_option('bjlg_schedule_settings', []);
+            $stored = \bjlg_get_option('bjlg_schedule_settings', []);
             $collection = BJLG_Settings::sanitize_schedule_collection($stored);
             $schedules = $collection['schedules'];
         }
