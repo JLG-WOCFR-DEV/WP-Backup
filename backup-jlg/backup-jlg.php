@@ -389,8 +389,8 @@ final class BJLG_Plugin {
         $this->maybe_load_autoloader();
 
         $files_to_load = [
-            'class-bjlg-debug.php', 'class-bjlg-client-ip-helper.php', 'class-bjlg-history.php', 'class-bjlg-settings.php',
-            'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php', 'class-bjlg-remote-storage-metrics.php',
+            'class-bjlg-site-context.php', 'class-bjlg-debug.php', 'class-bjlg-client-ip-helper.php', 'class-bjlg-history.php', 'class-bjlg-settings.php',
+            'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php',
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
             'class-bjlg-notification-transport.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-storage-metrics.php', 'class-bjlg-remote-purge-worker.php',

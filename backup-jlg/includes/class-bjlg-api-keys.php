@@ -178,7 +178,7 @@ class BJLG_API_Keys {
      * @return array<string, array<string, mixed>>
      */
     private static function get_indexed_keys() {
-        $stored = get_option(self::OPTION_NAME, []);
+        $stored = bjlg_get_option(self::OPTION_NAME, []);
 
         if (!is_array($stored)) {
             return [];
@@ -229,7 +229,7 @@ class BJLG_API_Keys {
             $prepared[$normalized['id']] = $normalized;
         }
 
-        update_option(self::OPTION_NAME, $prepared);
+        bjlg_update_option(self::OPTION_NAME, $prepared);
     }
 
     /**

@@ -106,11 +106,11 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
 
     public function disconnect() {
         if (function_exists('delete_option')) {
-            delete_option(self::OPTION_TOKEN);
-            delete_option(self::OPTION_STATUS);
+            bjlg_delete_option(self::OPTION_TOKEN);
+            bjlg_delete_option(self::OPTION_STATUS);
         } else {
-            update_option(self::OPTION_TOKEN, []);
-            update_option(self::OPTION_STATUS, []);
+            bjlg_update_option(self::OPTION_TOKEN, []);
+            bjlg_update_option(self::OPTION_STATUS, []);
         }
     }
 
@@ -919,7 +919,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             return;
         }
 
-        $expected_state = get_option(self::OPTION_STATE, '');
+        $expected_state = bjlg_get_option(self::OPTION_STATE, '');
         if ($expected_state === '' || !hash_equals($expected_state, $state)) {
             return;
         }
@@ -957,9 +957,9 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             $this->store_token($token);
 
             if (function_exists('delete_option')) {
-                delete_option(self::OPTION_STATE);
+                bjlg_delete_option(self::OPTION_STATE);
             } else {
-                update_option(self::OPTION_STATE, '');
+                bjlg_update_option(self::OPTION_STATE, '');
             }
 
             $this->store_status([
@@ -1086,7 +1086,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             $client->setState($state);
         }
 
-        update_option(self::OPTION_STATE, $state);
+        bjlg_update_option(self::OPTION_STATE, $state);
 
         return $client->createAuthUrl();
     }
@@ -1097,7 +1097,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      * @return array{client_id:string,client_secret:string,folder_id:string,enabled:bool}
      */
     private function get_settings() {
-        $settings = get_option(self::OPTION_SETTINGS, []);
+        $settings = bjlg_get_option(self::OPTION_SETTINGS, []);
         if (!is_array($settings)) {
             $settings = [];
         }
@@ -1172,7 +1172,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      * @return array<string, mixed>
      */
     private function get_stored_token() {
-        $token = get_option(self::OPTION_TOKEN, []);
+        $token = bjlg_get_option(self::OPTION_TOKEN, []);
 
         return is_array($token) ? $token : [];
     }
@@ -1184,7 +1184,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      * @return void
      */
     private function store_token(array $token) {
-        update_option(self::OPTION_TOKEN, $token);
+        bjlg_update_option(self::OPTION_TOKEN, $token);
     }
 
     /**
@@ -1199,7 +1199,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
             'message' => '',
         ];
 
-        $status = get_option(self::OPTION_STATUS, $defaults);
+        $status = bjlg_get_option(self::OPTION_STATUS, $defaults);
         if (!is_array($status)) {
             $status = [];
         }
@@ -1215,7 +1215,7 @@ class BJLG_Google_Drive implements BJLG_Destination_Interface {
      */
     private function store_status(array $status) {
         $current = $this->get_status();
-        update_option(self::OPTION_STATUS, array_merge($current, $status));
+        bjlg_update_option(self::OPTION_STATUS, array_merge($current, $status));
     }
 
     /**

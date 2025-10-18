@@ -140,12 +140,12 @@ abstract class BJLG_S3_Compatible_Destination implements BJLG_Destination_Interf
      * {@inheritdoc}
      */
     public function disconnect() {
-        update_option($this->get_settings_option_name(), $this->get_default_settings());
+        bjlg_update_option($this->get_settings_option_name(), $this->get_default_settings());
 
         if (function_exists('delete_option')) {
-            delete_option($this->get_status_option_name());
+            bjlg_delete_option($this->get_status_option_name());
         } else {
-            update_option($this->get_status_option_name(), []);
+            bjlg_update_option($this->get_status_option_name(), []);
         }
     }
 
@@ -611,7 +611,7 @@ abstract class BJLG_S3_Compatible_Destination implements BJLG_Destination_Interf
      * @return array<string, mixed>
      */
     protected function get_settings() {
-        $stored = get_option($this->get_settings_option_name(), []);
+        $stored = bjlg_get_option($this->get_settings_option_name(), []);
         if (!is_array($stored)) {
             $stored = [];
         }
@@ -804,7 +804,7 @@ abstract class BJLG_S3_Compatible_Destination implements BJLG_Destination_Interf
      * @return array<string, mixed>
      */
     protected function get_status() {
-        $status = get_option($this->get_status_option_name(), [
+        $status = bjlg_get_option($this->get_status_option_name(), [
             'last_result' => null,
             'tested_at' => 0,
             'message' => '',
@@ -829,7 +829,7 @@ abstract class BJLG_S3_Compatible_Destination implements BJLG_Destination_Interf
      */
     protected function store_status(array $status) {
         $current = $this->get_status();
-        update_option($this->get_status_option_name(), array_merge($current, $status));
+        bjlg_update_option($this->get_status_option_name(), array_merge($current, $status));
     }
 
     /**

@@ -67,12 +67,12 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
 
     public function disconnect() {
         $defaults = $this->get_default_settings();
-        update_option(self::OPTION_SETTINGS, $defaults);
+        bjlg_update_option(self::OPTION_SETTINGS, $defaults);
 
         if (function_exists('delete_option')) {
-            delete_option(self::OPTION_STATUS);
+            bjlg_delete_option(self::OPTION_STATUS);
         } else {
-            update_option(self::OPTION_STATUS, []);
+            bjlg_update_option(self::OPTION_STATUS, []);
         }
     }
 
@@ -636,7 +636,7 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
     }
 
     private function get_settings(): array {
-        $stored = get_option(self::OPTION_SETTINGS, []);
+        $stored = bjlg_get_option(self::OPTION_SETTINGS, []);
         $defaults = $this->get_default_settings();
 
         if (!is_array($stored)) {
@@ -679,11 +679,11 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
     private function store_settings(array $settings): void {
         $defaults = $this->get_default_settings();
         $normalized = array_merge($defaults, $settings);
-        update_option(self::OPTION_SETTINGS, $normalized);
+        bjlg_update_option(self::OPTION_SETTINGS, $normalized);
     }
 
     private function get_status(): array {
-        $status = get_option(self::OPTION_STATUS, []);
+        $status = bjlg_get_option(self::OPTION_STATUS, []);
         if (!is_array($status)) {
             $status = [];
         }
@@ -706,7 +706,7 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
             'message' => $message,
         ];
 
-        update_option(self::OPTION_STATUS, $status);
+        bjlg_update_option(self::OPTION_STATUS, $status);
     }
 
     private function log($message): void {

@@ -340,10 +340,10 @@ class BJLG_Settings {
     public function init_default_settings() {
         foreach ($this->default_settings as $key => $defaults) {
             $option_name = $this->get_option_name_for_section($key);
-            $stored = get_option($option_name, null);
+            $stored = bjlg_get_option($option_name, null);
 
             if ($stored === null) {
-                update_option($option_name, $defaults);
+                bjlg_update_option($option_name, $defaults);
                 continue;
             }
 
@@ -354,7 +354,7 @@ class BJLG_Settings {
             $merged = self::merge_settings_with_defaults($stored, $defaults);
 
             if ($merged !== $stored) {
-                update_option($option_name, $merged);
+                bjlg_update_option($option_name, $merged);
             }
         }
 
@@ -373,7 +373,7 @@ class BJLG_Settings {
      */
     private function get_section_settings_with_defaults($section): array {
         $option_name = $this->get_option_name_for_section($section);
-        $stored = get_option($option_name, []);
+        $stored = bjlg_get_option($option_name, []);
 
         if (!is_array($stored)) {
             $stored = [];
@@ -1021,7 +1021,7 @@ class BJLG_Settings {
         try {
             if ($section === 'all') {
                 foreach ($this->default_settings as $key => $defaults) {
-                    update_option($this->get_option_name_for_section($key), $defaults);
+                    bjlg_update_option($this->get_option_name_for_section($key), $defaults);
                 }
                 bjlg_update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
                 $this->sync_manage_plugin_capability_map(\BJLG_DEFAULT_CAPABILITY);
@@ -1032,7 +1032,7 @@ class BJLG_Settings {
                     $this->sync_manage_plugin_capability_map(\BJLG_DEFAULT_CAPABILITY);
                     BJLG_History::log('settings_reset', 'info', "Réglages 'permissions' réinitialisés");
                 } elseif (isset($this->default_settings[$section])) {
-                    update_option($this->get_option_name_for_section($section), $this->default_settings[$section]);
+                    bjlg_update_option($this->get_option_name_for_section($section), $this->default_settings[$section]);
                     BJLG_History::log('settings_reset', 'info', "Réglages '$section' réinitialisés");
                 } else {
                     throw new Exception("Section de réglages invalide.");
@@ -1087,7 +1087,7 @@ class BJLG_Settings {
         ];
         
         foreach ($option_keys as $key) {
-            $value = get_option($key);
+            $value = bjlg_get_option($key);
             if ($value !== false) {
                 $settings[$key] = $value;
             }
@@ -1147,7 +1147,7 @@ class BJLG_Settings {
             }
 
             foreach ($sanitized_settings as $key => $value) {
-                update_option($key, $value);
+                bjlg_update_option($key, $value);
             }
 
             if (array_key_exists('bjlg_required_capability', $sanitized_settings)) {
@@ -3015,7 +3015,7 @@ class BJLG_Settings {
      */
     public function get_setting($section, $key = null, $default = null) {
         $option_name = 'bjlg_' . $section . '_settings';
-        $settings = get_option($option_name, $this->default_settings[$section] ?? []);
+        $settings = bjlg_get_option($option_name, $this->default_settings[$section] ?? []);
         
         if ($key === null) {
             return $settings;
@@ -3029,10 +3029,10 @@ class BJLG_Settings {
      */
     public function update_setting($section, $key, $value) {
         $option_name = 'bjlg_' . $section . '_settings';
-        $settings = get_option($option_name, $this->default_settings[$section] ?? []);
+        $settings = bjlg_get_option($option_name, $this->default_settings[$section] ?? []);
         
         $settings[$key] = $value;
         
-        return update_option($option_name, $settings);
+        return bjlg_update_option($option_name, $settings);
     }
 }
