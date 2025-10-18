@@ -44,6 +44,129 @@ if (!defined('BJLG_DEFAULT_CAPABILITY')) {
     define('BJLG_DEFAULT_CAPABILITY', 'manage_options');
 }
 
+if (!function_exists('_bjlg_contextual_get_option')) {
+    /**
+     * Internal helper used before the site context class is loaded.
+     */
+    function _bjlg_contextual_get_option($option, $default = false, $site_id = null, $network = null) {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return get_option($option, $default);
+        }
+
+        if ($site_id !== null) {
+            $site_id = absint($site_id);
+            if ($site_id > 0 && function_exists('get_blog_option')) {
+                return get_blog_option($site_id, $option, $default);
+            }
+        }
+
+        if ($network === true || ($network === null && function_exists('is_network_admin') && is_network_admin())) {
+            if (function_exists('get_site_option')) {
+                return get_site_option($option, $default);
+            }
+
+            return get_option($option, $default);
+        }
+
+        return get_option($option, $default);
+    }
+}
+
+if (!function_exists('_bjlg_contextual_update_option')) {
+    /**
+     * Internal helper used before the site context class is loaded.
+     */
+    function _bjlg_contextual_update_option($option, $value, $site_id = null, $network = null, $autoload = null) {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return update_option($option, $value, $autoload);
+        }
+
+        if ($site_id !== null) {
+            $site_id = absint($site_id);
+            if ($site_id > 0 && function_exists('update_blog_option')) {
+                return update_blog_option($site_id, $option, $value);
+            }
+        }
+
+        if ($network === true || ($network === null && function_exists('is_network_admin') && is_network_admin())) {
+            if (function_exists('update_site_option')) {
+                return update_site_option($option, $value);
+            }
+
+            return update_option($option, $value, $autoload);
+        }
+
+        return update_option($option, $value, $autoload);
+    }
+}
+
+if (!function_exists('_bjlg_contextual_delete_option')) {
+    /**
+     * Internal helper used before the site context class is loaded.
+     */
+    function _bjlg_contextual_delete_option($option, $site_id = null, $network = null) {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return delete_option($option);
+        }
+
+        if ($site_id !== null) {
+            $site_id = absint($site_id);
+            if ($site_id > 0 && function_exists('delete_blog_option')) {
+                return delete_blog_option($site_id, $option);
+            }
+        }
+
+        if ($network === true || ($network === null && function_exists('is_network_admin') && is_network_admin())) {
+            if (function_exists('delete_site_option')) {
+                return delete_site_option($option);
+            }
+
+            return delete_option($option);
+        }
+
+        return delete_option($option);
+    }
+}
+
+if (!function_exists('bjlg_get_option')) {
+    /**
+     * Wrapper pour récupérer une option sensible au contexte multisite.
+     */
+    function bjlg_get_option($option, $default = false, $site_id = null, $network = null) {
+        if (class_exists('BJLG\\BJLG_Site_Context')) {
+            return BJLG\BJLG_Site_Context::get_option($option, $default, $site_id, $network);
+        }
+
+        return _bjlg_contextual_get_option($option, $default, $site_id, $network);
+    }
+}
+
+if (!function_exists('bjlg_update_option')) {
+    /**
+     * Wrapper pour mettre à jour une option sensible au contexte multisite.
+     */
+    function bjlg_update_option($option, $value, $site_id = null, $network = null, $autoload = null) {
+        if (class_exists('BJLG\\BJLG_Site_Context')) {
+            return BJLG\BJLG_Site_Context::update_option($option, $value, $site_id, $network, $autoload);
+        }
+
+        return _bjlg_contextual_update_option($option, $value, $site_id, $network, $autoload);
+    }
+}
+
+if (!function_exists('bjlg_delete_option')) {
+    /**
+     * Wrapper pour supprimer une option sensible au contexte multisite.
+     */
+    function bjlg_delete_option($option, $site_id = null, $network = null) {
+        if (class_exists('BJLG\\BJLG_Site_Context')) {
+            return BJLG\BJLG_Site_Context::delete_option($option, $site_id, $network);
+        }
+
+        return _bjlg_contextual_delete_option($option, $site_id, $network);
+    }
+}
+
 if (!function_exists('bjlg_get_required_capability')) {
     /**
      * Returns the capability or role required to access the plugin features.
@@ -295,33 +418,6 @@ if (!defined('BJLG_CAPABILITY')) {
 if (!defined('BJLG_BACKUP_DIR')) {
     $uploads = wp_get_upload_dir();
     define('BJLG_BACKUP_DIR', trailingslashit($uploads['basedir']) . 'bjlg-backups/');
-}
-
-if (!function_exists('bjlg_get_option')) {
-    /**
-     * Wrapper pour récupérer une option sensible au contexte multisite.
-     */
-    function bjlg_get_option($option, $default = false, $site_id = null, $network = null) {
-        return BJLG\BJLG_Site_Context::get_option($option, $default, $site_id, $network);
-    }
-}
-
-if (!function_exists('bjlg_update_option')) {
-    /**
-     * Wrapper pour mettre à jour une option sensible au contexte multisite.
-     */
-    function bjlg_update_option($option, $value, $site_id = null, $network = null, $autoload = null) {
-        return BJLG\BJLG_Site_Context::update_option($option, $value, $site_id, $network, $autoload);
-    }
-}
-
-if (!function_exists('bjlg_delete_option')) {
-    /**
-     * Wrapper pour supprimer une option sensible au contexte multisite.
-     */
-    function bjlg_delete_option($option, $site_id = null, $network = null) {
-        return BJLG\BJLG_Site_Context::delete_option($option, $site_id, $network);
-    }
 }
 
 /* -------------------------------------------------------------------------- */
