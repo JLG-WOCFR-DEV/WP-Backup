@@ -63,12 +63,14 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
 
     public function disconnect() {
         $defaults = $this->get_default_settings();
-        update_option(self::OPTION_SETTINGS, $defaults);
+        \bjlg_update_option(self::OPTION_SETTINGS, $defaults);
 
-        if (function_exists('delete_option')) {
+        if (function_exists('bjlg_delete_option')) {
+            \bjlg_delete_option(self::OPTION_STATUS);
+        } elseif (function_exists('delete_option')) {
             delete_option(self::OPTION_STATUS);
         } else {
-            update_option(self::OPTION_STATUS, []);
+            \bjlg_update_option(self::OPTION_STATUS, []);
         }
     }
 
@@ -322,6 +324,17 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         $settings = $this->get_settings();
 
         try {
+            $usage_snapshot = $this->query_bucket_usage($settings);
+            if (is_array($usage_snapshot)) {
+                return array_merge($defaults, $usage_snapshot);
+            }
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log(sprintf('API quota Amazon S3 indisponible : %s', $exception->getMessage()));
+            }
+        }
+
+        try {
             $backups = $this->fetch_remote_backups($settings);
         } catch (Exception $exception) {
             if (class_exists(BJLG_Debug::class)) {
@@ -341,6 +354,151 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
             'quota_bytes' => null,
             'free_bytes' => null,
         ];
+    }
+
+    private function query_bucket_usage(array $settings): ?array {
+        $response = $this->perform_request('HEAD', '', '', [], $settings);
+        $headers = $this->normalize_response_headers(isset($response['headers']) ? $response['headers'] : []);
+
+        $used = $this->extract_bytes_from_headers($headers, [
+            'x-amz-bucket-bytes-used',
+            'x-amz-bucket-size-bytes',
+            'x-amz-storage-usage',
+            'x-rgw-bucket-quota-used-bytes',
+            'x-oss-usage',
+            'x-oss-storage',
+            'x-qn-meta-bucket-usage',
+        ]);
+
+        $quota = $this->extract_bytes_from_headers($headers, [
+            'x-amz-bucket-quota',
+            'x-amz-meta-bucket-quota',
+            'x-rgw-bucket-quota-max-size',
+            'x-oss-quota',
+            'x-qn-meta-bucket-quota',
+        ]);
+
+        $free = $this->extract_bytes_from_headers($headers, [
+            'x-rgw-bucket-quota-remaining-bytes',
+            'x-oss-remaining',
+        ]);
+
+        if ($quota !== null && $used !== null && $free === null) {
+            $free = max(0, (int) $quota - (int) $used);
+        }
+        if ($quota === null && $used !== null && $free !== null) {
+            $quota = max(0, (int) $used + (int) $free);
+        }
+
+        $snapshot = null;
+        if ($used !== null || $quota !== null || $free !== null) {
+            $snapshot = [
+                'used_bytes' => $used,
+                'quota_bytes' => $quota,
+                'free_bytes' => $free,
+            ];
+        }
+
+        /**
+         * Permet aux intégrations S3 personnalisées d'ajuster les métriques détectées via les en-têtes.
+         *
+         * @param array<string,int|null>|null $snapshot
+         * @param array<string,string>         $headers
+         * @param array<string,mixed>          $settings
+         * @param self                         $destination
+         */
+        $filtered = apply_filters('bjlg_s3_usage_snapshot', $snapshot, $headers, $settings, $this);
+
+        if (is_array($filtered)) {
+            $snapshot = [
+                'used_bytes' => isset($filtered['used_bytes']) ? $this->sanitize_positive_int($filtered['used_bytes']) : $used,
+                'quota_bytes' => isset($filtered['quota_bytes']) ? $this->sanitize_positive_int($filtered['quota_bytes']) : $quota,
+                'free_bytes' => isset($filtered['free_bytes']) ? $this->sanitize_positive_int($filtered['free_bytes']) : $free,
+            ];
+        }
+
+        if ($snapshot !== null && ($snapshot['used_bytes'] !== null || $snapshot['quota_bytes'] !== null || $snapshot['free_bytes'] !== null)) {
+            if ($snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null && $snapshot['free_bytes'] === null) {
+                $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
+            }
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log(sprintf(
+                    'Métriques Amazon S3 : used=%s quota=%s free=%s',
+                    $snapshot['used_bytes'] !== null ? number_format_i18n((int) $snapshot['used_bytes']) : 'n/a',
+                    $snapshot['quota_bytes'] !== null ? number_format_i18n((int) $snapshot['quota_bytes']) : 'n/a',
+                    $snapshot['free_bytes'] !== null ? number_format_i18n((int) $snapshot['free_bytes']) : 'n/a'
+                ));
+            }
+
+            return $snapshot;
+        }
+
+        return null;
+    }
+
+    private function normalize_response_headers($raw_headers): array {
+        if ($raw_headers instanceof \WP_Http_Headers) {
+            $raw_headers = $raw_headers->getAll();
+        } elseif (is_object($raw_headers) && method_exists($raw_headers, 'getAll')) {
+            $raw_headers = $raw_headers->getAll();
+        }
+
+        if (!is_array($raw_headers)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($raw_headers as $key => $value) {
+            if ($key === null || $key === '') {
+                continue;
+            }
+
+            if (is_array($value)) {
+                $value = implode(',', array_map('strval', $value));
+            }
+
+            $normalized[strtolower((string) $key)] = trim((string) $value);
+        }
+
+        return $normalized;
+    }
+
+    private function extract_bytes_from_headers(array $headers, array $candidates): ?int {
+        foreach ($candidates as $candidate) {
+            if (isset($headers[$candidate])) {
+                $parsed = $this->sanitize_positive_int($headers[$candidate]);
+                if ($parsed !== null) {
+                    return $parsed;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function sanitize_positive_int($value): ?int {
+        if (is_int($value)) {
+            return $value >= 0 ? $value : null;
+        }
+
+        if (is_numeric($value)) {
+            $numeric = (float) $value;
+            if (is_finite($numeric) && $numeric >= 0) {
+                return (int) floor($numeric);
+            }
+        }
+
+        if (is_string($value)) {
+            if (preg_match('/(-?\d+(?:[\.,]\d+)?)/', $value, $matches)) {
+                $numeric = (float) str_replace(',', '.', $matches[1]);
+                if (is_finite($numeric) && $numeric >= 0) {
+                    return (int) floor($numeric);
+                }
+            }
+        }
+
+        return null;
     }
 
     private function fetch_remote_backups(array $settings) {
@@ -743,7 +901,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
     }
 
     private function get_settings() {
-        $stored = get_option(self::OPTION_SETTINGS, []);
+        $stored = \bjlg_get_option(self::OPTION_SETTINGS, []);
         if (!is_array($stored)) {
             $stored = [];
         }
@@ -769,7 +927,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
     }
 
     private function get_status() {
-        $status = get_option(self::OPTION_STATUS, [
+        $status = \bjlg_get_option(self::OPTION_STATUS, [
             'last_result' => null,
             'tested_at' => 0,
             'message' => '',
@@ -790,7 +948,7 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
 
     private function store_status(array $status) {
         $current = $this->get_status();
-        update_option(self::OPTION_STATUS, array_merge($current, $status));
+        \bjlg_update_option(self::OPTION_STATUS, array_merge($current, $status));
     }
 
     private function normalize_header_value($value) {
