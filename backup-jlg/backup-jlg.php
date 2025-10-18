@@ -40,6 +40,8 @@ if (!defined('BJLG_INCLUDES_DIR')) {
     define('BJLG_INCLUDES_DIR', BJLG_PLUGIN_DIR . 'includes/');
 }
 
+require_once BJLG_INCLUDES_DIR . 'class-bjlg-site-context.php';
+
 if (!defined('BJLG_DEFAULT_CAPABILITY')) {
     define('BJLG_DEFAULT_CAPABILITY', 'manage_options');
 }
@@ -52,6 +54,12 @@ if (!function_exists('bjlg_get_required_capability')) {
      */
     function bjlg_get_required_capability($context = 'manage_plugin') {
         $map = bjlg_get_capability_map();
+
+        if ($context === 'manage_plugin' && class_exists('BJLG\\BJLG_Site_Context') && \BJLG\BJLG_Site_Context::is_network_context()) {
+            if (isset($map['manage_network'])) {
+                $context = 'manage_network';
+            }
+        }
 
         if (!is_string($context) || $context === '') {
             $context = 'manage_plugin';
@@ -92,6 +100,10 @@ if (!function_exists('bjlg_get_capability_map')) {
             'manage_integrations' => BJLG_DEFAULT_CAPABILITY,
             'view_logs' => BJLG_DEFAULT_CAPABILITY,
         ];
+
+        if (function_exists('is_multisite') && is_multisite()) {
+            $defaults['manage_network'] = 'manage_network_options';
+        }
 
         $legacy_permission = get_option('bjlg_required_capability', '');
         if (is_string($legacy_permission) && $legacy_permission !== '') {
@@ -264,7 +276,11 @@ if (!function_exists('bjlg_map_required_capability')) {
             return $caps;
         }
 
-        $permission = bjlg_get_required_capability();
+        $context = class_exists('BJLG\\BJLG_Site_Context') && \BJLG\BJLG_Site_Context::is_network_context()
+            ? 'manage_network'
+            : 'manage_plugin';
+
+        $permission = bjlg_get_required_capability($context);
         $is_role = bjlg_permission_is_role($permission);
 
         if ($is_role) {
@@ -297,6 +313,85 @@ if (!defined('BJLG_BACKUP_DIR')) {
 /* -------------------------------------------------------------------------- */
 /* Fonctions Utilitaires Globales                                            */
 /* -------------------------------------------------------------------------- */
+
+if (!function_exists('bjlg_get_option')) {
+    /**
+     * Wrapper vers BJLG_Site_Context::get_option().
+     */
+    function bjlg_get_option($option_name, $default = false, array $args = []) {
+        if (!is_string($option_name) || $option_name === '') {
+            return $default;
+        }
+
+        if (class_exists('BJLG\\BJLG_Site_Context')) {
+            return \BJLG\BJLG_Site_Context::get_option($option_name, $default, $args);
+        }
+
+        return get_option($option_name, $default);
+    }
+}
+
+if (!function_exists('bjlg_update_option')) {
+    /**
+     * Wrapper vers BJLG_Site_Context::update_option().
+     */
+    function bjlg_update_option($option_name, $value, array $args = []) {
+        if (!is_string($option_name) || $option_name === '') {
+            return false;
+        }
+
+        if (class_exists('BJLG\\BJLG_Site_Context')) {
+            return (bool) \BJLG\BJLG_Site_Context::update_option($option_name, $value, $args);
+        }
+
+        return (bool) update_option($option_name, $value);
+    }
+}
+
+if (!function_exists('bjlg_delete_option')) {
+    /**
+     * Wrapper vers BJLG_Site_Context::delete_option().
+     */
+    function bjlg_delete_option($option_name, array $args = []) {
+        if (!is_string($option_name) || $option_name === '') {
+            return false;
+        }
+
+        if (class_exists('BJLG\\BJLG_Site_Context')) {
+            return (bool) \BJLG\BJLG_Site_Context::delete_option($option_name, $args);
+        }
+
+        return (bool) delete_option($option_name);
+    }
+}
+
+if (!function_exists('bjlg_with_site')) {
+    /**
+     * Exécute un callback en basculant sur un site donné.
+     */
+    function bjlg_with_site($site_id, callable $callback)
+    {
+        if (!class_exists('BJLG\\BJLG_Site_Context')) {
+            return $callback();
+        }
+
+        return \BJLG\BJLG_Site_Context::with_site((int) $site_id, $callback);
+    }
+}
+
+if (!function_exists('bjlg_with_network')) {
+    /**
+     * Exécute un callback en forçant le contexte réseau.
+     */
+    function bjlg_with_network(callable $callback)
+    {
+        if (!class_exists('BJLG\\BJLG_Site_Context')) {
+            return $callback();
+        }
+
+        return \BJLG\BJLG_Site_Context::with_network($callback);
+    }
+}
 
 if (!function_exists('bjlg_get_backup_size')) {
     /**
@@ -359,11 +454,11 @@ final class BJLG_Plugin {
         $this->maybe_load_autoloader();
 
         $files_to_load = [
-            'class-bjlg-debug.php', 'class-bjlg-client-ip-helper.php', 'class-bjlg-history.php', 'class-bjlg-settings.php',
+            'class-bjlg-debug.php', 'class-bjlg-client-ip-helper.php', 'class-bjlg-history.php', 'class-bjlg-site-context.php', 'class-bjlg-settings.php',
             'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php',
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
-            'class-bjlg-notification-transport.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-purge-worker.php',
+            'class-bjlg-notification-transport.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-storage-metrics.php', 'class-bjlg-remote-purge-worker.php',
             'class-bjlg-restore-self-test.php',
             'class-bjlg-update-guard.php',
             'class-bjlg-performance.php', 'class-bjlg-rate-limiter.php', 'class-bjlg-rest-api.php',
@@ -407,6 +502,10 @@ final class BJLG_Plugin {
     }
     
     private function init_services() {
+        if (class_exists(BJLG\BJLG_Site_Context::class)) {
+            BJLG\BJLG_Site_Context::bootstrap();
+        }
+
         new BJLG\BJLG_Admin();
         new BJLG\BJLG_Admin_Fallbacks();
         new BJLG\BJLG_Actions();
@@ -429,6 +528,7 @@ final class BJLG_Plugin {
         new BJLG\BJLG_Settings();
         new BJLG\BJLG_API_Keys();
         new BJLG\BJLG_Remote_Purge_Worker();
+        new BJLG\BJLG_Remote_Storage_Metrics();
         new BJLG\BJLG_Restore_Self_Test();
         new BJLG\BJLG_Update_Guard();
     }
@@ -517,35 +617,90 @@ final class BJLG_Plugin {
     public function activate() {
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-debug.php';
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-history.php';
-        BJLG\BJLG_History::create_table();
+        if (function_exists('is_multisite') && is_multisite()) {
+            $site_ids = get_sites(['fields' => 'ids']);
 
-        if (get_option('bjlg_required_capability', null) === null) {
-            add_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY);
-        }
-
-        if (get_option('bjlg_capability_map', null) === null) {
-            add_option('bjlg_capability_map', []);
-        }
-
-        if (!is_dir(BJLG_BACKUP_DIR)) {
-            wp_mkdir_p(BJLG_BACKUP_DIR);
-        }
-        if (is_dir(BJLG_BACKUP_DIR) && is_writable(BJLG_BACKUP_DIR)) {
-            $sentinels = [
-                '.htaccess' => "deny from all\n",
-                'index.php' => "<?php\nexit;\n",
-            ];
-
-            foreach ($sentinels as $filename => $contents) {
-                $path = BJLG_BACKUP_DIR . $filename;
-                if (!file_exists($path)) {
-                    file_put_contents($path, $contents);
-                }
+            foreach ((array) $site_ids as $site_id) {
+                bjlg_with_site((int) $site_id, function () {
+                    $this->activate_single_site();
+                });
             }
 
-            $web_config_path = BJLG_BACKUP_DIR . 'web.config';
-            if (!file_exists($web_config_path)) {
-                $web_config_contents = <<<'XML'
+            bjlg_with_network(function () {
+                if (bjlg_get_option('bjlg_required_capability', null, ['network' => true]) === null) {
+                    bjlg_update_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY, ['network' => true]);
+                }
+
+                if (bjlg_get_option('bjlg_capability_map', null, ['network' => true]) === null) {
+                    bjlg_update_option('bjlg_capability_map', [], ['network' => true]);
+                }
+            });
+
+            return;
+        }
+
+        $this->activate_single_site();
+    }
+
+    public function deactivate() {
+        wp_clear_scheduled_hook('bjlg_scheduled_backup_hook');
+        wp_clear_scheduled_hook('bjlg_daily_cleanup_hook');
+    }
+
+    private function activate_single_site(): void {
+        BJLG\BJLG_History::create_table();
+
+        if (bjlg_get_option('bjlg_required_capability', null) === null) {
+            bjlg_update_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY);
+        }
+
+        if (bjlg_get_option('bjlg_capability_map', null) === null) {
+            bjlg_update_option('bjlg_capability_map', []);
+        }
+
+        $backup_dir = $this->get_backup_dir_for_current_site();
+        $this->ensure_backup_directory($backup_dir);
+    }
+
+    private function get_backup_dir_for_current_site(): string {
+        $uploads = wp_get_upload_dir();
+        $basedir = isset($uploads['basedir']) && is_string($uploads['basedir']) ? $uploads['basedir'] : ''; // phpcs:ignore WordPress.NamingConventions.ValidVariableName.NotSnakeCaseMemberVar
+
+        if ($basedir === '') {
+            return trailingslashit(WP_CONTENT_DIR) . 'uploads/bjlg-backups/';
+        }
+
+        return trailingslashit($basedir) . 'bjlg-backups/';
+    }
+
+    private function ensure_backup_directory(string $backup_dir): void {
+        if ($backup_dir === '') {
+            return;
+        }
+
+        if (!is_dir($backup_dir)) {
+            wp_mkdir_p($backup_dir);
+        }
+
+        if (!is_dir($backup_dir) || !is_writable($backup_dir)) {
+            return;
+        }
+
+        $sentinels = [
+            '.htaccess' => "deny from all\n",
+            'index.php' => "<?php\nexit;\n",
+        ];
+
+        foreach ($sentinels as $filename => $contents) {
+            $path = $backup_dir . $filename;
+            if (!file_exists($path)) {
+                file_put_contents($path, $contents);
+            }
+        }
+
+        $web_config_path = $backup_dir . 'web.config';
+        if (!file_exists($web_config_path)) {
+            $web_config_contents = <<<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
     <system.webServer>
@@ -556,14 +711,8 @@ final class BJLG_Plugin {
 </configuration>
 XML;
 
-                file_put_contents($web_config_path, $web_config_contents);
-            }
+            file_put_contents($web_config_path, $web_config_contents);
         }
-    }
-
-    public function deactivate() {
-        wp_clear_scheduled_hook('bjlg_scheduled_backup_hook');
-        wp_clear_scheduled_hook('bjlg_daily_cleanup_hook');
     }
 }
 
