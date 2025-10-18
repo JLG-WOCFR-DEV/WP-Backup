@@ -71,7 +71,7 @@ final class BJLG_BackblazeB2DestinationTest extends TestCase
 
         $destination = $this->createDestination($handler);
 
-        update_option('bjlg_backblaze_b2_settings', [
+        bjlg_update_option('bjlg_backblaze_b2_settings', [
             'key_id' => 'key123',
             'application_key' => 'secret456',
             'bucket_id' => 'bucket-1',
@@ -121,7 +121,7 @@ final class BJLG_BackblazeB2DestinationTest extends TestCase
             'enabled' => true,
         ]);
 
-        $status = get_option('bjlg_backblaze_b2_status');
+        $status = bjlg_get_option('bjlg_backblaze_b2_status');
         $this->assertSame('success', $status['last_result']);
         $this->assertStringContainsString('bucket-name', (string) $status['message']);
     }
@@ -151,7 +151,7 @@ final class BJLG_BackblazeB2DestinationTest extends TestCase
 
         $destination = $this->createDestination($handler);
 
-        update_option('bjlg_backblaze_b2_settings', [
+        bjlg_update_option('bjlg_backblaze_b2_settings', [
             'key_id' => 'key',
             'application_key' => 'secret',
             'bucket_id' => 'bucket',

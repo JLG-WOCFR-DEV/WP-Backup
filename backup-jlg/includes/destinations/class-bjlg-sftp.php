@@ -469,6 +469,27 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
 
         check_ajax_referer('bjlg_nonce', 'nonce');
 
+        $site_switched = false;
+        if (function_exists('is_multisite') && is_multisite()) {
+            $requested = isset($_POST['site_id']) ? absint(wp_unslash($_POST['site_id'])) : 0;
+
+            if ($requested > 0) {
+                if (!current_user_can('manage_network_options')) {
+                    wp_send_json_error(['message' => __('Droits réseau insuffisants.', 'backup-jlg')], 403);
+                }
+
+                if (!function_exists('get_site') || !get_site($requested)) {
+                    wp_send_json_error(['message' => __('Site introuvable.', 'backup-jlg')], 404);
+                }
+
+                $site_switched = BJLG_Site_Context::switch_to_site($requested);
+
+                if (!$site_switched && (!function_exists('get_current_blog_id') || get_current_blog_id() !== $requested)) {
+                    wp_send_json_error(['message' => __('Impossible de basculer sur le site demandé.', 'backup-jlg')], 500);
+                }
+            }
+        }
+
         $posted = wp_unslash($_POST);
 
         $settings = [
@@ -484,6 +505,9 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
         ];
 
         if ($settings['host'] === '' || $settings['username'] === '') {
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
             wp_send_json_error([
                 'message' => "Impossible de tester la connexion.",
                 'errors' => ['Renseignez au minimum l\'hôte et l\'utilisateur.'],
@@ -498,12 +522,19 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
             $this->store_settings($settings);
             $this->store_status('success', $message);
 
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
+
             wp_send_json_success([
                 'message' => 'Connexion SFTP réussie !',
                 'details' => $message,
             ]);
         } catch (Exception $exception) {
             $this->store_status('error', $exception->getMessage());
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
             wp_send_json_error([
                 'message' => "Connexion SFTP impossible.",
                 'errors' => [$exception->getMessage()],

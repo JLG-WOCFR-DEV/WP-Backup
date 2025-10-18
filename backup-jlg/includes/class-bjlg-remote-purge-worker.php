@@ -468,7 +468,7 @@ class BJLG_Remote_Purge_Worker {
 
         $average_age = $pending_total > 0 ? $pending_sum_age / $pending_total : 0;
 
-        $existing = function_exists('get_option') ? get_option('bjlg_remote_purge_sla_metrics', []) : [];
+        $existing = function_exists('get_option') ? bjlg_get_option('bjlg_remote_purge_sla_metrics', []) : [];
         $existing = is_array($existing) ? $existing : [];
 
         $throughput = isset($existing['throughput']) && is_array($existing['throughput']) ? $existing['throughput'] : [];
@@ -544,7 +544,7 @@ class BJLG_Remote_Purge_Worker {
         ];
 
         if (function_exists('update_option')) {
-            update_option('bjlg_remote_purge_sla_metrics', $metrics, false);
+            bjlg_update_option('bjlg_remote_purge_sla_metrics', $metrics, false);
         }
     }
 

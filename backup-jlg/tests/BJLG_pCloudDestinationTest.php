@@ -35,7 +35,7 @@ final class BJLG_pCloudDestinationTest extends TestCase
             return 1_700_000_000;
         });
 
-        update_option('bjlg_pcloud_settings', [
+        bjlg_update_option('bjlg_pcloud_settings', [
             'access_token' => 'pc-token',
             'folder' => '/Archives',
             'enabled' => true,
@@ -114,7 +114,7 @@ final class BJLG_pCloudDestinationTest extends TestCase
             return $now;
         });
 
-        update_option('bjlg_pcloud_settings', [
+        bjlg_update_option('bjlg_pcloud_settings', [
             'access_token' => 'pc-token',
             'folder' => '/Archives',
             'enabled' => true,
