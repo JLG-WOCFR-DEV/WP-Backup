@@ -653,6 +653,9 @@ final class FakeDriveFiles
     /** @var array<string, mixed>|null */
     public $lastParams = null;
 
+    /** @var bool */
+    public $requireDriveSupport = false;
+
     /** @var array<string, mixed>|null */
     public $lastListParams = null;
 
