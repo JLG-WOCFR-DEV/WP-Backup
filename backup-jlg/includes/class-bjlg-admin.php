@@ -1060,6 +1060,25 @@ class BJLG_Admin {
                 $remote_caption = __('Connectez une destination distante pour suivre les quotas.', 'backup-jlg');
                 $capacity_watch = [];
                 $offline_destinations = [];
+                $remote_threshold = isset($metrics['storage']['remote_warning_threshold'])
+                    ? max(1.0, min(100.0, (float) $metrics['storage']['remote_warning_threshold']))
+                    : 85.0;
+                $remote_threshold_ratio = $remote_threshold / 100;
+                $remote_last_refresh_formatted = isset($metrics['storage']['remote_last_refreshed_formatted'])
+                    ? (string) $metrics['storage']['remote_last_refreshed_formatted']
+                    : '';
+                $remote_last_refresh_relative = isset($metrics['storage']['remote_last_refreshed_relative'])
+                    ? (string) $metrics['storage']['remote_last_refreshed_relative']
+                    : '';
+                $remote_refresh_stale = !empty($metrics['storage']['remote_refresh_stale']);
+                if ($remote_last_refresh_formatted !== '' && $remote_last_refresh_relative === '') {
+                    $remote_last_refresh_relative = $remote_last_refresh_formatted;
+                }
+                $remote_refresh_text = $remote_last_refresh_formatted !== ''
+                    ? ($remote_refresh_stale
+                        ? sprintf(__('Rafraîchi %s — données à actualiser', 'backup-jlg'), $remote_last_refresh_relative)
+                        : sprintf(__('Rafraîchi %s', 'backup-jlg'), $remote_last_refresh_relative))
+                    : __('Aucun rafraîchissement enregistré.', 'backup-jlg');
 
                 if ($remote_total > 0) {
                     foreach ($remote_destinations as $destination) {
@@ -1088,12 +1107,14 @@ class BJLG_Admin {
 
                         $used_bytes = isset($destination['used_bytes']) ? (int) $destination['used_bytes'] : null;
                         $quota_bytes = isset($destination['quota_bytes']) ? (int) $destination['quota_bytes'] : null;
+                        $ratio = isset($destination['utilization_ratio']) ? (float) $destination['utilization_ratio'] : null;
 
-                        if ($connected && $quota_bytes && $quota_bytes > 0 && $used_bytes !== null) {
-                            $ratio = $quota_bytes > 0 ? ($used_bytes / $quota_bytes) : null;
-                            if ($ratio !== null && $ratio >= 0.85) {
-                                $capacity_watch[] = $name;
-                            }
+                        if ($ratio === null && $connected && $quota_bytes && $quota_bytes > 0 && $used_bytes !== null) {
+                            $ratio = max(0, min(1, $used_bytes / $quota_bytes));
+                        }
+
+                        if ($ratio !== null && $ratio >= $remote_threshold_ratio) {
+                            $capacity_watch[] = $name;
                         }
                     }
 
@@ -1113,7 +1134,8 @@ class BJLG_Admin {
                         );
                     } elseif (!empty($unique_watch)) {
                         $remote_caption = sprintf(
-                            __('Capacité > 85%% pour %s', 'backup-jlg'),
+                            __('Capacité > %1$s%% pour %2$s', 'backup-jlg'),
+                            number_format_i18n((int) round($remote_threshold)),
                             implode(', ', $unique_watch)
                         );
                     } else {
@@ -1126,6 +1148,7 @@ class BJLG_Admin {
                     <h3 class="bjlg-card__title"><?php esc_html_e('Capacité hors-site', 'backup-jlg'); ?></h3>
                     <div class="bjlg-card__value" data-field="remote_storage_connected"><?php echo esc_html($remote_summary); ?></div>
                     <p class="bjlg-card__meta" data-field="remote_storage_caption"><?php echo esc_html($remote_caption); ?></p>
+                    <p class="bjlg-card__footnote" data-field="remote_storage_refresh"><?php echo esc_html($remote_refresh_text); ?></p>
                     <ul class="bjlg-card__list" data-field="remote_storage_list">
                         <?php if (empty($remote_destinations)): ?>
                             <li class="bjlg-card__list-item" data-empty="true"><?php esc_html_e('Aucune donnée distante disponible.', 'backup-jlg'); ?></li>
@@ -1168,16 +1191,22 @@ class BJLG_Admin {
                                     );
                                 }
 
-                                $ratio = null;
-                                if ($quota_bytes && $quota_bytes > 0 && $used_bytes !== null) {
+                                $ratio = isset($destination['utilization_ratio']) ? (float) $destination['utilization_ratio'] : null;
+                                if ($ratio === null && $quota_bytes && $quota_bytes > 0 && $used_bytes !== null) {
                                     $ratio = max(0, min(1, $used_bytes / $quota_bytes));
+                                }
+                                if ($ratio !== null) {
                                     $detail_parts[] = sprintf(__('Utilisation : %s%%', 'backup-jlg'), number_format_i18n((int) round($ratio * 100)));
+                                }
+                                $latency_ms = isset($destination['latency_ms']) ? (int) $destination['latency_ms'] : null;
+                                if ($latency_ms !== null && $latency_ms > 0) {
+                                    $detail_parts[] = sprintf(__('Relevé en %s ms', 'backup-jlg'), number_format_i18n($latency_ms));
                                 }
 
                                 $intent = 'info';
                                 if (!$connected || !empty($errors)) {
                                     $intent = 'error';
-                                } elseif ($ratio !== null && $ratio >= 0.85) {
+                                } elseif ($ratio !== null && $ratio >= $remote_threshold_ratio) {
                                     $intent = 'warning';
                                 }
                                 ?>
@@ -1193,6 +1222,10 @@ class BJLG_Admin {
                             <?php endforeach; ?>
                         <?php endif; ?>
                     </ul>
+                    <div class="bjlg-card__actions" data-field="remote_storage_actions">
+                        <a class="button button-secondary" href="<?php echo esc_url(add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php'))); ?>"><?php esc_html_e('Configurer les destinations', 'backup-jlg'); ?></a>
+                        <a class="button button-link" href="<?php echo esc_url(add_query_arg(['page' => 'backup-jlg', 'section' => 'monitoring'], admin_url('admin.php'))); ?>"><?php esc_html_e('Ouvrir le monitoring', 'backup-jlg'); ?></a>
+                    </div>
                 </article>
 
                 <?php
