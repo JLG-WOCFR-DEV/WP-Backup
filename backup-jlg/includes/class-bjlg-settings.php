@@ -114,6 +114,10 @@ class BJLG_Settings {
             'chunk_size' => 50,
             'compression_level' => 6
         ],
+        'monitoring' => [
+            'storage_quota_warning_threshold' => 85,
+            'remote_metrics_ttl_minutes' => 15,
+        ],
         'gdrive' => [
             'client_id' => '',
             'client_secret' => '',
@@ -695,6 +699,29 @@ class BJLG_Settings {
                 BJLG_Debug::log('Réglages de performance sauvegardés.');
             }
 
+            if (isset($_POST['storage_quota_warning_threshold']) || isset($_POST['remote_metrics_ttl_minutes'])) {
+                $monitoring_defaults = $this->default_settings['monitoring'];
+                $monitoring_settings = get_option('bjlg_monitoring_settings', []);
+                if (!is_array($monitoring_settings)) {
+                    $monitoring_settings = [];
+                }
+                $monitoring_settings = wp_parse_args($monitoring_settings, $monitoring_defaults);
+
+                if (isset($_POST['storage_quota_warning_threshold'])) {
+                    $threshold = floatval(wp_unslash($_POST['storage_quota_warning_threshold']));
+                    $monitoring_settings['storage_quota_warning_threshold'] = max(1.0, min(100.0, $threshold));
+                }
+
+                if (isset($_POST['remote_metrics_ttl_minutes'])) {
+                    $ttl_minutes = intval(wp_unslash($_POST['remote_metrics_ttl_minutes']));
+                    $monitoring_settings['remote_metrics_ttl_minutes'] = max(5, min(1440, $ttl_minutes));
+                }
+
+                update_option('bjlg_monitoring_settings', $monitoring_settings);
+                $saved_settings['monitoring'] = $monitoring_settings;
+                BJLG_Debug::log('Réglages de monitoring sauvegardés : ' . print_r($monitoring_settings, true));
+            }
+
             // --- Réglages Webhooks ---
             $webhook_fields = [
                 'webhook_enabled',
@@ -927,6 +954,7 @@ class BJLG_Settings {
             'encryption' => $this->get_section_settings_with_defaults('encryption'),
             'notifications' => $this->get_section_settings_with_defaults('notifications'),
             'performance' => $this->get_section_settings_with_defaults('performance'),
+            'monitoring' => $this->get_section_settings_with_defaults('monitoring'),
             'gdrive' => $this->get_section_settings_with_defaults('gdrive'),
             's3' => $this->get_section_settings_with_defaults('s3'),
             'wasabi' => $this->get_section_settings_with_defaults('wasabi'),
@@ -1009,6 +1037,7 @@ class BJLG_Settings {
             'bjlg_incremental_settings',
             'bjlg_notification_settings',
             'bjlg_performance_settings',
+            'bjlg_monitoring_settings',
             'bjlg_gdrive_settings',
             'bjlg_dropbox_settings',
             'bjlg_onedrive_settings',
@@ -1274,6 +1303,21 @@ class BJLG_Settings {
                     }
                     if (isset($value['compression_level'])) {
                         $sanitized['compression_level'] = max(0, intval($value['compression_level']));
+                    }
+                }
+
+                return $sanitized;
+
+            case 'bjlg_monitoring_settings':
+                $defaults = $this->default_settings['monitoring'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['storage_quota_warning_threshold'])) {
+                        $sanitized['storage_quota_warning_threshold'] = max(1.0, min(100.0, (float) $value['storage_quota_warning_threshold']));
+                    }
+                    if (isset($value['remote_metrics_ttl_minutes'])) {
+                        $sanitized['remote_metrics_ttl_minutes'] = max(5, min(1440, (int) $value['remote_metrics_ttl_minutes']));
                     }
                 }
 
@@ -2333,6 +2377,26 @@ class BJLG_Settings {
         }
 
         return (bool) $value;
+    }
+
+    public static function get_monitoring_settings(): array {
+        $instance = self::get_instance();
+        $defaults = isset($instance->default_settings['monitoring']) ? $instance->default_settings['monitoring'] : [];
+        $stored = get_option('bjlg_monitoring_settings', []);
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+
+        return self::merge_settings_with_defaults($stored, $defaults);
+    }
+
+    public static function get_storage_warning_threshold(): float {
+        $settings = self::get_monitoring_settings();
+        $threshold = isset($settings['storage_quota_warning_threshold'])
+            ? (float) $settings['storage_quota_warning_threshold']
+            : 85.0;
+
+        return max(1.0, min(100.0, $threshold));
     }
 
     public static function get_known_destination_ids() {
