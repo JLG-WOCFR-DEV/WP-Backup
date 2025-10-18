@@ -29,11 +29,16 @@ class BJLG_REST_API {
 
     /** @var BJLG_Settings|null */
     private $settings_manager;
+
+    /** @var bool */
+    private $site_switch_active = false;
     
     public function __construct() {
         add_action('rest_api_init', [$this, 'register_routes']);
         add_filter('pre_update_option_bjlg_api_keys', [$this, 'filter_api_keys_before_save'], 10, 3);
         add_action('add_option_bjlg_api_keys', [$this, 'handle_api_keys_added'], 10, 2);
+        add_filter('rest_request_before_callbacks', [$this, 'maybe_switch_site_for_request'], 10, 3);
+        add_filter('rest_request_after_callbacks', [$this, 'restore_site_after_request'], 10, 3);
 
         // Initialiser le rate limiter
         if (class_exists(BJLG_Rate_Limiter::class)) {
@@ -43,6 +48,72 @@ class BJLG_REST_API {
         if (class_exists(BJLG_Settings::class)) {
             $this->settings_manager = BJLG_Settings::get_instance();
         }
+    }
+
+    public function maybe_switch_site_for_request($response, $handler, $request) {
+        if (!$this->is_plugin_route($request)) {
+            return $response;
+        }
+
+        $result = $this->ensure_site_context($request);
+
+        if ($result instanceof WP_Error) {
+            return $result;
+        }
+
+        return $response;
+    }
+
+    public function restore_site_after_request($response, $handler, $request) {
+        if ($this->site_switch_active && $this->is_plugin_route($request)) {
+            BJLG_Site_Context::restore_site($this->site_switch_active);
+            $this->site_switch_active = false;
+        }
+
+        return $response;
+    }
+
+    private function is_plugin_route($request) {
+        $route = $request->get_route();
+        $route = is_string($route) ? trim($route, '/') : '';
+
+        return strpos($route, self::API_NAMESPACE . '/') === 0 || $route === self::API_NAMESPACE;
+    }
+
+    private function ensure_site_context($request) {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return true;
+        }
+
+        $raw = $request->get_param('site_id');
+        if ($raw === null || $raw === '') {
+            return true;
+        }
+
+        $site_id = absint($raw);
+        if ($site_id <= 0) {
+            return new WP_Error('bjlg_invalid_site', __('Identifiant de site invalide.', 'backup-jlg'), ['status' => 400]);
+        }
+
+        if (!function_exists('get_site') || !get_site($site_id)) {
+            return new WP_Error('bjlg_site_not_found', __('Site introuvable sur ce réseau.', 'backup-jlg'), ['status' => 404]);
+        }
+
+        if (function_exists('get_current_blog_id') && get_current_blog_id() === $site_id) {
+            return true;
+        }
+
+        if (!current_user_can('manage_network_options')) {
+            return new WP_Error('bjlg_forbidden_site', __('Droits insuffisants pour basculer de site.', 'backup-jlg'), ['status' => 403]);
+        }
+
+        $this->site_switch_active = BJLG_Site_Context::switch_to_site($site_id);
+
+        if (!$this->site_switch_active) {
+            return new WP_Error('bjlg_site_switch_failed', __('Impossible de basculer sur le site demandé.', 'backup-jlg'), ['status' => 500]);
+        }
+
+        return true;
     }
     
     /**
@@ -2686,4 +2757,4 @@ class BJLG_REST_API {
         ];
     }
 }
-
+

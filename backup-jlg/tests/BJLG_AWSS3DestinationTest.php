@@ -24,7 +24,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
     {
         $destination = $this->createDestination();
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AKIDEXAMPLE',
             'secret_key' => 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY',
             'region' => 'us-east-1',
@@ -73,7 +73,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
 
         $destination = $this->createDestination($handler);
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AK',
             'secret_key' => 'SECRET',
             'region' => 'eu-west-3',
@@ -105,7 +105,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
 
         $destination = $this->createDestination($handler);
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AK',
             'secret_key' => 'SECRET',
             'region' => 'eu-west-1',
@@ -158,7 +158,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
         $this->assertSame('HEAD', $captured[0]['args']['method']);
         $this->assertSame('https://demo-bucket.s3.eu-west-3.amazonaws.com/', $captured[0]['url']);
 
-        $status = get_option('bjlg_s3_status');
+        $status = bjlg_get_option('bjlg_s3_status');
         $this->assertSame('success', $status['last_result']);
         $this->assertStringContainsString('demo-bucket', $status['message']);
     }
@@ -180,7 +180,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
 
         $destination = $this->createDestination($handler);
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AK',
             'secret_key' => 'SECRET',
             'region' => 'eu-central-1',
@@ -200,7 +200,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
     {
         $destination = $this->createDestination();
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AKIDKMS',
             'secret_key' => 'kms-secret',
             'region' => 'eu-west-3',
@@ -229,7 +229,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
     {
         $destination = $this->createDestination();
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AKID',
             'secret_key' => 'SECRET',
             'region' => 'us-east-1',
@@ -256,7 +256,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
     {
         $destination = $this->createDestination();
 
-        update_option('bjlg_s3_settings', [
+        bjlg_update_option('bjlg_s3_settings', [
             'access_key' => 'AKID',
             'secret_key' => 'SECRET',
             'region' => 'us-east-1',
@@ -282,6 +282,95 @@ final class BJLG_AWSS3DestinationTest extends TestCase
         }
 
         $this->assertCount(1, $this->requests, 'Le premier fichier aurait dû être envoyé malgré les erreurs suivantes.');
+    }
+
+    public function test_get_storage_usage_prefers_provider_snapshot(): void
+    {
+        $handler = function ($url, array $args) {
+            $this->requests[] = ['url' => $url, 'args' => $args];
+
+            if (strpos($url, 'metrics=usage') !== false) {
+                return [
+                    'response' => [
+                        'code' => 200,
+                        'message' => 'OK',
+                    ],
+                    'body' => json_encode([
+                        'usedBytes' => 2048,
+                        'quotaBytes' => 4096,
+                        'freeBytes' => 2048,
+                    ]),
+                ];
+            }
+
+            return [
+                'response' => [
+                    'code' => 200,
+                    'message' => 'OK',
+                ],
+                'body' => '<ListBucketResult><Contents><Key>backup.zip</Key><Size>100</Size><LastModified>2021-01-01T00:00:00Z</LastModified></Contents></ListBucketResult>',
+            ];
+        };
+
+        $destination = $this->createDestination($handler);
+
+        update_option('bjlg_s3_settings', [
+            'access_key' => 'AK',
+            'secret_key' => 'SECRET',
+            'region' => 'eu-west-3',
+            'bucket' => 'demo-bucket',
+            'enabled' => true,
+        ]);
+
+        $usage = $destination->get_storage_usage();
+
+        $this->assertSame(2048, $usage['used_bytes']);
+        $this->assertSame(4096, $usage['quota_bytes']);
+        $this->assertSame(2048, $usage['free_bytes']);
+        $this->assertSame('provider', $usage['source']);
+        $this->assertSame(1609459200, $usage['refreshed_at']);
+    }
+
+    public function test_get_storage_usage_falls_back_to_listing_when_snapshot_fails(): void
+    {
+        $handler = function ($url, array $args) {
+            $this->requests[] = ['url' => $url, 'args' => $args];
+
+            if (strpos($url, 'metrics=usage') !== false) {
+                return [
+                    'response' => [
+                        'code' => 500,
+                        'message' => 'Error',
+                    ],
+                    'body' => 'Internal Error',
+                ];
+            }
+
+            return [
+                'response' => [
+                    'code' => 200,
+                    'message' => 'OK',
+                ],
+                'body' => '<ListBucketResult><Contents><Key>backup-1.zip</Key><Size>100</Size><LastModified>2021-01-01T00:00:00Z</LastModified></Contents><Contents><Key>backup-2.zip</Key><Size>150</Size><LastModified>2021-01-02T00:00:00Z</LastModified></Contents></ListBucketResult>',
+            ];
+        };
+
+        $destination = $this->createDestination($handler);
+
+        update_option('bjlg_s3_settings', [
+            'access_key' => 'AK',
+            'secret_key' => 'SECRET',
+            'region' => 'eu-west-3',
+            'bucket' => 'demo-bucket',
+            'enabled' => true,
+        ]);
+
+        $usage = $destination->get_storage_usage();
+
+        $this->assertSame(250, $usage['used_bytes']);
+        $this->assertNull($usage['quota_bytes']);
+        $this->assertNull($usage['free_bytes']);
+        $this->assertSame('estimate', $usage['source']);
     }
 
     private function createDestination(?callable $handler = null): BJLG_AWS_S3

@@ -332,25 +332,44 @@ class BJLG_Backblaze_B2 implements BJLG_Destination_Interface {
         }
 
         try {
-            $backups = $this->list_remote_backups();
-        } catch (Exception $exception) {
-            if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log('Impossible de récupérer les métriques Backblaze : ' . $exception->getMessage());
+            $auth = $this->authorize($settings);
+            $api_url = rtrim($auth['apiUrl'], '/');
+            $endpoint = $api_url . '/b2api/v2/b2_get_usage';
+            $payload = wp_json_encode(['bucketId' => $settings['bucket_id']]);
+
+            $response = $this->perform_request(
+                'POST',
+                $endpoint,
+                [
+                    'Authorization' => $auth['authorizationToken'],
+                    'Content-Type' => 'application/json',
+                ],
+                $payload
+            );
+
+            $usage = $this->parse_usage_snapshot(isset($response['body']) ? (string) $response['body'] : '');
+
+            if (!empty($usage)) {
+                $usage['source'] = $usage['source'] ?? 'provider';
+                $usage['refreshed_at'] = $this->get_time();
+
+                if ($usage['free_bytes'] === null && $usage['quota_bytes'] !== null && $usage['used_bytes'] !== null) {
+                    $usage['free_bytes'] = max(0, (int) $usage['quota_bytes'] - (int) $usage['used_bytes']);
+                }
+
+                $this->log(sprintf(
+                    'Backblaze B2 : métriques distantes récupérées (used=%s quota=%s).',
+                    $usage['used_bytes'] !== null ? (string) $usage['used_bytes'] : 'n/a',
+                    $usage['quota_bytes'] !== null ? (string) $usage['quota_bytes'] : 'n/a'
+                ));
+
+                return array_merge($defaults, $usage);
             }
-
-            return $defaults;
+        } catch (Exception $exception) {
+            $this->log('Backblaze B2 : impossible de récupérer le snapshot — ' . $exception->getMessage());
         }
 
-        $used = 0;
-        foreach ($backups as $backup) {
-            $used += isset($backup['size']) ? (int) $backup['size'] : 0;
-        }
-
-        return [
-            'used_bytes' => $used,
-            'quota_bytes' => null,
-            'free_bytes' => null,
-        ];
+        return array_merge($defaults, $this->estimate_usage_from_listing($settings));
     }
 
     private function fetch_usage_snapshot(array $settings): ?array {
@@ -790,6 +809,81 @@ class BJLG_Backblaze_B2 implements BJLG_Destination_Interface {
         }
 
         return $response;
+    }
+
+    private function parse_usage_snapshot($body) {
+        $body = trim((string) $body);
+        if ($body === '') {
+            return [];
+        }
+
+        $data = json_decode($body, true);
+        if (!is_array($data)) {
+            return [];
+        }
+
+        $used = $this->find_numeric_value($data, ['usedBytes', 'used_bytes', 'totalBytes']);
+        $quota = $this->find_numeric_value($data, ['capacityBytes', 'quota_bytes', 'limit']);
+        $free = $this->find_numeric_value($data, ['freeBytes', 'remainingBytes', 'free_bytes']);
+
+        if ($used === null && $quota === null && $free === null) {
+            return [];
+        }
+
+        return [
+            'used_bytes' => $used,
+            'quota_bytes' => $quota,
+            'free_bytes' => $free,
+            'source' => 'provider',
+        ];
+    }
+
+    private function find_numeric_value(array $data, array $keys) {
+        foreach ($keys as $key) {
+            if (isset($data[$key]) && is_numeric($data[$key])) {
+                return (int) $data[$key];
+            }
+        }
+
+        foreach ($data as $value) {
+            if (is_array($value)) {
+                $found = $this->find_numeric_value($value, $keys);
+                if ($found !== null) {
+                    return $found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function estimate_usage_from_listing(array $settings) {
+        try {
+            $backups = $this->list_remote_backups();
+        } catch (Exception $exception) {
+            $this->log('Backblaze B2 : estimation locale impossible — ' . $exception->getMessage());
+
+            return [
+                'used_bytes' => null,
+                'quota_bytes' => null,
+                'free_bytes' => null,
+                'source' => 'estimate',
+                'refreshed_at' => $this->get_time(),
+            ];
+        }
+
+        $used = 0;
+        foreach ($backups as $backup) {
+            $used += isset($backup['size']) ? (int) $backup['size'] : 0;
+        }
+
+        return [
+            'used_bytes' => $used,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+            'source' => 'estimate',
+            'refreshed_at' => $this->get_time(),
+        ];
     }
 
     private function build_object_key($filename, $prefix, $apply_basename = true) {

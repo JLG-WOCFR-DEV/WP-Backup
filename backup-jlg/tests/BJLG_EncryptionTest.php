@@ -38,7 +38,7 @@ final class BJLG_EncryptionTest extends TestCase
     protected function setUp(): void
     {
         $GLOBALS['bjlg_test_options'] = [];
-        update_option('bjlg_encryption_settings', ['enabled' => false]);
+        bjlg_update_option('bjlg_encryption_settings', ['enabled' => false]);
     }
 
     public function test_get_encryption_key_supports_base64_prefix(): void
