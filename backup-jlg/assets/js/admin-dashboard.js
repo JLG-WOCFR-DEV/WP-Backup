@@ -249,6 +249,31 @@ jQuery(function($) {
             : {};
         const threshold = Number(storage.remote_threshold || 0.85);
         const $list = $card.find('[data-field="remote_storage_list"]');
+        const thresholdPercentRaw = Number(storage.remote_warning_threshold || storage.threshold_percent || 85);
+        const thresholdPercent = Number.isFinite(thresholdPercentRaw) ? Math.max(1, Math.min(100, thresholdPercentRaw)) : 85;
+        const thresholdRatio = thresholdPercent / 100;
+        const refreshFormatted = storage.remote_last_refreshed_formatted || '';
+        const refreshRelative = storage.remote_last_refreshed_relative || '';
+        const refreshStale = !!storage.remote_refresh_stale;
+        const refreshDetail = refreshRelative || refreshFormatted;
+        let refreshText = '';
+
+        if (refreshFormatted) {
+            refreshText = refreshStale
+                ? sprintf(__('Rafraîchi %s — données à actualiser', 'backup-jlg'), refreshDetail)
+                : sprintf(__('Rafraîchi %s', 'backup-jlg'), refreshDetail);
+        } else {
+            refreshText = __('Aucun rafraîchissement enregistré.', 'backup-jlg');
+        }
+
+        setField('remote_storage_refresh', refreshText);
+
+        const $refresh = $card.find('[data-field="remote_storage_refresh"]');
+        if ($refresh.length) {
+            $refresh.toggleClass('is-warning', refreshStale);
+        }
+
+        const $actions = $card.find('[data-field="remote_storage_actions"]');
 
         if (!destinations.length) {
             setField('remote_storage_connected', __('Aucune destination distante configurée.', 'backup-jlg'));
@@ -260,7 +285,14 @@ jQuery(function($) {
                     text: __('Aucune donnée distante disponible.', 'backup-jlg')
                 }));
             }
+            if ($actions.length) {
+                $actions.attr('hidden', 'hidden');
+            }
             return;
+        }
+
+        if ($actions.length) {
+            $actions.removeAttr('hidden');
         }
 
         const connected = destinations.filter(function(dest) { return dest && dest.connected; }).length;
@@ -306,8 +338,9 @@ jQuery(function($) {
                 : 'unknown';
 
             let ratio = null;
-            if (ratioValue !== null) {
-                ratio = Math.min(1, Math.max(0, ratioValue));
+            const ratioFromSnapshot = Number(dest.utilization_ratio);
+            if (Number.isFinite(ratioFromSnapshot)) {
+                ratio = Math.min(1, Math.max(0, ratioFromSnapshot));
             } else if (Number.isFinite(usedBytes) && Number.isFinite(quotaBytes) && quotaBytes > 0) {
                 ratio = Math.min(1, Math.max(0, usedBytes / quotaBytes));
             }
@@ -318,7 +351,7 @@ jQuery(function($) {
             if (errors.length) {
                 offlineList.push(name);
             }
-            if (ratio !== null && ratio >= Math.max(0.1, threshold)) {
+            if (ratio !== null && ratio >= thresholdRatio) {
                 watchList.push(name);
             }
 
@@ -350,12 +383,15 @@ jQuery(function($) {
                 details.push(sprintf(__('Actualisé : %1$s (%2$s)', 'backup-jlg'), refreshLabel, stateText));
             }
 
+            const latency = Number(dest.latency_ms);
+            if (Number.isFinite(latency) && latency > 0) {
+                details.push(sprintf(__('Relevé en %s ms', 'backup-jlg'), formatNumber(Math.round(latency))));
+            }
+
             let intent = 'info';
             if (!connectedFlag || errors.length) {
                 intent = 'error';
-            } else if (ratio !== null && ratio >= 0.95) {
-                intent = 'critical';
-            } else if (ratio !== null && ratio >= Math.max(0.1, threshold)) {
+            } else if (ratio !== null && ratio >= thresholdRatio) {
                 intent = 'warning';
             }
 
@@ -378,7 +414,12 @@ jQuery(function($) {
         if (uniqueOffline.length) {
             captionParts.push(sprintf(__('Attention : vérifier %s', 'backup-jlg'), uniqueOffline.join(', ')));
         } else if (uniqueWatch.length) {
-            captionParts.push(sprintf(__('Quota proche de la limite pour %s', 'backup-jlg'), uniqueWatch.join(', ')));
+            setField(
+                'remote_storage_caption',
+                sprintf(__('Capacité > %s%% pour %s', 'backup-jlg'), formatNumber(Math.round(thresholdPercent)), uniqueWatch.join(', '))
+            );
+        } else {
+            setField('remote_storage_caption', __('Capacité hors-site nominale.', 'backup-jlg'));
         }
 
         if (!captionParts.length) {

@@ -848,6 +848,23 @@
     font-weight: 600;
 }
 
+.bjlg-card__footnote.is-warning {
+    color: var(--wp-admin-theme-color-darker-20, #b32d2e);
+    font-weight: 600;
+}
+
+.bjlg-card__actions {
+    margin-top: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.bjlg-card__actions .button-link {
+    padding-left: 0;
+    padding-right: 0;
+}
+
 .bjlg-onboarding {
     background: linear-gradient(170deg, var(--bjlg-color-surface) 0%, rgba(110, 86, 207, 0.05) 100%);
     border: 1px solid var(--bjlg-color-border);

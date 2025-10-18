@@ -182,10 +182,13 @@ class BJLG_Admin_Advanced {
             }
         }
 
-        $remote_metrics = $this->collect_remote_storage_metrics();
-        $metrics['storage']['remote_destinations'] = $remote_metrics['destinations'];
-        $metrics['storage']['remote_refresh'] = $remote_metrics['refresh'];
-        $metrics['storage']['remote_threshold'] = $remote_metrics['threshold'];
+        $remote_snapshot = $this->collect_remote_storage_metrics();
+        $metrics['storage']['remote_destinations'] = $remote_snapshot['destinations'];
+        $metrics['storage']['remote_last_refreshed'] = $remote_snapshot['generated_at'];
+        $metrics['storage']['remote_last_refreshed_formatted'] = $remote_snapshot['generated_at_formatted'];
+        $metrics['storage']['remote_last_refreshed_relative'] = $remote_snapshot['generated_at_relative'];
+        $metrics['storage']['remote_refresh_stale'] = $remote_snapshot['stale'];
+        $metrics['storage']['remote_warning_threshold'] = $remote_snapshot['threshold_percent'];
 
         $metrics['queues'] = $this->build_queue_metrics($now);
 
@@ -894,200 +897,138 @@ class BJLG_Admin_Advanced {
     }
 
     private function collect_remote_storage_metrics(): array {
-        if (!class_exists(BJLG_Destination_Factory::class)) {
+        $threshold_percent = $this->get_storage_warning_threshold_percent();
+        $threshold_ratio = $threshold_percent / 100;
+        $now = current_time('timestamp');
+
+        if (!class_exists(BJLG_Remote_Storage_Metrics::class)) {
             return [
                 'destinations' => [],
-                'refresh' => [
-                    'timestamp' => 0,
-                    'formatted' => '',
-                    'relative' => '',
-                    'state' => 'unknown',
-                ],
-                'threshold' => 0.85,
+                'generated_at' => 0,
+                'generated_at_formatted' => '',
+                'generated_at_relative' => '',
+                'stale' => false,
+                'threshold_percent' => $threshold_percent,
             ];
         }
 
-        $now = current_time('timestamp');
-        $snapshot = class_exists(BJLG_Remote_Storage_Metrics::class)
-            ? BJLG_Remote_Storage_Metrics::get_snapshot()
-            : ['generated_at' => 0, 'destinations' => []];
-
-        $snapshot_map = [];
-        if (isset($snapshot['destinations']) && is_array($snapshot['destinations'])) {
-            foreach ($snapshot['destinations'] as $key => $value) {
-                if (!is_array($value)) {
-                    continue;
-                }
-                $id = is_string($key) && $key !== '' ? $key : (string) ($value['id'] ?? '');
-                if ($id === '') {
-                    continue;
-                }
-                $snapshot_map[$id] = $value;
-            }
-        }
-
+        $snapshot = BJLG_Remote_Storage_Metrics::get_snapshot();
         $generated_at = isset($snapshot['generated_at']) ? (int) $snapshot['generated_at'] : 0;
-        [$refresh_formatted, $refresh_relative] = $this->format_timestamp_pair($generated_at, $now);
-        $refresh_state = $this->determine_refresh_state($generated_at, $now);
+        $stale = !empty($snapshot['stale']);
+        $destinations = isset($snapshot['destinations']) && is_array($snapshot['destinations'])
+            ? $snapshot['destinations']
+            : [];
 
-        $threshold = class_exists(BJLG_Settings::class)
-            ? BJLG_Settings::get_remote_storage_threshold()
-            : 0.85;
+        $formatted = $generated_at > 0 ? $this->format_datetime($generated_at) : '';
+        $relative = '';
+        if ($generated_at > 0) {
+            $relative = sprintf(__('il y a %s', 'backup-jlg'), human_time_diff($generated_at, $now));
+        }
 
-        $destinations = [];
-        $known_ids = BJLG_Settings::get_known_destination_ids();
+        $digest = get_option(BJLG_Remote_Storage_Metrics::WARNING_DIGEST_OPTION, []);
+        if (!is_array($digest)) {
+            $digest = [];
+        }
 
-        foreach ($known_ids as $destination_id) {
-            $destination = BJLG_Destination_Factory::create($destination_id);
-            if (!$destination instanceof BJLG_Destination_Interface) {
-                continue;
+        $digest_updated = false;
+        $seen_destinations = [];
+
+        foreach ($destinations as &$destination) {
+            if (!is_array($destination)) {
+                $destination = [];
             }
 
-            $connected = $destination->is_connected();
-            $entry = [
-                'id' => $destination_id,
-                'name' => $destination->get_name(),
-                'connected' => $connected,
-                'used_bytes' => null,
-                'quota_bytes' => null,
-                'free_bytes' => null,
-                'used_human' => '',
-                'quota_human' => '',
-                'free_human' => '',
-                'backups_count' => 0,
-                'errors' => [],
-                'refresh_state' => $refresh_state,
-                'refreshed_at' => $generated_at,
-                'refreshed_formatted' => $refresh_formatted,
-                'refreshed_relative' => $refresh_relative,
-                'refresh_label' => $refresh_relative !== '' ? $refresh_relative : $refresh_formatted,
-                'ratio' => null,
-                'ratio_label' => '',
-                'badge' => null,
-                'snapshot_source' => 'unknown',
-                'cta_settings_url' => add_query_arg(
-                    ['page' => 'backup-jlg', 'section' => 'destinations', 'destination' => $destination_id],
-                    admin_url('admin.php')
-                ),
-                'cta_test_url' => add_query_arg(
-                    ['page' => 'backup-jlg', 'section' => 'destinations', 'destination' => $destination_id, 'focus' => 'test'],
-                    admin_url('admin.php')
-                ),
-            ];
+            $destination_id = isset($destination['id']) ? sanitize_key((string) $destination['id']) : '';
+            $name = isset($destination['name']) ? (string) $destination['name'] : $destination_id;
 
-            if (isset($snapshot_map[$destination_id])) {
-                $usage = $snapshot_map[$destination_id];
-                if (isset($usage['used_bytes'])) {
-                    $entry['used_bytes'] = $this->sanitize_metric_value($usage['used_bytes']);
-                }
-                if (isset($usage['quota_bytes'])) {
-                    $entry['quota_bytes'] = $this->sanitize_metric_value($usage['quota_bytes']);
-                }
-                if (isset($usage['free_bytes'])) {
-                    $entry['free_bytes'] = $this->sanitize_metric_value($usage['free_bytes']);
-                }
-                if (isset($usage['error']) && $usage['error']) {
-                    $entry['errors'][] = (string) $usage['error'];
-                }
-                if (isset($usage['source'])) {
-                    $entry['snapshot_source'] = (string) $usage['source'];
-                }
-                if (isset($usage['refreshed_at'])) {
-                    $entry['refreshed_at'] = (int) $usage['refreshed_at'];
-                    [$entry['refreshed_formatted'], $entry['refreshed_relative']] = $this->format_timestamp_pair(
-                        $entry['refreshed_at'],
-                        $now
-                    );
-                    $entry['refresh_state'] = $this->determine_refresh_state($entry['refreshed_at'], $now);
-                    $entry['refresh_label'] = $entry['refreshed_relative'] !== ''
-                        ? $entry['refreshed_relative']
-                        : $entry['refreshed_formatted'];
-                }
+            if ($destination_id !== '') {
+                $seen_destinations[$destination_id] = true;
             }
 
-            $backups = [];
-            if ($connected) {
-                try {
-                    $backups = $destination->list_remote_backups();
-                } catch (\Throwable $exception) {
-                    $entry['errors'][] = $exception->getMessage();
-                }
+            $used_bytes = isset($destination['used_bytes']) ? $this->sanitize_metric_value($destination['used_bytes']) : null;
+            $quota_bytes = isset($destination['quota_bytes']) ? $this->sanitize_metric_value($destination['quota_bytes']) : null;
+            $free_bytes = isset($destination['free_bytes']) ? $this->sanitize_metric_value($destination['free_bytes']) : null;
+
+            $destination['used_bytes'] = $used_bytes;
+            $destination['quota_bytes'] = $quota_bytes;
+            $destination['free_bytes'] = $free_bytes;
+
+            if ($used_bytes !== null) {
+                $destination['used_human'] = size_format((int) $used_bytes);
+            } else {
+                $destination['used_human'] = isset($destination['used_human']) ? (string) $destination['used_human'] : '';
             }
 
-            if (is_array($backups)) {
-                $entry['backups_count'] = count($backups);
-
-                if ($entry['used_bytes'] === null) {
-                    $total = 0;
-                    foreach ($backups as $backup) {
-                        $total += isset($backup['size']) ? (int) $backup['size'] : 0;
-                    }
-                    $entry['used_bytes'] = $total;
-                }
+            if ($quota_bytes !== null) {
+                $destination['quota_human'] = size_format((int) $quota_bytes);
+            } else {
+                $destination['quota_human'] = isset($destination['quota_human']) ? (string) $destination['quota_human'] : '';
             }
 
-            if ($entry['free_bytes'] === null && $entry['quota_bytes'] !== null && $entry['used_bytes'] !== null) {
-                $entry['free_bytes'] = max(0, (int) $entry['quota_bytes'] - (int) $entry['used_bytes']);
+            if ($free_bytes === null && $quota_bytes !== null && $used_bytes !== null) {
+                $free_bytes = max(0, (int) $quota_bytes - (int) $used_bytes);
+                $destination['free_bytes'] = $free_bytes;
             }
 
-            if ($entry['used_bytes'] !== null) {
-                $entry['used_human'] = size_format((int) $entry['used_bytes']);
+            if ($free_bytes !== null) {
+                $destination['free_human'] = size_format((int) $free_bytes);
+            } else {
+                $destination['free_human'] = isset($destination['free_human']) ? (string) $destination['free_human'] : '';
             }
 
-            if ($entry['quota_bytes'] !== null) {
-                $entry['quota_human'] = size_format((int) $entry['quota_bytes']);
+            $ratio = null;
+            if ($quota_bytes !== null && $quota_bytes > 0 && $used_bytes !== null) {
+                $ratio = max(0.0, min(1.0, $used_bytes / max(1, $quota_bytes)));
             }
 
-            if ($entry['free_bytes'] !== null) {
-                $entry['free_human'] = size_format((int) $entry['free_bytes']);
-            }
+            $destination['utilization_ratio'] = $ratio;
+            $destination['last_refreshed_at'] = $generated_at;
+            $destination['threshold_percent'] = $threshold_percent;
 
-            if ($entry['quota_bytes'] !== null && $entry['quota_bytes'] > 0 && $entry['used_bytes'] !== null) {
-                $ratio = max(0, min(1, $entry['used_bytes'] / $entry['quota_bytes']));
-                $entry['ratio'] = $ratio;
-                $entry['ratio_label'] = sprintf(
-                    '%s%%',
-                    number_format_i18n($ratio * 100, $ratio * 100 >= 10 ? 1 : 2)
-                );
-
-                if ($ratio >= 0.95) {
-                    $entry['badge'] = 'critical';
-                } elseif ($ratio >= $threshold) {
-                    $entry['badge'] = 'warning';
-                }
-
-                if ($connected && $ratio >= $threshold) {
-                    $payload = [
+            if ($ratio !== null && $ratio >= $threshold_ratio && !$stale && $destination_id !== '') {
+                $last_notified = isset($digest[$destination_id]) ? (int) $digest[$destination_id] : 0;
+                if ($generated_at > $last_notified) {
+                    do_action('bjlg_storage_warning', [
                         'destination_id' => $destination_id,
-                        'destination_name' => $entry['name'],
-                        'used_bytes' => (int) $entry['used_bytes'],
-                        'quota_bytes' => (int) $entry['quota_bytes'],
-                        'free_bytes' => $entry['free_bytes'] !== null ? (int) $entry['free_bytes'] : null,
-                        'free_space' => $entry['free_bytes'] !== null ? (int) $entry['free_bytes'] : null,
-                        'threshold' => (int) round($entry['quota_bytes'] * $threshold),
-                        'threshold_ratio' => $threshold,
+                        'name' => $name,
                         'ratio' => $ratio,
-                        'refreshed_at' => $entry['refreshed_at'],
-                        'type' => 'remote',
-                    ];
-
-                    do_action('bjlg_storage_warning', $payload);
+                        'threshold_percent' => $threshold_percent,
+                        'used_bytes' => $used_bytes,
+                        'quota_bytes' => $quota_bytes,
+                        'free_bytes' => $destination['free_bytes'],
+                        'generated_at' => $generated_at,
+                    ]);
+                    $digest[$destination_id] = $generated_at;
+                    $digest_updated = true;
                 }
             }
+        }
+        unset($destination);
 
-            $destinations[] = $entry;
+        if ($digest_updated) {
+            if (!empty($seen_destinations)) {
+                $digest = array_intersect_key($digest, $seen_destinations);
+            }
+
+            update_option(BJLG_Remote_Storage_Metrics::WARNING_DIGEST_OPTION, $digest);
         }
 
         return [
             'destinations' => $destinations,
-            'refresh' => [
-                'timestamp' => $generated_at,
-                'formatted' => $refresh_formatted,
-                'relative' => $refresh_relative,
-                'state' => $refresh_state,
-            ],
-            'threshold' => $threshold,
+            'generated_at' => $generated_at,
+            'generated_at_formatted' => $formatted,
+            'generated_at_relative' => $relative,
+            'stale' => $stale,
+            'threshold_percent' => $threshold_percent,
         ];
+    }
+
+    private function get_storage_warning_threshold_percent(): float {
+        if (!class_exists(BJLG_Settings::class) || !method_exists(BJLG_Settings::class, 'get_storage_warning_threshold')) {
+            return 85.0;
+        }
+
+        return (float) BJLG_Settings::get_storage_warning_threshold();
     }
 
     private function get_encryption_metrics(): array {
