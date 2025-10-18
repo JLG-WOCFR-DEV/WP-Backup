@@ -42,6 +42,151 @@ if (!defined('BJLG_INCLUDES_DIR')) {
 
 require_once BJLG_INCLUDES_DIR . 'class-bjlg-site-context.php';
 
+if (!function_exists('bjlg_normalize_option_context_args')) {
+    /**
+     * Normalise les paramètres de contexte pour la gestion des options.
+     *
+     * @param array|int|null $args_or_site_id Tableau d'arguments ou identifiant de site.
+     * @param bool|null      $network         Indicateur réseau (ancienne signature).
+     *
+     * @return array<string,mixed>
+     */
+    function bjlg_normalize_option_context_args($args_or_site_id = null, $network = null) {
+        $args = [];
+
+        if (is_array($args_or_site_id)) {
+            $args = $args_or_site_id;
+        } elseif ($args_or_site_id !== null) {
+            $args['site_id'] = (int) $args_or_site_id;
+        }
+
+        if ($network !== null) {
+            $args['network'] = (bool) $network;
+        }
+
+        if (array_key_exists('site_id', $args)) {
+            $site_id = (int) $args['site_id'];
+            if ($site_id > 0) {
+                $args['site_id'] = $site_id;
+            } else {
+                unset($args['site_id']);
+            }
+        }
+
+        if (array_key_exists('network', $args)) {
+            $args['network'] = (bool) $args['network'];
+        }
+
+        return $args;
+    }
+}
+
+if (!function_exists('bjlg_get_option')) {
+    /**
+     * Wrapper vers BJLG_Site_Context::get_option().
+     *
+     * @param string          $option_name
+     * @param mixed           $default
+     * @param array|int|null  $args_or_site_id
+     * @param bool|null       $network
+     *
+     * @return mixed
+     */
+    function bjlg_get_option($option_name, $default = false, $args_or_site_id = null, $network = null) {
+        if (!is_string($option_name) || $option_name === '') {
+            return $default;
+        }
+
+        $args = bjlg_normalize_option_context_args($args_or_site_id, $network);
+
+        if (class_exists('BJLG\\BJLG_Site_Context')) {
+            return \BJLG\BJLG_Site_Context::get_option($option_name, $default, $args);
+        }
+
+        if (isset($args['site_id']) && function_exists('get_blog_option')) {
+            return get_blog_option($args['site_id'], $option_name, $default);
+        }
+
+        if (!empty($args['network']) && function_exists('get_site_option')) {
+            return get_site_option($option_name, $default);
+        }
+
+        return get_option($option_name, $default);
+    }
+}
+
+if (!function_exists('bjlg_update_option')) {
+    /**
+     * Wrapper vers BJLG_Site_Context::update_option().
+     *
+     * @param string          $option_name
+     * @param mixed           $value
+     * @param array|int|null  $args_or_site_id
+     * @param bool|null       $network
+     * @param string|bool|null $autoload
+     */
+    function bjlg_update_option($option_name, $value, $args_or_site_id = null, $network = null, $autoload = null) {
+        if (!is_string($option_name) || $option_name === '') {
+            return false;
+        }
+
+        $args = bjlg_normalize_option_context_args($args_or_site_id, $network);
+
+        if ($autoload !== null && !array_key_exists('autoload', $args)) {
+            $args['autoload'] = $autoload;
+        }
+
+        if (class_exists('BJLG\\BJLG_Site_Context')) {
+            return (bool) \BJLG\BJLG_Site_Context::update_option($option_name, $value, $args);
+        }
+
+        if (isset($args['site_id']) && function_exists('update_blog_option')) {
+            return (bool) update_blog_option($args['site_id'], $option_name, $value);
+        }
+
+        if (!empty($args['network']) && function_exists('update_site_option')) {
+            return (bool) update_site_option($option_name, $value);
+        }
+
+        if ($autoload !== null) {
+            return (bool) update_option($option_name, $value, $autoload);
+        }
+
+        return (bool) update_option($option_name, $value);
+    }
+}
+
+if (!function_exists('bjlg_delete_option')) {
+    /**
+     * Wrapper vers BJLG_Site_Context::delete_option().
+     *
+     * @param string         $option_name
+     * @param array|int|null $args_or_site_id
+     * @param bool|null      $network
+     */
+    function bjlg_delete_option($option_name, $args_or_site_id = null, $network = null) {
+        if (!is_string($option_name) || $option_name === '') {
+            return false;
+        }
+
+        $args = bjlg_normalize_option_context_args($args_or_site_id, $network);
+
+        if (class_exists('BJLG\\BJLG_Site_Context')) {
+            return (bool) \BJLG\BJLG_Site_Context::delete_option($option_name, $args);
+        }
+
+        if (isset($args['site_id']) && function_exists('delete_blog_option')) {
+            return (bool) delete_blog_option($args['site_id'], $option_name);
+        }
+
+        if (!empty($args['network']) && function_exists('delete_site_option')) {
+            return (bool) delete_site_option($option_name);
+        }
+
+        return (bool) delete_option($option_name);
+    }
+}
+
 if (!defined('BJLG_DEFAULT_CAPABILITY')) {
     define('BJLG_DEFAULT_CAPABILITY', 'manage_options');
 }
@@ -313,87 +458,9 @@ if (!defined('BJLG_BACKUP_DIR')) {
     define('BJLG_BACKUP_DIR', trailingslashit($uploads['basedir']) . 'bjlg-backups/');
 }
 
-if (!function_exists('bjlg_get_option')) {
-    /**
-     * Wrapper pour récupérer une option sensible au contexte multisite.
-     */
-    function bjlg_get_option($option, $default = false, $site_id = null, $network = null) {
-        return BJLG\BJLG_Site_Context::get_option($option, $default, $site_id, $network);
-    }
-}
-
-if (!function_exists('bjlg_update_option')) {
-    /**
-     * Wrapper pour mettre à jour une option sensible au contexte multisite.
-     */
-    function bjlg_update_option($option, $value, $site_id = null, $network = null, $autoload = null) {
-        return BJLG\BJLG_Site_Context::update_option($option, $value, $site_id, $network, $autoload);
-    }
-}
-
-if (!function_exists('bjlg_delete_option')) {
-    /**
-     * Wrapper pour supprimer une option sensible au contexte multisite.
-     */
-    function bjlg_delete_option($option, $site_id = null, $network = null) {
-        return BJLG\BJLG_Site_Context::delete_option($option, $site_id, $network);
-    }
-}
-
 /* -------------------------------------------------------------------------- */
 /* Fonctions Utilitaires Globales                                            */
 /* -------------------------------------------------------------------------- */
-
-if (!function_exists('bjlg_get_option')) {
-    /**
-     * Wrapper vers BJLG_Site_Context::get_option().
-     */
-    function bjlg_get_option($option_name, $default = false, array $args = []) {
-        if (!is_string($option_name) || $option_name === '') {
-            return $default;
-        }
-
-        if (class_exists('BJLG\\BJLG_Site_Context')) {
-            return \BJLG\BJLG_Site_Context::get_option($option_name, $default, $args);
-        }
-
-        return get_option($option_name, $default);
-    }
-}
-
-if (!function_exists('bjlg_update_option')) {
-    /**
-     * Wrapper vers BJLG_Site_Context::update_option().
-     */
-    function bjlg_update_option($option_name, $value, array $args = []) {
-        if (!is_string($option_name) || $option_name === '') {
-            return false;
-        }
-
-        if (class_exists('BJLG\\BJLG_Site_Context')) {
-            return (bool) \BJLG\BJLG_Site_Context::update_option($option_name, $value, $args);
-        }
-
-        return (bool) update_option($option_name, $value);
-    }
-}
-
-if (!function_exists('bjlg_delete_option')) {
-    /**
-     * Wrapper vers BJLG_Site_Context::delete_option().
-     */
-    function bjlg_delete_option($option_name, array $args = []) {
-        if (!is_string($option_name) || $option_name === '') {
-            return false;
-        }
-
-        if (class_exists('BJLG\\BJLG_Site_Context')) {
-            return (bool) \BJLG\BJLG_Site_Context::delete_option($option_name, $args);
-        }
-
-        return (bool) delete_option($option_name);
-    }
-}
 
 if (!function_exists('bjlg_with_site')) {
     /**
