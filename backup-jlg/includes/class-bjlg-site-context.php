@@ -299,26 +299,19 @@ class BJLG_Site_Context {
             return $value;
         }
 
-        $network_value = get_site_option($option_name, self::NO_VALUE);
+        $network_value      = get_site_option($option_name, self::NO_VALUE);
+        $has_network_value  = ($network_value !== self::NO_VALUE);
 
         if (self::is_network_context()) {
-            if ($network_value !== self::NO_VALUE) {
-                return $network_value;
-            }
+            return $has_network_value ? $network_value : $value;
+        }
 
+        if (!$is_default && $value !== false && $value !== self::NO_VALUE) {
             return $value;
         }
 
-        if ($value !== false && $value !== self::NO_VALUE) {
-            return $value;
-        }
-
-        if ($network_value !== self::NO_VALUE) {
+        if ($has_network_value) {
             return $network_value;
-        }
-
-        if ($is_default) {
-            return $value;
         }
 
         return $value;
