@@ -699,6 +699,17 @@ abstract class BJLG_S3_Compatible_Destination implements BJLG_Destination_Interf
         }
 
         try {
+            $snapshot = $this->query_bucket_usage($settings);
+            if (is_array($snapshot)) {
+                return array_merge($defaults, $snapshot);
+            }
+        } catch (Exception $exception) {
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log(sprintf('API quota %s indisponible : %s', $this->get_log_label(), $exception->getMessage()));
+            }
+        }
+
+        try {
             $response = $this->perform_request('GET', '', '', [], $settings, ['metrics' => 'usage']);
             $body = isset($response['body']) ? (string) $response['body'] : '';
             $usage = $this->parse_usage_snapshot($body);

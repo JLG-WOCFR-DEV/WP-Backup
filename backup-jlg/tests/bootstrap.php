@@ -1110,37 +1110,40 @@ if (!isset($GLOBALS['bjlg_tests_sites'])) {
 
 if (!function_exists('is_multisite')) {
     function is_multisite() {
-        return !empty($GLOBALS['bjlg_tests_multisite']);
+        return !empty($GLOBALS['bjlg_test_is_multisite']);
     }
 }
 
 if (!function_exists('is_network_admin')) {
     function is_network_admin() {
-        return !empty($GLOBALS['bjlg_tests_network_admin']);
+        return !empty($GLOBALS['bjlg_test_is_network_admin']);
     }
 }
 
 if (!function_exists('get_current_blog_id')) {
     function get_current_blog_id() {
-        $stack = $GLOBALS['bjlg_tests_blog_stack'] ?? [1];
+        if (!isset($GLOBALS['bjlg_test_current_blog_id'])) {
+            $GLOBALS['bjlg_test_current_blog_id'] = 1;
+        }
 
-        return (int) end($stack);
+        return (int) $GLOBALS['bjlg_test_current_blog_id'];
     }
 }
 
 if (!function_exists('switch_to_blog')) {
-    function switch_to_blog($site_id) {
-        $site_id = (int) $site_id;
-        if ($site_id <= 0) {
-            return false;
+    function switch_to_blog($blog_id) {
+        if (!isset($GLOBALS['bjlg_test_blog_stack'])) {
+            $GLOBALS['bjlg_test_blog_stack'] = [];
         }
 
-        $sites = $GLOBALS['bjlg_tests_sites'] ?? [];
-        if (!isset($sites[$site_id])) {
-            return false;
+        $GLOBALS['bjlg_test_blog_stack'][] = get_current_blog_id();
+        $GLOBALS['bjlg_test_current_blog_id'] = (int) $blog_id;
+
+        if (!isset($GLOBALS['bjlg_test_blog_switch_log'])) {
+            $GLOBALS['bjlg_test_blog_switch_log'] = [];
         }
 
-        $GLOBALS['bjlg_tests_blog_stack'][] = $site_id;
+        $GLOBALS['bjlg_test_blog_switch_log'][] = (int) $blog_id;
 
         return true;
     }
@@ -1148,31 +1151,54 @@ if (!function_exists('switch_to_blog')) {
 
 if (!function_exists('restore_current_blog')) {
     function restore_current_blog() {
-        if (!isset($GLOBALS['bjlg_tests_blog_stack']) || count($GLOBALS['bjlg_tests_blog_stack']) <= 1) {
-            return;
+        if (empty($GLOBALS['bjlg_test_blog_stack'])) {
+            $GLOBALS['bjlg_test_current_blog_id'] = 1;
+
+            return false;
         }
 
-        array_pop($GLOBALS['bjlg_tests_blog_stack']);
+        $previous = array_pop($GLOBALS['bjlg_test_blog_stack']);
+        $GLOBALS['bjlg_test_current_blog_id'] = (int) $previous;
+
+        return true;
     }
 }
 
-if (!function_exists('get_sites')) {
-    function get_sites($args = []) {
-        $sites = $GLOBALS['bjlg_tests_sites'] ?? [];
-
-        if (isset($args['fields']) && $args['fields'] === 'ids') {
-            return array_map('intval', array_keys($sites));
+if (!function_exists('get_site_option')) {
+    function get_site_option($option, $default = false) {
+        if (!isset($GLOBALS['bjlg_test_site_options'])) {
+            $GLOBALS['bjlg_test_site_options'] = [];
         }
 
-        return array_values($sites);
+        return $GLOBALS['bjlg_test_site_options'][$option] ?? $default;
     }
 }
 
-if (!function_exists('get_site')) {
-    function get_site($site_id) {
-        $sites = $GLOBALS['bjlg_tests_sites'] ?? [];
+if (!function_exists('update_site_option')) {
+    function update_site_option($option, $value) {
+        if (!isset($GLOBALS['bjlg_test_site_options'])) {
+            $GLOBALS['bjlg_test_site_options'] = [];
+        }
 
-        return $sites[(int) $site_id] ?? null;
+        $GLOBALS['bjlg_test_site_options'][$option] = $value;
+
+        return true;
+    }
+}
+
+if (!function_exists('delete_site_option')) {
+    function delete_site_option($option) {
+        if (!isset($GLOBALS['bjlg_test_site_options'])) {
+            $GLOBALS['bjlg_test_site_options'] = [];
+        }
+
+        if (array_key_exists($option, $GLOBALS['bjlg_test_site_options'])) {
+            unset($GLOBALS['bjlg_test_site_options'][$option]);
+
+            return true;
+        }
+
+        return false;
     }
 }
 

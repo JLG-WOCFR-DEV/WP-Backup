@@ -2523,7 +2523,7 @@ class BJLG_Settings {
     public static function get_monitoring_settings(): array {
         $instance = self::get_instance();
         $defaults = isset($instance->default_settings['monitoring']) ? $instance->default_settings['monitoring'] : [];
-        $stored = $this->get_option_value('bjlg_monitoring_settings', []);
+        $stored = $instance->get_option_value('bjlg_monitoring_settings', []);
         if (!is_array($stored)) {
             $stored = [];
         }
