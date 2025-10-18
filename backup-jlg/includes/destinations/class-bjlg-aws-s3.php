@@ -322,25 +322,31 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         $settings = $this->get_settings();
 
         try {
-            $backups = $this->fetch_remote_backups($settings);
-        } catch (Exception $exception) {
-            if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log(sprintf('Impossible de récupérer les métriques distantes Amazon S3 : %s', $exception->getMessage()));
+            $response = $this->perform_request('GET', '', '', [], $settings, ['metrics' => 'usage']);
+            $body = isset($response['body']) ? (string) $response['body'] : '';
+            $usage = $this->parse_usage_snapshot($body);
+
+            if (!empty($usage)) {
+                $usage['source'] = $usage['source'] ?? 'provider';
+                $usage['refreshed_at'] = $this->get_time();
+
+                if ($usage['free_bytes'] === null && $usage['quota_bytes'] !== null && $usage['used_bytes'] !== null) {
+                    $usage['free_bytes'] = max(0, (int) $usage['quota_bytes'] - (int) $usage['used_bytes']);
+                }
+
+                $this->log(sprintf(
+                    'Métriques distantes S3 récupérées : utilisé=%s quota=%s.',
+                    $usage['used_bytes'] !== null ? (string) $usage['used_bytes'] : 'n/a',
+                    $usage['quota_bytes'] !== null ? (string) $usage['quota_bytes'] : 'n/a'
+                ));
+
+                return array_merge($defaults, $usage);
             }
-
-            return $defaults;
+        } catch (Exception $exception) {
+            $this->log('Impossible de récupérer le snapshot Amazon S3 : ' . $exception->getMessage());
         }
 
-        $used = 0;
-        foreach ($backups as $backup) {
-            $used += isset($backup['size']) ? (int) $backup['size'] : 0;
-        }
-
-        return [
-            'used_bytes' => $used,
-            'quota_bytes' => null,
-            'free_bytes' => null,
-        ];
+        return array_merge($defaults, $this->estimate_usage_from_listing($settings));
     }
 
     private function fetch_remote_backups(array $settings) {
@@ -415,6 +421,95 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         } while ($continuation !== null && $continuation !== '');
 
         return $backups;
+    }
+
+    private function parse_usage_snapshot($body) {
+        $body = trim((string) $body);
+        if ($body === '') {
+            return [];
+        }
+
+        $data = null;
+        if ($body !== '' && ($body[0] === '{' || $body[0] === '[')) {
+            $decoded = json_decode($body, true);
+            if (is_array($decoded)) {
+                $data = $decoded;
+            }
+        }
+
+        if ($data === null) {
+            $xml = @simplexml_load_string($body);
+            if ($xml !== false) {
+                $data = json_decode(json_encode($xml), true);
+            }
+        }
+
+        if (!is_array($data)) {
+            return [];
+        }
+
+        $used = $this->find_numeric_value($data, ['used_bytes', 'usedBytes', 'usage', 'UsageBytes', 'UsedBytes']);
+        $quota = $this->find_numeric_value($data, ['quota_bytes', 'quotaBytes', 'limit', 'Limit', 'TotalBytes']);
+        $free = $this->find_numeric_value($data, ['free_bytes', 'freeBytes', 'remaining', 'RemainingBytes']);
+
+        if ($used === null && $quota === null && $free === null) {
+            return [];
+        }
+
+        return [
+            'used_bytes' => $used,
+            'quota_bytes' => $quota,
+            'free_bytes' => $free,
+            'source' => 'provider',
+        ];
+    }
+
+    private function find_numeric_value(array $data, array $keys) {
+        foreach ($keys as $key) {
+            if (isset($data[$key]) && is_numeric($data[$key])) {
+                return (int) $data[$key];
+            }
+        }
+
+        foreach ($data as $value) {
+            if (is_array($value)) {
+                $found = $this->find_numeric_value($value, $keys);
+                if ($found !== null) {
+                    return $found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function estimate_usage_from_listing(array $settings) {
+        try {
+            $backups = $this->fetch_remote_backups($settings);
+        } catch (Exception $exception) {
+            $this->log('Impossible de calculer une estimation locale S3 : ' . $exception->getMessage());
+
+            return [
+                'used_bytes' => null,
+                'quota_bytes' => null,
+                'free_bytes' => null,
+                'source' => 'estimate',
+                'refreshed_at' => $this->get_time(),
+            ];
+        }
+
+        $used = 0;
+        foreach ($backups as $backup) {
+            $used += isset($backup['size']) ? (int) $backup['size'] : 0;
+        }
+
+        return [
+            'used_bytes' => $used,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+            'source' => 'estimate',
+            'refreshed_at' => $this->get_time(),
+        ];
     }
 
     private function delete_remote_backup(array $settings, array $backup) {
@@ -546,6 +641,27 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
 
         check_ajax_referer('bjlg_nonce', 'nonce');
 
+        $site_switched = false;
+        if (function_exists('is_multisite') && is_multisite()) {
+            $requested = isset($_POST['site_id']) ? absint(wp_unslash($_POST['site_id'])) : 0;
+
+            if ($requested > 0) {
+                if (!current_user_can('manage_network_options')) {
+                    wp_send_json_error(['message' => __('Droits réseau insuffisants.', 'backup-jlg')], 403);
+                }
+
+                if (!function_exists('get_site') || !get_site($requested)) {
+                    wp_send_json_error(['message' => __('Site introuvable.', 'backup-jlg')], 404);
+                }
+
+                $site_switched = BJLG_Site_Context::switch_to_site($requested);
+
+                if (!$site_switched && (!function_exists('get_current_blog_id') || get_current_blog_id() !== $requested)) {
+                    wp_send_json_error(['message' => __('Impossible de basculer sur le site demandé.', 'backup-jlg')], 500);
+                }
+            }
+        }
+
         $settings = [
             'access_key' => isset($_POST['s3_access_key']) ? sanitize_text_field(wp_unslash($_POST['s3_access_key'])) : '',
             'secret_key' => isset($_POST['s3_secret_key']) ? sanitize_text_field(wp_unslash($_POST['s3_secret_key'])) : '',
@@ -564,6 +680,10 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
         try {
             $this->test_connection($settings);
             $message = sprintf('Connexion établie avec le bucket "%s".', $settings['bucket']);
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
+
             wp_send_json_success(['message' => $message]);
         } catch (Exception $exception) {
             $this->store_status([
@@ -571,6 +691,10 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
                 'tested_at' => $this->get_time(),
                 'message' => $exception->getMessage(),
             ]);
+
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
 
             wp_send_json_error(['message' => $exception->getMessage()]);
         }

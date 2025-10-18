@@ -20,6 +20,13 @@ class BJLG_Scheduler {
     private static $instance = null;
 
     /**
+     * Indique si les hooks supplémentaires ont déjà été initialisés.
+     *
+     * @var bool
+     */
+    private static $hooks_initialized = false;
+
+    /**
      * Retourne l'instance unique du planificateur.
      *
      * @return BJLG_Scheduler
@@ -30,6 +37,36 @@ class BJLG_Scheduler {
         }
 
         return self::$instance;
+    }
+
+    /**
+     * Initialise les hooks complémentaires gérés par le planificateur.
+     */
+    public static function init_hooks(): void {
+        if (self::$hooks_initialized) {
+            return;
+        }
+
+        self::$hooks_initialized = true;
+
+        add_action('init', [self::class, 'register_background_jobs'], 20);
+        add_action(
+            BJLG_Remote_Storage_Metrics::CRON_HOOK,
+            [BJLG_Remote_Storage_Metrics::class, 'refresh_snapshot']
+        );
+    }
+
+    /**
+     * Programme les tâches complémentaires (métriques de stockage, etc.).
+     */
+    public static function register_background_jobs(): void {
+        $hook = BJLG_Remote_Storage_Metrics::CRON_HOOK;
+
+        if (!wp_next_scheduled($hook)) {
+            $start = time() + (int) apply_filters('bjlg_remote_storage_metrics_delay', MINUTE_IN_SECONDS);
+            $recurrence = apply_filters('bjlg_remote_storage_metrics_recurrence', 'hourly');
+            wp_schedule_event($start, $recurrence, $hook);
+        }
     }
 
     private function __construct() {
@@ -164,7 +201,7 @@ class BJLG_Scheduler {
 
         $collection['schedules'] = $schedules;
 
-        update_option('bjlg_schedule_settings', $collection);
+        bjlg_update_option('bjlg_schedule_settings', $collection);
 
         $primary = $this->get_primary_schedule($schedules);
         $aggregated_secondary = array_values(array_unique($all_secondary));
@@ -983,11 +1020,11 @@ class BJLG_Scheduler {
     }
 
     public function get_schedule_settings() {
-        $stored = get_option('bjlg_schedule_settings', []);
+        $stored = bjlg_get_option('bjlg_schedule_settings', []);
         $collection = BJLG_Settings::sanitize_schedule_collection($stored);
 
         if ($stored !== $collection) {
-            update_option('bjlg_schedule_settings', $collection);
+            bjlg_update_option('bjlg_schedule_settings', $collection);
         }
 
         return $collection;
@@ -1050,7 +1087,7 @@ class BJLG_Scheduler {
         }
 
         $collection = BJLG_Settings::sanitize_schedule_collection(['schedules' => $schedules]);
-        update_option('bjlg_schedule_settings', $collection);
+        bjlg_update_option('bjlg_schedule_settings', $collection);
 
         $this->sync_schedules($collection['schedules']);
         $next_runs = $this->get_next_runs_summary($collection['schedules']);
@@ -1102,7 +1139,7 @@ class BJLG_Scheduler {
         $schedules[] = $duplicate;
 
         $collection = BJLG_Settings::sanitize_schedule_collection(['schedules' => $schedules]);
-        update_option('bjlg_schedule_settings', $collection);
+        bjlg_update_option('bjlg_schedule_settings', $collection);
 
         $this->sync_schedules($collection['schedules']);
         $next_runs = $this->get_next_runs_summary($collection['schedules']);

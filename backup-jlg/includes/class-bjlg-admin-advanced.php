@@ -521,7 +521,7 @@ class BJLG_Admin_Advanced {
             return [];
         }
 
-        $raw = get_option('bjlg_remote_purge_sla_metrics', []);
+        $raw = bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
         if (!is_array($raw) || empty($raw)) {
             return [];
         }
@@ -790,6 +790,24 @@ class BJLG_Admin_Advanced {
         }
 
         return [$formatted, sprintf(__('il y a %s', 'backup-jlg'), human_time_diff($timestamp, $now))];
+    }
+
+    private function determine_refresh_state(int $timestamp, int $now): string {
+        if ($timestamp <= 0) {
+            return 'unknown';
+        }
+
+        $age = max(0, $now - $timestamp);
+
+        if ($age <= 10 * MINUTE_IN_SECONDS) {
+            return 'fresh';
+        }
+
+        if ($age <= HOUR_IN_SECONDS) {
+            return 'stale';
+        }
+
+        return 'expired';
     }
 
     private function min_time($current, $candidate) {

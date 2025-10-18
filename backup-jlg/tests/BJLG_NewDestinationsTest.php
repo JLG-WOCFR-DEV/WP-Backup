@@ -90,7 +90,7 @@ final class BJLG_NewDestinationsTest extends TestCase
 
         $destination = new BJLG_Dropbox($handler, $time);
 
-        update_option('bjlg_dropbox_settings', [
+        bjlg_update_option('bjlg_dropbox_settings', [
             'access_token' => 'token',
             'folder' => '/Backups',
             'enabled' => true,
@@ -110,7 +110,7 @@ final class BJLG_NewDestinationsTest extends TestCase
         $this->assertIsArray($apiArg);
         $this->assertSame('/Backups/' . basename($file), $apiArg['path']);
 
-        $status = get_option('bjlg_dropbox_status');
+        $status = bjlg_get_option('bjlg_dropbox_status');
         $this->assertIsArray($status);
         $this->assertSame('success', $status['last_result']);
 
@@ -183,7 +183,7 @@ final class BJLG_NewDestinationsTest extends TestCase
 
         $destination = new BJLG_OneDrive($handler, $time);
 
-        update_option('bjlg_onedrive_settings', [
+        bjlg_update_option('bjlg_onedrive_settings', [
             'access_token' => 'token',
             'folder' => '/Sauvegardes',
             'enabled' => true,
@@ -200,7 +200,7 @@ final class BJLG_NewDestinationsTest extends TestCase
         $this->assertSame('PUT', strtoupper($uploadCall['args']['method']));
         $this->assertSame('Bearer token', $uploadCall['args']['headers']['Authorization']);
 
-        $status = get_option('bjlg_onedrive_status');
+        $status = bjlg_get_option('bjlg_onedrive_status');
         $this->assertIsArray($status);
         $this->assertSame('success', $status['last_result']);
 
@@ -280,7 +280,7 @@ final class BJLG_NewDestinationsTest extends TestCase
 
         $destination = new BJLG_PCloud($handler, $time);
 
-        update_option('bjlg_pcloud_settings', [
+        bjlg_update_option('bjlg_pcloud_settings', [
             'access_token' => 'token',
             'folder' => '/Backups',
             'enabled' => true,
@@ -298,7 +298,7 @@ final class BJLG_NewDestinationsTest extends TestCase
         $this->assertSame('Bearer token', $uploadCall['args']['headers']['Authorization']);
         $this->assertSame('/Backups/' . basename($file), $uploadCall['args']['headers']['X-PCloud-Path']);
 
-        $status = get_option('bjlg_pcloud_status');
+        $status = bjlg_get_option('bjlg_pcloud_status');
         $this->assertIsArray($status);
         $this->assertSame('success', $status['last_result']);
 

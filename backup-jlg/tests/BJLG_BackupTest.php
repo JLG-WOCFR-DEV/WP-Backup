@@ -237,8 +237,8 @@ final class BJLG_BackupTest extends TestCase
     {
         $backup = new BJLG\BJLG_Backup();
 
-        $previous = get_option('bjlg_backup_include_patterns');
-        update_option('bjlg_backup_include_patterns', ['wp-content/uploads/images', 'uploads/media/*']);
+        $previous = bjlg_get_option('bjlg_backup_include_patterns');
+        bjlg_update_option('bjlg_backup_include_patterns', ['wp-content/uploads/images', 'uploads/media/*']);
 
         $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'resolve_include_patterns');
         $method->setAccessible(true);
@@ -246,7 +246,7 @@ final class BJLG_BackupTest extends TestCase
         try {
             $patterns = $method->invoke($backup, []);
         } finally {
-            update_option('bjlg_backup_include_patterns', $previous);
+            bjlg_update_option('bjlg_backup_include_patterns', $previous);
         }
 
         $this->assertSame(['*wp-content/uploads/images*', 'uploads/media/*'], $patterns);
@@ -280,8 +280,8 @@ final class BJLG_BackupTest extends TestCase
 
     public function test_perform_post_backup_checks_returns_checksum_and_dry_run_status(): void
     {
-        $previous_settings = get_option('bjlg_encryption_settings', null);
-        update_option('bjlg_encryption_settings', ['enabled' => true]);
+        $previous_settings = bjlg_get_option('bjlg_encryption_settings', null);
+        bjlg_update_option('bjlg_encryption_settings', ['enabled' => true]);
 
         $encryption = new BJLG\BJLG_Encryption();
         $backup = new BJLG\BJLG_Backup(null, $encryption);
@@ -362,7 +362,7 @@ final class BJLG_BackupTest extends TestCase
 
         $encryption = new BJLG\BJLG_Encryption();
         $backup = new BJLG\BJLG_Backup(null, $encryption);
-        $previous_settings = get_option('bjlg_encryption_settings', null);
+        $previous_settings = bjlg_get_option('bjlg_encryption_settings', null);
 
         $encrypted_path = null;
         $corrupted_zip = null;
@@ -411,7 +411,7 @@ final class BJLG_BackupTest extends TestCase
             $this->assertSame('failed', $failed_results['overall_status']);
             $this->assertSame('failed', $failed_results['files']['database.sql']['status']);
 
-            update_option('bjlg_encryption_settings', ['enabled' => true, 'password_protect' => true]);
+            bjlg_update_option('bjlg_encryption_settings', ['enabled' => true, 'password_protect' => true]);
             $password_encryption = new BJLG\BJLG_Encryption();
             $password_backup = new BJLG\BJLG_Backup(null, $password_encryption);
 
@@ -458,7 +458,7 @@ final class BJLG_BackupTest extends TestCase
             if ($previous_settings === null) {
                 unset($GLOBALS['bjlg_test_options']['bjlg_encryption_settings']);
             } else {
-                update_option('bjlg_encryption_settings', $previous_settings);
+                bjlg_update_option('bjlg_encryption_settings', $previous_settings);
             }
         }
     }
@@ -684,9 +684,9 @@ final class BJLG_BackupTest extends TestCase
 
         \phpseclib3\Net\SFTP::$uploaded = [];
 
-        $previous_settings = get_option('bjlg_sftp_settings');
+        $previous_settings = bjlg_get_option('bjlg_sftp_settings');
 
-        update_option('bjlg_sftp_settings', [
+        bjlg_update_option('bjlg_sftp_settings', [
             'enabled' => true,
             'host' => 'sftp.example.org',
             'port' => 22,
@@ -710,7 +710,7 @@ final class BJLG_BackupTest extends TestCase
             $results = $method->invoke($backup, $file, ['sftp'], 'task-sftp-1');
         } finally {
             @unlink($file);
-            update_option('bjlg_sftp_settings', $previous_settings);
+            bjlg_update_option('bjlg_sftp_settings', $previous_settings);
         }
 
         $this->assertSame(['sftp'], $results['success']);
@@ -727,8 +727,8 @@ final class BJLG_BackupTest extends TestCase
     {
         $backup = new BJLG\BJLG_Backup();
 
-        $previous = get_option('bjlg_backup_secondary_destinations');
-        update_option('bjlg_backup_secondary_destinations', ['google_drive', 'aws_s3']);
+        $previous = bjlg_get_option('bjlg_backup_secondary_destinations');
+        bjlg_update_option('bjlg_backup_secondary_destinations', ['google_drive', 'aws_s3']);
 
         $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'resolve_destination_queue');
         $method->setAccessible(true);
@@ -736,7 +736,7 @@ final class BJLG_BackupTest extends TestCase
         try {
             $queue = $method->invoke($backup, []);
         } finally {
-            update_option('bjlg_backup_secondary_destinations', $previous);
+            bjlg_update_option('bjlg_backup_secondary_destinations', $previous);
         }
 
         $this->assertSame(['google_drive', 'aws_s3'], $queue);

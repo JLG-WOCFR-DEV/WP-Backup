@@ -327,7 +327,7 @@ final class BJLG_ActionsTest extends TestCase
     {
         $actions = new BJLG\BJLG_Actions();
 
-        update_option('bjlg_notification_queue', [
+        bjlg_update_option('bjlg_notification_queue', [
             [
                 'id' => 'ajax-entry',
                 'event' => 'backup_failed',
@@ -364,14 +364,14 @@ final class BJLG_ActionsTest extends TestCase
             $_POST = [];
         }
 
-        $queue = get_option('bjlg_notification_queue');
+        $queue = bjlg_get_option('bjlg_notification_queue');
         $this->assertSame('pending', $queue[0]['channels']['email']['status']);
     }
 
     public function test_handle_notification_queue_delete_succeeds(): void
     {
         $actions = new BJLG\BJLG_Actions();
-        update_option('bjlg_notification_queue', [
+        bjlg_update_option('bjlg_notification_queue', [
             [
                 'id' => 'ajax-delete',
                 'event' => 'backup_complete',
@@ -405,7 +405,7 @@ final class BJLG_ActionsTest extends TestCase
             $_POST = [];
         }
 
-        $queue = get_option('bjlg_notification_queue');
+        $queue = bjlg_get_option('bjlg_notification_queue');
         $this->assertSame([], $queue);
     }
 

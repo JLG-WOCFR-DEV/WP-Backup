@@ -28,6 +28,8 @@ class BJLG_Settings {
     ];
     private const VALID_SCHEDULE_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
+    private const DEFAULT_REMOTE_STORAGE_THRESHOLD = 0.85;
+
     private $default_settings = [
         'cleanup' => [
             'by_number' => 3,
@@ -191,7 +193,8 @@ class BJLG_Settings {
             'debug_mode' => false,
             'ajax_debug' => false,
             'exclude_patterns' => [],
-            'custom_backup_dir' => ''
+            'custom_backup_dir' => '',
+            'remote_storage_threshold' => self::DEFAULT_REMOTE_STORAGE_THRESHOLD,
         ]
     ];
 
@@ -355,8 +358,8 @@ class BJLG_Settings {
             }
         }
 
-        if (get_option('bjlg_required_capability', null) === null) {
-            add_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+        if (bjlg_get_option('bjlg_required_capability', null) === null) {
+            bjlg_update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
         }
 
         $this->init_backup_preferences_defaults();
@@ -407,6 +410,27 @@ class BJLG_Settings {
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
 
+        $site_switched = false;
+        if (function_exists('is_multisite') && is_multisite()) {
+            $requested = isset($_POST['site_id']) ? absint(wp_unslash($_POST['site_id'])) : 0;
+
+            if ($requested > 0) {
+                if (!current_user_can('manage_network_options')) {
+                    wp_send_json_error(['message' => __('Droits insuffisants pour gérer ce site.', 'backup-jlg')], 403);
+                }
+
+                if (!function_exists('get_site') || !get_site($requested)) {
+                    wp_send_json_error(['message' => __('Site introuvable sur le réseau.', 'backup-jlg')], 404);
+                }
+
+                $site_switched = BJLG_Site_Context::switch_to_site($requested);
+
+                if (!$site_switched && (!function_exists('get_current_blog_id') || get_current_blog_id() !== $requested)) {
+                    wp_send_json_error(['message' => __('Impossible de basculer sur le site demandé.', 'backup-jlg')], 500);
+                }
+            }
+        }
+
         try {
             $saved_settings = [];
             
@@ -416,7 +440,7 @@ class BJLG_Settings {
                     'by_number' => isset($_POST['by_number']) ? max(0, intval(wp_unslash($_POST['by_number']))) : 3,
                     'by_age'    => isset($_POST['by_age']) ? max(0, intval(wp_unslash($_POST['by_age']))) : 0,
                 ];
-                update_option('bjlg_cleanup_settings', $cleanup_settings);
+                bjlg_update_option('bjlg_cleanup_settings', $cleanup_settings);
                 $saved_settings['cleanup'] = $cleanup_settings;
                 BJLG_Debug::log("Réglages de nettoyage sauvegardés : " . print_r($cleanup_settings, true));
             }
@@ -445,7 +469,7 @@ class BJLG_Settings {
                     'rotation_enabled' => $rotation_enabled,
                 ];
 
-                update_option('bjlg_incremental_settings', $incremental_settings);
+                bjlg_update_option('bjlg_incremental_settings', $incremental_settings);
                 $saved_settings['incremental'] = $incremental_settings;
 
                 BJLG_Debug::log('Réglages incrémentaux sauvegardés : ' . print_r($incremental_settings, true));
@@ -457,14 +481,14 @@ class BJLG_Settings {
                     'plugin_name'          => isset($_POST['plugin_name']) ? sanitize_text_field(wp_unslash($_POST['plugin_name'])) : '',
                     'hide_from_non_admins' => isset($_POST['hide_from_non_admins']) ? $this->to_bool(wp_unslash($_POST['hide_from_non_admins'])) : false,
                 ];
-                update_option('bjlg_whitelabel_settings', $wl_settings);
+                bjlg_update_option('bjlg_whitelabel_settings', $wl_settings);
                 $saved_settings['whitelabel'] = $wl_settings;
                 BJLG_Debug::log("Réglages de marque blanche sauvegardés : " . print_r($wl_settings, true));
 
                 if (array_key_exists('required_capability', $_POST)) {
                     $raw_permission = wp_unslash($_POST['required_capability']);
                     $required_capability = $this->sanitize_required_capability_value($raw_permission);
-                    update_option('bjlg_required_capability', $required_capability);
+                    bjlg_update_option('bjlg_required_capability', $required_capability);
                     $this->sync_manage_plugin_capability_map($required_capability);
                     $saved_settings['permissions'] = [
                         'required_capability' => $required_capability,
@@ -498,7 +522,7 @@ class BJLG_Settings {
                     'compression_level' => $compression_level,
                 ];
 
-                update_option('bjlg_encryption_settings', $encryption_settings);
+                bjlg_update_option('bjlg_encryption_settings', $encryption_settings);
                 $saved_settings['encryption'] = $encryption_settings;
                 BJLG_Debug::log("Réglages de chiffrement sauvegardés.");
             }
@@ -540,7 +564,7 @@ class BJLG_Settings {
                     'folder_id'     => isset($_POST['gdrive_folder_id']) ? sanitize_text_field(wp_unslash($_POST['gdrive_folder_id'])) : '',
                     'enabled'       => isset($_POST['gdrive_enabled']) ? $this->to_bool(wp_unslash($_POST['gdrive_enabled'])) : false
                 ];
-                update_option('bjlg_gdrive_settings', $gdrive_settings);
+                bjlg_update_option('bjlg_gdrive_settings', $gdrive_settings);
                 $saved_settings['gdrive'] = $gdrive_settings;
                 BJLG_Debug::log("Identifiants Google Drive sauvegardés.");
             }
@@ -568,7 +592,7 @@ class BJLG_Settings {
 
                 $s3_settings['object_prefix'] = trim($s3_settings['object_prefix']);
 
-                update_option('bjlg_s3_settings', $s3_settings);
+                bjlg_update_option('bjlg_s3_settings', $s3_settings);
                 $saved_settings['s3'] = $s3_settings;
                 BJLG_Debug::log('Réglages Amazon S3 sauvegardés.');
             }
@@ -586,7 +610,7 @@ class BJLG_Settings {
 
                 $wasabi_settings['object_prefix'] = trim($wasabi_settings['object_prefix']);
 
-                update_option('bjlg_wasabi_settings', $wasabi_settings);
+                bjlg_update_option('bjlg_wasabi_settings', $wasabi_settings);
                 $saved_settings['wasabi'] = $wasabi_settings;
                 BJLG_Debug::log('Réglages Wasabi sauvegardés.');
             }
@@ -599,7 +623,7 @@ class BJLG_Settings {
                     'enabled' => isset($_POST['dropbox_enabled']) ? $this->to_bool(wp_unslash($_POST['dropbox_enabled'])) : false,
                 ];
 
-                update_option('bjlg_dropbox_settings', $dropbox_settings);
+                bjlg_update_option('bjlg_dropbox_settings', $dropbox_settings);
                 $saved_settings['dropbox'] = $dropbox_settings;
                 BJLG_Debug::log('Réglages Dropbox sauvegardés.');
             }
@@ -612,7 +636,7 @@ class BJLG_Settings {
                     'enabled' => isset($_POST['onedrive_enabled']) ? $this->to_bool(wp_unslash($_POST['onedrive_enabled'])) : false,
                 ];
 
-                update_option('bjlg_onedrive_settings', $onedrive_settings);
+                bjlg_update_option('bjlg_onedrive_settings', $onedrive_settings);
                 $saved_settings['onedrive'] = $onedrive_settings;
                 BJLG_Debug::log('Réglages OneDrive sauvegardés.');
             }
@@ -625,7 +649,7 @@ class BJLG_Settings {
                     'enabled' => isset($_POST['pcloud_enabled']) ? $this->to_bool(wp_unslash($_POST['pcloud_enabled'])) : false,
                 ];
 
-                update_option('bjlg_pcloud_settings', $pcloud_settings);
+                bjlg_update_option('bjlg_pcloud_settings', $pcloud_settings);
                 $saved_settings['pcloud'] = $pcloud_settings;
                 BJLG_Debug::log('Réglages pCloud sauvegardés.');
             }
@@ -658,7 +682,7 @@ class BJLG_Settings {
             if ($should_update_notifications) {
                 $notifications_settings = $this->prepare_notifications_settings_from_request($_POST);
 
-                update_option('bjlg_notification_settings', $notifications_settings);
+                bjlg_update_option('bjlg_notification_settings', $notifications_settings);
                 $saved_settings['notifications'] = $notifications_settings;
                 BJLG_Debug::log('Réglages de notifications sauvegardés.');
             }
@@ -675,7 +699,7 @@ class BJLG_Settings {
 
             if ($should_update_performance) {
                 $performance_defaults = $this->default_settings['performance'];
-                $performance_settings = get_option('bjlg_performance_settings', []);
+                $performance_settings = bjlg_get_option('bjlg_performance_settings', []);
                 if (!is_array($performance_settings)) {
                     $performance_settings = [];
                 }
@@ -694,7 +718,7 @@ class BJLG_Settings {
                     $performance_settings['compression_level'] = min(9, max(0, intval(wp_unslash($_POST['compression_level']))));
                 }
 
-                update_option('bjlg_performance_settings', $performance_settings);
+                bjlg_update_option('bjlg_performance_settings', $performance_settings);
                 $saved_settings['performance'] = $performance_settings;
                 BJLG_Debug::log('Réglages de performance sauvegardés.');
             }
@@ -750,7 +774,7 @@ class BJLG_Settings {
                     'secret' => '',
                 ];
 
-                $webhook_settings = get_option('bjlg_webhook_settings', []);
+                $webhook_settings = bjlg_get_option('bjlg_webhook_settings', []);
                 if (!is_array($webhook_settings)) {
                     $webhook_settings = [];
                 }
@@ -790,7 +814,7 @@ class BJLG_Settings {
                     }
                 }
 
-                update_option('bjlg_webhook_settings', $webhook_settings);
+                bjlg_update_option('bjlg_webhook_settings', $webhook_settings);
                 $saved_settings['webhooks'] = $webhook_settings;
                 BJLG_Debug::log('Réglages de webhooks sauvegardés.');
             }
@@ -798,7 +822,7 @@ class BJLG_Settings {
             // --- Réglage du débogueur AJAX ---
             if (isset($_POST['ajax_debug_enabled'])) {
                 $ajax_debug_enabled = $this->to_bool(wp_unslash($_POST['ajax_debug_enabled']));
-                update_option('bjlg_ajax_debug_enabled', $ajax_debug_enabled);
+                bjlg_update_option('bjlg_ajax_debug_enabled', $ajax_debug_enabled);
                 $saved_settings['ajax_debug'] = $ajax_debug_enabled;
                 BJLG_Debug::log("Réglage du débogueur AJAX mis à jour.");
             }
@@ -815,6 +839,10 @@ class BJLG_Settings {
         } catch (Exception $e) {
             BJLG_History::log('settings_updated', 'failure', 'Erreur : ' . $e->getMessage());
             wp_send_json_error(['message' => $e->getMessage()]);
+        } finally {
+            if ($site_switched) {
+                BJLG_Site_Context::restore_site($site_switched);
+            }
         }
     }
 
@@ -869,10 +897,10 @@ class BJLG_Settings {
             $sanitized['id'] = $preset_id;
         }
 
-        $existing = self::sanitize_backup_presets(get_option('bjlg_backup_presets', []));
+        $existing = self::sanitize_backup_presets(bjlg_get_option('bjlg_backup_presets', []));
         $existing[$sanitized['id']] = $sanitized;
 
-        update_option('bjlg_backup_presets', $existing);
+        bjlg_update_option('bjlg_backup_presets', $existing);
 
         BJLG_Debug::log('Modèle de sauvegarde enregistré : ' . $sanitized['id']);
 
@@ -965,13 +993,13 @@ class BJLG_Settings {
             'backblaze_b2' => $this->get_section_settings_with_defaults('backblaze_b2'),
             'sftp' => $this->get_section_settings_with_defaults('sftp'),
             'advanced' => $this->get_section_settings_with_defaults('advanced'),
-            'webhooks' => get_option('bjlg_webhook_settings', []),
-            'schedule' => get_option('bjlg_schedule_settings', []),
+            'webhooks' => bjlg_get_option('bjlg_webhook_settings', []),
+            'schedule' => bjlg_get_option('bjlg_schedule_settings', []),
             'permissions' => [
                 'required_capability' => $required_permission,
                 'type' => $this->is_role_permission($required_permission) ? 'role' : 'capability',
             ],
-            'ajax_debug' => get_option('bjlg_ajax_debug_enabled', false)
+            'ajax_debug' => bjlg_get_option('bjlg_ajax_debug_enabled', false)
         ];
         
         wp_send_json_success($settings);
@@ -995,12 +1023,12 @@ class BJLG_Settings {
                 foreach ($this->default_settings as $key => $defaults) {
                     update_option($this->get_option_name_for_section($key), $defaults);
                 }
-                update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+                bjlg_update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
                 $this->sync_manage_plugin_capability_map(\BJLG_DEFAULT_CAPABILITY);
                 BJLG_History::log('settings_reset', 'info', 'Tous les réglages ont été réinitialisés');
             } else {
                 if ($section === 'permissions') {
-                    update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+                    bjlg_update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
                     $this->sync_manage_plugin_capability_map(\BJLG_DEFAULT_CAPABILITY);
                     BJLG_History::log('settings_reset', 'info', "Réglages 'permissions' réinitialisés");
                 } elseif (isset($this->default_settings[$section])) {
@@ -1629,6 +1657,12 @@ class BJLG_Settings {
                     if (isset($value['custom_backup_dir'])) {
                         $sanitized['custom_backup_dir'] = sanitize_text_field((string) $value['custom_backup_dir']);
                     }
+                    if (isset($value['remote_storage_threshold'])) {
+                        $sanitized['remote_storage_threshold'] = self::normalize_ratio(
+                            $value['remote_storage_threshold'],
+                            (float) $defaults['remote_storage_threshold']
+                        );
+                    }
                 }
 
                 return $sanitized;
@@ -1666,7 +1700,7 @@ class BJLG_Settings {
             $normalized_permission = \BJLG_DEFAULT_CAPABILITY;
         }
 
-        $stored_map = get_option('bjlg_capability_map', []);
+        $stored_map = bjlg_get_option('bjlg_capability_map', []);
         if (!is_array($stored_map)) {
             $stored_map = [];
         }
@@ -1679,7 +1713,7 @@ class BJLG_Settings {
 
         $stored_map['manage_plugin'] = $normalized_permission;
 
-        update_option('bjlg_capability_map', $stored_map);
+        bjlg_update_option('bjlg_capability_map', $stored_map);
     }
 
     /**
@@ -1783,24 +1817,24 @@ class BJLG_Settings {
     private function init_backup_preferences_defaults() {
         $defaults = $this->default_backup_preferences;
 
-        if (get_option('bjlg_backup_include_patterns', null) === null) {
-            update_option('bjlg_backup_include_patterns', $defaults['include_patterns']);
+        if (bjlg_get_option('bjlg_backup_include_patterns', null) === null) {
+            bjlg_update_option('bjlg_backup_include_patterns', $defaults['include_patterns']);
         }
 
-        if (get_option('bjlg_backup_exclude_patterns', null) === null) {
-            update_option('bjlg_backup_exclude_patterns', $defaults['exclude_patterns']);
+        if (bjlg_get_option('bjlg_backup_exclude_patterns', null) === null) {
+            bjlg_update_option('bjlg_backup_exclude_patterns', $defaults['exclude_patterns']);
         }
 
-        if (get_option('bjlg_backup_secondary_destinations', null) === null) {
-            update_option('bjlg_backup_secondary_destinations', $defaults['secondary_destinations']);
+        if (bjlg_get_option('bjlg_backup_secondary_destinations', null) === null) {
+            bjlg_update_option('bjlg_backup_secondary_destinations', $defaults['secondary_destinations']);
         }
 
-        if (get_option('bjlg_backup_post_checks', null) === null) {
-            update_option('bjlg_backup_post_checks', $defaults['post_checks']);
+        if (bjlg_get_option('bjlg_backup_post_checks', null) === null) {
+            bjlg_update_option('bjlg_backup_post_checks', $defaults['post_checks']);
         }
 
-        if (get_option('bjlg_backup_presets', null) === null) {
-            update_option('bjlg_backup_presets', $this->default_backup_presets);
+        if (bjlg_get_option('bjlg_backup_presets', null) === null) {
+            bjlg_update_option('bjlg_backup_presets', $this->default_backup_presets);
         }
     }
 
@@ -1810,14 +1844,14 @@ class BJLG_Settings {
         $destinations = self::sanitize_destination_list($destinations, self::get_known_destination_ids());
         $post_checks = self::sanitize_post_checks($post_checks, self::get_default_backup_post_checks());
 
-        update_option('bjlg_backup_include_patterns', $includes);
-        update_option('bjlg_backup_exclude_patterns', $excludes);
-        update_option('bjlg_backup_secondary_destinations', $destinations);
-        update_option('bjlg_backup_post_checks', $post_checks);
+        bjlg_update_option('bjlg_backup_include_patterns', $includes);
+        bjlg_update_option('bjlg_backup_exclude_patterns', $excludes);
+        bjlg_update_option('bjlg_backup_secondary_destinations', $destinations);
+        bjlg_update_option('bjlg_backup_post_checks', $post_checks);
     }
 
     public static function get_backup_presets(): array {
-        return self::sanitize_backup_presets(get_option('bjlg_backup_presets', []));
+        return self::sanitize_backup_presets(bjlg_get_option('bjlg_backup_presets', []));
     }
 
     public static function sanitize_backup_presets($presets): array {
@@ -2463,6 +2497,22 @@ class BJLG_Settings {
         }
 
         return ucwords(str_replace(['_', '-'], ' ', $slug));
+    }
+
+    /**
+     * Retourne le seuil d'alerte pour les destinations distantes.
+     */
+    public static function get_remote_storage_threshold(): float {
+        $settings = get_option('bjlg_advanced_settings', []);
+        $default = self::DEFAULT_REMOTE_STORAGE_THRESHOLD;
+
+        if (!is_array($settings)) {
+            return $default;
+        }
+
+        $value = $settings['remote_storage_threshold'] ?? $default;
+
+        return self::normalize_ratio($value, $default);
     }
 
     /**
