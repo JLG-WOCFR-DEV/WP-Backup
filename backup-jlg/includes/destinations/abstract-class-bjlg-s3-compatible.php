@@ -738,14 +738,6 @@ abstract class BJLG_S3_Compatible_Destination implements BJLG_Destination_Interf
         return array_merge($defaults, $this->estimate_usage_from_listing($settings));
     }
 
-    /**
-     * @param array<string, mixed> $settings
-     * @return array<string, mixed>
-     */
-    protected function merge_settings(array $settings) {
-        return array_merge($this->get_default_settings(), $settings);
-    }
-
     private function parse_usage_snapshot($body) {
         $body = trim((string) $body);
         if ($body === '') {
