@@ -2393,7 +2393,17 @@ class BJLG_Settings {
     }
 
     public static function get_known_destination_ids() {
-        $destinations = ['google_drive', 'aws_s3', 'sftp', 'dropbox', 'onedrive', 'pcloud', 'wasabi'];
+        $destinations = [
+            'google_drive',
+            'aws_s3',
+            'sftp',
+            'dropbox',
+            'onedrive',
+            'pcloud',
+            'wasabi',
+            'azure_blob',
+            'backblaze_b2',
+        ];
 
         /** @var array<int, string> $filtered */
         $filtered = apply_filters('bjlg_known_destination_ids', $destinations);
