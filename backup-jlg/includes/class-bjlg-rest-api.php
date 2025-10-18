@@ -62,7 +62,7 @@ class BJLG_REST_API {
             'methods' => 'POST',
             'callback' => [$this, 'authenticate'],
             'permission_callback' => [$this, 'check_auth_permissions'],
-            'args' => [
+            'args' => $this->merge_site_args([
                 'username' => [
                     'required' => true,
                     'type' => 'string',
@@ -75,7 +75,7 @@ class BJLG_REST_API {
                     'required' => false,
                     'type' => 'string',
                 ]
-            ]
+            ])
         ]);
         
         // Routes : Gestion des sauvegardes
@@ -84,7 +84,7 @@ class BJLG_REST_API {
                 'methods' => 'GET',
                 'callback' => [$this, 'get_backups'],
                 'permission_callback' => [$this, 'check_permissions'],
-                'args' => [
+                'args' => $this->merge_site_args([
                     'page' => [
                         'default' => 1,
                         'validate_callback' => function($param) {
@@ -128,13 +128,13 @@ class BJLG_REST_API {
                         'required' => false,
                         'type' => 'boolean'
                     ]
-                ]
+                ])
             ],
             [
                 'methods' => 'POST',
                 'callback' => [$this, 'create_backup'],
                 'permission_callback' => [$this, 'check_permissions'],
-                'args' => [
+                'args' => $this->merge_site_args([
                     'components' => [
                         'required' => false,
                         'default' => ['db', 'plugins', 'themes', 'uploads'],
@@ -151,7 +151,7 @@ class BJLG_REST_API {
                     'description' => [
                         'type' => 'string'
                     ]
-                ]
+                ])
             ]
         ]);
         
@@ -161,39 +161,40 @@ class BJLG_REST_API {
                 'methods' => 'GET',
                 'callback' => [$this, 'get_backup'],
                 'permission_callback' => [$this, 'check_permissions'],
-                'args' => [
+                'args' => $this->merge_site_args([
                     'with_token' => [
                         'required' => false,
                         'type' => 'boolean'
                     ]
-                ]
+                ])
             ],
             [
                 'methods' => 'DELETE',
                 'callback' => [$this, 'delete_backup'],
                 'permission_callback' => [$this, 'check_permissions'],
+                'args' => $this->merge_site_args(),
             ]
         ]);
-        
+
         // Route : Télécharger une sauvegarde
         register_rest_route(self::API_NAMESPACE, '/backups/(?P<id>[A-Za-z0-9._-]+)/download', [
             'methods' => 'GET',
             'callback' => [$this, 'download_backup'],
             'permission_callback' => [$this, 'check_permissions'],
-            'args' => [
+            'args' => $this->merge_site_args([
                 'token' => [
                     'required' => false,
                     'type' => 'string'
                 ]
-            ]
+            ])
         ]);
-        
+
         // Route : Restaurer une sauvegarde
         register_rest_route(self::API_NAMESPACE, '/backups/(?P<id>[A-Za-z0-9._-]+)/restore', [
             'methods' => 'POST',
             'callback' => [$this, 'restore_backup'],
             'permission_callback' => [$this, 'check_permissions'],
-            'args' => [
+            'args' => $this->merge_site_args([
                 'components' => [
                     'type' => 'array',
                     'default' => ['all']
@@ -214,7 +215,7 @@ class BJLG_REST_API {
                     'type' => 'string',
                     'required' => false
                 ]
-            ]
+            ])
         ]);
 
         // Routes : Statut et monitoring
@@ -222,25 +223,27 @@ class BJLG_REST_API {
             'methods' => 'GET',
             'callback' => [$this, 'get_status'],
             'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args(),
         ]);
-        
+
         register_rest_route(self::API_NAMESPACE, '/health', [
             'methods' => 'GET',
             'callback' => [$this, 'get_health'],
             'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args(),
         ]);
-        
+
         // Routes : Statistiques
         register_rest_route(self::API_NAMESPACE, '/stats', [
             'methods' => 'GET',
             'callback' => [$this, 'get_stats'],
             'permission_callback' => [$this, 'check_permissions'],
-            'args' => [
+            'args' => $this->merge_site_args([
                 'period' => [
                     'default' => 'week',
                     'enum' => ['day', 'week', 'month', 'year']
                 ]
-            ]
+            ])
         ]);
         
         // Routes : Historique
@@ -248,7 +251,7 @@ class BJLG_REST_API {
             'methods' => 'GET',
             'callback' => [$this, 'get_history'],
             'permission_callback' => [$this, 'check_permissions'],
-            'args' => [
+            'args' => $this->merge_site_args([
                 'limit' => [
                     'default' => 50,
                     'validate_callback' => function($param) {
@@ -280,42 +283,47 @@ class BJLG_REST_API {
                 'status' => [
                     'enum' => ['success', 'failure', 'info']
                 ]
-            ]
+            ])
         ]);
-        
+
         // Routes : Configuration
         register_rest_route(self::API_NAMESPACE, '/settings', [
             [
                 'methods' => 'GET',
                 'callback' => [$this, 'get_settings'],
                 'permission_callback' => [$this, 'check_admin_permissions'],
+                'args' => $this->merge_site_args(),
             ],
             [
                 'methods' => 'PUT',
                 'callback' => [$this, 'update_settings'],
                 'permission_callback' => [$this, 'check_admin_permissions'],
+                'args' => $this->merge_site_args(),
             ]
         ]);
-        
+
         // Routes : Planification
         register_rest_route(self::API_NAMESPACE, '/schedules', [
             [
                 'methods' => 'GET',
                 'callback' => [$this, 'get_schedules'],
                 'permission_callback' => [$this, 'check_permissions'],
+                'args' => $this->merge_site_args(),
             ],
             [
                 'methods' => 'POST',
                 'callback' => [$this, 'create_schedule'],
                 'permission_callback' => [$this, 'check_admin_permissions'],
+                'args' => $this->merge_site_args(),
             ]
         ]);
-        
+
         // Route : Tâches
         register_rest_route(self::API_NAMESPACE, '/tasks/(?P<id>[a-zA-Z0-9_-]+)', [
             'methods' => 'GET',
             'callback' => [$this, 'get_task_status'],
             'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args(),
         ]);
     }
 
@@ -346,44 +354,48 @@ class BJLG_REST_API {
                 ['status' => 429]
             );
         }
-        
-        // Vérifier l'authentification via API Key
-        $api_key = $request->get_header('X-API-Key');
-        if ($api_key) {
-            $verified_user = $this->verify_api_key($api_key);
 
-            if (is_wp_error($verified_user)) {
-                return $verified_user;
+        $result = $this->with_request_site($request, function () use ($request) {
+            // Vérifier l'authentification via API Key
+            $api_key = $request->get_header('X-API-Key');
+            if ($api_key) {
+                $verified_user = $this->verify_api_key($api_key);
+
+                if (is_wp_error($verified_user)) {
+                    return $verified_user;
+                }
+
+                if (!$verified_user) {
+                    return false;
+                }
+
+                if (function_exists('wp_set_current_user') && is_object($verified_user) && isset($verified_user->ID)) {
+                    wp_set_current_user((int) $verified_user->ID);
+                }
+
+                return true;
             }
 
-            if (!$verified_user) {
-                return false;
+            // Vérifier l'authentification via Bearer Token
+            $auth_header = $request->get_header('Authorization');
+            if ($auth_header && strpos($auth_header, 'Bearer ') === 0) {
+                $token = substr($auth_header, 7);
+                $jwt_check = $this->verify_jwt_token($token);
+
+                if (is_wp_error($jwt_check)) {
+                    return $jwt_check;
+                }
+
+                return true;
             }
 
-            if (function_exists('wp_set_current_user') && is_object($verified_user) && isset($verified_user->ID)) {
-                wp_set_current_user((int) $verified_user->ID);
-            }
+            // Vérifier l'authentification WordPress standard
+            return \bjlg_can_manage_backups();
+        });
 
-            return true;
-        }
-
-        // Vérifier l'authentification via Bearer Token
-        $auth_header = $request->get_header('Authorization');
-        if ($auth_header && strpos($auth_header, 'Bearer ') === 0) {
-            $token = substr($auth_header, 7);
-            $jwt_check = $this->verify_jwt_token($token);
-
-            if (is_wp_error($jwt_check)) {
-                return $jwt_check;
-            }
-
-            return true;
-        }
-
-        // Vérifier l'authentification WordPress standard
-        return \bjlg_can_manage_backups();
+        return $result;
     }
-    
+
     /**
      * Vérification des permissions admin
      */
@@ -398,14 +410,110 @@ class BJLG_REST_API {
             return false;
         }
 
-        return \bjlg_can_manage_settings();
+        return $this->with_request_site($request, function () {
+            return \bjlg_can_manage_settings();
+        });
+    }
+
+    /**
+     * Étend les arguments REST avec la sélection de site.
+     *
+     * @param array<string, mixed> $args
+     *
+     * @return array<string, mixed>
+     */
+    private function merge_site_args(array $args = []): array {
+        $args['site_id'] = [
+            'required' => false,
+            'sanitize_callback' => static function ($param) {
+                if ($param === null || $param === '' || $param === false) {
+                    return null;
+                }
+
+                $value = absint($param);
+
+                return $value > 0 ? $value : null;
+            },
+            'validate_callback' => static function ($param) {
+                if ($param === null || $param === '' || $param === false) {
+                    return true;
+                }
+
+                if (!is_numeric($param) || absint($param) <= 0) {
+                    return new WP_Error(
+                        'bjlg_invalid_site_id',
+                        __('Le paramètre site_id doit être un entier positif.', 'backup-jlg'),
+                        ['status' => 400]
+                    );
+                }
+
+                return true;
+            },
+        ];
+
+        return $args;
+    }
+
+    /**
+     * Détermine l'identifiant de site fourni dans la requête.
+     *
+     * @param \WP_REST_Request $request
+     */
+    private function get_requested_site_id($request) {
+        $site_id = $request->get_param('site_id');
+
+        if (($site_id === null || $site_id === '' || $site_id === false) && method_exists($request, 'get_header')) {
+            $header_value = $request->get_header('X-WP-Site');
+            if ($header_value !== null && $header_value !== '' && $header_value !== false) {
+                $site_id = $header_value;
+            }
+        }
+
+        if ($site_id === null || $site_id === '' || $site_id === false) {
+            return null;
+        }
+
+        $site_id = absint($site_id);
+
+        return $site_id > 0 ? $site_id : null;
+    }
+
+    /**
+     * Exécute un callback dans le contexte multisite demandé.
+     *
+     * @param callable $callback
+     *
+     * @return mixed
+     */
+    private function with_request_site($request, callable $callback) {
+        $site_id = $this->get_requested_site_id($request);
+
+        if (!$site_id) {
+            return $callback();
+        }
+
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return $callback();
+        }
+
+        if (function_exists('get_site') && !get_site($site_id)) {
+            return new WP_Error(
+                'bjlg_site_not_found',
+                __('Le site demandé est introuvable.', 'backup-jlg'),
+                ['status' => 404]
+            );
+        }
+
+        return \bjlg_with_site($site_id, static function () use ($callback) {
+            return $callback();
+        });
     }
     
     /**
      * Vérifie une clé API
      */
     private function verify_api_key($api_key) {
-        $stored_keys = get_option('bjlg_api_keys', []);
+        $stored_keys = \bjlg_get_option('bjlg_api_keys', []);
 
         foreach ($stored_keys as $index => &$key_data) {
             $stored_value = isset($key_data['key']) ? $key_data['key'] : '';
@@ -575,7 +683,7 @@ class BJLG_REST_API {
             return;
         }
 
-        update_option('bjlg_api_keys', $prepared_keys);
+        \bjlg_update_option('bjlg_api_keys', $prepared_keys);
         set_transient(self::API_KEYS_LAST_PERSIST_TRANSIENT, time(), 0);
     }
 
@@ -1054,41 +1162,79 @@ class BJLG_REST_API {
      * Endpoint : Authentification
      */
     public function authenticate($request) {
-        $username = $request->get_param('username');
-        $password = $request->get_param('password');
-        $api_key = $request->get_param('api_key');
+        return $this->with_request_site($request, function () use ($request) {
+            $username = $request->get_param('username');
+            $password = $request->get_param('password');
+            $api_key = $request->get_param('api_key');
 
-        // Authentification par API Key
-        if ($api_key) {
-            $verified_user = $this->verify_api_key($api_key);
+            // Authentification par API Key
+            if ($api_key) {
+                $verified_user = $this->verify_api_key($api_key);
 
-            if (is_wp_error($verified_user)) {
-                return $verified_user;
+                if (is_wp_error($verified_user)) {
+                    return $verified_user;
+                }
+
+                if (!is_object($verified_user) || !isset($verified_user->ID)) {
+                    return new WP_Error(
+                        'api_key_missing_user',
+                        __('Cette clé API n\'est associée à aucun utilisateur.', 'backup-jlg'),
+                        ['status' => 403]
+                    );
+                }
+
+                $user = $verified_user;
+
+                if (!$user) {
+                    return new WP_Error(
+                        'user_not_found',
+                        'User not found',
+                        ['status' => 404]
+                    );
+                }
+
+                if ($username && strcasecmp($username, (string) $user->user_login) !== 0) {
+                    return new WP_Error(
+                        'api_key_user_mismatch',
+                        __('Cette clé API ne peut pas être utilisée pour cet utilisateur.', 'backup-jlg'),
+                        ['status' => 403]
+                    );
+                }
+
+                if (!\bjlg_can_manage_backups($user)) {
+                    return new WP_Error(
+                        'insufficient_permissions',
+                        'User does not have backup permissions',
+                        ['status' => 403]
+                    );
+                }
+
+                $token = $this->generate_jwt_token($user->ID, $user->user_login);
+
+                if (is_wp_error($token)) {
+                    return $token;
+                }
+
+                return rest_ensure_response([
+                    'success' => true,
+                    'message' => 'Authentication successful',
+                    'token' => $token,
+                    'user' => [
+                        'id' => $user->ID,
+                        'username' => $user->user_login,
+                        'email' => $user->user_email
+                    ]
+                ]);
             }
 
-            if (!is_object($verified_user) || !isset($verified_user->ID)) {
-                return new WP_Error(
-                    'api_key_missing_user',
-                    __('Cette clé API n\'est associée à aucun utilisateur.', 'backup-jlg'),
-                    ['status' => 403]
-                );
-            }
+            // Authentification par username/password
+            $user = wp_authenticate($username, $password);
 
-            $user = $verified_user;
-
-            if (!$user) {
+            if (is_wp_error($user)) {
                 return new WP_Error(
-                    'user_not_found',
-                    'User not found',
-                    ['status' => 404]
-                );
-            }
-
-            if ($username && strcasecmp($username, (string) $user->user_login) !== 0) {
-                return new WP_Error(
-                    'api_key_user_mismatch',
-                    __('Cette clé API ne peut pas être utilisée pour cet utilisateur.', 'backup-jlg'),
-                    ['status' => 403]
+                    'authentication_failed',
+                    'Invalid credentials',
+                    ['status' => 401]
                 );
             }
 
@@ -1116,43 +1262,7 @@ class BJLG_REST_API {
                     'email' => $user->user_email
                 ]
             ]);
-        }
-        
-        // Authentification par username/password
-        $user = wp_authenticate($username, $password);
-        
-        if (is_wp_error($user)) {
-            return new WP_Error(
-                'authentication_failed',
-                'Invalid credentials',
-                ['status' => 401]
-            );
-        }
-        
-        if (!\bjlg_can_manage_backups($user)) {
-            return new WP_Error(
-                'insufficient_permissions',
-                'User does not have backup permissions',
-                ['status' => 403]
-            );
-        }
-        
-        $token = $this->generate_jwt_token($user->ID, $user->user_login);
-
-        if (is_wp_error($token)) {
-            return $token;
-        }
-
-        return rest_ensure_response([
-            'success' => true,
-            'message' => 'Authentication successful',
-            'token' => $token,
-            'user' => [
-                'id' => $user->ID,
-                'username' => $user->user_login,
-                'email' => $user->user_email
-            ]
-        ]);
+        });
     }
     
     /**
@@ -1194,233 +1304,237 @@ class BJLG_REST_API {
      * Endpoint : Liste des sauvegardes
      */
     public function get_backups($request) {
-        $page = $request->get_param('page');
-        $per_page = $request->get_param('per_page');
-        $type = $request->get_param('type');
-        $sort = $request->get_param('sort');
-        $with_token = $this->interpret_boolean($request->get_param('with_token'));
+        return $this->with_request_site($request, function () use ($request) {
+            $page = $request->get_param('page');
+            $per_page = $request->get_param('per_page');
+            $type = $request->get_param('type');
+            $sort = $request->get_param('sort');
+            $with_token = $this->interpret_boolean($request->get_param('with_token'));
 
-        if ($with_token === null) {
-            $with_token = false;
-        }
+            if ($with_token === null) {
+                $with_token = false;
+            }
 
-        $page = max(1, (int) $page);
-        $per_page = max(1, min(100, (int) $per_page));
-        
-        $backups = [];
-        $files = glob(BJLG_BACKUP_DIR . '*.zip*');
-        
-        if (empty($files)) {
-            return rest_ensure_response([
-                'backups' => [],
+            $page = max(1, (int) $page);
+            $per_page = max(1, min(100, (int) $per_page));
+
+            $backups = [];
+            $files = glob(BJLG_BACKUP_DIR . '*.zip*');
+
+            if (empty($files)) {
+                return rest_ensure_response([
+                    'backups' => [],
+                    'pagination' => [
+                        'total' => 0,
+                        'pages' => 0,
+                        'current_page' => $page,
+                        'per_page' => $per_page
+                    ]
+                ]);
+            }
+
+            $manifests_cache = [];
+
+            // Déterminer les composants associés à certains filtres "type"
+            $component_filters = [];
+            if ($type === 'database') {
+                $component_filters = ['db'];
+            } elseif ($type === 'files') {
+                $component_filters = ['plugins', 'themes', 'uploads'];
+            }
+
+            // Filtrer par type
+            if ($type !== 'all') {
+                $files = array_filter($files, function ($file) use ($type, $component_filters, &$manifests_cache) {
+                    $manifest = $this->get_backup_manifest($file);
+
+                    if ($manifest !== null) {
+                        $manifests_cache[$file] = $manifest;
+                    }
+
+                    if (!empty($component_filters)) {
+                        $contains = [];
+                        $has_manifest_components = false;
+                        if (is_array($manifest) && isset($manifest['contains']) && is_array($manifest['contains'])) {
+                            $contains = $manifest['contains'];
+                            $has_manifest_components = true;
+                        }
+
+                        if (!empty(array_intersect($component_filters, $contains))) {
+                            return true;
+                        }
+
+                        if ($has_manifest_components) {
+                            return false;
+                        }
+
+                        $filename = basename($file);
+
+                        // Vérifier également les conventions de nommage historiques
+                        $aliases = $component_filters;
+                        if ($type === 'database') {
+                            $aliases[] = 'database';
+                        } elseif ($type === 'files') {
+                            $aliases[] = 'files';
+                        }
+
+                        foreach (array_unique($aliases) as $component) {
+                            if (strpos($filename, $component) !== false) {
+                                return true;
+                            }
+                        }
+
+                        return false;
+                    }
+
+                    return $this->backup_matches_type($file, $type, $manifest);
+                });
+            }
+
+            // Trier
+            $this->sort_files($files, $sort);
+
+            // Pagination
+            $total = count($files);
+            $offset = ($page - 1) * $per_page;
+            $files = array_slice($files, $offset, $per_page);
+
+            // Construire la réponse
+            foreach ($files as $file) {
+                $manifest = $manifests_cache[$file] ?? null;
+                if ($manifest === null) {
+                    $manifest = $this->get_backup_manifest($file);
+                }
+
+                $backups[] = $this->format_backup_data($file, $manifest, (bool) $with_token);
+            }
+
+            $response = rest_ensure_response([
+                'backups' => $backups,
                 'pagination' => [
-                    'total' => 0,
-                    'pages' => 0,
+                    'total' => $total,
+                    'pages' => ceil($total / $per_page),
                     'current_page' => $page,
                     'per_page' => $per_page
                 ]
             ]);
-        }
-        
-        $manifests_cache = [];
 
-        // Déterminer les composants associés à certains filtres "type"
-        $component_filters = [];
-        if ($type === 'database') {
-            $component_filters = ['db'];
-        } elseif ($type === 'files') {
-            $component_filters = ['plugins', 'themes', 'uploads'];
-        }
-
-        // Filtrer par type
-        if ($type !== 'all') {
-            $files = array_filter($files, function($file) use ($type, $component_filters, &$manifests_cache) {
-                $manifest = $this->get_backup_manifest($file);
-
-                if ($manifest !== null) {
-                    $manifests_cache[$file] = $manifest;
-                }
-
-                if (!empty($component_filters)) {
-                    $contains = [];
-                    $has_manifest_components = false;
-                    if (is_array($manifest) && isset($manifest['contains']) && is_array($manifest['contains'])) {
-                        $contains = $manifest['contains'];
-                        $has_manifest_components = true;
-                    }
-
-                    if (!empty(array_intersect($component_filters, $contains))) {
-                        return true;
-                    }
-
-                    if ($has_manifest_components) {
-                        return false;
-                    }
-
-                    $filename = basename($file);
-
-                    // Vérifier également les conventions de nommage historiques
-                    $aliases = $component_filters;
-                    if ($type === 'database') {
-                        $aliases[] = 'database';
-                    } elseif ($type === 'files') {
-                        $aliases[] = 'files';
-                    }
-
-                    foreach (array_unique($aliases) as $component) {
-                        if (strpos($filename, $component) !== false) {
-                            return true;
-                        }
-                    }
-
-                    return false;
-                }
-
-                return $this->backup_matches_type($file, $type, $manifest);
-            });
-        }
-        
-        // Trier
-        $this->sort_files($files, $sort);
-        
-        // Pagination
-        $total = count($files);
-        $offset = ($page - 1) * $per_page;
-        $files = array_slice($files, $offset, $per_page);
-        
-        // Construire la réponse
-        foreach ($files as $file) {
-            $manifest = $manifests_cache[$file] ?? null;
-            if ($manifest === null) {
-                $manifest = $this->get_backup_manifest($file);
+            if (is_object($response) && method_exists($response, 'header')) {
+                $response->header('X-Total-Count', $total);
             }
 
-            $backups[] = $this->format_backup_data($file, $manifest, (bool) $with_token);
-        }
-        
-        $response = rest_ensure_response([
-            'backups' => $backups,
-            'pagination' => [
-                'total' => $total,
-                'pages' => ceil($total / $per_page),
-                'current_page' => $page,
-                'per_page' => $per_page
-            ]
-        ]);
-
-        if (is_object($response) && method_exists($response, 'header')) {
-            $response->header('X-Total-Count', $total);
-        }
-
-        return $response;
+            return $response;
+        });
     }
     
     /**
      * Endpoint : Créer une sauvegarde
      */
     public function create_backup($request) {
-        $components = $request->get_param('components');
-        $filtered_components = $this->sanitize_components_list($components);
-        if (is_wp_error($filtered_components)) {
-            return $filtered_components;
-        }
-        if (empty($filtered_components)) {
-            return new WP_Error(
-                'invalid_components',
-                __('Aucun composant valide fourni pour la sauvegarde.', 'backup-jlg'),
-                ['status' => 400]
-            );
-        }
-        $type = $request->get_param('type');
-        $type = ($type === 'incremental') ? 'incremental' : 'full';
+        return $this->with_request_site($request, function () use ($request) {
+            $components = $request->get_param('components');
+            $filtered_components = $this->sanitize_components_list($components);
+            if (is_wp_error($filtered_components)) {
+                return $filtered_components;
+            }
+            if (empty($filtered_components)) {
+                return new WP_Error(
+                    'invalid_components',
+                    __('Aucun composant valide fourni pour la sauvegarde.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+            $type = $request->get_param('type');
+            $type = ($type === 'incremental') ? 'incremental' : 'full';
 
-        $encrypt_param = $request->get_param('encrypt');
-        $encrypt = filter_var($encrypt_param, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-        if ($encrypt === null) {
-            $encrypt = false;
-        }
-
-        $incremental = ($type === 'incremental');
-        $description = $request->get_param('description');
-        $sanitized_description = '';
-
-        if (is_scalar($description)) {
-            $raw_description = (string) $description;
-
-            if (function_exists('sanitize_text_field')) {
-                $raw_description = sanitize_text_field($raw_description);
+            $encrypt_param = $request->get_param('encrypt');
+            $encrypt = filter_var($encrypt_param, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            if ($encrypt === null) {
+                $encrypt = false;
             }
 
-            $max_description_length = 255;
+            $incremental = ($type === 'incremental');
+            $description = $request->get_param('description');
+            $sanitized_description = '';
 
-            if (function_exists('mb_strlen') && function_exists('mb_substr')) {
-                if (mb_strlen($raw_description, 'UTF-8') > $max_description_length) {
-                    $raw_description = mb_substr($raw_description, 0, $max_description_length, 'UTF-8');
+            if (is_scalar($description)) {
+                $raw_description = (string) $description;
+
+                if (function_exists('sanitize_text_field')) {
+                    $raw_description = sanitize_text_field($raw_description);
                 }
-            } elseif (strlen($raw_description) > $max_description_length) {
-                $raw_description = substr($raw_description, 0, $max_description_length);
+
+                $max_description_length = 255;
+
+                if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+                    if (mb_strlen($raw_description, 'UTF-8') > $max_description_length) {
+                        $raw_description = mb_substr($raw_description, 0, $max_description_length, 'UTF-8');
+                    }
+                } elseif (strlen($raw_description) > $max_description_length) {
+                    $raw_description = substr($raw_description, 0, $max_description_length);
+                }
+
+                $sanitized_description = $raw_description;
             }
 
-            $sanitized_description = $raw_description;
-        }
+            // Créer une tâche de sauvegarde
+            $task_id = 'bjlg_backup_' . md5(uniqid('api', true));
+            $task_data = [
+                'progress' => 5,
+                'status' => 'pending',
+                'status_text' => 'Initialisation (API)...',
+                'components' => $filtered_components,
+                'encrypt' => $encrypt,
+                'incremental' => $incremental,
+                'type' => $type,
+                'description' => $sanitized_description,
+                'source' => 'api',
+                'start_time' => time()
+            ];
 
-        // Créer une tâche de sauvegarde
-        $task_id = 'bjlg_backup_' . md5(uniqid('api', true));
-        $task_data = [
-            'progress' => 5,
-            'status' => 'pending',
-            'status_text' => 'Initialisation (API)...',
-            'components' => $filtered_components,
-            'encrypt' => $encrypt,
-            'incremental' => $incremental,
-            'type' => $type,
-            'description' => $sanitized_description,
-            'source' => 'api',
-            'start_time' => time()
-        ];
+            if (!BJLG_Backup::reserve_task_slot($task_id)) {
+                return new WP_Error(
+                    'backup_in_progress',
+                    __('Une sauvegarde est déjà en cours. Réessayez ultérieurement.', 'backup-jlg'),
+                    ['status' => 409]
+                );
+            }
 
-        if (!BJLG_Backup::reserve_task_slot($task_id)) {
-            return new WP_Error(
-                'backup_in_progress',
-                __('Une sauvegarde est déjà en cours. Réessayez ultérieurement.', 'backup-jlg'),
-                ['status' => 409]
-            );
-        }
+            $task_initialized = BJLG_Backup::save_task_state($task_id, $task_data);
 
-        $task_initialized = BJLG_Backup::save_task_state($task_id, $task_data);
+            if (!$task_initialized) {
+                BJLG_Backup::release_task_slot($task_id);
 
-        if (!$task_initialized) {
-            BJLG_Backup::release_task_slot($task_id);
+                return new WP_Error(
+                    'task_initialization_failed',
+                    __('Impossible d\'initialiser la sauvegarde. Veuillez réessayer.', 'backup-jlg'),
+                    ['status' => 500]
+                );
+            }
 
-            return new WP_Error(
-                'task_initialization_failed',
-                __('Impossible d\'initialiser la sauvegarde. Veuillez réessayer.', 'backup-jlg'),
-                ['status' => 500]
-            );
-        }
+            // Planifier l'exécution
+            $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
 
-        // Planifier l'exécution
-        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+            if ($scheduled === false) {
+                BJLG_Backup::delete_task_state($task_id);
+                BJLG_Backup::release_task_slot($task_id);
 
-        if ($scheduled === false) {
-            BJLG_Backup::delete_task_state($task_id);
-            BJLG_Backup::release_task_slot($task_id);
+                return new WP_Error(
+                    'schedule_failed',
+                    __('Impossible de planifier la tâche de sauvegarde en arrière-plan.', 'backup-jlg'),
+                    ['status' => 500]
+                );
+            }
 
-            return new WP_Error(
-                'schedule_failed',
-                __('Impossible de planifier la tâche de sauvegarde en arrière-plan.', 'backup-jlg'),
-                ['status' => 500]
-            );
-        }
+            BJLG_History::log('api_backup_created', 'info', 'Backup initiated via API');
 
-        BJLG_History::log('api_backup_created', 'info', 'Backup initiated via API');
-
-        return rest_ensure_response([
-            'success' => true,
-            'task_id' => $task_id,
-            'message' => 'Backup task created successfully',
-            'status_url' => rest_url(self::API_NAMESPACE . '/tasks/' . $task_id)
-        ]);
+            return rest_ensure_response([
+                'success' => true,
+                'task_id' => $task_id,
+                'message' => 'Backup task created successfully',
+                'status_url' => rest_url(self::API_NAMESPACE . '/tasks/' . $task_id)
+            ]);
+        });
     }
 
     private function sanitize_components_list($components) {
@@ -1688,45 +1802,49 @@ class BJLG_REST_API {
      * Endpoint : Obtenir une sauvegarde spécifique
      */
     public function get_backup($request) {
-        $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
+        return $this->with_request_site($request, function () use ($request) {
+            $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
 
-        if (is_wp_error($filepath)) {
-            return $filepath;
-        }
+            if (is_wp_error($filepath)) {
+                return $filepath;
+            }
 
-        $with_token = $this->interpret_boolean($request->get_param('with_token'));
+            $with_token = $this->interpret_boolean($request->get_param('with_token'));
 
-        if ($with_token === null) {
-            $with_token = false;
-        }
+            if ($with_token === null) {
+                $with_token = false;
+            }
 
-        return rest_ensure_response($this->format_backup_data($filepath, null, (bool) $with_token));
+            return rest_ensure_response($this->format_backup_data($filepath, null, (bool) $with_token));
+        });
     }
     
     /**
      * Endpoint : Supprimer une sauvegarde
      */
     public function delete_backup($request) {
-        $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
+        return $this->with_request_site($request, function () use ($request) {
+            $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
 
-        if (is_wp_error($filepath)) {
-            return $filepath;
-        }
+            if (is_wp_error($filepath)) {
+                return $filepath;
+            }
 
-        if (unlink($filepath)) {
-            BJLG_History::log('backup_deleted', 'success', 'Deleted via API: ' . basename($filepath));
+            if (unlink($filepath)) {
+                BJLG_History::log('backup_deleted', 'success', 'Deleted via API: ' . basename($filepath));
 
-            return rest_ensure_response([
-                'success' => true,
-                'message' => 'Backup deleted successfully'
-            ]);
-        }
+                return rest_ensure_response([
+                    'success' => true,
+                    'message' => 'Backup deleted successfully'
+                ]);
+            }
 
-        return new WP_Error(
-            'deletion_failed',
-            'Failed to delete backup',
-            ['status' => 500]
-        );
+            return new WP_Error(
+                'deletion_failed',
+                'Failed to delete backup',
+                ['status' => 500]
+            );
+        });
     }
     
     /**
@@ -1745,128 +1863,130 @@ class BJLG_REST_API {
      * }|WP_Error URL publique générée via l'action AJAX bjlg_download.
      */
     public function download_backup($request) {
-        $token = $request->get_param('token');
+        return $this->with_request_site($request, function () use ($request) {
+            $token = $request->get_param('token');
 
-        $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
+            $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
 
-        if (is_wp_error($filepath)) {
-            return $filepath;
-        }
-
-        $download_token = null;
-        $transient_ttl = BJLG_Actions::get_download_token_ttl($filepath);
-
-        if (is_string($token)) {
-            $token = trim($token);
-        }
-
-        if (!empty($token)) {
-            $transient_key = 'bjlg_download_' . $token;
-            $existing_payload = get_transient($transient_key);
-            $existing_path = is_array($existing_payload) ? ($existing_payload['file'] ?? '') : $existing_payload;
-
-            if (empty($existing_path)) {
-                return new WP_Error(
-                    'bjlg_invalid_token',
-                    __('Le token de téléchargement fourni est invalide ou expiré.', 'backup-jlg'),
-                    ['status' => 404]
-                );
+            if (is_wp_error($filepath)) {
+                return $filepath;
             }
 
-            $normalized_existing = $this->normalize_backup_path($existing_path);
-            $normalized_requested = $this->normalize_backup_path($filepath);
+            $download_token = null;
+            $transient_ttl = BJLG_Actions::get_download_token_ttl($filepath);
 
-            if ($normalized_existing === null || $normalized_requested === null
-                || $normalized_existing !== $normalized_requested
-            ) {
-                return new WP_Error(
-                    'bjlg_invalid_token',
-                    __('Le token fourni ne correspond pas à cette sauvegarde.', 'backup-jlg'),
-                    ['status' => 403]
-                );
+            if (is_string($token)) {
+                $token = trim($token);
             }
 
-            $payload = BJLG_Actions::build_download_token_payload($filepath);
-            $persisted = set_transient($transient_key, $payload, $transient_ttl);
+            if (!empty($token)) {
+                $transient_key = 'bjlg_download_' . $token;
+                $existing_payload = get_transient($transient_key);
+                $existing_path = is_array($existing_payload) ? ($existing_payload['file'] ?? '') : $existing_payload;
 
-            if ($persisted === false) {
+                if (empty($existing_path)) {
+                    return new WP_Error(
+                        'bjlg_invalid_token',
+                        __('Le token de téléchargement fourni est invalide ou expiré.', 'backup-jlg'),
+                        ['status' => 404]
+                    );
+                }
+
+                $normalized_existing = $this->normalize_backup_path($existing_path);
+                $normalized_requested = $this->normalize_backup_path($filepath);
+
+                if ($normalized_existing === null || $normalized_requested === null
+                    || $normalized_existing !== $normalized_requested
+                ) {
+                    return new WP_Error(
+                        'bjlg_invalid_token',
+                        __('Le token fourni ne correspond pas à cette sauvegarde.', 'backup-jlg'),
+                        ['status' => 403]
+                    );
+                }
+
+                $payload = BJLG_Actions::build_download_token_payload($filepath);
+                $persisted = set_transient($transient_key, $payload, $transient_ttl);
+
+                if ($persisted === false) {
+                    BJLG_Debug::error(sprintf(
+                        'Échec de la persistance du token de téléchargement "%s" pour "%s".',
+                        $token,
+                        $filepath
+                    ));
+
+                    return new WP_Error(
+                        'bjlg_download_token_failure',
+                        __('Impossible de créer un token de téléchargement.', 'backup-jlg'),
+                        ['status' => 500]
+                    );
+                }
+
+                $download_token = $token;
+            }
+
+            if ($download_token === null) {
+                $download_token = wp_generate_password(32, false);
+                $payload = BJLG_Actions::build_download_token_payload($filepath);
+                $transient_key = 'bjlg_download_' . $download_token;
+                $persisted = set_transient($transient_key, $payload, $transient_ttl);
+
+                if ($persisted === false) {
+                    BJLG_Debug::error(sprintf(
+                        'Échec de la persistance du token de téléchargement "%s" pour "%s".',
+                        $download_token,
+                        $filepath
+                    ));
+
+                    return new WP_Error(
+                        'bjlg_download_token_failure',
+                        __('Impossible de créer un token de téléchargement.', 'backup-jlg'),
+                        ['status' => 500]
+                    );
+                }
+            }
+
+            $size = filesize($filepath);
+
+            if ($size === false) {
                 BJLG_Debug::error(sprintf(
-                    'Échec de la persistance du token de téléchargement "%s" pour "%s".',
-                    $token,
+                    'Impossible de récupérer la taille du fichier de sauvegarde pour "%s".',
                     $filepath
                 ));
 
+                $status = \file_exists($filepath) ? 500 : 404;
+                $message = $status === 404
+                    ? __('La sauvegarde demandée est introuvable.', 'backup-jlg')
+                    : __('Impossible de déterminer la taille de la sauvegarde.', 'backup-jlg');
+
                 return new WP_Error(
-                    'bjlg_download_token_failure',
-                    __('Impossible de créer un token de téléchargement.', 'backup-jlg'),
-                    ['status' => 500]
+                    'bjlg_backup_size_unavailable',
+                    $message,
+                    ['status' => $status]
                 );
             }
 
-            $download_token = $token;
-        }
+            $download_url = BJLG_Actions::build_download_url($download_token);
 
-        if ($download_token === null) {
-            $download_token = wp_generate_password(32, false);
-            $payload = BJLG_Actions::build_download_token_payload($filepath);
-            $transient_key = 'bjlg_download_' . $download_token;
-            $persisted = set_transient($transient_key, $payload, $transient_ttl);
-
-            if ($persisted === false) {
-                BJLG_Debug::error(sprintf(
-                    'Échec de la persistance du token de téléchargement "%s" pour "%s".',
+            BJLG_History::log(
+                'backup_download_link_issued',
+                'success',
+                sprintf(
+                    'Token: %s | Fichier: %s',
                     $download_token,
-                    $filepath
-                ));
-
-                return new WP_Error(
-                    'bjlg_download_token_failure',
-                    __('Impossible de créer un token de téléchargement.', 'backup-jlg'),
-                    ['status' => 500]
-                );
-            }
-        }
-
-        $size = filesize($filepath);
-
-        if ($size === false) {
-            BJLG_Debug::error(sprintf(
-                'Impossible de récupérer la taille du fichier de sauvegarde pour "%s".',
-                $filepath
-            ));
-
-            $status = \file_exists($filepath) ? 500 : 404;
-            $message = $status === 404
-                ? __('La sauvegarde demandée est introuvable.', 'backup-jlg')
-                : __('Impossible de déterminer la taille de la sauvegarde.', 'backup-jlg');
-
-            return new WP_Error(
-                'bjlg_backup_size_unavailable',
-                $message,
-                ['status' => $status]
+                    basename($filepath)
+                ),
+                function_exists('get_current_user_id') ? get_current_user_id() : null
             );
-        }
 
-        $download_url = BJLG_Actions::build_download_url($download_token);
-
-        BJLG_History::log(
-            'backup_download_link_issued',
-            'success',
-            sprintf(
-                'Token: %s | Fichier: %s',
-                $download_token,
-                basename($filepath)
-            ),
-            function_exists('get_current_user_id') ? get_current_user_id() : null
-        );
-
-        return rest_ensure_response([
-            'download_url' => $download_url,
-            'expires_in' => $transient_ttl,
-            'download_token' => $download_token,
-            'filename' => basename($filepath),
-            'size' => $size
-        ]);
+            return rest_ensure_response([
+                'download_url' => $download_url,
+                'expires_in' => $transient_ttl,
+                'download_token' => $download_token,
+                'filename' => basename($filepath),
+                'size' => $size
+            ]);
+        });
     }
 
     /**
@@ -1893,90 +2013,107 @@ class BJLG_REST_API {
      * Endpoint : Restaurer une sauvegarde
      */
     public function restore_backup($request) {
-        $components = $this->normalize_restore_components($request->get_param('components'));
-        if (is_wp_error($components)) {
-            return $components;
-        }
-
-        if (empty($components)) {
-            return new WP_Error(
-                'invalid_components',
-                __('Aucun composant valide fourni pour la restauration.', 'backup-jlg'),
-                ['status' => 400]
-            );
-        }
-
-        $restore_environment = $request->get_param('restore_environment');
-        if (is_string($restore_environment)) {
-            $restore_environment = sanitize_key($restore_environment);
-        } else {
-            $restore_environment = BJLG_Restore::ENV_PRODUCTION;
-        }
-
-        if ($restore_environment === BJLG_Restore::ENV_SANDBOX && !BJLG_Restore::user_can_use_sandbox()) {
-            return new WP_Error(
-                'rest_restore_sandbox_forbidden',
-                __('Vous ne disposez pas des permissions nécessaires pour restaurer dans la sandbox.', 'backup-jlg'),
-                ['status' => 403]
-            );
-        }
-
-        $sandbox_path = $request->get_param('sandbox_path');
-        if (!is_string($sandbox_path)) {
-            $sandbox_path = '';
-        }
-
-        try {
-            $environment_config = BJLG_Restore::prepare_environment($restore_environment, [
-                'sandbox_path' => $sandbox_path,
-            ]);
-        } catch (Exception $exception) {
-            $error_message = sprintf(
-                __('Impossible de préparer la cible de restauration : %s', 'backup-jlg'),
-                $exception->getMessage()
-            );
-
-            $error_data = ['status' => 400];
-
-            if ($restore_environment === BJLG_Restore::ENV_SANDBOX) {
-                $error_data['validation_errors'] = [
-                    'sandbox_path' => [$exception->getMessage()],
-                ];
+        return $this->with_request_site($request, function () use ($request) {
+            $components = $this->normalize_restore_components($request->get_param('components'));
+            if (is_wp_error($components)) {
+                return $components;
             }
 
-            return new WP_Error('rest_restore_invalid_environment', $error_message, $error_data);
-        }
+            if (empty($components)) {
+                return new WP_Error(
+                    'invalid_components',
+                    __('Aucun composant valide fourni pour la restauration.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
 
-        $raw_create_restore_point = $request->get_param('create_restore_point');
-        if ($raw_create_restore_point === null) {
-            $create_restore_point = true;
-        } else {
-            $filtered_value = filter_var($raw_create_restore_point, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-            $create_restore_point = ($filtered_value !== null) ? $filtered_value : false;
-        }
+            $restore_environment = $request->get_param('restore_environment');
+            if (is_string($restore_environment)) {
+                $restore_environment = sanitize_key($restore_environment);
+            } else {
+                $restore_environment = BJLG_Restore::ENV_PRODUCTION;
+            }
 
-        $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
+            if ($restore_environment === BJLG_Restore::ENV_SANDBOX && !BJLG_Restore::user_can_use_sandbox()) {
+                return new WP_Error(
+                    'rest_restore_sandbox_forbidden',
+                    __('Vous ne disposez pas des permissions nécessaires pour restaurer dans la sandbox.', 'backup-jlg'),
+                    ['status' => 403]
+                );
+            }
 
-        if (is_wp_error($filepath)) {
-            return $filepath;
-        }
+            $sandbox_path = $request->get_param('sandbox_path');
+            if (!is_string($sandbox_path)) {
+                $sandbox_path = '';
+            }
 
-        $filename = basename($filepath);
-        $is_encrypted_backup = substr($filename, -4) === '.enc';
+            try {
+                $environment_config = BJLG_Restore::prepare_environment($restore_environment, [
+                    'sandbox_path' => $sandbox_path,
+                ]);
+            } catch (Exception $exception) {
+                $error_message = sprintf(
+                    __('Impossible de préparer la cible de restauration : %s', 'backup-jlg'),
+                    $exception->getMessage()
+                );
 
-        $password = $request->get_param('password');
-        if ($password !== null && !is_string($password)) {
-            $password = null;
-        }
+                $error_data = ['status' => 400];
 
-        if (is_string($password)) {
-            if ($password === '') {
+                if ($restore_environment === BJLG_Restore::ENV_SANDBOX) {
+                    $error_data['validation_errors'] = [
+                        'sandbox_path' => [$exception->getMessage()],
+                    ];
+                }
+
+                return new WP_Error('rest_restore_invalid_environment', $error_message, $error_data);
+            }
+
+            $raw_create_restore_point = $request->get_param('create_restore_point');
+            if ($raw_create_restore_point === null) {
+                $create_restore_point = true;
+            } else {
+                $filtered_value = filter_var($raw_create_restore_point, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                $create_restore_point = ($filtered_value !== null) ? $filtered_value : false;
+            }
+
+            $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
+
+            if (is_wp_error($filepath)) {
+                return $filepath;
+            }
+
+            $filename = basename($filepath);
+            $is_encrypted_backup = substr($filename, -4) === '.enc';
+
+            $password = $request->get_param('password');
+            if ($password !== null && !is_string($password)) {
                 $password = null;
-            } elseif (strlen($password) < 4) {
-                $message = 'Le mot de passe doit contenir au moins 4 caractères.';
+            }
+
+            if (is_string($password)) {
+                if ($password === '') {
+                    $password = null;
+                } elseif (strlen($password) < 4) {
+                    $message = 'Le mot de passe doit contenir au moins 4 caractères.';
+
+                    return new WP_Error(
+                        'rest_restore_invalid_password',
+                        $message,
+                        [
+                            'status' => 400,
+                            'validation_errors' => [
+                                'password' => [$message],
+                            ],
+                        ]
+                    );
+                }
+            }
+
+            if ($is_encrypted_backup && $password === null) {
+                $message = 'Un mot de passe est requis pour restaurer une sauvegarde chiffrée.';
 
                 return new WP_Error(
-                    'rest_restore_invalid_password',
+                    'rest_restore_missing_password',
                     $message,
                     [
                         'status' => 400,
@@ -1986,108 +2123,93 @@ class BJLG_REST_API {
                     ]
                 );
             }
-        }
 
-        if ($is_encrypted_backup && $password === null) {
-            $message = 'Un mot de passe est requis pour restaurer une sauvegarde chiffrée.';
-
-            return new WP_Error(
-                'rest_restore_missing_password',
-                $message,
-                [
-                    'status' => 400,
-                    'validation_errors' => [
-                        'password' => [$message],
-                    ],
-                ]
-            );
-        }
-
-        try {
-            $encrypted_password = BJLG_Restore::encrypt_password_for_transient($password);
-        } catch (Exception $exception) {
-            if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log('Échec du chiffrement du mot de passe de restauration (API) : ' . $exception->getMessage(), 'error');
-            }
-
-            return new WP_Error(
-                'rest_restore_password_encryption_failed',
-                __('Impossible de sécuriser le mot de passe fourni.', 'backup-jlg'),
-                ['status' => 500]
-            );
-        }
-
-        // Créer une tâche de restauration
-        $task_id = 'bjlg_restore_' . md5(uniqid('api', true));
-        $task_data = [
-            'progress' => 0,
-            'status' => 'pending',
-            'status_text' => 'Initialisation de la restauration (API)...',
-            'filepath' => $filepath,
-            'components' => $components,
-            'create_restore_point' => (bool) $create_restore_point,
-            'password_encrypted' => $encrypted_password,
-            'filename' => $filename,
-            'environment' => $environment_config['environment'],
-            'routing_table' => $environment_config['routing_table'],
-        ];
-
-        if (!empty($environment_config['sandbox'])) {
-            $task_data['sandbox'] = $environment_config['sandbox'];
-        }
-
-        $task_ttl = BJLG_Backup::get_task_ttl();
-        $transient_set = set_transient($task_id, $task_data, $task_ttl);
-
-        if ($transient_set === false) {
-            if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log("ERREUR : Impossible d'initialiser la tâche de restauration {$task_id} via l'API.");
-            }
-
-            return new WP_Error(
-                'rest_restore_initialization_failed',
-                __('Impossible d\'initialiser la tâche de restauration.', 'backup-jlg'),
-                ['status' => 500]
-            );
-        }
-
-        // Planifier l'exécution
-        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
-
-        if ($scheduled === false || is_wp_error($scheduled)) {
-            delete_transient($task_id);
-
-            $error_details = is_wp_error($scheduled) ? $scheduled->get_error_message() : null;
-
-            if (class_exists(BJLG_Debug::class)) {
-                $log_message = "ERREUR : Impossible de planifier la tâche de restauration {$task_id} via l'API.";
-
-                if (!empty($error_details)) {
-                    $log_message .= ' Détails : ' . $error_details;
+            try {
+                $encrypted_password = BJLG_Restore::encrypt_password_for_transient($password);
+            } catch (Exception $exception) {
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log('Échec du chiffrement du mot de passe de restauration (API) : ' . $exception->getMessage(), 'error');
                 }
 
-                BJLG_Debug::log($log_message);
+                return new WP_Error(
+                    'rest_restore_password_encryption_failed',
+                    __('Impossible de sécuriser le mot de passe fourni.', 'backup-jlg'),
+                    ['status' => 500]
+                );
             }
 
-            $error_data = ['status' => 500];
+            // Créer une tâche de restauration
+            $task_id = 'bjlg_restore_' . md5(uniqid('api', true));
+            $task_data = [
+                'progress' => 0,
+                'status' => 'pending',
+                'status_text' => 'Initialisation de la restauration (API)...',
+                'filepath' => $filepath,
+                'components' => $components,
+                'create_restore_point' => (bool) $create_restore_point,
+                'password_encrypted' => $encrypted_password,
+                'filename' => $filename,
+                'environment' => $environment_config['environment'],
+                'routing_table' => $environment_config['routing_table'],
+            ];
 
-            if (!empty($error_details)) {
-                $error_data['details'] = $error_details;
+            if (!empty($environment_config['sandbox'])) {
+                $task_data['sandbox'] = $environment_config['sandbox'];
             }
 
-            return new WP_Error(
-                'rest_restore_schedule_failed',
-                __('Impossible de planifier la tâche de restauration en arrière-plan.', 'backup-jlg'),
-                $error_data
-            );
-        }
+            $task_ttl = BJLG_Backup::get_task_ttl();
+            $transient_set = set_transient($task_id, $task_data, $task_ttl);
 
-        return rest_ensure_response([
-            'success' => true,
-            'task_id' => $task_id,
-            'message' => 'Restore task created successfully',
-            'status_url' => rest_url(self::API_NAMESPACE . '/tasks/' . $task_id)
-        ]);
+            if ($transient_set === false) {
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log("ERREUR : Impossible d'initialiser la tâche de restauration {$task_id} via l'API.");
+                }
+
+                return new WP_Error(
+                    'rest_restore_initialization_failed',
+                    __('Impossible d\'initialiser la tâche de restauration.', 'backup-jlg'),
+                    ['status' => 500]
+                );
+            }
+
+            // Planifier l'exécution
+            $scheduled = wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
+
+            if ($scheduled === false || is_wp_error($scheduled)) {
+                delete_transient($task_id);
+
+                $error_details = is_wp_error($scheduled) ? $scheduled->get_error_message() : null;
+
+                if (class_exists(BJLG_Debug::class)) {
+                    $log_message = "ERREUR : Impossible de planifier la tâche de restauration {$task_id} via l'API.";
+
+                    if (!empty($error_details)) {
+                        $log_message .= ' Détails : ' . $error_details;
+                    }
+
+                    BJLG_Debug::log($log_message);
+                }
+
+                $error_data = ['status' => 500];
+
+                if (!empty($error_details)) {
+                    $error_data['details'] = $error_details;
+                }
+
+                return new WP_Error(
+                    'rest_restore_schedule_failed',
+                    __('Impossible de planifier la tâche de restauration en arrière-plan.', 'backup-jlg'),
+                    $error_data
+                );
+            }
+
+            return rest_ensure_response([
+                'success' => true,
+                'task_id' => $task_id,
+                'message' => 'Restore task created successfully',
+                'status_url' => rest_url(self::API_NAMESPACE . '/tasks/' . $task_id)
+            ]);
+        });
     }
 
     private function normalize_restore_components($components) {
@@ -2121,314 +2243,332 @@ class BJLG_REST_API {
      * Endpoint : Statut du système
      */
     public function get_status($request) {
-        $backup_files = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
+        return $this->with_request_site($request, function () use ($request) {
+            $backup_files = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
 
-        $backup_directory = BJLG_BACKUP_DIR;
-        $disk_free_space = null;
-        $disk_space_error = false;
+            $backup_directory = BJLG_BACKUP_DIR;
+            $disk_free_space = null;
+            $disk_space_error = false;
 
-        if (is_dir($backup_directory) && is_readable($backup_directory)) {
-            $available_space = @disk_free_space($backup_directory);
+            if (is_dir($backup_directory) && is_readable($backup_directory)) {
+                $available_space = @disk_free_space($backup_directory);
 
-            if ($available_space !== false) {
-                $disk_free_space = $available_space;
+                if ($available_space !== false) {
+                    $disk_free_space = $available_space;
+                } else {
+                    $disk_space_error = true;
+                }
             } else {
                 $disk_space_error = true;
             }
-        } else {
-            $disk_space_error = true;
-        }
 
-        $status = [
-            'plugin_version' => BJLG_VERSION,
-            'wordpress_version' => get_bloginfo('version'),
-            'php_version' => PHP_VERSION,
-            'backup_directory' => $backup_directory,
-            'backup_directory_writable' => is_writable($backup_directory),
-            'total_backups' => count($backup_files),
-            'total_size' => $this->get_total_backup_size(),
-            'disk_free_space' => $disk_free_space,
-            'disk_space_error' => $disk_space_error,
-            'memory_limit' => ini_get('memory_limit'),
-            'max_execution_time' => ini_get('max_execution_time'),
-            'active_tasks' => $this->get_active_tasks_count()
-        ];
-        
-        return rest_ensure_response($status);
+            $status = [
+                'plugin_version' => BJLG_VERSION,
+                'wordpress_version' => get_bloginfo('version'),
+                'php_version' => PHP_VERSION,
+                'backup_directory' => $backup_directory,
+                'backup_directory_writable' => is_writable($backup_directory),
+                'total_backups' => count($backup_files),
+                'total_size' => $this->get_total_backup_size(),
+                'disk_free_space' => $disk_free_space,
+                'disk_space_error' => $disk_space_error,
+                'memory_limit' => ini_get('memory_limit'),
+                'max_execution_time' => ini_get('max_execution_time'),
+                'active_tasks' => $this->get_active_tasks_count()
+            ];
+
+            return rest_ensure_response($status);
+        });
     }
     
     /**
      * Endpoint : Santé du système
      */
     public function get_health($request) {
-        $health_check = new BJLG_Health_Check();
-        $results = $health_check->get_all_checks();
-        
-        $overall_status = 'healthy';
-        foreach ($results as $check) {
-            if ($check['status'] === 'error') {
-                $overall_status = 'critical';
-                break;
-            } elseif ($check['status'] === 'warning' && $overall_status !== 'critical') {
-                $overall_status = 'warning';
+        return $this->with_request_site($request, function () use ($request) {
+            $health_check = new BJLG_Health_Check();
+            $results = $health_check->get_all_checks();
+
+            $overall_status = 'healthy';
+            foreach ($results as $check) {
+                if ($check['status'] === 'error') {
+                    $overall_status = 'critical';
+                    break;
+                } elseif ($check['status'] === 'warning' && $overall_status !== 'critical') {
+                    $overall_status = 'warning';
+                }
             }
-        }
-        
-        return rest_ensure_response([
-            'status' => $overall_status,
-            'checks' => $results,
-            'timestamp' => current_time('c')
-        ]);
+
+            return rest_ensure_response([
+                'status' => $overall_status,
+                'checks' => $results,
+                'timestamp' => current_time('c')
+            ]);
+        });
     }
     
     /**
      * Endpoint : Statistiques
      */
     public function get_stats($request) {
-        $period = $request->get_param('period');
-        
-        $history_stats = BJLG_History::get_stats($period);
-        $storage_stats = BJLG_Cleanup::get_storage_stats_snapshot();
-        
-        $disk_total = $storage_stats['disk_total'];
-        $disk_free = $storage_stats['disk_free'];
+        return $this->with_request_site($request, function () use ($request) {
+            $period = $request->get_param('period');
 
-        $disk_calculation_error = false;
-        $disk_usage_percent = null;
+            $history_stats = BJLG_History::get_stats($period);
+            $storage_stats = BJLG_Cleanup::get_storage_stats_snapshot();
 
-        if (!is_numeric($disk_total) || $disk_total <= 0 || !is_numeric($disk_free)) {
-            $disk_calculation_error = true;
-        } else {
-            $disk_usage_percent = round((($disk_total - $disk_free) / $disk_total) * 100, 2);
-        }
+            $disk_total = $storage_stats['disk_total'];
+            $disk_free = $storage_stats['disk_free'];
 
-        if (!empty($storage_stats['disk_space_error'])) {
-            $disk_calculation_error = true;
-        }
+            $disk_calculation_error = false;
+            $disk_usage_percent = null;
 
-        return rest_ensure_response([
-            'period' => $period,
-            'backups' => [
-                'total' => $storage_stats['total_backups'],
-                'total_size' => $storage_stats['total_size'],
-                'average_size' => $storage_stats['average_size'],
-                'oldest' => $storage_stats['oldest_backup'],
-                'newest' => $storage_stats['newest_backup']
-            ],
-            'activity' => $history_stats,
-            'disk' => [
-                'free' => $storage_stats['disk_free'],
-                'total' => $storage_stats['disk_total'],
-                'usage_percent' => $disk_usage_percent,
-                'calculation_error' => $disk_calculation_error
-            ]
-        ]);
+            if (!is_numeric($disk_total) || $disk_total <= 0 || !is_numeric($disk_free)) {
+                $disk_calculation_error = true;
+            } else {
+                $disk_usage_percent = round((($disk_total - $disk_free) / $disk_total) * 100, 2);
+            }
+
+            if (!empty($storage_stats['disk_space_error'])) {
+                $disk_calculation_error = true;
+            }
+
+            return rest_ensure_response([
+                'period' => $period,
+                'backups' => [
+                    'total' => $storage_stats['total_backups'],
+                    'total_size' => $storage_stats['total_size'],
+                    'average_size' => $storage_stats['average_size'],
+                    'oldest' => $storage_stats['oldest_backup'],
+                    'newest' => $storage_stats['newest_backup']
+                ],
+                'activity' => $history_stats,
+                'disk' => [
+                    'free' => $storage_stats['disk_free'],
+                    'total' => $storage_stats['disk_total'],
+                    'usage_percent' => $disk_usage_percent,
+                    'calculation_error' => $disk_calculation_error
+                ]
+            ]);
+        });
     }
     
     /**
      * Endpoint : Historique
      */
     public function get_history($request) {
-        $limit = $request->get_param('limit');
-        $action = $request->get_param('action');
-        $status = $request->get_param('status');
+        return $this->with_request_site($request, function () use ($request) {
+            $limit = $request->get_param('limit');
+            $action = $request->get_param('action');
+            $status = $request->get_param('status');
 
-        $filters = [];
-        if ($action) $filters['action_type'] = $action;
-        if ($status) $filters['status'] = $status;
+            $filters = [];
+            if ($action) $filters['action_type'] = $action;
+            if ($status) $filters['status'] = $status;
 
-        $limit = max(1, min(500, (int) $limit));
+            $limit = max(1, min(500, (int) $limit));
 
-        $history = BJLG_History::get_history($limit, $filters);
-        
-        return rest_ensure_response([
-            'entries' => $history,
-            'total' => count($history)
-        ]);
+            $history = BJLG_History::get_history($limit, $filters);
+
+            return rest_ensure_response([
+                'entries' => $history,
+                'total' => count($history)
+            ]);
+        });
     }
     
     /**
      * Endpoint : Obtenir les paramètres
      */
     public function get_settings($request) {
-        $settings = [
-            'cleanup' => get_option('bjlg_cleanup_settings', []),
-            'schedule' => get_option('bjlg_schedule_settings', []),
-            'encryption' => get_option('bjlg_encryption_settings', []),
-            'notifications' => get_option('bjlg_notification_settings', []),
-            'performance' => get_option('bjlg_performance_settings', []),
-            'webhooks' => get_option('bjlg_webhook_settings', [])
-        ];
-        
-        return rest_ensure_response($settings);
+        return $this->with_request_site($request, function () use ($request) {
+            $settings = [
+                'cleanup' => \bjlg_get_option('bjlg_cleanup_settings', []),
+                'schedule' => \bjlg_get_option('bjlg_schedule_settings', []),
+                'encryption' => \bjlg_get_option('bjlg_encryption_settings', []),
+                'notifications' => \bjlg_get_option('bjlg_notification_settings', []),
+                'performance' => \bjlg_get_option('bjlg_performance_settings', []),
+                'webhooks' => \bjlg_get_option('bjlg_webhook_settings', [])
+            ];
+
+            return rest_ensure_response($settings);
+        });
     }
     
     /**
      * Endpoint : Mettre à jour les paramètres
      */
     public function update_settings($request) {
-        $params = $request->get_json_params();
+        return $this->with_request_site($request, function () use ($request) {
+            $params = $request->get_json_params();
 
-        if (!is_array($params) || empty($params)) {
-            return new WP_Error(
-                'invalid_payload',
-                __('The request payload must be a JSON object with settings data.', 'backup-jlg'),
-                ['status' => 400]
-            );
-        }
+            if (!is_array($params) || empty($params)) {
+                return new WP_Error(
+                    'invalid_payload',
+                    __('The request payload must be a JSON object with settings data.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
 
-        $validated_settings = $this->prepare_settings_payload($params);
+            $validated_settings = $this->prepare_settings_payload($params);
 
-        if (is_wp_error($validated_settings)) {
-            return $validated_settings;
-        }
+            if (is_wp_error($validated_settings)) {
+                return $validated_settings;
+            }
 
-        $option_name_map = [
-            'notifications' => 'bjlg_notification_settings',
-            'webhooks' => 'bjlg_webhook_settings',
-        ];
+            $option_name_map = [
+                'notifications' => 'bjlg_notification_settings',
+                'webhooks' => 'bjlg_webhook_settings',
+            ];
 
-        foreach ($validated_settings as $key => $value) {
-            $option_name = $option_name_map[$key] ?? 'bjlg_' . $key . '_settings';
-            update_option($option_name, $value);
-        }
+            foreach ($validated_settings as $key => $value) {
+                $option_name = $option_name_map[$key] ?? 'bjlg_' . $key . '_settings';
+                update_option($option_name, $value);
+            }
 
-        BJLG_History::log('settings_updated', 'success', 'Settings updated via API');
+            BJLG_History::log('settings_updated', 'success', 'Settings updated via API');
 
-        return rest_ensure_response([
-            'success' => true,
-            'message' => 'Settings updated successfully'
-        ]);
+            return rest_ensure_response([
+                'success' => true,
+                'message' => 'Settings updated successfully'
+            ]);
+        });
     }
     
     /**
      * Endpoint : Obtenir les planifications
      */
     public function get_schedules($request) {
-        $stored = get_option('bjlg_schedule_settings', []);
-        $collection = BJLG_Settings::sanitize_schedule_collection($stored);
-        $schedules = $collection['schedules'];
+        return $this->with_request_site($request, function () use ($request) {
+            $stored = \bjlg_get_option('bjlg_schedule_settings', []);
+            $collection = BJLG_Settings::sanitize_schedule_collection($stored);
+            $schedules = $collection['schedules'];
 
-        $next_runs = [];
+            $next_runs = [];
 
-        if (class_exists(BJLG_Scheduler::class)) {
-            $scheduler = BJLG_Scheduler::instance();
-            if ($scheduler && method_exists($scheduler, 'get_next_runs_summary')) {
-                $next_runs = $scheduler->get_next_runs_summary($schedules);
+            if (class_exists(BJLG_Scheduler::class)) {
+                $scheduler = BJLG_Scheduler::instance();
+                if ($scheduler && method_exists($scheduler, 'get_next_runs_summary')) {
+                    $next_runs = $scheduler->get_next_runs_summary($schedules);
+                }
             }
-        }
 
-        if (empty($next_runs)) {
+            if (empty($next_runs)) {
+                foreach ($schedules as $schedule) {
+                    if (!is_array($schedule) || empty($schedule['id'])) {
+                        continue;
+                    }
+
+                    $schedule_id = $schedule['id'];
+                    $next_runs[$schedule_id] = [
+                        'id' => $schedule_id,
+                        'label' => $schedule['label'] ?? $schedule_id,
+                        'recurrence' => $schedule['recurrence'] ?? 'disabled',
+                        'enabled' => ($schedule['recurrence'] ?? 'disabled') !== 'disabled',
+                        'next_run' => null,
+                        'next_run_formatted' => 'Non planifié',
+                        'next_run_relative' => null,
+                    ];
+                }
+            }
+
+            $enabled = false;
+
             foreach ($schedules as $schedule) {
-                if (!is_array($schedule) || empty($schedule['id'])) {
+                if (!is_array($schedule)) {
                     continue;
                 }
-
-                $schedule_id = $schedule['id'];
-                $next_runs[$schedule_id] = [
-                    'id' => $schedule_id,
-                    'label' => $schedule['label'] ?? $schedule_id,
-                    'recurrence' => $schedule['recurrence'] ?? 'disabled',
-                    'enabled' => ($schedule['recurrence'] ?? 'disabled') !== 'disabled',
-                    'next_run' => null,
-                    'next_run_formatted' => 'Non planifié',
-                    'next_run_relative' => null,
-                ];
+                if (($schedule['recurrence'] ?? 'disabled') !== 'disabled') {
+                    $enabled = true;
+                    break;
+                }
             }
-        }
 
-        $enabled = false;
-
-        foreach ($schedules as $schedule) {
-            if (!is_array($schedule)) {
-                continue;
-            }
-            if (($schedule['recurrence'] ?? 'disabled') !== 'disabled') {
-                $enabled = true;
-                break;
-            }
-        }
-
-        return rest_ensure_response([
-            'version' => $collection['version'] ?? null,
-            'schedules' => $schedules,
-            'next_runs' => $next_runs,
-            'enabled' => $enabled,
-        ]);
+            return rest_ensure_response([
+                'version' => $collection['version'] ?? null,
+                'schedules' => $schedules,
+                'next_runs' => $next_runs,
+                'enabled' => $enabled,
+            ]);
+        });
     }
     
     /**
      * Endpoint : Créer une planification
      */
     public function create_schedule($request) {
-        $params = $request->get_json_params();
+        return $this->with_request_site($request, function () use ($request) {
+            $params = $request->get_json_params();
 
-        if (!is_array($params) || empty($params)) {
-            return new WP_Error(
-                'invalid_payload',
-                __('The request payload must be a JSON object with schedule data.', 'backup-jlg'),
-                ['status' => 400]
+            if (!is_array($params) || empty($params)) {
+                return new WP_Error(
+                    'invalid_payload',
+                    __('The request payload must be a JSON object with schedule data.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+
+            $validated_collection = $this->validate_schedule_settings($params);
+
+            if (is_wp_error($validated_collection)) {
+                return $validated_collection;
+            }
+
+            $existing_collection = BJLG_Settings::sanitize_schedule_collection(
+                \bjlg_get_option('bjlg_schedule_settings', [])
             );
-        }
 
-        $validated_collection = $this->validate_schedule_settings($params);
+            $merged_schedules = array_merge(
+                $existing_collection['schedules'],
+                $validated_collection['schedules']
+            );
 
-        if (is_wp_error($validated_collection)) {
-            return $validated_collection;
-        }
+            $final_collection = BJLG_Settings::sanitize_schedule_collection([
+                'schedules' => $merged_schedules,
+            ]);
 
-        $existing_collection = BJLG_Settings::sanitize_schedule_collection(
-            get_option('bjlg_schedule_settings', [])
-        );
+            \bjlg_update_option('bjlg_schedule_settings', $final_collection);
 
-        $merged_schedules = array_merge(
-            $existing_collection['schedules'],
-            $validated_collection['schedules']
-        );
+            // Réinitialiser la planification sans multiplier les hooks
+            $scheduler = BJLG_Scheduler::instance();
+            $scheduler->check_schedule();
 
-        $final_collection = BJLG_Settings::sanitize_schedule_collection([
-            'schedules' => $merged_schedules,
-        ]);
-
-        update_option('bjlg_schedule_settings', $final_collection);
-
-        // Réinitialiser la planification sans multiplier les hooks
-        $scheduler = BJLG_Scheduler::instance();
-        $scheduler->check_schedule();
-
-        return rest_ensure_response([
-            'success' => true,
-            'message' => 'Schedule created successfully',
-            'schedules' => $final_collection['schedules'],
-        ]);
+            return rest_ensure_response([
+                'success' => true,
+                'message' => 'Schedule created successfully',
+                'schedules' => $final_collection['schedules'],
+            ]);
+        });
     }
     
     /**
      * Endpoint : Obtenir le statut d'une tâche
      */
     public function get_task_status($request) {
-        $raw_task_id = $request->get_param('id');
-        $task_id = sanitize_key($raw_task_id);
+        return $this->with_request_site($request, function () use ($request) {
+            $raw_task_id = $request->get_param('id');
+            $task_id = sanitize_key($raw_task_id);
 
-        if (empty($task_id) || !preg_match('/^bjlg_(?:backup|restore)_[a-z0-9_]+$/', $task_id)) {
-            return new WP_Error(
-                'invalid_task_id',
-                __('Invalid task identifier.', 'backup-jlg'),
-                ['status' => 400]
-            );
-        }
+            if (empty($task_id) || !preg_match('/^bjlg_(?:backup|restore)_[a-z0-9_]+$/', $task_id)) {
+                return new WP_Error(
+                    'invalid_task_id',
+                    __('Invalid task identifier.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
 
-        $task_data = get_transient($task_id);
+            $task_data = get_transient($task_id);
 
-        if (!$task_data) {
-            return new WP_Error(
-                'task_not_found',
-                'Task not found or expired',
-                ['status' => 404]
-            );
-        }
-        
-        return rest_ensure_response($task_data);
+            if (!$task_data) {
+                return new WP_Error(
+                    'task_not_found',
+                    'Task not found or expired',
+                    ['status' => 404]
+                );
+            }
+
+            return rest_ensure_response($task_data);
+        });
     }
     
     /**
@@ -2686,4 +2826,4 @@ class BJLG_REST_API {
         ];
     }
 }
-
+

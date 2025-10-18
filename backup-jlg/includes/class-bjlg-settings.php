@@ -114,6 +114,10 @@ class BJLG_Settings {
             'chunk_size' => 50,
             'compression_level' => 6
         ],
+        'monitoring' => [
+            'storage_quota_warning_threshold' => 85,
+            'remote_metrics_ttl_minutes' => 15,
+        ],
         'gdrive' => [
             'client_id' => '',
             'client_secret' => '',
@@ -265,6 +269,101 @@ class BJLG_Settings {
         ];
     }
 
+    private $active_context = [];
+
+    private function with_context(array $context, callable $callback)
+    {
+        $previous = $this->active_context;
+        $this->active_context = $context;
+
+        try {
+            return $callback();
+        } finally {
+            $this->active_context = $previous;
+        }
+    }
+
+    private function context_args(array $args = []): array
+    {
+        if (empty($this->active_context)) {
+            return $args;
+        }
+
+        return array_merge($this->active_context, $args);
+    }
+
+    private function get_option_value(string $option_name, $default = null, array $args = [])
+    {
+        return \bjlg_get_option($option_name, $default, $this->context_args($args));
+    }
+
+    private function update_option_value(string $option_name, $value, array $args = []): bool
+    {
+        return (bool) \bjlg_update_option($option_name, $value, $this->context_args($args));
+    }
+
+    private function delete_option_value(string $option_name, array $args = []): bool
+    {
+        return (bool) \bjlg_delete_option($option_name, $this->context_args($args));
+    }
+
+    private function resolve_request_context_from_input(array $input): array
+    {
+        $context = [];
+
+        if (isset($input['site_id'])) {
+            $site_id = is_scalar($input['site_id']) ? (int) $input['site_id'] : 0;
+            if ($site_id > 0) {
+                $context['site_id'] = $site_id;
+            }
+        }
+
+        if (isset($input['scope']) && sanitize_key((string) $input['scope']) === 'network') {
+            if (function_exists('is_multisite') && is_multisite()) {
+                $context['network'] = true;
+                unset($context['site_id']);
+            }
+        }
+
+        return $context;
+    }
+
+    private function ensure_request_context_capabilities(array $context): void
+    {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return;
+        }
+
+        if (!empty($context['network']) && !current_user_can('manage_network_options')) {
+            wp_send_json_error(['message' => __('Permissions réseau insuffisantes.', 'backup-jlg')], 403);
+        }
+
+        if (isset($context['site_id'])) {
+            $site_id = (int) $context['site_id'];
+            if ($site_id > 0 && function_exists('get_current_blog_id') && $site_id !== get_current_blog_id()) {
+                if (!current_user_can('manage_network_options')) {
+                    wp_send_json_error(['message' => __('Permissions multisite insuffisantes pour ce site.', 'backup-jlg')], 403);
+                }
+            }
+        }
+    }
+
+    private function execute_in_site_scope(array $context, callable $callback)
+    {
+        $site_id = isset($context['site_id']) ? (int) $context['site_id'] : null;
+        $is_network = !empty($context['network']);
+
+        if ($is_network) {
+            return \bjlg_with_network($callback);
+        }
+
+        if ($site_id !== null && $site_id > 0) {
+            return \bjlg_with_site($site_id, $callback);
+        }
+
+        return $callback();
+    }
+
     /**
      * Fusionne récursivement les réglages existants avec les valeurs par défaut.
      *
@@ -333,10 +432,10 @@ class BJLG_Settings {
     public function init_default_settings() {
         foreach ($this->default_settings as $key => $defaults) {
             $option_name = $this->get_option_name_for_section($key);
-            $stored = get_option($option_name, null);
+            $stored = $this->get_option_value($option_name, null);
 
             if ($stored === null) {
-                update_option($option_name, $defaults);
+                $this->update_option_value($option_name, $defaults);
                 continue;
             }
 
@@ -347,12 +446,12 @@ class BJLG_Settings {
             $merged = self::merge_settings_with_defaults($stored, $defaults);
 
             if ($merged !== $stored) {
-                update_option($option_name, $merged);
+                $this->update_option_value($option_name, $merged);
             }
         }
 
-        if (get_option('bjlg_required_capability', null) === null) {
-            add_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+        if ($this->get_option_value('bjlg_required_capability', null) === null) {
+            $this->update_option_value('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
         }
 
         $this->init_backup_preferences_defaults();
@@ -366,7 +465,7 @@ class BJLG_Settings {
      */
     private function get_section_settings_with_defaults($section): array {
         $option_name = $this->get_option_name_for_section($section);
-        $stored = get_option($option_name, []);
+        $stored = $this->get_option_value($option_name, []);
 
         if (!is_array($stored)) {
             $stored = [];
@@ -403,8 +502,13 @@ class BJLG_Settings {
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
 
+        $context = $this->resolve_request_context_from_input($_POST);
+        $this->ensure_request_context_capabilities($context);
+
         try {
             $saved_settings = [];
+
+            $operation = function () use (&$saved_settings) {
             
             // --- Réglages de la Rétention ---
             if (isset($_POST['by_number']) || isset($_POST['by_age'])) {
@@ -412,7 +516,7 @@ class BJLG_Settings {
                     'by_number' => isset($_POST['by_number']) ? max(0, intval(wp_unslash($_POST['by_number']))) : 3,
                     'by_age'    => isset($_POST['by_age']) ? max(0, intval(wp_unslash($_POST['by_age']))) : 0,
                 ];
-                update_option('bjlg_cleanup_settings', $cleanup_settings);
+                $this->update_option_value('bjlg_cleanup_settings', $cleanup_settings);
                 $saved_settings['cleanup'] = $cleanup_settings;
                 BJLG_Debug::log("Réglages de nettoyage sauvegardés : " . print_r($cleanup_settings, true));
             }
@@ -441,7 +545,7 @@ class BJLG_Settings {
                     'rotation_enabled' => $rotation_enabled,
                 ];
 
-                update_option('bjlg_incremental_settings', $incremental_settings);
+                $this->update_option_value('bjlg_incremental_settings', $incremental_settings);
                 $saved_settings['incremental'] = $incremental_settings;
 
                 BJLG_Debug::log('Réglages incrémentaux sauvegardés : ' . print_r($incremental_settings, true));
@@ -453,14 +557,14 @@ class BJLG_Settings {
                     'plugin_name'          => isset($_POST['plugin_name']) ? sanitize_text_field(wp_unslash($_POST['plugin_name'])) : '',
                     'hide_from_non_admins' => isset($_POST['hide_from_non_admins']) ? $this->to_bool(wp_unslash($_POST['hide_from_non_admins'])) : false,
                 ];
-                update_option('bjlg_whitelabel_settings', $wl_settings);
+                $this->update_option_value('bjlg_whitelabel_settings', $wl_settings);
                 $saved_settings['whitelabel'] = $wl_settings;
                 BJLG_Debug::log("Réglages de marque blanche sauvegardés : " . print_r($wl_settings, true));
 
                 if (array_key_exists('required_capability', $_POST)) {
                     $raw_permission = wp_unslash($_POST['required_capability']);
                     $required_capability = $this->sanitize_required_capability_value($raw_permission);
-                    update_option('bjlg_required_capability', $required_capability);
+                    $this->update_option_value('bjlg_required_capability', $required_capability);
                     $this->sync_manage_plugin_capability_map($required_capability);
                     $saved_settings['permissions'] = [
                         'required_capability' => $required_capability,
@@ -494,7 +598,7 @@ class BJLG_Settings {
                     'compression_level' => $compression_level,
                 ];
 
-                update_option('bjlg_encryption_settings', $encryption_settings);
+                $this->update_option_value('bjlg_encryption_settings', $encryption_settings);
                 $saved_settings['encryption'] = $encryption_settings;
                 BJLG_Debug::log("Réglages de chiffrement sauvegardés.");
             }
@@ -536,7 +640,7 @@ class BJLG_Settings {
                     'folder_id'     => isset($_POST['gdrive_folder_id']) ? sanitize_text_field(wp_unslash($_POST['gdrive_folder_id'])) : '',
                     'enabled'       => isset($_POST['gdrive_enabled']) ? $this->to_bool(wp_unslash($_POST['gdrive_enabled'])) : false
                 ];
-                update_option('bjlg_gdrive_settings', $gdrive_settings);
+                $this->update_option_value('bjlg_gdrive_settings', $gdrive_settings);
                 $saved_settings['gdrive'] = $gdrive_settings;
                 BJLG_Debug::log("Identifiants Google Drive sauvegardés.");
             }
@@ -564,7 +668,7 @@ class BJLG_Settings {
 
                 $s3_settings['object_prefix'] = trim($s3_settings['object_prefix']);
 
-                update_option('bjlg_s3_settings', $s3_settings);
+                $this->update_option_value('bjlg_s3_settings', $s3_settings);
                 $saved_settings['s3'] = $s3_settings;
                 BJLG_Debug::log('Réglages Amazon S3 sauvegardés.');
             }
@@ -582,7 +686,7 @@ class BJLG_Settings {
 
                 $wasabi_settings['object_prefix'] = trim($wasabi_settings['object_prefix']);
 
-                update_option('bjlg_wasabi_settings', $wasabi_settings);
+                $this->update_option_value('bjlg_wasabi_settings', $wasabi_settings);
                 $saved_settings['wasabi'] = $wasabi_settings;
                 BJLG_Debug::log('Réglages Wasabi sauvegardés.');
             }
@@ -595,7 +699,7 @@ class BJLG_Settings {
                     'enabled' => isset($_POST['dropbox_enabled']) ? $this->to_bool(wp_unslash($_POST['dropbox_enabled'])) : false,
                 ];
 
-                update_option('bjlg_dropbox_settings', $dropbox_settings);
+                $this->update_option_value('bjlg_dropbox_settings', $dropbox_settings);
                 $saved_settings['dropbox'] = $dropbox_settings;
                 BJLG_Debug::log('Réglages Dropbox sauvegardés.');
             }
@@ -608,7 +712,7 @@ class BJLG_Settings {
                     'enabled' => isset($_POST['onedrive_enabled']) ? $this->to_bool(wp_unslash($_POST['onedrive_enabled'])) : false,
                 ];
 
-                update_option('bjlg_onedrive_settings', $onedrive_settings);
+                $this->update_option_value('bjlg_onedrive_settings', $onedrive_settings);
                 $saved_settings['onedrive'] = $onedrive_settings;
                 BJLG_Debug::log('Réglages OneDrive sauvegardés.');
             }
@@ -621,7 +725,7 @@ class BJLG_Settings {
                     'enabled' => isset($_POST['pcloud_enabled']) ? $this->to_bool(wp_unslash($_POST['pcloud_enabled'])) : false,
                 ];
 
-                update_option('bjlg_pcloud_settings', $pcloud_settings);
+                $this->update_option_value('bjlg_pcloud_settings', $pcloud_settings);
                 $saved_settings['pcloud'] = $pcloud_settings;
                 BJLG_Debug::log('Réglages pCloud sauvegardés.');
             }
@@ -654,7 +758,7 @@ class BJLG_Settings {
             if ($should_update_notifications) {
                 $notifications_settings = $this->prepare_notifications_settings_from_request($_POST);
 
-                update_option('bjlg_notification_settings', $notifications_settings);
+                $this->update_option_value('bjlg_notification_settings', $notifications_settings);
                 $saved_settings['notifications'] = $notifications_settings;
                 BJLG_Debug::log('Réglages de notifications sauvegardés.');
             }
@@ -671,7 +775,7 @@ class BJLG_Settings {
 
             if ($should_update_performance) {
                 $performance_defaults = $this->default_settings['performance'];
-                $performance_settings = get_option('bjlg_performance_settings', []);
+                $performance_settings = $this->get_option_value('bjlg_performance_settings', []);
                 if (!is_array($performance_settings)) {
                     $performance_settings = [];
                 }
@@ -690,9 +794,32 @@ class BJLG_Settings {
                     $performance_settings['compression_level'] = min(9, max(0, intval(wp_unslash($_POST['compression_level']))));
                 }
 
-                update_option('bjlg_performance_settings', $performance_settings);
+                $this->update_option_value('bjlg_performance_settings', $performance_settings);
                 $saved_settings['performance'] = $performance_settings;
                 BJLG_Debug::log('Réglages de performance sauvegardés.');
+            }
+
+            if (isset($_POST['storage_quota_warning_threshold']) || isset($_POST['remote_metrics_ttl_minutes'])) {
+                $monitoring_defaults = $this->default_settings['monitoring'];
+                $monitoring_settings = $this->get_option_value('bjlg_monitoring_settings', []);
+                if (!is_array($monitoring_settings)) {
+                    $monitoring_settings = [];
+                }
+                $monitoring_settings = wp_parse_args($monitoring_settings, $monitoring_defaults);
+
+                if (isset($_POST['storage_quota_warning_threshold'])) {
+                    $threshold = floatval(wp_unslash($_POST['storage_quota_warning_threshold']));
+                    $monitoring_settings['storage_quota_warning_threshold'] = max(1.0, min(100.0, $threshold));
+                }
+
+                if (isset($_POST['remote_metrics_ttl_minutes'])) {
+                    $ttl_minutes = intval(wp_unslash($_POST['remote_metrics_ttl_minutes']));
+                    $monitoring_settings['remote_metrics_ttl_minutes'] = max(5, min(1440, $ttl_minutes));
+                }
+
+                $this->update_option_value('bjlg_monitoring_settings', $monitoring_settings);
+                $saved_settings['monitoring'] = $monitoring_settings;
+                BJLG_Debug::log('Réglages de monitoring sauvegardés : ' . print_r($monitoring_settings, true));
             }
 
             // --- Réglages Webhooks ---
@@ -723,7 +850,7 @@ class BJLG_Settings {
                     'secret' => '',
                 ];
 
-                $webhook_settings = get_option('bjlg_webhook_settings', []);
+                $webhook_settings = $this->get_option_value('bjlg_webhook_settings', []);
                 if (!is_array($webhook_settings)) {
                     $webhook_settings = [];
                 }
@@ -763,7 +890,7 @@ class BJLG_Settings {
                     }
                 }
 
-                update_option('bjlg_webhook_settings', $webhook_settings);
+                $this->update_option_value('bjlg_webhook_settings', $webhook_settings);
                 $saved_settings['webhooks'] = $webhook_settings;
                 BJLG_Debug::log('Réglages de webhooks sauvegardés.');
             }
@@ -771,10 +898,16 @@ class BJLG_Settings {
             // --- Réglage du débogueur AJAX ---
             if (isset($_POST['ajax_debug_enabled'])) {
                 $ajax_debug_enabled = $this->to_bool(wp_unslash($_POST['ajax_debug_enabled']));
-                update_option('bjlg_ajax_debug_enabled', $ajax_debug_enabled);
+                $this->update_option_value('bjlg_ajax_debug_enabled', $ajax_debug_enabled);
                 $saved_settings['ajax_debug'] = $ajax_debug_enabled;
                 BJLG_Debug::log("Réglage du débogueur AJAX mis à jour.");
             }
+
+            };
+
+            $this->execute_in_site_scope($context, function () use ($operation, $context) {
+                return $this->with_context($context, $operation);
+            });
 
             BJLG_History::log('settings_updated', 'success', 'Les réglages ont été mis à jour.');
             
@@ -842,10 +975,10 @@ class BJLG_Settings {
             $sanitized['id'] = $preset_id;
         }
 
-        $existing = self::sanitize_backup_presets(get_option('bjlg_backup_presets', []));
+        $existing = self::sanitize_backup_presets($this->get_option_value('bjlg_backup_presets', []));
         $existing[$sanitized['id']] = $sanitized;
 
-        update_option('bjlg_backup_presets', $existing);
+        $this->update_option_value('bjlg_backup_presets', $existing);
 
         BJLG_Debug::log('Modèle de sauvegarde enregistré : ' . $sanitized['id']);
 
@@ -918,34 +1051,42 @@ class BJLG_Settings {
         if (!\bjlg_can_manage_settings()) {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
-        
-        $required_permission = \bjlg_get_required_capability();
 
-        $settings = [
-            'cleanup' => $this->get_section_settings_with_defaults('cleanup'),
-            'whitelabel' => $this->get_section_settings_with_defaults('whitelabel'),
-            'encryption' => $this->get_section_settings_with_defaults('encryption'),
-            'notifications' => $this->get_section_settings_with_defaults('notifications'),
-            'performance' => $this->get_section_settings_with_defaults('performance'),
-            'gdrive' => $this->get_section_settings_with_defaults('gdrive'),
-            's3' => $this->get_section_settings_with_defaults('s3'),
-            'wasabi' => $this->get_section_settings_with_defaults('wasabi'),
-            'dropbox' => $this->get_section_settings_with_defaults('dropbox'),
-            'onedrive' => $this->get_section_settings_with_defaults('onedrive'),
-            'pcloud' => $this->get_section_settings_with_defaults('pcloud'),
-            'azure_blob' => $this->get_section_settings_with_defaults('azure_blob'),
-            'backblaze_b2' => $this->get_section_settings_with_defaults('backblaze_b2'),
-            'sftp' => $this->get_section_settings_with_defaults('sftp'),
-            'advanced' => $this->get_section_settings_with_defaults('advanced'),
-            'webhooks' => get_option('bjlg_webhook_settings', []),
-            'schedule' => get_option('bjlg_schedule_settings', []),
-            'permissions' => [
-                'required_capability' => $required_permission,
-                'type' => $this->is_role_permission($required_permission) ? 'role' : 'capability',
-            ],
-            'ajax_debug' => get_option('bjlg_ajax_debug_enabled', false)
-        ];
-        
+        $context = $this->resolve_request_context_from_input($_REQUEST);
+        $this->ensure_request_context_capabilities($context);
+
+        $settings = $this->execute_in_site_scope($context, function () use ($context) {
+            return $this->with_context($context, function () {
+                $required_permission = \bjlg_get_required_capability();
+
+                return [
+                    'cleanup' => $this->get_section_settings_with_defaults('cleanup'),
+                    'whitelabel' => $this->get_section_settings_with_defaults('whitelabel'),
+                    'encryption' => $this->get_section_settings_with_defaults('encryption'),
+                    'notifications' => $this->get_section_settings_with_defaults('notifications'),
+                    'performance' => $this->get_section_settings_with_defaults('performance'),
+                    'monitoring' => $this->get_section_settings_with_defaults('monitoring'),
+                    'gdrive' => $this->get_section_settings_with_defaults('gdrive'),
+                    's3' => $this->get_section_settings_with_defaults('s3'),
+                    'wasabi' => $this->get_section_settings_with_defaults('wasabi'),
+                    'dropbox' => $this->get_section_settings_with_defaults('dropbox'),
+                    'onedrive' => $this->get_section_settings_with_defaults('onedrive'),
+                    'pcloud' => $this->get_section_settings_with_defaults('pcloud'),
+                    'azure_blob' => $this->get_section_settings_with_defaults('azure_blob'),
+                    'backblaze_b2' => $this->get_section_settings_with_defaults('backblaze_b2'),
+                    'sftp' => $this->get_section_settings_with_defaults('sftp'),
+                    'advanced' => $this->get_section_settings_with_defaults('advanced'),
+                    'webhooks' => $this->get_option_value('bjlg_webhook_settings', []),
+                    'schedule' => $this->get_option_value('bjlg_schedule_settings', []),
+                    'permissions' => [
+                        'required_capability' => $required_permission,
+                        'type' => $this->is_role_permission($required_permission) ? 'role' : 'capability',
+                    ],
+                    'ajax_debug' => $this->get_option_value('bjlg_ajax_debug_enabled', false)
+                ];
+            });
+        });
+
         wp_send_json_success($settings);
     }
     
@@ -957,34 +1098,43 @@ class BJLG_Settings {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
-        
+
+        $context = $this->resolve_request_context_from_input($_POST);
+        $this->ensure_request_context_capabilities($context);
+
         $section = isset($_POST['section'])
             ? sanitize_text_field(wp_unslash($_POST['section']))
             : 'all';
-        
+
         try {
-            if ($section === 'all') {
-                foreach ($this->default_settings as $key => $defaults) {
-                    update_option($this->get_option_name_for_section($key), $defaults);
-                }
-                update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
-                $this->sync_manage_plugin_capability_map(\BJLG_DEFAULT_CAPABILITY);
-                BJLG_History::log('settings_reset', 'info', 'Tous les réglages ont été réinitialisés');
-            } else {
-                if ($section === 'permissions') {
-                    update_option('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+            $operation = function () use ($section) {
+                if ($section === 'all') {
+                    foreach ($this->default_settings as $key => $defaults) {
+                        $this->update_option_value($this->get_option_name_for_section($key), $defaults);
+                    }
+                    $this->update_option_value('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
                     $this->sync_manage_plugin_capability_map(\BJLG_DEFAULT_CAPABILITY);
-                    BJLG_History::log('settings_reset', 'info', "Réglages 'permissions' réinitialisés");
-                } elseif (isset($this->default_settings[$section])) {
-                    update_option($this->get_option_name_for_section($section), $this->default_settings[$section]);
-                    BJLG_History::log('settings_reset', 'info', "Réglages '$section' réinitialisés");
+                    BJLG_History::log('settings_reset', 'info', 'Tous les réglages ont été réinitialisés');
                 } else {
-                    throw new Exception("Section de réglages invalide.");
+                    if ($section === 'permissions') {
+                        $this->update_option_value('bjlg_required_capability', \BJLG_DEFAULT_CAPABILITY);
+                        $this->sync_manage_plugin_capability_map(\BJLG_DEFAULT_CAPABILITY);
+                        BJLG_History::log('settings_reset', 'info', "Réglages 'permissions' réinitialisés");
+                    } elseif (isset($this->default_settings[$section])) {
+                        $this->update_option_value($this->get_option_name_for_section($section), $this->default_settings[$section]);
+                        BJLG_History::log('settings_reset', 'info', "Réglages '$section' réinitialisés");
+                    } else {
+                        throw new Exception("Section de réglages invalide.");
+                    }
                 }
-            }
-            
+            };
+
+            $this->execute_in_site_scope($context, function () use ($operation, $context) {
+                return $this->with_context($context, $operation);
+            });
+
             wp_send_json_success(['message' => 'Réglages réinitialisés avec succès.']);
-            
+
         } catch (Exception $e) {
             wp_send_json_error(['message' => $e->getMessage()]);
         }
@@ -998,58 +1148,65 @@ class BJLG_Settings {
             wp_send_json_error(['message' => 'Permission refusée.']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
-        
-        $settings = [];
-        
-        // Collecter tous les paramètres
-        $option_keys = [
-            'bjlg_cleanup_settings',
-            'bjlg_whitelabel_settings',
-            'bjlg_encryption_settings',
-            'bjlg_incremental_settings',
-            'bjlg_notification_settings',
-            'bjlg_performance_settings',
-            'bjlg_gdrive_settings',
-            'bjlg_dropbox_settings',
-            'bjlg_onedrive_settings',
-            'bjlg_pcloud_settings',
-            'bjlg_s3_settings',
-            'bjlg_wasabi_settings',
-            'bjlg_azure_blob_settings',
-            'bjlg_backblaze_b2_settings',
-            'bjlg_sftp_settings',
-            'bjlg_webhook_settings',
-            'bjlg_schedule_settings',
-            'bjlg_advanced_settings',
-            'bjlg_backup_include_patterns',
-            'bjlg_backup_exclude_patterns',
-            'bjlg_backup_secondary_destinations',
-            'bjlg_backup_post_checks',
-            'bjlg_backup_presets',
-            'bjlg_required_capability'
-        ];
-        
-        foreach ($option_keys as $key) {
-            $value = get_option($key);
-            if ($value !== false) {
-                $settings[$key] = $value;
-            }
-        }
-        
-        // Ajouter des métadonnées
-        $export_data = [
-            'plugin' => 'Backup JLG',
-            'version' => BJLG_VERSION,
-            'exported_at' => current_time('c'),
-            'site_url' => get_site_url(),
-            'settings' => $settings
-        ];
-        
-        BJLG_History::log('settings_exported', 'success', 'Paramètres exportés');
-        
+
+        $context = $this->resolve_request_context_from_input($_POST);
+        $this->ensure_request_context_capabilities($context);
+
+        $export_payload = $this->execute_in_site_scope($context, function () use ($context) {
+            return $this->with_context($context, function () {
+                $option_keys = [
+                    'bjlg_cleanup_settings',
+                    'bjlg_whitelabel_settings',
+                    'bjlg_encryption_settings',
+                    'bjlg_incremental_settings',
+                    'bjlg_notification_settings',
+                    'bjlg_performance_settings',
+                    'bjlg_monitoring_settings',
+                    'bjlg_gdrive_settings',
+                    'bjlg_dropbox_settings',
+                    'bjlg_onedrive_settings',
+                    'bjlg_pcloud_settings',
+                    'bjlg_s3_settings',
+                    'bjlg_wasabi_settings',
+                    'bjlg_azure_blob_settings',
+                    'bjlg_backblaze_b2_settings',
+                    'bjlg_sftp_settings',
+                    'bjlg_webhook_settings',
+                    'bjlg_schedule_settings',
+                    'bjlg_advanced_settings',
+                    'bjlg_backup_include_patterns',
+                    'bjlg_backup_exclude_patterns',
+                    'bjlg_backup_secondary_destinations',
+                    'bjlg_backup_post_checks',
+                    'bjlg_backup_presets',
+                    'bjlg_required_capability'
+                ];
+
+                $settings = [];
+                foreach ($option_keys as $key) {
+                    $value = $this->get_option_value($key);
+                    if ($value !== false) {
+                        $settings[$key] = $value;
+                    }
+                }
+
+                $export_data = [
+                    'plugin' => 'Backup JLG',
+                    'version' => BJLG_VERSION,
+                    'exported_at' => current_time('c'),
+                    'site_url' => get_site_url(),
+                    'settings' => $settings,
+                ];
+
+                BJLG_History::log('settings_exported', 'success', 'Paramètres exportés');
+
+                return $export_data;
+            });
+        });
+
         wp_send_json_success([
             'filename' => 'bjlg-settings-' . date('Y-m-d-His') . '.json',
-            'data' => base64_encode(json_encode($export_data, JSON_PRETTY_PRINT))
+            'data' => base64_encode(json_encode($export_payload, JSON_PRETTY_PRINT)),
         ]);
     }
     
@@ -1090,7 +1247,7 @@ class BJLG_Settings {
             }
 
             foreach ($sanitized_settings as $key => $value) {
-                update_option($key, $value);
+                $this->update_option_value($key, $value);
             }
 
             if (array_key_exists('bjlg_required_capability', $sanitized_settings)) {
@@ -1274,6 +1431,21 @@ class BJLG_Settings {
                     }
                     if (isset($value['compression_level'])) {
                         $sanitized['compression_level'] = max(0, intval($value['compression_level']));
+                    }
+                }
+
+                return $sanitized;
+
+            case 'bjlg_monitoring_settings':
+                $defaults = $this->default_settings['monitoring'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['storage_quota_warning_threshold'])) {
+                        $sanitized['storage_quota_warning_threshold'] = max(1.0, min(100.0, (float) $value['storage_quota_warning_threshold']));
+                    }
+                    if (isset($value['remote_metrics_ttl_minutes'])) {
+                        $sanitized['remote_metrics_ttl_minutes'] = max(5, min(1440, (int) $value['remote_metrics_ttl_minutes']));
                     }
                 }
 
@@ -1622,7 +1794,7 @@ class BJLG_Settings {
             $normalized_permission = \BJLG_DEFAULT_CAPABILITY;
         }
 
-        $stored_map = get_option('bjlg_capability_map', []);
+        $stored_map = $this->get_option_value('bjlg_capability_map', []);
         if (!is_array($stored_map)) {
             $stored_map = [];
         }
@@ -1635,7 +1807,7 @@ class BJLG_Settings {
 
         $stored_map['manage_plugin'] = $normalized_permission;
 
-        update_option('bjlg_capability_map', $stored_map);
+        $this->update_option_value('bjlg_capability_map', $stored_map);
     }
 
     /**
@@ -1739,24 +1911,24 @@ class BJLG_Settings {
     private function init_backup_preferences_defaults() {
         $defaults = $this->default_backup_preferences;
 
-        if (get_option('bjlg_backup_include_patterns', null) === null) {
-            update_option('bjlg_backup_include_patterns', $defaults['include_patterns']);
+        if ($this->get_option_value('bjlg_backup_include_patterns', null) === null) {
+            $this->update_option_value('bjlg_backup_include_patterns', $defaults['include_patterns']);
         }
 
-        if (get_option('bjlg_backup_exclude_patterns', null) === null) {
-            update_option('bjlg_backup_exclude_patterns', $defaults['exclude_patterns']);
+        if ($this->get_option_value('bjlg_backup_exclude_patterns', null) === null) {
+            $this->update_option_value('bjlg_backup_exclude_patterns', $defaults['exclude_patterns']);
         }
 
-        if (get_option('bjlg_backup_secondary_destinations', null) === null) {
-            update_option('bjlg_backup_secondary_destinations', $defaults['secondary_destinations']);
+        if ($this->get_option_value('bjlg_backup_secondary_destinations', null) === null) {
+            $this->update_option_value('bjlg_backup_secondary_destinations', $defaults['secondary_destinations']);
         }
 
-        if (get_option('bjlg_backup_post_checks', null) === null) {
-            update_option('bjlg_backup_post_checks', $defaults['post_checks']);
+        if ($this->get_option_value('bjlg_backup_post_checks', null) === null) {
+            $this->update_option_value('bjlg_backup_post_checks', $defaults['post_checks']);
         }
 
-        if (get_option('bjlg_backup_presets', null) === null) {
-            update_option('bjlg_backup_presets', $this->default_backup_presets);
+        if ($this->get_option_value('bjlg_backup_presets', null) === null) {
+            $this->update_option_value('bjlg_backup_presets', $this->default_backup_presets);
         }
     }
 
@@ -1766,14 +1938,14 @@ class BJLG_Settings {
         $destinations = self::sanitize_destination_list($destinations, self::get_known_destination_ids());
         $post_checks = self::sanitize_post_checks($post_checks, self::get_default_backup_post_checks());
 
-        update_option('bjlg_backup_include_patterns', $includes);
-        update_option('bjlg_backup_exclude_patterns', $excludes);
-        update_option('bjlg_backup_secondary_destinations', $destinations);
-        update_option('bjlg_backup_post_checks', $post_checks);
+        $this->update_option_value('bjlg_backup_include_patterns', $includes);
+        $this->update_option_value('bjlg_backup_exclude_patterns', $excludes);
+        $this->update_option_value('bjlg_backup_secondary_destinations', $destinations);
+        $this->update_option_value('bjlg_backup_post_checks', $post_checks);
     }
 
     public static function get_backup_presets(): array {
-        return self::sanitize_backup_presets(get_option('bjlg_backup_presets', []));
+        return self::sanitize_backup_presets($this->get_option_value('bjlg_backup_presets', []));
     }
 
     public static function sanitize_backup_presets($presets): array {
@@ -2333,6 +2505,26 @@ class BJLG_Settings {
         }
 
         return (bool) $value;
+    }
+
+    public static function get_monitoring_settings(): array {
+        $instance = self::get_instance();
+        $defaults = isset($instance->default_settings['monitoring']) ? $instance->default_settings['monitoring'] : [];
+        $stored = $instance->get_option_value('bjlg_monitoring_settings', []);
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+
+        return self::merge_settings_with_defaults($stored, $defaults);
+    }
+
+    public static function get_storage_warning_threshold(): float {
+        $settings = self::get_monitoring_settings();
+        $threshold = isset($settings['storage_quota_warning_threshold'])
+            ? (float) $settings['storage_quota_warning_threshold']
+            : 85.0;
+
+        return max(1.0, min(100.0, $threshold));
     }
 
     public static function get_known_destination_ids() {
@@ -2901,7 +3093,7 @@ class BJLG_Settings {
      */
     public function get_setting($section, $key = null, $default = null) {
         $option_name = 'bjlg_' . $section . '_settings';
-        $settings = get_option($option_name, $this->default_settings[$section] ?? []);
+        $settings = $this->get_option_value($option_name, $this->default_settings[$section] ?? []);
         
         if ($key === null) {
             return $settings;
@@ -2915,10 +3107,10 @@ class BJLG_Settings {
      */
     public function update_setting($section, $key, $value) {
         $option_name = 'bjlg_' . $section . '_settings';
-        $settings = get_option($option_name, $this->default_settings[$section] ?? []);
+        $settings = $this->get_option_value($option_name, $this->default_settings[$section] ?? []);
         
         $settings[$key] = $value;
         
-        return update_option($option_name, $settings);
+        return $this->update_option_value($option_name, $settings);
     }
 }

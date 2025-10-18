@@ -195,7 +195,7 @@ class BJLG_Incremental {
     }
 
     private function get_incremental_settings() {
-        $settings = get_option('bjlg_incremental_settings', self::DEFAULT_INCREMENTAL_SETTINGS);
+        $settings = \bjlg_get_option('bjlg_incremental_settings', self::DEFAULT_INCREMENTAL_SETTINGS);
 
         if (!is_array($settings)) {
             $settings = [];

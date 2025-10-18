@@ -1064,6 +1064,94 @@ if (!function_exists('home_url')) {
 
 if (!function_exists('is_multisite')) {
     function is_multisite() {
+        return !empty($GLOBALS['bjlg_test_is_multisite']);
+    }
+}
+
+if (!function_exists('is_network_admin')) {
+    function is_network_admin() {
+        return !empty($GLOBALS['bjlg_test_is_network_admin']);
+    }
+}
+
+if (!function_exists('get_current_blog_id')) {
+    function get_current_blog_id() {
+        if (!isset($GLOBALS['bjlg_test_current_blog_id'])) {
+            $GLOBALS['bjlg_test_current_blog_id'] = 1;
+        }
+
+        return (int) $GLOBALS['bjlg_test_current_blog_id'];
+    }
+}
+
+if (!function_exists('switch_to_blog')) {
+    function switch_to_blog($blog_id) {
+        if (!isset($GLOBALS['bjlg_test_blog_stack'])) {
+            $GLOBALS['bjlg_test_blog_stack'] = [];
+        }
+
+        $GLOBALS['bjlg_test_blog_stack'][] = get_current_blog_id();
+        $GLOBALS['bjlg_test_current_blog_id'] = (int) $blog_id;
+
+        if (!isset($GLOBALS['bjlg_test_blog_switch_log'])) {
+            $GLOBALS['bjlg_test_blog_switch_log'] = [];
+        }
+
+        $GLOBALS['bjlg_test_blog_switch_log'][] = (int) $blog_id;
+
+        return true;
+    }
+}
+
+if (!function_exists('restore_current_blog')) {
+    function restore_current_blog() {
+        if (empty($GLOBALS['bjlg_test_blog_stack'])) {
+            $GLOBALS['bjlg_test_current_blog_id'] = 1;
+
+            return false;
+        }
+
+        $previous = array_pop($GLOBALS['bjlg_test_blog_stack']);
+        $GLOBALS['bjlg_test_current_blog_id'] = (int) $previous;
+
+        return true;
+    }
+}
+
+if (!function_exists('get_site_option')) {
+    function get_site_option($option, $default = false) {
+        if (!isset($GLOBALS['bjlg_test_site_options'])) {
+            $GLOBALS['bjlg_test_site_options'] = [];
+        }
+
+        return $GLOBALS['bjlg_test_site_options'][$option] ?? $default;
+    }
+}
+
+if (!function_exists('update_site_option')) {
+    function update_site_option($option, $value) {
+        if (!isset($GLOBALS['bjlg_test_site_options'])) {
+            $GLOBALS['bjlg_test_site_options'] = [];
+        }
+
+        $GLOBALS['bjlg_test_site_options'][$option] = $value;
+
+        return true;
+    }
+}
+
+if (!function_exists('delete_site_option')) {
+    function delete_site_option($option) {
+        if (!isset($GLOBALS['bjlg_test_site_options'])) {
+            $GLOBALS['bjlg_test_site_options'] = [];
+        }
+
+        if (array_key_exists($option, $GLOBALS['bjlg_test_site_options'])) {
+            unset($GLOBALS['bjlg_test_site_options'][$option]);
+
+            return true;
+        }
+
         return false;
     }
 }
