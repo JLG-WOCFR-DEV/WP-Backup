@@ -229,6 +229,13 @@ jQuery(function($) {
         }
     };
 
+    const refreshStateLabels = {
+        'fresh': __('Actualisé récemment', 'backup-jlg'),
+        'stale': __('Instantané daté', 'backup-jlg'),
+        'expired': __('Actualisation requise', 'backup-jlg'),
+        'unknown': __('État inconnu', 'backup-jlg')
+    };
+
     const updateRemoteStorage = function(storage) {
         const $card = $overview.find('[data-metric="remote-storage"]');
         if (!$card.length) {
@@ -237,6 +244,10 @@ jQuery(function($) {
 
         storage = storage || {};
         const destinations = Array.isArray(storage.remote_destinations) ? storage.remote_destinations : [];
+        const refreshInfo = typeof storage.remote_refresh === 'object' && storage.remote_refresh !== null
+            ? storage.remote_refresh
+            : {};
+        const threshold = Number(storage.remote_threshold || 0.85);
         const $list = $card.find('[data-field="remote_storage_list"]');
 
         if (!destinations.length) {
@@ -263,6 +274,13 @@ jQuery(function($) {
         const watchList = [];
         const offlineList = [];
         const rendered = [];
+        const captionParts = [];
+
+        if (refreshInfo && (refreshInfo.relative || refreshInfo.formatted)) {
+            const refreshLabel = refreshInfo.relative || refreshInfo.formatted;
+            const stateLabel = refreshStateLabels[refreshInfo.state] || refreshStateLabels.unknown;
+            captionParts.push(sprintf(__('Actualisé %1$s (%2$s)', 'backup-jlg'), refreshLabel, stateLabel));
+        }
 
         destinations.forEach(function(dest) {
             if (!dest || typeof dest !== 'object') {
@@ -280,9 +298,17 @@ jQuery(function($) {
             const backupsCount = Number(dest.backups_count || 0);
             const usedBytes = Number(dest.used_bytes);
             const quotaBytes = Number(dest.quota_bytes);
+            const ratioValue = typeof dest.ratio === 'number' && Number.isFinite(dest.ratio) ? dest.ratio : null;
+            const ratioLabel = dest.ratio_label || (ratioValue !== null ? formatNumber((ratioValue * 100).toFixed(1)) + '%' : '');
+            const refreshLabel = dest.refresh_label || dest.refreshed_relative || dest.refreshed_formatted || '';
+            const refreshState = dest.refresh_state && refreshStateLabels[dest.refresh_state]
+                ? dest.refresh_state
+                : 'unknown';
 
             let ratio = null;
-            if (Number.isFinite(usedBytes) && Number.isFinite(quotaBytes) && quotaBytes > 0) {
+            if (ratioValue !== null) {
+                ratio = Math.min(1, Math.max(0, ratioValue));
+            } else if (Number.isFinite(usedBytes) && Number.isFinite(quotaBytes) && quotaBytes > 0) {
                 ratio = Math.min(1, Math.max(0, usedBytes / quotaBytes));
             }
 
@@ -292,7 +318,7 @@ jQuery(function($) {
             if (errors.length) {
                 offlineList.push(name);
             }
-            if (ratio !== null && ratio >= 0.85) {
+            if (ratio !== null && ratio >= Math.max(0.1, threshold)) {
                 watchList.push(name);
             }
 
@@ -312,13 +338,24 @@ jQuery(function($) {
             }
 
             if (ratio !== null) {
-                details.push(sprintf(__('Utilisation : %s%%', 'backup-jlg'), formatNumber(Math.round(ratio * 100))));
+                if (ratioLabel) {
+                    details.push(sprintf(__('Utilisation : %s', 'backup-jlg'), ratioLabel));
+                } else {
+                    details.push(sprintf(__('Utilisation : %s%%', 'backup-jlg'), formatNumber(Math.round(ratio * 100))));
+                }
+            }
+
+            if (refreshLabel) {
+                const stateText = refreshStateLabels[refreshState] || refreshStateLabels.unknown;
+                details.push(sprintf(__('Actualisé : %1$s (%2$s)', 'backup-jlg'), refreshLabel, stateText));
             }
 
             let intent = 'info';
             if (!connectedFlag || errors.length) {
                 intent = 'error';
-            } else if (ratio !== null && ratio >= 0.85) {
+            } else if (ratio !== null && ratio >= 0.95) {
+                intent = 'critical';
+            } else if (ratio !== null && ratio >= Math.max(0.1, threshold)) {
                 intent = 'warning';
             }
 
@@ -326,7 +363,12 @@ jQuery(function($) {
                 name: name,
                 details: details,
                 errors: errors,
-                intent: intent
+                intent: intent,
+                badge: dest.badge || intent,
+                actions: {
+                    settings: dest.cta_settings_url || '',
+                    test: dest.cta_test_url || ''
+                }
             });
         });
 
@@ -334,12 +376,16 @@ jQuery(function($) {
         const uniqueWatch = watchList.filter(function(value, index, array) { return array.indexOf(value) === index; });
 
         if (uniqueOffline.length) {
-            setField('remote_storage_caption', sprintf(__('Attention : vérifier %s', 'backup-jlg'), uniqueOffline.join(', ')));
+            captionParts.push(sprintf(__('Attention : vérifier %s', 'backup-jlg'), uniqueOffline.join(', ')));
         } else if (uniqueWatch.length) {
-            setField('remote_storage_caption', sprintf(__('Capacité > 85%% pour %s', 'backup-jlg'), uniqueWatch.join(', ')));
-        } else {
-            setField('remote_storage_caption', __('Capacité hors-site nominale.', 'backup-jlg'));
+            captionParts.push(sprintf(__('Quota proche de la limite pour %s', 'backup-jlg'), uniqueWatch.join(', ')));
         }
+
+        if (!captionParts.length) {
+            captionParts.push(__('Capacité hors-site nominale.', 'backup-jlg'));
+        }
+
+        setField('remote_storage_caption', captionParts.join(' — '));
 
         if ($list.length) {
             $list.empty();
@@ -348,12 +394,43 @@ jQuery(function($) {
                     'class': 'bjlg-card__list-item bjlg-card__list-item--' + item.intent,
                     'data-intent': item.intent
                 });
-                $('<strong/>', { text: item.name }).appendTo($item);
+                const $title = $('<strong/>', { text: item.name }).appendTo($item);
+                if (item.badge === 'critical') {
+                    $('<span/>', {
+                        'class': 'bjlg-badge bjlg-badge-bg-rose',
+                        text: __('Critique', 'backup-jlg')
+                    }).appendTo($title);
+                } else if (item.badge === 'warning') {
+                    $('<span/>', {
+                        'class': 'bjlg-badge bjlg-badge-bg-amber',
+                        text: __('À surveiller', 'backup-jlg')
+                    }).appendTo($title);
+                }
                 if (item.details.length) {
                     $('<span/>', { 'class': 'bjlg-card__list-meta', text: item.details.join(' • ') }).appendTo($item);
                 }
                 if (item.errors.length) {
                     $('<span/>', { 'class': 'bjlg-card__list-error', text: item.errors.join(' • ') }).appendTo($item);
+                }
+                const hasSettings = item.actions.settings && item.actions.settings !== '';
+                const hasTest = item.actions.test && item.actions.test !== '';
+                if (hasSettings || hasTest) {
+                    const $actions = $('<div/>', { 'class': 'bjlg-card__list-meta bjlg-card__list-meta--cta' });
+                    if (hasSettings) {
+                        $('<a/>', {
+                            href: item.actions.settings,
+                            'class': 'button button-secondary button-small',
+                            text: __('Ouvrir les réglages', 'backup-jlg')
+                        }).appendTo($actions);
+                    }
+                    if (hasTest) {
+                        $('<a/>', {
+                            href: item.actions.test,
+                            'class': 'button button-small',
+                            text: __('Tester la connexion', 'backup-jlg')
+                        }).appendTo($actions);
+                    }
+                    $actions.appendTo($item);
                 }
                 $list.append($item);
             });

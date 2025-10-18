@@ -28,6 +28,8 @@ class BJLG_Settings {
     ];
     private const VALID_SCHEDULE_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
+    private const DEFAULT_REMOTE_STORAGE_THRESHOLD = 0.85;
+
     private $default_settings = [
         'cleanup' => [
             'by_number' => 3,
@@ -187,7 +189,8 @@ class BJLG_Settings {
             'debug_mode' => false,
             'ajax_debug' => false,
             'exclude_patterns' => [],
-            'custom_backup_dir' => ''
+            'custom_backup_dir' => '',
+            'remote_storage_threshold' => self::DEFAULT_REMOTE_STORAGE_THRESHOLD,
         ]
     ];
 
@@ -1585,6 +1588,12 @@ class BJLG_Settings {
                     if (isset($value['custom_backup_dir'])) {
                         $sanitized['custom_backup_dir'] = sanitize_text_field((string) $value['custom_backup_dir']);
                     }
+                    if (isset($value['remote_storage_threshold'])) {
+                        $sanitized['remote_storage_threshold'] = self::normalize_ratio(
+                            $value['remote_storage_threshold'],
+                            (float) $defaults['remote_storage_threshold']
+                        );
+                    }
                 }
 
                 return $sanitized;
@@ -2335,6 +2344,29 @@ class BJLG_Settings {
         return (bool) $value;
     }
 
+    private static function normalize_ratio($value, float $default): float {
+        if (is_string($value)) {
+            $value = str_replace(',', '.', trim($value));
+        }
+
+        if (!is_numeric($value)) {
+            return $default;
+        }
+
+        $ratio = (float) $value;
+        if ($ratio > 1.0) {
+            $ratio = $ratio / 100.0;
+        }
+
+        if ($ratio <= 0.0) {
+            return $default;
+        }
+
+        $ratio = max(0.05, min(0.99, $ratio));
+
+        return (float) round($ratio, 4);
+    }
+
     public static function get_known_destination_ids() {
         $destinations = ['google_drive', 'aws_s3', 'sftp', 'dropbox', 'onedrive', 'pcloud', 'wasabi'];
 
@@ -2399,6 +2431,22 @@ class BJLG_Settings {
         }
 
         return ucwords(str_replace(['_', '-'], ' ', $slug));
+    }
+
+    /**
+     * Retourne le seuil d'alerte pour les destinations distantes.
+     */
+    public static function get_remote_storage_threshold(): float {
+        $settings = get_option('bjlg_advanced_settings', []);
+        $default = self::DEFAULT_REMOTE_STORAGE_THRESHOLD;
+
+        if (!is_array($settings)) {
+            return $default;
+        }
+
+        $value = $settings['remote_storage_threshold'] ?? $default;
+
+        return self::normalize_ratio($value, $default);
     }
 
     /**

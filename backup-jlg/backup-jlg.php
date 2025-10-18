@@ -360,7 +360,7 @@ final class BJLG_Plugin {
 
         $files_to_load = [
             'class-bjlg-debug.php', 'class-bjlg-client-ip-helper.php', 'class-bjlg-history.php', 'class-bjlg-settings.php',
-            'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php',
+            'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php', 'class-bjlg-remote-storage-metrics.php',
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
             'class-bjlg-notification-transport.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-purge-worker.php',
@@ -418,6 +418,7 @@ final class BJLG_Plugin {
         new BJLG\BJLG_Restore($backup_manager, $encryption_service);
 
         BJLG\BJLG_Scheduler::instance();
+        BJLG\BJLG_Scheduler::init_hooks();
         BJLG\BJLG_Cleanup::instance();
         new BJLG\BJLG_Health_Check();
         new BJLG\BJLG_Diagnostics();

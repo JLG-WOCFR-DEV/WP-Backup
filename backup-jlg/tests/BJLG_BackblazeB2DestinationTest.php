@@ -166,6 +166,105 @@ final class BJLG_BackblazeB2DestinationTest extends TestCase
         $this->assertStringContainsString('remote/backup.zip', $token['url']);
     }
 
+    public function test_get_storage_usage_prefers_provider_snapshot(): void
+    {
+        $handler = function (string $url, array $args): array {
+            $this->requests[] = ['url' => $url, 'args' => $args];
+
+            if (strpos($url, 'b2_authorize_account') !== false) {
+                return $this->jsonResponse([
+                    'accountId' => '1234',
+                    'authorizationToken' => 'authToken',
+                    'apiUrl' => 'https://api001.backblazeb2.com',
+                    'downloadUrl' => 'https://f001.backblazeb2.com',
+                ]);
+            }
+
+            if (strpos($url, 'b2_get_usage') !== false) {
+                return $this->jsonResponse([
+                    'usedBytes' => 5000,
+                    'capacityBytes' => 10000,
+                    'freeBytes' => 5000,
+                ]);
+            }
+
+            return $this->jsonResponse([]);
+        };
+
+        $destination = $this->createDestination($handler);
+
+        update_option('bjlg_backblaze_b2_settings', [
+            'key_id' => 'key',
+            'application_key' => 'secret',
+            'bucket_id' => 'bucket',
+            'bucket_name' => 'bucket-name',
+            'enabled' => true,
+        ]);
+
+        $usage = $destination->get_storage_usage();
+
+        $this->assertSame(5000, $usage['used_bytes']);
+        $this->assertSame(10000, $usage['quota_bytes']);
+        $this->assertSame(5000, $usage['free_bytes']);
+        $this->assertSame('provider', $usage['source']);
+        $this->assertSame(strtotime('2021-02-01T00:00:00Z'), $usage['refreshed_at']);
+    }
+
+    public function test_get_storage_usage_falls_back_to_listing_when_snapshot_fails(): void
+    {
+        $handler = function (string $url, array $args): array {
+            $this->requests[] = ['url' => $url, 'args' => $args];
+
+            if (strpos($url, 'b2_authorize_account') !== false) {
+                return $this->jsonResponse([
+                    'accountId' => '1234',
+                    'authorizationToken' => 'authToken',
+                    'apiUrl' => 'https://api001.backblazeb2.com',
+                    'downloadUrl' => 'https://f001.backblazeb2.com',
+                ]);
+            }
+
+            if (strpos($url, 'b2_get_usage') !== false) {
+                return [
+                    'response' => [
+                        'code' => 500,
+                        'message' => 'Error',
+                    ],
+                    'body' => 'error',
+                ];
+            }
+
+            if (strpos($url, 'b2_list_file_names') !== false) {
+                return $this->jsonResponse([
+                    'files' => [
+                        ['fileName' => 'nightly/backup-1.zip', 'contentLength' => 2000, 'uploadTimestamp' => 1612137600000],
+                        ['fileName' => 'nightly/backup-2.zip', 'contentLength' => 3000, 'uploadTimestamp' => 1612141200000],
+                    ],
+                ]);
+            }
+
+            return $this->jsonResponse([]);
+        };
+
+        $destination = $this->createDestination($handler);
+
+        update_option('bjlg_backblaze_b2_settings', [
+            'key_id' => 'key',
+            'application_key' => 'secret',
+            'bucket_id' => 'bucket',
+            'bucket_name' => 'bucket-name',
+            'object_prefix' => 'nightly',
+            'enabled' => true,
+        ]);
+
+        $usage = $destination->get_storage_usage();
+
+        $this->assertSame(5000, $usage['used_bytes']);
+        $this->assertNull($usage['quota_bytes']);
+        $this->assertNull($usage['free_bytes']);
+        $this->assertSame('estimate', $usage['source']);
+    }
+
     private function createDestination(?callable $handler = null): BJLG_Backblaze_B2
     {
         $time = static fn (): int => strtotime('2021-02-01T00:00:00Z');
