@@ -4362,6 +4362,24 @@ class BJLG_Admin {
         $custom_id = sprintf($custom_id_template, $field_prefix);
         $custom_description_id = sprintf($custom_description_id_template, $field_prefix);
 
+        $cron_examples = [
+            '0 2 * * *' => __('Tous les jours à 02h00', 'backup-jlg'),
+            '0 1 * * 1-5' => __('Chaque jour ouvré à 01h00', 'backup-jlg'),
+            '30 2 1 * *' => __('Le 1er de chaque mois à 02h30', 'backup-jlg'),
+            '0 */6 * * *' => __('Toutes les 6 heures pile', 'backup-jlg'),
+            '15 3 * * sun' => __('Tous les dimanches à 03h15', 'backup-jlg'),
+        ];
+
+        $cron_examples_id_template = 'bjlg-schedule-cron-examples-%s';
+        $cron_helper_id_template = 'bjlg-cron-helper-%s';
+        $cron_preview_list_id_template = 'bjlg-cron-preview-list-%s';
+        $cron_warning_id_template = 'bjlg-cron-warnings-%s';
+
+        $cron_examples_id = sprintf($cron_examples_id_template, $field_prefix);
+        $cron_helper_id = sprintf($cron_helper_id_template, $field_prefix);
+        $cron_preview_list_id = sprintf($cron_preview_list_id_template, $field_prefix);
+        $cron_warning_id = sprintf($cron_warning_id_template, $field_prefix);
+
         $summary_html = $this->get_schedule_summary_markup(
             $schedule_components,
             $encrypt_enabled,
@@ -4479,19 +4497,77 @@ class BJLG_Admin {
                     <tr class="<?php echo esc_attr($custom_classes); ?>" aria-hidden="<?php echo esc_attr($custom_hidden ? 'true' : 'false'); ?>">
                         <th scope="row"><label for="<?php echo esc_attr($custom_id); ?>" data-for-template="bjlg-schedule-custom-%s">Expression Cron</label></th>
                         <td>
-                            <input type="text"
-                                   id="<?php echo esc_attr($custom_id); ?>"
-                                   class="regular-text code"
-                                   data-field="custom_cron"
-                                   data-id-template="bjlg-schedule-custom-%s"
-                                   data-describedby-template="bjlg-schedule-custom-%s-description"
-                                   name="schedules[<?php echo esc_attr($field_prefix); ?>][custom_cron]"
-                                   value="<?php echo esc_attr($schedule['custom_cron'] ?? ''); ?>"
-                                   placeholder="0 3 * * mon-fri"
-                                   aria-describedby="<?php echo esc_attr($custom_description_id); ?>">
-                            <p id="<?php echo esc_attr($custom_description_id); ?>" class="description" data-id-template="bjlg-schedule-custom-%s-description">
-                                Utilisez une expression Cron standard à cinq champs (minute, heure, jour du mois, mois, jour de semaine).
-                            </p>
+                            <div class="bjlg-cron-field" data-cron-field>
+                                <div class="bjlg-form-field-group">
+                                    <div class="bjlg-form-field-control">
+                                        <input type="text"
+                                               id="<?php echo esc_attr($custom_id); ?>"
+                                               class="regular-text code bjlg-cron-input"
+                                               data-field="custom_cron"
+                                               data-id-template="bjlg-schedule-custom-%s"
+                                               data-describedby-template="bjlg-schedule-custom-%s-description"
+                                               name="schedules[<?php echo esc_attr($field_prefix); ?>][custom_cron]"
+                                               value="<?php echo esc_attr($schedule['custom_cron'] ?? ''); ?>"
+                                               list="<?php echo esc_attr($cron_examples_id); ?>"
+                                               placeholder="0 3 * * mon-fri"
+                                               aria-describedby="<?php echo esc_attr($custom_description_id); ?>"
+                                               data-cron-input>
+                                    </div>
+                                    <div class="bjlg-form-field-actions">
+                                        <button type="button"
+                                                class="button-link bjlg-cron-helper-toggle"
+                                                data-target="<?php echo esc_attr($cron_helper_id); ?>"
+                                                aria-controls="<?php echo esc_attr($cron_helper_id); ?>"
+                                                aria-expanded="false"
+                                                data-label-show="<?php echo esc_attr__('Afficher des exemples', 'backup-jlg'); ?>"
+                                                data-label-hide="<?php echo esc_attr__('Masquer les exemples', 'backup-jlg'); ?>">
+                                            <?php esc_html_e('Afficher des exemples', 'backup-jlg'); ?>
+                                        </button>
+                                    </div>
+                                </div>
+                                <datalist id="<?php echo esc_attr($cron_examples_id); ?>">
+                                    <?php foreach ($cron_examples as $expression => $label_text): ?>
+                                        <option value="<?php echo esc_attr($expression); ?>"><?php echo esc_html($label_text); ?></option>
+                                    <?php endforeach; ?>
+                                </datalist>
+                                <p id="<?php echo esc_attr($custom_description_id); ?>"
+                                   class="description"
+                                   data-id-template="bjlg-schedule-custom-%s-description">
+                                    Utilisez une expression Cron standard à cinq champs (minute, heure, jour du mois, mois, jour de semaine).
+                                </p>
+                                <div id="<?php echo esc_attr($cron_helper_id); ?>"
+                                     class="bjlg-cron-helper-panel bjlg-hidden"
+                                     data-cron-helper
+                                     data-id-template="bjlg-cron-helper-%s"
+                                     aria-live="polite">
+                                    <p class="description bjlg-mb-6"><?php esc_html_e('Exemples rapides :', 'backup-jlg'); ?></p>
+                                    <div class="bjlg-cron-examples" role="list">
+                                        <?php foreach ($cron_examples as $expression => $label_text): ?>
+                                            <button type="button"
+                                                    class="button-link bjlg-cron-example"
+                                                    data-expression="<?php echo esc_attr($expression); ?>"
+                                                    role="listitem">
+                                                <code><?php echo esc_html($expression); ?></code>
+                                                <span class="bjlg-cron-example-label"><?php echo esc_html($label_text); ?></span>
+                                            </button>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <div class="bjlg-cron-preview" data-cron-preview>
+                                        <strong class="bjlg-cron-preview-title"><?php esc_html_e('Prochaines exécutions', 'backup-jlg'); ?></strong>
+                                        <ul class="bjlg-cron-preview-list"
+                                            id="<?php echo esc_attr($cron_preview_list_id); ?>"
+                                            data-cron-preview-list
+                                            data-default-message="<?php echo esc_attr__('Saisissez une expression pour obtenir les cinq prochaines occurrences.', 'backup-jlg'); ?>">
+                                            <li class="description"><?php esc_html_e('Saisissez une expression pour obtenir les cinq prochaines occurrences.', 'backup-jlg'); ?></li>
+                                        </ul>
+                                    </div>
+                                    <div class="bjlg-cron-warnings"
+                                         id="<?php echo esc_attr($cron_warning_id); ?>"
+                                         data-cron-warnings
+                                         aria-live="polite">
+                                    </div>
+                                </div>
+                            </div>
                         </td>
                     </tr>
                     <tr>
