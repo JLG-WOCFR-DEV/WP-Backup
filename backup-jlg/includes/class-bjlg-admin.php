@@ -4481,7 +4481,7 @@ class BJLG_Admin {
                         <td>
                             <input type="text"
                                    id="<?php echo esc_attr($custom_id); ?>"
-                                   class="regular-text code"
+                                   class="regular-text code bjlg-cron-input"
                                    data-field="custom_cron"
                                    data-id-template="bjlg-schedule-custom-%s"
                                    data-describedby-template="bjlg-schedule-custom-%s-description"
@@ -4490,8 +4490,15 @@ class BJLG_Admin {
                                    placeholder="0 3 * * mon-fri"
                                    aria-describedby="<?php echo esc_attr($custom_description_id); ?>">
                             <p id="<?php echo esc_attr($custom_description_id); ?>" class="description" data-id-template="bjlg-schedule-custom-%s-description">
-                                Utilisez une expression Cron standard à cinq champs (minute, heure, jour du mois, mois, jour de semaine).
+                                Utilisez une expression Cron standard à cinq champs&nbsp;: minute, heure, jour du mois, mois et jour de semaine. Les suggestions ci-dessous proposent des exemples prêts à l'emploi et complètent automatiquement les noms de jours ou de mois.
                             </p>
+                            <div class="bjlg-cron-assistant" data-cron-helper>
+                                <p class="description bjlg-cron-assistant__title">Exemples rapides</p>
+                                <div class="bjlg-cron-presets" data-cron-presets role="list"></div>
+                                <div class="bjlg-cron-suggestions" data-cron-suggestions aria-hidden="true" aria-label="Suggestions pour le champ en cours" role="listbox"></div>
+                                <p class="description bjlg-cron-message" data-cron-message aria-live="polite"></p>
+                                <p class="description bjlg-cron-frequency" data-cron-frequency></p>
+                            </div>
                         </td>
                     </tr>
                     <tr>
