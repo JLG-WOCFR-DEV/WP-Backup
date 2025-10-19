@@ -4362,6 +4362,24 @@ class BJLG_Admin {
         $custom_id = sprintf($custom_id_template, $field_prefix);
         $custom_description_id = sprintf($custom_description_id_template, $field_prefix);
 
+        $cron_examples = [
+            '0 2 * * *' => __('Tous les jours à 02h00', 'backup-jlg'),
+            '0 1 * * 1-5' => __('Chaque jour ouvré à 01h00', 'backup-jlg'),
+            '30 2 1 * *' => __('Le 1er de chaque mois à 02h30', 'backup-jlg'),
+            '0 */6 * * *' => __('Toutes les 6 heures pile', 'backup-jlg'),
+            '15 3 * * sun' => __('Tous les dimanches à 03h15', 'backup-jlg'),
+        ];
+
+        $cron_examples_id_template = 'bjlg-schedule-cron-examples-%s';
+        $cron_helper_id_template = 'bjlg-cron-helper-%s';
+        $cron_preview_list_id_template = 'bjlg-cron-preview-list-%s';
+        $cron_warning_id_template = 'bjlg-cron-warnings-%s';
+
+        $cron_examples_id = sprintf($cron_examples_id_template, $field_prefix);
+        $cron_helper_id = sprintf($cron_helper_id_template, $field_prefix);
+        $cron_preview_list_id = sprintf($cron_preview_list_id_template, $field_prefix);
+        $cron_warning_id = sprintf($cron_warning_id_template, $field_prefix);
+
         $summary_html = $this->get_schedule_summary_markup(
             $schedule_components,
             $encrypt_enabled,

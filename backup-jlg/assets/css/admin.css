@@ -1521,6 +1521,109 @@
     align-items: flex-end;
 }
 
+.bjlg-cron-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bjlg-cron-helper-panel {
+    background: color-mix(in srgb, var(--bjlg-color-surface) 80%, var(--bjlg-color-surface-subtle) 20%);
+    border: 1px solid color-mix(in srgb, var(--bjlg-color-border) 70%, var(--bjlg-color-border-strong) 30%);
+    border-radius: var(--bjlg-radius-md);
+    padding: 14px 16px;
+    box-shadow: var(--bjlg-shadow-xs);
+}
+
+.bjlg-cron-examples {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.bjlg-cron-example {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid color-mix(in srgb, var(--bjlg-color-border) 55%, var(--bjlg-color-border-strong) 45%);
+    border-radius: var(--bjlg-radius-sm);
+    padding: 6px 10px;
+    background: var(--bjlg-color-surface);
+    box-shadow: var(--bjlg-shadow-xs);
+    cursor: pointer;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.bjlg-cron-example:hover,
+.bjlg-cron-example:focus {
+    background: var(--bjlg-color-surface-subtle);
+    border-color: var(--bjlg-color-border-strong);
+    outline: none;
+}
+
+.bjlg-cron-example code {
+    font-size: 0.9em;
+}
+
+.bjlg-cron-example-label {
+    font-size: 0.85em;
+    font-weight: 500;
+    color: var(--bjlg-color-text-subtle);
+}
+
+.bjlg-cron-preview {
+    margin-top: 10px;
+}
+
+.bjlg-cron-preview-title {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 600;
+    color: var(--bjlg-color-text);
+}
+
+.bjlg-cron-preview-list {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--bjlg-color-text);
+}
+
+.bjlg-cron-preview-item {
+    margin-bottom: 4px;
+}
+
+.bjlg-cron-preview-date {
+    font-weight: 600;
+}
+
+.bjlg-cron-preview-relative {
+    margin-left: 6px;
+    color: var(--bjlg-color-text-subtle);
+    font-style: italic;
+}
+
+.bjlg-cron-warning {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: var(--bjlg-radius-sm);
+    border: 1px solid transparent;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+.bjlg-cron-warning--warning {
+    border-color: rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.12);
+    color: #92400e;
+}
+
+.bjlg-cron-warning--error {
+    border-color: rgba(244, 63, 94, 0.45);
+    background: rgba(244, 63, 94, 0.12);
+    color: #991b1b;
+}
+
 /* Utilitaires génériques
 --------------------------------------------- */
 
@@ -1647,6 +1750,110 @@
 
 .bjlg-badge-bg-blue {
     background-color: #3b82f6;
+}
+
+.bjlg-cron-assistant {
+    margin-top: 8px;
+    padding: 12px 14px;
+    border: 1px solid color-mix(in srgb, var(--bjlg-color-accent) 12%, var(--bjlg-color-border));
+    border-radius: var(--bjlg-radius-md);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--bjlg-color-surface) 88%, #ffffff 12%) 0%, var(--bjlg-color-surface) 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.bjlg-cron-assistant__title {
+    margin: 0;
+    font-weight: 600;
+    color: var(--bjlg-color-text);
+}
+
+.bjlg-cron-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.bjlg-cron-preset {
+    font-size: 12px;
+    line-height: 1.4;
+    padding: 2px 10px;
+}
+
+.bjlg-cron-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+.bjlg-cron-suggestions[aria-hidden="true"] {
+    display: none;
+}
+
+.bjlg-cron-suggestion.button-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--bjlg-color-accent) 16%, var(--bjlg-color-border));
+    background: color-mix(in srgb, var(--bjlg-color-surface) 86%, var(--bjlg-color-surface-subtle) 14%);
+    color: var(--bjlg-color-accent-strong);
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.bjlg-cron-suggestion.button-link:hover,
+.bjlg-cron-suggestion.button-link:focus {
+    color: var(--bjlg-color-accent-strong);
+    background: color-mix(in srgb, var(--bjlg-color-accent) 12%, #ffffff);
+    border-color: color-mix(in srgb, var(--bjlg-color-accent) 28%, var(--bjlg-color-border));
+    outline: none;
+}
+
+.bjlg-cron-message {
+    margin: 2px 0 0;
+    font-weight: 500;
+}
+
+.bjlg-cron-message.is-error {
+    color: #b32d2e;
+}
+
+.bjlg-cron-message.is-warning {
+    color: #d97706;
+}
+
+.bjlg-cron-message.is-success {
+    color: #047857;
+}
+
+.bjlg-cron-message.is-neutral {
+    color: var(--bjlg-color-text-subtle);
+}
+
+.bjlg-cron-frequency {
+    margin: 0;
+    color: var(--bjlg-color-text-subtle);
+    font-style: italic;
+}
+
+.bjlg-cron-input--error {
+    border-color: #b32d2e !important;
+    box-shadow: 0 0 0 1px rgba(179, 45, 46, 0.18);
+}
+
+.bjlg-cron-input--warning {
+    border-color: #d97706 !important;
+    box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.16);
+}
+
+.bjlg-cron-input--success {
+    border-color: #047857 !important;
+    box-shadow: 0 0 0 1px rgba(4, 120, 87, 0.2);
 }
 
 .bjlg-badge-bg-purple {

@@ -338,15 +338,7 @@ class BJLG_Scheduler {
         $time_str = $schedule['time'] ?? '23:59';
         list($hour, $minute) = array_map('intval', explode(':', $time_str));
 
-        if (function_exists('wp_timezone')) {
-            $timezone = wp_timezone();
-        } else {
-            $timezone_string = function_exists('wp_timezone_string') ? wp_timezone_string() : get_option('timezone_string', 'UTC');
-            if (empty($timezone_string)) {
-                $timezone_string = 'UTC';
-            }
-            $timezone = new \DateTimeZone($timezone_string);
-        }
+        $timezone = $this->get_wordpress_timezone();
 
         $now = $from_timestamp !== null
             ? (new \DateTimeImmutable('@' . $from_timestamp))->setTimezone($timezone)
@@ -472,7 +464,20 @@ class BJLG_Scheduler {
 
         return $next_run_time->getTimestamp();
     }
-    
+
+    private function get_wordpress_timezone(): \DateTimeZone {
+        if (function_exists('wp_timezone')) {
+            return wp_timezone();
+        }
+
+        $timezone_string = function_exists('wp_timezone_string') ? wp_timezone_string() : get_option('timezone_string', 'UTC');
+        if (empty($timezone_string)) {
+            $timezone_string = 'UTC';
+        }
+
+        return new \DateTimeZone($timezone_string);
+    }
+
     /**
      * Obtient la prochaine exécution planifiée
      */
@@ -486,6 +491,72 @@ class BJLG_Scheduler {
 
         wp_send_json_success([
             'schedules' => $summary,
+        ]);
+    }
+
+    public function handle_preview_cron_expression() {
+        if (!\bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $posted = wp_unslash($_POST);
+        $raw_expression = isset($posted['expression']) ? $posted['expression'] : '';
+        $expression = BJLG_Settings::sanitize_cron_expression($raw_expression);
+
+        if ($expression === '') {
+            wp_send_json_error([
+                'message' => __('Expression Cron invalide.', 'backup-jlg'),
+                'errors' => [__('Indiquez une expression Cron à cinq champs (minute, heure, jour du mois, mois, jour de semaine).', 'backup-jlg')],
+            ], 400);
+        }
+
+        $timezone = $this->get_wordpress_timezone();
+        $now = new \DateTimeImmutable('now', $timezone);
+        $occurrences = $this->build_custom_cron_preview($expression, $now, 5);
+
+        if (empty($occurrences)) {
+            wp_send_json_error([
+                'message' => __('Impossible de calculer les prochaines exécutions.', 'backup-jlg'),
+                'errors' => [__('Aucune occurrence trouvée sur l’année à venir. Vérifiez les champs « jour » et « mois ».', 'backup-jlg')],
+            ], 422);
+        }
+
+        $current_timestamp = current_time('timestamp');
+        $response_occurrences = [];
+        $previous_timestamp = null;
+        $intervals = [];
+
+        foreach ($occurrences as $occurrence) {
+            $timestamp = $occurrence->getTimestamp();
+            $response_occurrences[] = [
+                'timestamp' => $timestamp,
+                'formatted' => get_date_from_gmt($this->format_gmt_datetime($timestamp), 'd/m/Y H:i'),
+                'relative' => human_time_diff($timestamp, $current_timestamp),
+            ];
+
+            if ($previous_timestamp !== null) {
+                $intervals[] = max(0, $timestamp - $previous_timestamp);
+            }
+
+            $previous_timestamp = $timestamp;
+        }
+
+        $warnings = [];
+        if (!empty($intervals)) {
+            $min_interval = min($intervals);
+            if ($min_interval < 5 * MINUTE_IN_SECONDS) {
+                $warnings[] = __('Cette expression déclenche la sauvegarde très fréquemment (moins de 5 minutes entre deux passages). Assurez-vous que l’infrastructure peut encaisser cette cadence.', 'backup-jlg');
+            } elseif ($min_interval < 15 * MINUTE_IN_SECONDS) {
+                $warnings[] = __('Fréquence élevée détectée (moins de 15 minutes). Vérifiez qu’il ne s’agit pas d’une erreur de configuration.', 'backup-jlg');
+            }
+        }
+
+        wp_send_json_success([
+            'expression' => $expression,
+            'occurrences' => $response_occurrences,
+            'warnings' => $warnings,
         ]);
     }
 
