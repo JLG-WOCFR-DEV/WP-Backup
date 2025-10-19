@@ -1905,10 +1905,16 @@ class BJLG_REST_API {
                     );
                 }
 
-                $payload = BJLG_Actions::build_download_token_payload($filepath);
+                $base_payload = BJLG_Actions::build_download_token_payload($filepath);
 
                 if (is_array($existing_payload)) {
-                    $payload = array_merge($payload, $existing_payload);
+                    $payload = $existing_payload;
+                    $payload['file'] = $base_payload['file'];
+                    $payload['requires_cap'] = $base_payload['requires_cap'];
+                    $payload['issued_at'] = $base_payload['issued_at'];
+                    $payload['issued_by'] = $base_payload['issued_by'];
+                } else {
+                    $payload = $base_payload;
                 }
                 $persisted = set_transient($transient_key, $payload, $transient_ttl);
 
