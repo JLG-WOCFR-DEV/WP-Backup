@@ -38,6 +38,15 @@ jQuery(function($) {
     const initialNextRuns = parseJSONAttr($scheduleForm.attr('data-next-runs')) || {};
     let newScheduleCounter = 0;
 
+    const cronAssistant = typeof bjlg_ajax.cron_assistant === 'object' && bjlg_ajax.cron_assistant
+        ? bjlg_ajax.cron_assistant
+        : {};
+    const cronExamples = Array.isArray(cronAssistant.examples) ? cronAssistant.examples : [];
+    const cronLabels = cronAssistant.labels && typeof cronAssistant.labels === 'object' ? cronAssistant.labels : {};
+    const cronPreviewCache = new Map();
+    let cronPreviewTimer = null;
+    let cronPreviewRequest = null;
+
     const destinationLabels = {};
     const $timeline = $('#bjlg-schedule-timeline');
     const initialSchedules = parseJSONAttr($scheduleForm.attr('data-schedules')) || [];
@@ -726,6 +735,12 @@ jQuery(function($) {
                 $custom.hide().attr('aria-hidden', 'true');
             }
         }
+
+        if (recurrence === 'custom') {
+            refreshCronAssistant($item, true);
+        } else {
+            clearCronAssistant($item);
+        }
     }
 
     function normalizePatterns(value) {
@@ -768,6 +783,277 @@ jQuery(function($) {
             normalized.dry_run = !!value.dry_run;
         }
         return normalized;
+    }
+
+    function getCronAssistantHelper($item) {
+        if (!$item || !$item.length) {
+            return null;
+        }
+        const $assistant = $item.find('[data-cron-assistant]');
+        if (!$assistant.length) {
+            return null;
+        }
+        return {
+            container: $assistant,
+            examples: $assistant.find('[data-cron-examples]'),
+            preview: $assistant.find('[data-cron-preview]'),
+            list: $assistant.find('[data-cron-preview-list]'),
+            status: $assistant.find('[data-cron-status]'),
+            empty: $assistant.find('[data-cron-empty]'),
+        };
+    }
+
+    function ensureCronAssistant($item) {
+        const helper = getCronAssistantHelper($item);
+        if (!helper || !helper.examples.length || helper.examples.data('initialized')) {
+            if (helper && helper.status.length && typeof helper.status.data('default') === 'undefined') {
+                helper.status.data('default', helper.status.text());
+            }
+            return helper;
+        }
+
+        helper.examples.data('initialized', '1');
+        if (helper.status.length && typeof helper.status.data('default') === 'undefined') {
+            helper.status.data('default', helper.status.text());
+        }
+        cronExamples.forEach(function(example) {
+            if (!example || typeof example !== 'object') {
+                return;
+            }
+            const expression = (example.expression || '').toString();
+            if (!expression) {
+                return;
+            }
+            const label = (example.label || expression).toString();
+            const $button = $('<button/>', {
+                type: 'button',
+                class: 'bjlg-cron-example',
+                text: label,
+            });
+            if (cronLabels.apply_example) {
+                $button.attr('aria-label', cronLabels.apply_example.replace('%s', label));
+            }
+            $button.on('click', function() {
+                const $input = $item.find('[data-field="custom_cron"]');
+                $input.val(expression).trigger('input').trigger('change');
+                $input.focus();
+            });
+            helper.examples.append($button);
+        });
+
+        return helper;
+    }
+
+    function renderCronPreviewState($item, payload) {
+        const helper = getCronAssistantHelper($item);
+        if (!helper) {
+            return;
+        }
+
+        const $input = $item.find('[data-field="custom_cron"]');
+        const $status = helper.status;
+        const $preview = helper.preview;
+        const $list = helper.list;
+        const $empty = helper.empty;
+
+        if (!payload || !payload.expression) {
+            if ($preview.length) {
+                $preview.attr('hidden', 'hidden');
+            }
+            if ($list.length) {
+                $list.empty();
+            }
+            if ($status.length) {
+                const message = cronLabels.empty || $status.data('default') || $status.text() || '';
+                $status.text(message)
+                    .removeClass('bjlg-cron-status--success bjlg-cron-status--warning bjlg-cron-status--error');
+            }
+            if ($empty.length) {
+                $empty.show();
+            }
+            if ($input.length) {
+                $input.removeClass('bjlg-field-error').removeAttr('aria-invalid');
+            }
+            return;
+        }
+
+        if ($empty.length) {
+            $empty.hide();
+        }
+
+        if (payload.loading) {
+            if ($status.length) {
+                $status.text(cronLabels.loading || 'Analyse en cours…')
+                    .removeClass('bjlg-cron-status--success bjlg-cron-status--warning bjlg-cron-status--error');
+            }
+            if ($preview.length) {
+                $preview.attr('hidden', 'hidden');
+            }
+            if ($list.length) {
+                $list.empty();
+            }
+            if ($input.length) {
+                $input.removeClass('bjlg-field-error').removeAttr('aria-invalid');
+            }
+            return;
+        }
+
+        const severity = payload.severity || (Array.isArray(payload.errors) && payload.errors.length ? 'error' : (Array.isArray(payload.warnings) && payload.warnings.length ? 'warning' : 'success'));
+        let message = typeof payload.message === 'string' ? payload.message : '';
+
+        if (!message) {
+            if (severity === 'error' && Array.isArray(payload.errors) && payload.errors.length) {
+                message = payload.errors[0];
+            } else if (Array.isArray(payload.warnings) && payload.warnings.length) {
+                message = payload.warnings[0];
+            } else if (severity === 'error' && cronLabels.error) {
+                message = cronLabels.error;
+            }
+        }
+
+        if ($status.length) {
+            $status
+                .text(message || '')
+                .removeClass('bjlg-cron-status--success bjlg-cron-status--warning bjlg-cron-status--error');
+            if (message) {
+                $status.addClass('bjlg-cron-status--' + severity);
+            }
+        }
+
+        if ($input.length) {
+            if (severity === 'error') {
+                $input.addClass('bjlg-field-error').attr('aria-invalid', 'true');
+            } else {
+                $input.removeClass('bjlg-field-error').removeAttr('aria-invalid');
+            }
+        }
+
+        const runs = Array.isArray(payload.next_runs) ? payload.next_runs : [];
+        if ($preview.length) {
+            if (runs.length) {
+                $preview.removeAttr('hidden');
+            } else {
+                $preview.attr('hidden', 'hidden');
+            }
+        }
+        if ($list.length) {
+            $list.empty();
+            runs.forEach(function(run) {
+                if (!run || typeof run !== 'object') {
+                    return;
+                }
+                const $itemElement = $('<li/>');
+                const formatted = (run.formatted || run.label || '').toString();
+                const relative = (run.relative || '').toString();
+                const iso = (run.iso || '').toString();
+                if (formatted) {
+                    $('<time/>', { datetime: iso, text: formatted }).appendTo($itemElement);
+                }
+                if (relative) {
+                    $('<span/>', { class: 'bjlg-cron-assistant__relative', text: relative }).appendTo($itemElement);
+                }
+                if (!formatted && !relative && run.raw) {
+                    $itemElement.text((run.raw || '').toString());
+                }
+                $list.append($itemElement);
+            });
+        }
+    }
+
+    function clearCronAssistant($item) {
+        renderCronPreviewState($item, null);
+    }
+
+    function queueCronPreview($item, expression) {
+        if (cronPreviewTimer) {
+            clearTimeout(cronPreviewTimer);
+        }
+        cronPreviewTimer = setTimeout(function() {
+            requestCronPreview($item, expression);
+        }, 250);
+    }
+
+    function requestCronPreview($item, expression) {
+        if (cronPreviewTimer) {
+            clearTimeout(cronPreviewTimer);
+            cronPreviewTimer = null;
+        }
+
+        ensureCronAssistant($item);
+        renderCronPreviewState($item, { expression: expression, loading: true });
+
+        if (cronPreviewRequest) {
+            cronPreviewRequest.abort();
+            cronPreviewRequest = null;
+        }
+
+        if (cronPreviewCache.has(expression)) {
+            const cached = cronPreviewCache.get(expression);
+            if (cached) {
+                renderCronPreviewState($item, cached);
+            }
+            return;
+        }
+
+        cronPreviewRequest = $.ajax({
+            url: bjlg_ajax.ajax_url,
+            method: 'POST',
+            data: {
+                action: 'bjlg_preview_cron_expression',
+                nonce: bjlg_ajax.nonce,
+                expression: expression
+            }
+        }).done(function(response) {
+            const data = response && typeof response === 'object' ? response.data || {} : {};
+            const payload = $.extend({ expression: expression }, data);
+            if (response && response.success) {
+                payload.severity = payload.severity || (Array.isArray(payload.warnings) && payload.warnings.length ? 'warning' : 'success');
+                cronPreviewCache.set(expression, payload);
+                renderCronPreviewState($item, payload);
+            } else {
+                payload.severity = payload.severity || 'error';
+                if (!payload.message && typeof data.message === 'string') {
+                    payload.message = data.message;
+                }
+                renderCronPreviewState($item, payload);
+            }
+        }).fail(function(jqXHR) {
+            if (jqXHR && jqXHR.statusText === 'abort') {
+                return;
+            }
+            const data = jqXHR && jqXHR.responseJSON ? jqXHR.responseJSON.data || jqXHR.responseJSON : {};
+            const payload = {
+                expression: expression,
+                severity: 'error',
+                message: data && typeof data.message === 'string' ? data.message : (cronLabels.error || 'Erreur lors de l’analyse de l’expression.'),
+            };
+            renderCronPreviewState($item, payload);
+        }).always(function() {
+            cronPreviewRequest = null;
+        });
+    }
+
+    function refreshCronAssistant($item, immediate) {
+        ensureCronAssistant($item);
+        const recurrence = ($item.find('[data-field="recurrence"]').val() || '').toString();
+        if (recurrence !== 'custom') {
+            clearCronAssistant($item);
+            return;
+        }
+
+        const $input = $item.find('[data-field="custom_cron"]');
+        const expression = ($input.val() || '').toString().trim();
+
+        if (!expression) {
+            clearCronAssistant($item);
+            return;
+        }
+
+        if (immediate) {
+            requestCronPreview($item, expression);
+        } else {
+            queueCronPreview($item, expression);
+        }
     }
 
     const badgeStyles = {
@@ -1070,6 +1356,7 @@ jQuery(function($) {
         }
 
         toggleScheduleRows($item);
+        ensureCronAssistant($item);
         updateScheduleSummaryForItem($item);
         updateRunButtonState($item);
     }
@@ -1462,12 +1749,20 @@ jQuery(function($) {
     });
 
     $scheduleForm.on('change', '.bjlg-schedule-item [data-field="components"], .bjlg-schedule-item [data-field="encrypt"], .bjlg-schedule-item [data-field="incremental"], .bjlg-schedule-item [data-field="day"], .bjlg-schedule-item [data-field="day_of_month"], .bjlg-schedule-item [data-field="time"], .bjlg-schedule-item [data-field="custom_cron"], .bjlg-schedule-item [data-field="post_checks"], .bjlg-schedule-item [data-field="secondary_destinations"]', function() {
-        updateScheduleSummaryForItem($(this).closest('.bjlg-schedule-item'));
+        const $item = $(this).closest('.bjlg-schedule-item');
+        if ($(this).is('[data-field="custom_cron"]')) {
+            refreshCronAssistant($item, true);
+        }
+        updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
     });
 
     $scheduleForm.on('input', '.bjlg-schedule-item [data-field="label"], .bjlg-schedule-item textarea[data-field], .bjlg-schedule-item [data-field="custom_cron"]', function() {
-        updateScheduleSummaryForItem($(this).closest('.bjlg-schedule-item'));
+        const $item = $(this).closest('.bjlg-schedule-item');
+        if ($(this).is('[data-field="custom_cron"]')) {
+            refreshCronAssistant($item, false);
+        }
+        updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
     });
 

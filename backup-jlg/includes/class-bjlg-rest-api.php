@@ -1779,6 +1779,32 @@ class BJLG_REST_API {
                     ['status' => 400]
                 );
             }
+
+            if (($sanitized_entry['recurrence'] ?? '') === 'custom') {
+                $analysis = BJLG_Scheduler::analyze_custom_cron_expression($sanitized_entry['custom_cron']);
+                if (is_wp_error($analysis)) {
+                    $details = $analysis->get_error_data();
+                    return new WP_Error(
+                        'invalid_schedule_cron',
+                        $analysis->get_error_message(),
+                        [
+                            'status' => 400,
+                            'details' => isset($details['details']) ? (array) $details['details'] : [],
+                        ]
+                    );
+                }
+
+                if (!empty($analysis['errors'])) {
+                    return new WP_Error(
+                        'invalid_schedule_cron',
+                        $analysis['errors'][0],
+                        [
+                            'status' => 400,
+                            'details' => $analysis['errors'],
+                        ]
+                    );
+                }
+            }
         }
 
         return $collection;

@@ -4492,6 +4492,17 @@ class BJLG_Admin {
                             <p id="<?php echo esc_attr($custom_description_id); ?>" class="description" data-id-template="bjlg-schedule-custom-%s-description">
                                 Utilisez une expression Cron standard à cinq champs (minute, heure, jour du mois, mois, jour de semaine).
                             </p>
+                            <div class="bjlg-cron-assistant" data-cron-assistant>
+                                <p class="description bjlg-cron-assistant__hint" data-cron-empty>
+                                    <?php esc_html_e('Saisissez une expression pour prévisualiser les prochaines exécutions ou sélectionnez un exemple.', 'backup-jlg'); ?>
+                                </p>
+                                <div class="bjlg-cron-assistant__examples" data-cron-examples role="list"></div>
+                                <div class="bjlg-cron-assistant__preview" data-cron-preview hidden>
+                                    <strong class="bjlg-cron-assistant__title"><?php esc_html_e('Prochaines exécutions', 'backup-jlg'); ?></strong>
+                                    <ol class="bjlg-cron-assistant__runs" data-cron-preview-list></ol>
+                                </div>
+                                <p class="bjlg-cron-assistant__status" data-cron-status aria-live="polite"></p>
+                            </div>
                         </td>
                     </tr>
                     <tr>
