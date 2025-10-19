@@ -284,8 +284,14 @@ class BJLG_Actions {
             return new WP_Error('bjlg_invalid_token', 'Lien de téléchargement invalide ou expiré.', ['status' => 403]);
         }
 
-        if ($issued_by > 0 && function_exists('wp_set_current_user')) {
-            wp_set_current_user($issued_by);
+        $current_user_id = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
+
+        if ($issued_by > 0 && $current_user_id !== $issued_by) {
+            return new WP_Error(
+                'bjlg_forbidden',
+                'Permissions insuffisantes pour télécharger cette sauvegarde.',
+                ['status' => 403]
+            );
         }
 
         if ($required_capability && !current_user_can($required_capability)) {
