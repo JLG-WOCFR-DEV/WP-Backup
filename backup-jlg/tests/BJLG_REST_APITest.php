@@ -1878,6 +1878,92 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         }
     }
 
+    public function test_download_backup_refresh_preserves_flags_and_ttl(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+        $filepath = BJLG_BACKUP_DIR . $filename;
+
+        file_put_contents($filepath, 'backup-data');
+
+        $token = 'bjlg-test-token-' . uniqid('', true);
+        $transient_key = 'bjlg_download_' . $token;
+
+        $initial_payload = BJLG\BJLG_Actions::build_download_token_payload($filepath);
+        $initial_payload['delete_after_download'] = true;
+        $initial_payload['custom_flag'] = 'persist';
+
+        $initial_ttl = 30;
+        set_transient($transient_key, $initial_payload, $initial_ttl);
+
+        $initial_timeout = $GLOBALS['bjlg_test_options']['_transient_timeout_' . $transient_key] ?? null;
+        $this->assertNotNull($initial_timeout, 'Initial transient timeout was not recorded.');
+
+        $expected_ttl = 600;
+        $previous_download_filters = $GLOBALS['bjlg_test_hooks']['filters']['bjlg_download_token_ttl'] ?? null;
+
+        add_filter('bjlg_download_token_ttl', static function ($value) use ($expected_ttl) {
+            return $expected_ttl;
+        }, 10, 2);
+
+        $request = new class($filename, $token) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id, $token)
+            {
+                $this->params = [
+                    'id' => $id,
+                    'token' => $token,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        try {
+            $response = $api->download_backup($request);
+
+            $this->assertIsArray($response);
+            $this->assertArrayHasKey('download_token', $response);
+            $this->assertSame($token, $response['download_token']);
+
+            $stored_payload = $GLOBALS['bjlg_test_transients'][$transient_key] ?? null;
+            $this->assertIsArray($stored_payload);
+            $this->assertArrayHasKey('delete_after_download', $stored_payload);
+            $this->assertTrue($stored_payload['delete_after_download']);
+            $this->assertSame('persist', $stored_payload['custom_flag'] ?? null);
+
+            $new_timeout = $GLOBALS['bjlg_test_options']['_transient_timeout_' . $transient_key] ?? null;
+            $this->assertNotNull($new_timeout, 'Refreshed transient timeout was not recorded.');
+            $this->assertGreaterThan($initial_timeout, $new_timeout, 'Transient timeout was not refreshed.');
+
+            $remaining_lifetime = $new_timeout - time();
+            $this->assertGreaterThanOrEqual($expected_ttl - 1, $remaining_lifetime);
+            $this->assertLessThanOrEqual($expected_ttl, $remaining_lifetime);
+        } finally {
+            if ($previous_download_filters !== null) {
+                $GLOBALS['bjlg_test_hooks']['filters']['bjlg_download_token_ttl'] = $previous_download_filters;
+            } else {
+                unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_download_token_ttl']);
+            }
+
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+
+            unset($GLOBALS['bjlg_test_transients'][$transient_key]);
+            unset($GLOBALS['bjlg_test_options']['_transient_' . $transient_key]);
+            unset($GLOBALS['bjlg_test_options']['_transient_timeout_' . $transient_key]);
+        }
+    }
+
     public function test_download_backup_url_can_be_used_without_session(): void
     {
         $GLOBALS['bjlg_test_transients'] = [];
