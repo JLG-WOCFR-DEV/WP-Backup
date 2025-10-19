@@ -3096,7 +3096,7 @@ class BJLG_Settings {
         return $sanitized;
     }
 
-    private static function sanitize_cron_expression($expression): string {
+    public static function sanitize_cron_expression($expression): string {
         if (!is_string($expression)) {
             if (is_array($expression)) {
                 $expression = implode(' ', $expression);
