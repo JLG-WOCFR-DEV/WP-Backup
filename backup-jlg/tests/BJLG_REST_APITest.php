@@ -1046,7 +1046,6 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $this->assertArrayNotHasKey('last_used', $updated_keys[0]);
         $this->assertIsArray($stored_stats);
         $this->assertSame(1, $stored_stats['usage_count']);
-        $this->assertSame($user->ID, get_current_user_id());
     }
 
     public function test_admin_generated_key_survives_sanitization_and_rest_verification(): void
@@ -1301,11 +1300,6 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $this->assertSame('settings_updated', $last_entry['action']);
         $this->assertSame('success', $last_entry['status']);
         $this->assertSame($admin->ID, $last_entry['user_id']);
-
-        $current_user = wp_get_current_user();
-        $this->assertIsObject($current_user);
-        $this->assertSame($admin->ID, $current_user->ID);
-        $this->assertSame($admin->ID, get_current_user_id());
     }
 
     /**
@@ -1607,7 +1601,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $this->assertArrayHasKey('issued_at', $stored_payload);
             $this->assertIsInt($stored_payload['issued_at']);
             $this->assertArrayHasKey('issued_by', $stored_payload);
-            $this->assertSame(get_current_user_id(), $stored_payload['issued_by']);
+            $this->assertSame(0, $stored_payload['issued_by']);
         } finally {
             if (file_exists($filepath)) {
                 unlink($filepath);
@@ -1893,8 +1887,8 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $GLOBALS['bjlg_test_users'] = [
             $user->ID => $user,
         ];
-        $GLOBALS['current_user'] = $user;
-        $GLOBALS['current_user_id'] = $user->ID;
+
+        wp_set_current_user($user->ID);
 
         $backup = $this->createBackupWithComponents(['db']);
         $filename = basename($backup);
@@ -1920,25 +1914,93 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $response = $api->download_backup($request);
 
             $this->assertIsArray($response);
-            $this->assertArrayHasKey('download_url', $response);
             $this->assertArrayHasKey('download_token', $response);
 
-            $download_url = (string) $response['download_url'];
-            $parsed_url = parse_url($download_url);
-            $this->assertIsArray($parsed_url);
-            $this->assertSame('/wp-admin/admin-ajax.php', $parsed_url['path'] ?? null);
+            $token = (string) $response['download_token'];
+            $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
 
-            $query_args = [];
-            if (!empty($parsed_url['query'])) {
-                parse_str((string) $parsed_url['query'], $query_args);
+            wp_set_current_user(0);
+
+            $_REQUEST['token'] = $token;
+
+            try {
+                $actions->handle_download_request();
+                $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+            } catch (BJLG_Test_JSON_Response $exception) {
+                $this->assertSame(403, $exception->status_code);
+                $this->assertIsArray($exception->data);
+                $this->assertSame(
+                    'Permissions insuffisantes pour télécharger cette sauvegarde.',
+                    $exception->data['message'] ?? null
+                );
             }
 
-            $token = (string) $response['download_token'];
-
-            $this->assertSame('bjlg_download', $query_args['action'] ?? null);
-            $this->assertSame($token, $query_args['token'] ?? null);
             $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
-            $this->assertSame(10, has_action('wp_ajax_nopriv_bjlg_download', [$actions, 'handle_download_request']));
+            $this->assertFileExists($backup);
+        } finally {
+            $_REQUEST = [];
+            $_GET = [];
+            $_POST = [];
+            wp_set_current_user(0);
+            $GLOBALS['bjlg_test_current_user_can'] = true;
+            $this->deleteBackupIfExists($backup);
+        }
+    }
+
+    public function test_download_backup_token_succeeds_for_authenticated_user(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+        $GLOBALS['bjlg_test_current_user_can'] = true;
+        $_REQUEST = [];
+        $_GET = [];
+        $_POST = [];
+
+        $api = new BJLG\BJLG_REST_API();
+        $actions = new BJLG\BJLG_Actions();
+
+        $user = $this->makeUser(778, 'rest-download-auth');
+        $GLOBALS['bjlg_test_users'] = [
+            $user->ID => $user,
+        ];
+
+        wp_set_current_user($user->ID);
+
+        $backup = $this->createBackupWithComponents(['db']);
+        $filename = basename($backup);
+
+        $request = new class($filename) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id)
+            {
+                $this->params = [
+                    'id' => $id,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $captured_paths = [];
+
+        add_filter('bjlg_pre_stream_backup', function ($value, $filepath) use (&$captured_paths) {
+            $captured_paths[] = $filepath;
+
+            return true;
+        }, 10, 2);
+
+        try {
+            $response = $api->download_backup($request);
+
+            $this->assertIsArray($response);
+            $this->assertArrayHasKey('download_token', $response);
+
+            $token = (string) $response['download_token'];
+            $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
 
             // Simulate an unauthenticated request consuming the download URL.
             $previous_can = $GLOBALS['bjlg_test_current_user_can'] ?? null;
@@ -1946,15 +2008,92 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $GLOBALS['current_user_id'] = 0;
             $GLOBALS['bjlg_test_current_user_can'] = false;
 
-            $captured_paths = [];
-            add_filter('bjlg_pre_stream_backup', function ($value, $filepath) use (&$captured_paths) {
-                $captured_paths[] = $filepath;
+            $actions->handle_download_request();
 
-                return true;
-            }, 10, 2);
+            $this->assertNotEmpty($captured_paths);
+            $this->assertSame(realpath($backup), realpath((string) $captured_paths[0]));
+            $this->assertArrayNotHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
+            $this->assertFileExists($backup);
+        } finally {
+            unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_pre_stream_backup']);
+            $_REQUEST = [];
+            $_GET = [];
+            $_POST = [];
+            wp_set_current_user(0);
+            $GLOBALS['bjlg_test_current_user_can'] = true;
+            $this->deleteBackupIfExists($backup);
+        }
+    }
+
+    public function test_delete_after_download_token_deletes_file_after_rest_refresh(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+        $GLOBALS['bjlg_test_current_user_can'] = true;
+        $_REQUEST = [];
+        $_GET = [];
+        $_POST = [];
+
+        $api = new BJLG\BJLG_REST_API();
+        $actions = new BJLG\BJLG_Actions();
+
+        $user = $this->makeUser(779, 'delete-after-rest');
+        $GLOBALS['bjlg_test_users'] = [
+            $user->ID => $user,
+        ];
+
+        wp_set_current_user($user->ID);
+
+        $backup = $this->createBackupWithComponents(['db']);
+        $filename = basename($backup);
+
+        $token = 'bjlg-delete-after-' . uniqid('', true);
+
+        set_transient('bjlg_download_' . $token, [
+            'file' => $backup,
+            'requires_cap' => bjlg_get_required_capability(),
+            'issued_at' => time() - 30,
+            'issued_by' => $user->ID,
+            'delete_after_download' => true,
+        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
+
+        $request = new class($filename, $token) {
+            /** @var array<string, mixed> */
+            private $params;
+
+            public function __construct($id, $token)
+            {
+                $this->params = [
+                    'id' => $id,
+                    'token' => $token,
+                ];
+            }
+
+            public function get_param($key)
+            {
+                return $this->params[$key] ?? null;
+            }
+        };
+
+        $captured_paths = [];
+
+        add_filter('bjlg_pre_stream_backup', function ($value, $filepath) use (&$captured_paths) {
+            $captured_paths[] = $filepath;
+
+            return true;
+        }, 10, 2);
+
+        try {
+            $response = $api->download_backup($request);
+
+            $this->assertIsArray($response);
+            $this->assertArrayHasKey('download_token', $response);
+            $this->assertSame($token, $response['download_token']);
+
+            $payload = $GLOBALS['bjlg_test_transients']['bjlg_download_' . $token] ?? null;
+            $this->assertIsArray($payload);
+            $this->assertTrue($payload['delete_after_download']);
 
             $_REQUEST['token'] = $token;
-            $_GET['token'] = $token;
 
             try {
                 do_action('wp_ajax_nopriv_bjlg_download');
@@ -1976,7 +2115,6 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
             $this->assertNotEmpty($captured_paths);
             $this->assertSame(realpath($backup), realpath((string) $captured_paths[0]));
-            $this->assertSame($user->ID, get_current_user_id());
             $this->assertArrayNotHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
             if ($previous_can !== null) {
                 $GLOBALS['bjlg_test_current_user_can'] = $previous_can;
@@ -1988,9 +2126,8 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $_REQUEST = [];
             $_GET = [];
             $_POST = [];
+            wp_set_current_user(0);
             $GLOBALS['bjlg_test_current_user_can'] = true;
-            $GLOBALS['current_user'] = null;
-            $GLOBALS['current_user_id'] = 0;
             $this->deleteBackupIfExists($backup);
         }
     }

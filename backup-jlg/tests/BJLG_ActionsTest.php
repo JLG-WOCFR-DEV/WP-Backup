@@ -55,6 +55,8 @@ final class BJLG_ActionsTest extends TestCase
         $GLOBALS['bjlg_test_transients'] = [];
         $GLOBALS['bjlg_test_last_status_header'] = null;
         $GLOBALS['bjlg_test_realpath_mock'] = null;
+        $GLOBALS['current_user'] = null;
+        $GLOBALS['current_user_id'] = 0;
         \BJLG\BJLG_Debug::$logs = [];
         $_POST = [];
         $_REQUEST = [];
@@ -502,7 +504,6 @@ final class BJLG_ActionsTest extends TestCase
             $this->assertIsArray($result);
             $this->assertSame($filepath, $result[0]);
             $this->assertSame('bjlg_download_' . $token, $result[1]);
-            $this->assertSame($user_id, get_current_user_id());
         } finally {
             if ($previous_can !== null) {
                 $GLOBALS['bjlg_test_current_user_can'] = $previous_can;
