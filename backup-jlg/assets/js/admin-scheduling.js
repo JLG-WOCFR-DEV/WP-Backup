@@ -130,6 +130,10 @@ jQuery(function($) {
         paused: { label: 'En pause', className: 'bjlg-status-badge--paused' }
     };
 
+    const cronPreviewCache = new Map();
+    let cronPreviewRequest = null;
+    let cronPreviewTimer = null;
+
     $scheduleForm.find('[data-field="secondary_destinations"]').each(function() {
         const value = ($(this).val() || '').toString();
         if (!value || destinationLabels[value]) {
@@ -797,8 +801,10 @@ jQuery(function($) {
         if ($custom.length) {
             if (recurrence === 'custom') {
                 $custom.show().attr('aria-hidden', 'false');
+                initCronAssistant($item);
             } else {
                 $custom.hide().attr('aria-hidden', 'true');
+                resetCronAssistant($item);
             }
         }
     }
@@ -1397,6 +1403,374 @@ jQuery(function($) {
         $target.empty().append(fragment);
     }
 
+    function getCronFieldElements($input) {
+        const $field = $input.closest('[data-cron-field]');
+        if (!$field.length) {
+            return null;
+        }
+        const $panel = $field.find('[data-cron-helper]').first();
+        const $previewList = $field.find('[data-cron-preview-list]').first();
+        const $warnings = $field.find('[data-cron-warnings]').first();
+        const $toggle = $field.find('.bjlg-cron-helper-toggle').first();
+
+        return {
+            field: $field,
+            panel: $panel,
+            previewList: $previewList,
+            warnings: $warnings,
+            toggle: $toggle
+        };
+    }
+
+    function getCronDefaultMessage($list) {
+        if (!$list || !$list.length) {
+            return '';
+        }
+        const stored = $list.attr('data-default-message');
+        return typeof stored === 'string' ? stored : '';
+    }
+
+    function setCronPanelVisibility(elements, visible) {
+        if (!elements) {
+            return;
+        }
+        const $panel = elements.panel;
+        const $toggle = elements.toggle;
+
+        if ($panel && $panel.length) {
+            if (visible) {
+                $panel.removeClass('bjlg-hidden');
+            } else {
+                $panel.addClass('bjlg-hidden');
+            }
+        }
+
+        if ($toggle && $toggle.length) {
+            const showLabel = ($toggle.attr('data-label-show') || '').toString();
+            const hideLabel = ($toggle.attr('data-label-hide') || '').toString();
+            if (visible) {
+                $toggle.attr('aria-expanded', 'true');
+                if (hideLabel) {
+                    $toggle.text(hideLabel);
+                }
+            } else {
+                $toggle.attr('aria-expanded', 'false');
+                if (showLabel) {
+                    $toggle.text(showLabel);
+                }
+            }
+        }
+    }
+
+    function setCronPreviewLoading(elements) {
+        if (!elements) {
+            return;
+        }
+        if (elements.previewList && elements.previewList.length) {
+            elements.previewList.empty().append(
+                $('<li/>', { class: 'description', text: 'Analyse de l’expression…' })
+            );
+        }
+        if (elements.warnings && elements.warnings.length) {
+            elements.warnings.empty();
+        }
+    }
+
+    function renderCronWarnings(elements, messages, level) {
+        if (!elements || !elements.warnings || !elements.warnings.length) {
+            return;
+        }
+        const $warnings = elements.warnings;
+        $warnings.empty();
+
+        const entries = [];
+        if (Array.isArray(messages)) {
+            messages.forEach(function(message) {
+                if (typeof message === 'string') {
+                    const trimmed = message.trim();
+                    if (trimmed) {
+                        entries.push(trimmed);
+                    }
+                }
+            });
+        }
+
+        if (!entries.length) {
+            return;
+        }
+
+        const baseClass = level === 'error' ? 'bjlg-cron-warning--error' : 'bjlg-cron-warning--warning';
+        entries.forEach(function(entry) {
+            $('<p/>', {
+                class: 'bjlg-cron-warning ' + baseClass,
+                text: entry
+            }).appendTo($warnings);
+        });
+    }
+
+    function clearCronPreview(elements) {
+        if (!elements) {
+            return;
+        }
+        if (elements.previewList && elements.previewList.length) {
+            const defaultMessage = getCronDefaultMessage(elements.previewList);
+            elements.previewList.empty();
+            if (defaultMessage) {
+                $('<li/>', { class: 'description', text: defaultMessage }).appendTo(elements.previewList);
+            }
+        }
+        if (elements.warnings && elements.warnings.length) {
+            elements.warnings.empty();
+        }
+    }
+
+    function renderCronPreviewData(elements, data) {
+        if (!elements || !elements.previewList || !elements.previewList.length) {
+            return;
+        }
+
+        const occurrences = Array.isArray(data && data.occurrences) ? data.occurrences : [];
+        const warnings = Array.isArray(data && data.warnings) ? data.warnings : [];
+
+        elements.previewList.empty();
+
+        if (!occurrences.length) {
+            elements.previewList.append(
+                $('<li/>', { class: 'description', text: 'Aucune occurrence calculée.' })
+            );
+        } else {
+            occurrences.forEach(function(entry) {
+                const formatted = entry && entry.formatted ? entry.formatted.toString() : '';
+                const relative = entry && entry.relative ? entry.relative.toString() : '';
+                const $item = $('<li/>', { class: 'bjlg-cron-preview-item' });
+                if (formatted) {
+                    $('<span/>', { class: 'bjlg-cron-preview-date', text: formatted }).appendTo($item);
+                }
+                if (relative) {
+                    $('<span/>', { class: 'bjlg-cron-preview-relative', text: '≈ ' + relative }).appendTo($item);
+                }
+                elements.previewList.append($item);
+            });
+        }
+
+        renderCronWarnings(elements, warnings, warnings.length ? 'warning' : 'info');
+
+        if (warnings.length) {
+            setCronPanelVisibility(elements, true);
+        }
+    }
+
+    function renderCronPreviewError(elements, message, details) {
+        if (!elements || !elements.previewList || !elements.previewList.length) {
+            return;
+        }
+
+        const messages = [];
+        if (typeof message === 'string' && message.trim()) {
+            messages.push(message.trim());
+        }
+        if (Array.isArray(details)) {
+            details.forEach(function(entry) {
+                if (typeof entry === 'string') {
+                    const trimmed = entry.trim();
+                    if (trimmed && messages.indexOf(trimmed) === -1) {
+                        messages.push(trimmed);
+                    }
+                }
+            });
+        }
+
+        const display = messages.length ? messages[0] : 'Analyse impossible.';
+        elements.previewList.empty().append(
+            $('<li/>', { class: 'description', text: display })
+        );
+
+        renderCronWarnings(elements, messages, 'error');
+        setCronPanelVisibility(elements, true);
+    }
+
+    function recurrenceIsCustom($input) {
+        const $item = $input.closest('.bjlg-schedule-item');
+        if (!$item.length) {
+            return true;
+        }
+        const recurrence = ($item.find('[data-field="recurrence"]').val() || '').toString();
+        return recurrence === 'custom';
+    }
+
+    function scheduleCronPreview($input, immediate) {
+        if (!$input || !$input.length) {
+            return;
+        }
+        const elements = getCronFieldElements($input);
+        if (!elements) {
+            return;
+        }
+
+        const rawValue = ($input.val() || '').toString();
+        const expression = rawValue.trim();
+
+        if (!recurrenceIsCustom($input)) {
+            resetCronAssistant($input.closest('.bjlg-schedule-item'));
+            return;
+        }
+
+        if (expression === '') {
+            clearCronPreview(elements);
+            return;
+        }
+
+        if (cronPreviewTimer) {
+            clearTimeout(cronPreviewTimer);
+        }
+
+        const runner = function() {
+            requestCronPreview(expression, elements);
+        };
+
+        if (immediate) {
+            runner();
+        } else {
+            cronPreviewTimer = setTimeout(runner, 320);
+        }
+    }
+
+    function requestCronPreview(expression, elements) {
+        if (!expression) {
+            clearCronPreview(elements);
+            return;
+        }
+
+        if (cronPreviewRequest && typeof cronPreviewRequest.abort === 'function') {
+            cronPreviewRequest.abort();
+        }
+
+        if (cronPreviewCache.has(expression)) {
+            renderCronPreviewData(elements, cronPreviewCache.get(expression));
+            return;
+        }
+
+        setCronPreviewLoading(elements);
+
+        cronPreviewRequest = $.ajax({
+            url: bjlg_ajax.ajax_url,
+            method: 'POST',
+            dataType: 'json',
+            data: {
+                action: 'bjlg_preview_cron_expression',
+                nonce: bjlg_ajax.nonce,
+                expression: expression
+            }
+        }).done(function(response) {
+            if (!response) {
+                renderCronPreviewError(elements, 'Réponse inattendue du serveur.', []);
+                return;
+            }
+            if (response.success) {
+                const data = response.data || {};
+                cronPreviewCache.set(expression, data);
+                renderCronPreviewData(elements, data);
+            } else {
+                const payload = response.data || response || {};
+                const message = payload && typeof payload.message === 'string' ? payload.message : 'Expression Cron invalide.';
+                const details = normalizeErrorList(payload && (payload.errors || payload.validation_errors || payload.field_errors));
+                renderCronPreviewError(elements, message, details);
+            }
+        }).fail(function(jqXHR, textStatus) {
+            if (textStatus === 'abort') {
+                return;
+            }
+            let message = 'Erreur de communication avec le serveur.';
+            let details = [];
+            if (jqXHR && jqXHR.responseJSON) {
+                const data = jqXHR.responseJSON.data || jqXHR.responseJSON;
+                if (data && typeof data.message === 'string') {
+                    message = data.message;
+                }
+                details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
+            }
+            renderCronPreviewError(elements, message, details);
+        }).always(function() {
+            cronPreviewRequest = null;
+        });
+    }
+
+    function initCronAssistant($scope) {
+        if (!$scope || !$scope.length) {
+            return;
+        }
+
+        $scope.find('.bjlg-cron-input').each(function() {
+            const $input = $(this);
+            if ($input.data('cronAssistantReady')) {
+                return;
+            }
+            $input.data('cronAssistantReady', true);
+
+            const elements = getCronFieldElements($input);
+            if (!elements) {
+                return;
+            }
+
+            setCronPanelVisibility(elements, false);
+            clearCronPreview(elements);
+
+            if (elements.toggle && elements.toggle.length) {
+                elements.toggle.on('click', function(event) {
+                    event.preventDefault();
+                    const $button = $(this);
+                    const expanded = $button.attr('aria-expanded') === 'true';
+                    setCronPanelVisibility(elements, !expanded);
+                    if (!expanded) {
+                        scheduleCronPreview($input, true);
+                    }
+                });
+            }
+
+            if (elements.field && elements.field.length) {
+                elements.field.on('click', '.bjlg-cron-example', function(event) {
+                    event.preventDefault();
+                    const value = ($(this).attr('data-expression') || '').toString();
+                    if (!value) {
+                        return;
+                    }
+                    $input.val(value).trigger('input');
+                    setCronPanelVisibility(elements, true);
+                    scheduleCronPreview($input, true);
+                });
+            }
+
+            $input.on('input', function() {
+                scheduleCronPreview($input, false);
+            });
+
+            $input.on('blur', function() {
+                if (($input.val() || '').toString().trim() === '') {
+                    clearCronPreview(elements);
+                }
+            });
+
+            if (($input.val() || '').toString().trim() !== '' && recurrenceIsCustom($input)) {
+                scheduleCronPreview($input, false);
+            }
+        });
+    }
+
+    function resetCronAssistant($scope) {
+        if (!$scope || !$scope.length) {
+            return;
+        }
+        $scope.find('.bjlg-cron-input').each(function() {
+            const $input = $(this);
+            const elements = getCronFieldElements($input);
+            if (!elements) {
+                return;
+            }
+            clearCronPreview(elements);
+            setCronPanelVisibility(elements, false);
+        });
+    }
+
     function buildSummaryGroupsFromData(data) {
         const recurrence = (data.recurrence || 'disabled').toString();
         const frequencyBadges = [];
@@ -1650,7 +2024,7 @@ jQuery(function($) {
             }
         }
 
-        setupCronAssistantForItem($item);
+        initCronAssistant($item);
         toggleScheduleRows($item);
         updateScheduleSummaryForItem($item);
         updateRunButtonState($item);

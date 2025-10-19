@@ -1521,6 +1521,109 @@
     align-items: flex-end;
 }
 
+.bjlg-cron-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bjlg-cron-helper-panel {
+    background: color-mix(in srgb, var(--bjlg-color-surface) 80%, var(--bjlg-color-surface-subtle) 20%);
+    border: 1px solid color-mix(in srgb, var(--bjlg-color-border) 70%, var(--bjlg-color-border-strong) 30%);
+    border-radius: var(--bjlg-radius-md);
+    padding: 14px 16px;
+    box-shadow: var(--bjlg-shadow-xs);
+}
+
+.bjlg-cron-examples {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.bjlg-cron-example {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid color-mix(in srgb, var(--bjlg-color-border) 55%, var(--bjlg-color-border-strong) 45%);
+    border-radius: var(--bjlg-radius-sm);
+    padding: 6px 10px;
+    background: var(--bjlg-color-surface);
+    box-shadow: var(--bjlg-shadow-xs);
+    cursor: pointer;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.bjlg-cron-example:hover,
+.bjlg-cron-example:focus {
+    background: var(--bjlg-color-surface-subtle);
+    border-color: var(--bjlg-color-border-strong);
+    outline: none;
+}
+
+.bjlg-cron-example code {
+    font-size: 0.9em;
+}
+
+.bjlg-cron-example-label {
+    font-size: 0.85em;
+    font-weight: 500;
+    color: var(--bjlg-color-text-subtle);
+}
+
+.bjlg-cron-preview {
+    margin-top: 10px;
+}
+
+.bjlg-cron-preview-title {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 600;
+    color: var(--bjlg-color-text);
+}
+
+.bjlg-cron-preview-list {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--bjlg-color-text);
+}
+
+.bjlg-cron-preview-item {
+    margin-bottom: 4px;
+}
+
+.bjlg-cron-preview-date {
+    font-weight: 600;
+}
+
+.bjlg-cron-preview-relative {
+    margin-left: 6px;
+    color: var(--bjlg-color-text-subtle);
+    font-style: italic;
+}
+
+.bjlg-cron-warning {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: var(--bjlg-radius-sm);
+    border: 1px solid transparent;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+.bjlg-cron-warning--warning {
+    border-color: rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.12);
+    color: #92400e;
+}
+
+.bjlg-cron-warning--error {
+    border-color: rgba(244, 63, 94, 0.45);
+    background: rgba(244, 63, 94, 0.12);
+    color: #991b1b;
+}
+
 /* Utilitaires génériques
 --------------------------------------------- */
 
