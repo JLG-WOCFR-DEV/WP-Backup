@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 class BJLG_Scheduler {
 
     const SCHEDULE_HOOK = 'bjlg_scheduled_backup_hook';
+    const MIN_CUSTOM_CRON_INTERVAL = 5 * MINUTE_IN_SECONDS;
 
     /**
      * Instance unique du planificateur.
@@ -184,6 +185,45 @@ class BJLG_Scheduler {
                     'errors' => [__('L’expression Cron personnalisée est invalide.', 'backup-jlg')]
                 ]);
             }
+        }
+
+        $cron_errors = [];
+        $cron_analysis_cache = [];
+        foreach ($schedules as $schedule_entry) {
+            if (($schedule_entry['recurrence'] ?? '') !== 'custom') {
+                continue;
+            }
+
+            $expression = isset($schedule_entry['custom_cron']) ? (string) $schedule_entry['custom_cron'] : '';
+            if ($expression === '') {
+                continue;
+            }
+
+            if (!isset($cron_analysis_cache[$expression])) {
+                $cron_analysis_cache[$expression] = $this->analyze_custom_cron_expression_internal($expression);
+            }
+
+            $analysis = $cron_analysis_cache[$expression];
+            if (is_wp_error($analysis)) {
+                $details = $analysis->get_error_data();
+                $errors = isset($details['details']) ? (array) $details['details'] : [];
+                if (empty($errors)) {
+                    $errors[] = $analysis->get_error_message();
+                }
+                $cron_errors = array_merge($cron_errors, $errors);
+                continue;
+            }
+
+            if (!empty($analysis['errors'])) {
+                $cron_errors = array_merge($cron_errors, $analysis['errors']);
+            }
+        }
+
+        if (!empty($cron_errors)) {
+            wp_send_json_error([
+                'message' => __('Impossible d\'enregistrer la planification.', 'backup-jlg'),
+                'errors' => array_values(array_unique(array_map('strval', $cron_errors))),
+            ]);
         }
 
         $batch_size = $this->get_destination_batch_size();
@@ -615,21 +655,194 @@ class BJLG_Scheduler {
         return null;
     }
 
-    private function build_custom_cron_preview(string $expression, \DateTimeImmutable $start, int $count = 5): array {
-        $occurrences = [];
-        $cursor = $start;
+    public static function analyze_custom_cron_expression($expression) {
+        $instance = self::instance();
 
-        for ($index = 0; $index < max(1, $count); $index++) {
-            $next = $this->calculate_custom_cron_next_run($expression, $cursor);
+        return $instance->analyze_custom_cron_expression_internal($expression);
+    }
+
+    public function handle_preview_cron_expression() {
+        if (!\bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')]);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $posted = wp_unslash($_POST);
+        $raw_expression = isset($posted['expression']) ? (string) $posted['expression'] : '';
+        $sanitized = BJLG_Settings::sanitize_cron_expression($raw_expression);
+
+        if ($sanitized === '') {
+            wp_send_json_error([
+                'message' => __('L’expression Cron doit contenir cinq champs valides.', 'backup-jlg'),
+            ]);
+        }
+
+        $analysis = $this->analyze_custom_cron_expression_internal($sanitized);
+
+        if (is_wp_error($analysis)) {
+            $details = $analysis->get_error_data();
+            wp_send_json_error([
+                'message' => $analysis->get_error_message(),
+                'errors' => isset($details['details']) ? (array) $details['details'] : [],
+            ]);
+        }
+
+        $runs = isset($analysis['runs']) ? $analysis['runs'] : [];
+        $current_time = $this->get_current_time();
+        $current_timestamp = $current_time->getTimestamp();
+        $timezone = wp_timezone_string();
+
+        $formatted_runs = [];
+        foreach ($runs as $run) {
+            if (!$run instanceof \DateTimeImmutable) {
+                continue;
+            }
+            $timestamp = $run->getTimestamp();
+            $formatted_runs[] = [
+                'timestamp' => $timestamp,
+                'formatted' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), $timestamp),
+                'relative' => sprintf(__('dans %s', 'backup-jlg'), human_time_diff($current_timestamp, $timestamp)),
+                'iso' => wp_date('c', $timestamp),
+            ];
+        }
+
+        $min_interval = $analysis['min_interval'] ?? null;
+
+        $severity = 'success';
+        if (!empty($analysis['errors'])) {
+            $severity = 'error';
+        } elseif (!empty($analysis['warnings'])) {
+            $severity = 'warning';
+        }
+
+        $message = '';
+        if (!empty($analysis['errors'])) {
+            $message = (string) $analysis['errors'][0];
+        } elseif (!empty($analysis['warnings'])) {
+            $message = (string) $analysis['warnings'][0];
+        } elseif ($min_interval) {
+            $message = sprintf(
+                __('Intervalle minimum détecté : %s.', 'backup-jlg'),
+                $this->format_interval_label($min_interval)
+            );
+        } elseif (!empty($formatted_runs)) {
+            $message = sprintf(
+                __('Prochaine exécution planifiée dans %s.', 'backup-jlg'),
+                human_time_diff($current_timestamp, $formatted_runs[0]['timestamp'])
+            );
+        }
+
+        wp_send_json_success([
+            'expression' => $sanitized,
+            'next_runs' => $formatted_runs,
+            'warnings' => $analysis['warnings'],
+            'errors' => $analysis['errors'],
+            'severity' => $severity,
+            'message' => $message,
+            'interval' => [
+                'min' => $min_interval,
+                'min_human' => $min_interval ? $this->format_interval_label($min_interval) : '',
+            ],
+            'timezone' => $timezone,
+        ]);
+    }
+
+    private function analyze_custom_cron_expression_internal($expression) {
+        $sanitized = BJLG_Settings::sanitize_cron_expression($expression);
+        if ($sanitized === '') {
+            return new \WP_Error(
+                'invalid_schedule_cron',
+                __('L’expression Cron personnalisée est invalide.', 'backup-jlg'),
+                ['details' => [__('L’expression Cron doit contenir cinq champs valides.', 'backup-jlg')]]
+            );
+        }
+
+        $now = $this->get_current_time();
+        $runs = $this->compute_next_custom_runs($sanitized, $now, 5);
+
+        if (empty($runs)) {
+            return new \WP_Error(
+                'invalid_schedule_cron',
+                __('Impossible de déterminer la prochaine exécution pour cette expression Cron.', 'backup-jlg')
+            );
+        }
+
+        $intervals = [];
+        $previous = null;
+        foreach ($runs as $run) {
+            if (!$run instanceof \DateTimeImmutable) {
+                continue;
+            }
+            if ($previous instanceof \DateTimeImmutable) {
+                $intervals[] = $run->getTimestamp() - $previous->getTimestamp();
+            }
+            $previous = $run;
+        }
+
+        $min_interval = !empty($intervals) ? min($intervals) : null;
+        $max_interval = !empty($intervals) ? max($intervals) : null;
+
+        $warnings = [];
+        $errors = [];
+
+        if ($min_interval !== null && $min_interval < self::MIN_CUSTOM_CRON_INTERVAL) {
+            $errors[] = sprintf(
+                __('L’expression Cron lance une sauvegarde toutes les %1$s. Choisissez un intervalle d’au moins %2$s.', 'backup-jlg'),
+                $this->format_interval_label($min_interval),
+                $this->format_interval_label(self::MIN_CUSTOM_CRON_INTERVAL)
+            );
+        }
+
+        return [
+            'expression' => $sanitized,
+            'runs' => $runs,
+            'min_interval' => $min_interval,
+            'max_interval' => $max_interval,
+            'warnings' => $warnings,
+            'errors' => $errors,
+        ];
+    }
+
+    private function compute_next_custom_runs($expression, \DateTimeImmutable $now, int $limit = 5) {
+        $runs = [];
+        $search_from = $now;
+        $previous_timestamp = null;
+
+        for ($i = 0; $i < $limit; $i++) {
+            $next = $this->calculate_custom_cron_next_run($expression, $search_from);
             if (!$next instanceof \DateTimeImmutable) {
                 break;
             }
 
-            $occurrences[] = $next;
-            $cursor = $next;
+            $timestamp = $next->getTimestamp();
+            if ($previous_timestamp !== null && $timestamp === $previous_timestamp) {
+                break;
+            }
+
+            $runs[] = $next;
+            $previous_timestamp = $timestamp;
+            $search_from = $next->modify('+1 minute');
         }
 
-        return $occurrences;
+        return $runs;
+    }
+
+    private function format_interval_label($seconds) {
+        $seconds = (int) $seconds;
+        if ($seconds <= 0) {
+            return __('immédiatement', 'backup-jlg');
+        }
+
+        if ($seconds < MINUTE_IN_SECONDS) {
+            return __('moins d’une minute', 'backup-jlg');
+        }
+
+        return human_time_diff(time(), time() + $seconds);
+    }
+
+    private function get_current_time() {
+        return new \DateTimeImmutable('now', wp_timezone());
     }
 
     private function parse_cron_field($field, $min, $max, array $names = []) {

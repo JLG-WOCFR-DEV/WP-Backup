@@ -113,6 +113,15 @@ jQuery(function($) {
     const initialNextRuns = parseJSONAttr($scheduleForm.attr('data-next-runs')) || {};
     let newScheduleCounter = 0;
 
+    const cronAssistant = typeof bjlg_ajax.cron_assistant === 'object' && bjlg_ajax.cron_assistant
+        ? bjlg_ajax.cron_assistant
+        : {};
+    const cronExamples = Array.isArray(cronAssistant.examples) ? cronAssistant.examples : [];
+    const cronLabels = cronAssistant.labels && typeof cronAssistant.labels === 'object' ? cronAssistant.labels : {};
+    const cronPreviewCache = new Map();
+    let cronPreviewTimer = null;
+    let cronPreviewRequest = null;
+
     const destinationLabels = {};
     const $timeline = $('#bjlg-schedule-timeline');
     const initialSchedules = parseJSONAttr($scheduleForm.attr('data-schedules')) || [];
@@ -807,6 +816,12 @@ jQuery(function($) {
                 resetCronAssistant($item);
             }
         }
+
+        if (recurrence === 'custom') {
+            refreshCronAssistant($item, true);
+        } else {
+            clearCronAssistant($item);
+        }
     }
 
     function normalizePatterns(value) {
@@ -851,510 +866,275 @@ jQuery(function($) {
         return normalized;
     }
 
-    function tokenizeCronExpression(value) {
-        const tokens = [];
-        if (typeof value !== 'string' || value.trim() === '') {
-            return tokens;
+    function getCronAssistantHelper($item) {
+        if (!$item || !$item.length) {
+            return null;
         }
-        const pattern = /\S+/g;
-        let match;
-        while ((match = pattern.exec(value)) !== null) {
-            tokens.push({
-                value: match[0],
-                start: match.index,
-                end: match.index + match[0].length
-            });
-        }
-        return tokens;
-    }
-
-    function getCronCursorContext(input, tokens) {
-        const element = input && input.nodeType === 1 ? input : null;
-        if (!element) {
-            return { fieldIndex: 0, tokenValue: '', tokenStart: 0, tokenEnd: 0, partial: '', selectionStart: 0 };
-        }
-        const value = element.value || '';
-        const cursor = typeof element.selectionStart === 'number' ? element.selectionStart : value.length;
-        const tokenList = Array.isArray(tokens) ? tokens : tokenizeCronExpression(value);
-        if (!tokenList.length) {
-            return { fieldIndex: 0, tokenValue: '', tokenStart: cursor, tokenEnd: cursor, partial: '', selectionStart: cursor };
-        }
-        for (let index = 0; index < tokenList.length; index += 1) {
-            const token = tokenList[index];
-            if (cursor < token.start) {
-                return {
-                    fieldIndex: Math.min(index, cronFieldCount - 1),
-                    tokenValue: '',
-                    tokenStart: cursor,
-                    tokenEnd: cursor,
-                    partial: '',
-                    selectionStart: cursor
-                };
-            }
-            if (cursor <= token.end) {
-                const partialLength = Math.max(0, cursor - token.start);
-                return {
-                    fieldIndex: Math.min(index, cronFieldCount - 1),
-                    tokenValue: token.value,
-                    tokenStart: token.start,
-                    tokenEnd: token.end,
-                    partial: token.value.slice(0, partialLength),
-                    selectionStart: cursor
-                };
-            }
+        const $assistant = $item.find('[data-cron-assistant]');
+        if (!$assistant.length) {
+            return null;
         }
         return {
-            fieldIndex: Math.min(tokenList.length, cronFieldCount - 1),
-            tokenValue: '',
-            tokenStart: cursor,
-            tokenEnd: cursor,
-            partial: '',
-            selectionStart: cursor
+            container: $assistant,
+            examples: $assistant.find('[data-cron-examples]'),
+            preview: $assistant.find('[data-cron-preview]'),
+            list: $assistant.find('[data-cron-preview-list]'),
+            status: $assistant.find('[data-cron-status]'),
+            empty: $assistant.find('[data-cron-empty]'),
         };
     }
 
-    function normalizeCronExpressionSpacing(value) {
-        if (typeof value !== 'string') {
-            return '';
-        }
-        return value.replace(/\s+/g, ' ').trim();
-    }
-
-    function renderCronPresets($container) {
-        if (!$container || !$container.length || $container.data('initialized')) {
-            return;
-        }
-        const fragment = $(document.createDocumentFragment());
-        cronPresets.forEach(function(preset) {
-            const $button = $('<button/>', {
-                type: 'button',
-                class: 'button button-secondary bjlg-cron-preset',
-                text: preset.label,
-                'data-cron-preset': preset.expression
-            });
-            const ariaLabel = preset.description ? preset.label + ' – ' + preset.description : preset.label;
-            $button.attr('aria-label', ariaLabel);
-            $button.attr('title', preset.description ? preset.description + ' (' + preset.expression + ')' : preset.expression);
-            fragment.append($button);
-        });
-        $container.append(fragment).data('initialized', true);
-    }
-
-    function computeFieldSuggestions(fieldIndex, partial) {
-        const tokens = cronFieldTokens[fieldIndex];
-        if (!tokens) {
-            return [];
-        }
-        const normalized = (partial || '').toString().toLowerCase();
-        if (!normalized) {
-            return tokens.slice(0, 6);
-        }
-        return tokens.filter(function(entry) {
-            const value = entry.value.toLowerCase();
-            const label = (entry.label || '').toLowerCase();
-            return value.indexOf(normalized) === 0 || label.indexOf(normalized) !== -1;
-        }).slice(0, 6);
-    }
-
-    function renderCronSuggestions($container, suggestions) {
-        if (!$container || !$container.length) {
-            return;
-        }
-        $container.empty();
-        if (!Array.isArray(suggestions) || !suggestions.length) {
-            $container.attr('aria-hidden', 'true');
-            return;
-        }
-        const fragment = $(document.createDocumentFragment());
-        suggestions.forEach(function(entry) {
-            const $button = $('<button/>', {
-                type: 'button',
-                class: 'bjlg-cron-suggestion button-link',
-                text: entry.label || entry.value,
-                'data-cron-suggestion': entry.value,
-                role: 'option'
-            });
-            $button.attr('title', entry.value);
-            fragment.append($button);
-        });
-        $container.attr('aria-hidden', 'false').append(fragment);
-    }
-
-    function applyCronExpression($input, expression) {
-        if (!$input || !$input.length) {
-            return;
-        }
-        const normalized = normalizeCronExpressionSpacing(expression || '');
-        $input.val(normalized);
-        const element = $input.get(0);
-        if (element && typeof element.focus === 'function') {
-            element.focus();
-        }
-        if (element && typeof element.setSelectionRange === 'function') {
-            const caret = normalized.length;
-            element.setSelectionRange(caret, caret);
-        }
-        $input.trigger('input');
-        $input.trigger('change');
-    }
-
-    function applyCronSuggestion($input, suggestion) {
-        if (!$input || !$input.length || !suggestion) {
-            return;
-        }
-        const element = $input.get(0);
-        const value = ($input.val() || '').toString();
-        const tokens = tokenizeCronExpression(value);
-        const context = $input.data('cronAssistantContext') || getCronCursorContext(element, tokens);
-        const values = tokens.map(function(token) { return token.value; });
-        const index = Math.max(0, Math.min(context.fieldIndex || 0, cronFieldCount - 1));
-        if (context.tokenValue && index < values.length) {
-            values[index] = suggestion;
-        } else {
-            values.splice(index, 0, suggestion);
-        }
-        const newValue = values.join(' ');
-        $input.val(newValue);
-        if (element && typeof element.focus === 'function') {
-            element.focus();
-        }
-        if (element && typeof element.setSelectionRange === 'function') {
-            let caret = 0;
-            for (let i = 0; i <= index && i < values.length; i += 1) {
-                if (i > 0) {
-                    caret += 1;
-                }
-                caret += values[i].length;
+    function ensureCronAssistant($item) {
+        const helper = getCronAssistantHelper($item);
+        if (!helper || !helper.examples.length || helper.examples.data('initialized')) {
+            if (helper && helper.status.length && typeof helper.status.data('default') === 'undefined') {
+                helper.status.data('default', helper.status.text());
             }
-            element.setSelectionRange(caret, caret);
+            return helper;
         }
-        $input.trigger('input');
-        $input.trigger('change');
-    }
 
-    function extractInvalidNames(field, allowedSet) {
-        if (!field || typeof field !== 'string') {
-            return [];
+        helper.examples.data('initialized', '1');
+        if (helper.status.length && typeof helper.status.data('default') === 'undefined') {
+            helper.status.data('default', helper.status.text());
         }
-        const matches = field.match(/[A-Za-z]+/g) || [];
-        const invalid = [];
-        matches.forEach(function(name) {
-            const normalized = name.toLowerCase();
-            if (!allowedSet.has(normalized) && invalid.indexOf(name) === -1) {
-                invalid.push(name);
-            }
-        });
-        return invalid;
-    }
-
-    function extractOutOfRange(field, min, max, options) {
-        if (!field || typeof field !== 'string') {
-            return [];
-        }
-        const opts = options || {};
-        const numbers = field.match(/\d+/g) || [];
-        const invalid = [];
-        numbers.forEach(function(entry) {
-            const value = parseInt(entry, 10);
-            if (!Number.isFinite(value)) {
+        cronExamples.forEach(function(example) {
+            if (!example || typeof example !== 'object') {
                 return;
             }
-            if (opts.allowSevenForSunday && value === 7) {
-                return;
-            }
-            if (value < min || value > max) {
-                if (invalid.indexOf(entry) === -1) {
-                    invalid.push(entry);
-                }
-            }
-        });
-        return invalid;
-    }
-
-    function describeDaysOfWeek(field) {
-        if (!field || typeof field !== 'string') {
-            return '';
-        }
-        const value = field.toLowerCase();
-        if (value.indexOf('-') !== -1) {
-            const parts = value.split('-');
-            if (parts.length === 2 && cronDayDisplay[parts[0]] && cronDayDisplay[parts[1]]) {
-                return 'du ' + cronDayDisplay[parts[0]] + ' au ' + cronDayDisplay[parts[1]];
-            }
-        }
-        const tokens = value.split(',');
-        const labels = tokens.map(function(token) {
-            const name = token.trim();
-            return cronDayDisplay[name] || name;
-        }).filter(Boolean);
-        if (!labels.length) {
-            return value;
-        }
-        if (labels.length === 1) {
-            return labels[0];
-        }
-        return labels.slice(0, -1).join(', ') + ' et ' + labels[labels.length - 1];
-    }
-
-    function describeDaysOfMonth(field) {
-        if (!field || typeof field !== 'string') {
-            return '';
-        }
-        if (field === '*') {
-            return 'chaque jour du mois';
-        }
-        const stepMatch = field.match(/^\*\/(\d+)$/);
-        if (stepMatch) {
-            const stepValue = parseInt(stepMatch[1], 10);
-            if (Number.isFinite(stepValue) && stepValue > 0) {
-                return 'tous les ' + stepValue + ' jours du mois';
-            }
-        }
-        if (field.indexOf('-') !== -1) {
-            const parts = field.split('-');
-            if (parts.length === 2) {
-                return 'du ' + parts[0] + ' au ' + parts[1];
-            }
-        }
-        const tokens = field.split(',').map(function(entry) { return entry.trim(); }).filter(Boolean);
-        if (!tokens.length) {
-            return field;
-        }
-        if (tokens.length === 1) {
-            return 'le ' + tokens[0];
-        }
-        return 'les jours ' + tokens.slice(0, -1).join(', ') + ' et ' + tokens[tokens.length - 1];
-    }
-
-    function formatCronTime(hour, minute) {
-        const hh = Number.isFinite(hour) ? (hour < 10 ? '0' + hour : String(hour)) : '00';
-        const mm = Number.isFinite(minute) ? (minute < 10 ? '0' + minute : String(minute)) : '00';
-        return hh + 'h' + mm;
-    }
-
-    function computeFrequencyHint(fields) {
-        if (!Array.isArray(fields) || fields.length !== cronFieldCount) {
-            return '';
-        }
-        const minuteField = fields[0];
-        const hourField = fields[1];
-        const domField = fields[2];
-        const dowField = fields[4];
-
-        if ((minuteField === '*' || minuteField === '*/1') && (hourField === '*' || hourField === '*/1')) {
-            return 'Fréquence estimée : toutes les minutes.';
-        }
-
-        const minuteStepMatch = minuteField.match(/^\*\/(\d+)$/);
-        if (minuteStepMatch && (hourField === '*' || hourField === '*/1')) {
-            const stepValue = parseInt(minuteStepMatch[1], 10);
-            if (Number.isFinite(stepValue) && stepValue > 1) {
-                return 'Fréquence estimée : toutes les ' + stepValue + ' minutes.';
-            }
-        }
-
-        const minuteValue = parseInt(minuteField, 10);
-        const hourValue = parseInt(hourField, 10);
-        const hourStepMatch = hourField.match(/^\*\/(\d+)$/);
-        if (hourStepMatch && Number.isFinite(minuteValue)) {
-            const stepValue = parseInt(hourStepMatch[1], 10);
-            if (Number.isFinite(stepValue) && stepValue > 0) {
-                const minuteDisplay = minuteValue < 10 ? '0' + minuteValue : String(minuteValue);
-                return 'Fréquence estimée : toutes les ' + stepValue + ' heures (à ' + minuteDisplay + ' min).';
-            }
-        }
-
-        if (Number.isFinite(hourValue) && Number.isFinite(minuteValue)) {
-            if (domField === '*' && dowField === '*') {
-                return 'Fréquence estimée : tous les jours à ' + formatCronTime(hourValue, minuteValue) + '.';
-            }
-            if (dowField !== '*') {
-                return 'Fréquence estimée : chaque ' + describeDaysOfWeek(dowField) + ' à ' + formatCronTime(hourValue, minuteValue) + '.';
-            }
-            if (domField !== '*') {
-                return 'Fréquence estimée : ' + describeDaysOfMonth(domField) + ' à ' + formatCronTime(hourValue, minuteValue) + '.';
-            }
-        }
-
-        if (minuteField === '0' && hourField === '*') {
-            return 'Fréquence estimée : au début de chaque heure.';
-        }
-
-        return '';
-    }
-
-    function evaluateCronExpression(expression) {
-        const result = { normalized: '', errors: [], warnings: [], frequencyHint: '' };
-        const value = typeof expression === 'string' ? expression.trim() : '';
-        if (value === '') {
-            return result;
-        }
-        const normalized = normalizeCronExpressionSpacing(value);
-        if (normalized === '') {
-            result.errors.push('Expression Cron invalide.');
-            return result;
-        }
-        if (!cronAllowedPattern.test(normalized)) {
-            result.errors.push('Seuls les caractères 0-9, *, -, /, , et les abréviations sont autorisés.');
-            return result;
-        }
-        const fields = normalized.split(' ');
-        if (fields.length !== cronFieldCount) {
-            result.errors.push('Le format doit contenir 5 champs : minute, heure, jour du mois, mois et jour de semaine.');
-            return result;
-        }
-
-        const minuteField = fields[0];
-        const hourField = fields[1];
-        const domField = fields[2];
-        const monthField = fields[3];
-        const dowField = fields[4];
-
-        const invalidMonths = extractInvalidNames(monthField, cronMonthSet);
-        if (invalidMonths.length) {
-            result.errors.push('Mois invalide : ' + invalidMonths.join(', ') + '.');
-        }
-
-        const invalidDays = extractInvalidNames(dowField, cronDaySet);
-        if (invalidDays.length) {
-            result.errors.push('Jour de semaine invalide : ' + invalidDays.join(', ') + '.');
-        }
-
-        const minuteOut = extractOutOfRange(minuteField, 0, 59);
-        if (minuteOut.length) {
-            result.errors.push('Minutes hors plage : ' + minuteOut.join(', ') + '.');
-        }
-
-        const hourOut = extractOutOfRange(hourField, 0, 23);
-        if (hourOut.length) {
-            result.errors.push('Heures hors plage : ' + hourOut.join(', ') + '.');
-        }
-
-        const domOut = extractOutOfRange(domField, 1, 31);
-        if (domOut.length) {
-            result.errors.push('Jours du mois hors plage : ' + domOut.join(', ') + '.');
-        }
-
-        const monthOut = extractOutOfRange(monthField, 1, 12);
-        if (monthOut.length) {
-            result.errors.push('Mois hors plage : ' + monthOut.join(', ') + '.');
-        }
-
-        const dowOut = extractOutOfRange(dowField, 0, 6, { allowSevenForSunday: true });
-        if (dowOut.length) {
-            result.errors.push('Jours de semaine hors plage : ' + dowOut.join(', ') + '.');
-        }
-
-        if (domField !== '*' && dowField !== '*') {
-            result.warnings.push('Définir à la fois le jour du mois et le jour de semaine peut empêcher l\'exécution.');
-        }
-
-        const minuteStepMatch = minuteField.match(/^\*\/(\d+)$/);
-        if ((minuteField === '*' || minuteField === '*/1') && (hourField === '*' || hourField === '*/1')) {
-            result.warnings.push('Cette expression déclenche une exécution toutes les minutes.');
-        } else if (minuteStepMatch && (hourField === '*' || hourField === '*/1')) {
-            const stepValue = parseInt(minuteStepMatch[1], 10);
-            if (Number.isFinite(stepValue) && stepValue > 0 && stepValue < 5) {
-                result.warnings.push('Cette expression planifie plus de 12 exécutions par heure.');
-            }
-        } else if (minuteField.split(',').length >= 6 && (hourField === '*' || hourField === '*/1')) {
-            result.warnings.push('Beaucoup de minutes listées : vérifiez que la fréquence reste supportable.');
-        }
-
-        result.normalized = normalized;
-        result.frequencyHint = computeFrequencyHint(fields);
-        return result;
-    }
-
-    function updateCronAssistantState($input) {
-        if (!$input || !$input.length) {
-            return;
-        }
-        const $helper = $input.closest('td').find('[data-cron-helper]');
-        if (!$helper.length) {
-            return;
-        }
-        const $message = $helper.find('[data-cron-message]');
-        const $frequency = $helper.find('[data-cron-frequency]');
-        const $suggestions = $helper.find('[data-cron-suggestions]');
-        $message.removeClass('is-error is-warning is-success is-neutral');
-        const value = ($input.val() || '').toString();
-        const element = $input.get(0);
-        const context = getCronCursorContext(element);
-        const fieldIndex = Math.max(0, Math.min(context.fieldIndex || 0, cronFieldCount - 1));
-        $input.data('cronAssistantContext', context);
-        renderCronSuggestions($suggestions, computeFieldSuggestions(fieldIndex, context.partial));
-
-        const trimmed = value.trim();
-        $frequency.text('');
-        $input.removeClass('bjlg-cron-input--error bjlg-cron-input--warning bjlg-cron-input--success');
-        if (!trimmed) {
-            $message.addClass('is-neutral').text('Saisissez une expression Cron complète (5 champs).');
-            return;
-        }
-
-        const evaluation = evaluateCronExpression(trimmed);
-        if (evaluation.errors.length) {
-            $message.addClass('is-error').text(evaluation.errors[0]);
-            $input.addClass('bjlg-cron-input--error');
-        } else if (evaluation.warnings.length) {
-            $message.addClass('is-warning').text(evaluation.warnings[0]);
-            $input.addClass('bjlg-cron-input--warning');
-        } else {
-            $message.addClass('is-success').text('Expression valide.');
-            $input.addClass('bjlg-cron-input--success');
-        }
-
-        if (evaluation.frequencyHint) {
-            $frequency.text(evaluation.frequencyHint);
-        }
-    }
-
-    function setupCronAssistantForItem($item) {
-        if (!$item || !$item.length) {
-            return;
-        }
-        const $input = $item.find('[data-field="custom_cron"]');
-        const $helper = $item.find('[data-cron-helper]');
-        if (!$input.length || !$helper.length) {
-            return;
-        }
-        if ($input.data('cronAssistantReady')) {
-            updateCronAssistantState($input);
-            return;
-        }
-
-        $input.data('cronAssistantReady', true);
-        const $presets = $helper.find('[data-cron-presets]');
-        renderCronPresets($presets);
-
-        $helper.on('mousedown', '[data-cron-preset]', function(event) {
-            event.preventDefault();
-            const expression = ($(this).data('cron-preset') || $(this).attr('data-cron-preset') || '').toString();
+            const expression = (example.expression || '').toString();
             if (!expression) {
                 return;
             }
-            applyCronExpression($input, expression);
+            const label = (example.label || expression).toString();
+            const $button = $('<button/>', {
+                type: 'button',
+                class: 'bjlg-cron-example',
+                text: label,
+            });
+            if (cronLabels.apply_example) {
+                $button.attr('aria-label', cronLabels.apply_example.replace('%s', label));
+            }
+            $button.on('click', function() {
+                const $input = $item.find('[data-field="custom_cron"]');
+                $input.val(expression).trigger('input').trigger('change');
+                $input.focus();
+            });
+            helper.examples.append($button);
         });
 
-        $helper.on('mousedown', '[data-cron-suggestion]', function(event) {
-            event.preventDefault();
-            const suggestion = ($(this).data('cron-suggestion') || $(this).attr('data-cron-suggestion') || '').toString();
-            if (!suggestion) {
+        return helper;
+    }
+
+    function renderCronPreviewState($item, payload) {
+        const helper = getCronAssistantHelper($item);
+        if (!helper) {
+            return;
+        }
+
+        const $input = $item.find('[data-field="custom_cron"]');
+        const $status = helper.status;
+        const $preview = helper.preview;
+        const $list = helper.list;
+        const $empty = helper.empty;
+
+        if (!payload || !payload.expression) {
+            if ($preview.length) {
+                $preview.attr('hidden', 'hidden');
+            }
+            if ($list.length) {
+                $list.empty();
+            }
+            if ($status.length) {
+                const message = cronLabels.empty || $status.data('default') || $status.text() || '';
+                $status.text(message)
+                    .removeClass('bjlg-cron-status--success bjlg-cron-status--warning bjlg-cron-status--error');
+            }
+            if ($empty.length) {
+                $empty.show();
+            }
+            if ($input.length) {
+                $input.removeClass('bjlg-field-error').removeAttr('aria-invalid');
+            }
+            return;
+        }
+
+        if ($empty.length) {
+            $empty.hide();
+        }
+
+        if (payload.loading) {
+            if ($status.length) {
+                $status.text(cronLabels.loading || 'Analyse en cours…')
+                    .removeClass('bjlg-cron-status--success bjlg-cron-status--warning bjlg-cron-status--error');
+            }
+            if ($preview.length) {
+                $preview.attr('hidden', 'hidden');
+            }
+            if ($list.length) {
+                $list.empty();
+            }
+            if ($input.length) {
+                $input.removeClass('bjlg-field-error').removeAttr('aria-invalid');
+            }
+            return;
+        }
+
+        const severity = payload.severity || (Array.isArray(payload.errors) && payload.errors.length ? 'error' : (Array.isArray(payload.warnings) && payload.warnings.length ? 'warning' : 'success'));
+        let message = typeof payload.message === 'string' ? payload.message : '';
+
+        if (!message) {
+            if (severity === 'error' && Array.isArray(payload.errors) && payload.errors.length) {
+                message = payload.errors[0];
+            } else if (Array.isArray(payload.warnings) && payload.warnings.length) {
+                message = payload.warnings[0];
+            } else if (severity === 'error' && cronLabels.error) {
+                message = cronLabels.error;
+            }
+        }
+
+        if ($status.length) {
+            $status
+                .text(message || '')
+                .removeClass('bjlg-cron-status--success bjlg-cron-status--warning bjlg-cron-status--error');
+            if (message) {
+                $status.addClass('bjlg-cron-status--' + severity);
+            }
+        }
+
+        if ($input.length) {
+            if (severity === 'error') {
+                $input.addClass('bjlg-field-error').attr('aria-invalid', 'true');
+            } else {
+                $input.removeClass('bjlg-field-error').removeAttr('aria-invalid');
+            }
+        }
+
+        const runs = Array.isArray(payload.next_runs) ? payload.next_runs : [];
+        if ($preview.length) {
+            if (runs.length) {
+                $preview.removeAttr('hidden');
+            } else {
+                $preview.attr('hidden', 'hidden');
+            }
+        }
+        if ($list.length) {
+            $list.empty();
+            runs.forEach(function(run) {
+                if (!run || typeof run !== 'object') {
+                    return;
+                }
+                const $itemElement = $('<li/>');
+                const formatted = (run.formatted || run.label || '').toString();
+                const relative = (run.relative || '').toString();
+                const iso = (run.iso || '').toString();
+                if (formatted) {
+                    $('<time/>', { datetime: iso, text: formatted }).appendTo($itemElement);
+                }
+                if (relative) {
+                    $('<span/>', { class: 'bjlg-cron-assistant__relative', text: relative }).appendTo($itemElement);
+                }
+                if (!formatted && !relative && run.raw) {
+                    $itemElement.text((run.raw || '').toString());
+                }
+                $list.append($itemElement);
+            });
+        }
+    }
+
+    function clearCronAssistant($item) {
+        renderCronPreviewState($item, null);
+    }
+
+    function queueCronPreview($item, expression) {
+        if (cronPreviewTimer) {
+            clearTimeout(cronPreviewTimer);
+        }
+        cronPreviewTimer = setTimeout(function() {
+            requestCronPreview($item, expression);
+        }, 250);
+    }
+
+    function requestCronPreview($item, expression) {
+        if (cronPreviewTimer) {
+            clearTimeout(cronPreviewTimer);
+            cronPreviewTimer = null;
+        }
+
+        ensureCronAssistant($item);
+        renderCronPreviewState($item, { expression: expression, loading: true });
+
+        if (cronPreviewRequest) {
+            cronPreviewRequest.abort();
+            cronPreviewRequest = null;
+        }
+
+        if (cronPreviewCache.has(expression)) {
+            const cached = cronPreviewCache.get(expression);
+            if (cached) {
+                renderCronPreviewState($item, cached);
+            }
+            return;
+        }
+
+        cronPreviewRequest = $.ajax({
+            url: bjlg_ajax.ajax_url,
+            method: 'POST',
+            data: {
+                action: 'bjlg_preview_cron_expression',
+                nonce: bjlg_ajax.nonce,
+                expression: expression
+            }
+        }).done(function(response) {
+            const data = response && typeof response === 'object' ? response.data || {} : {};
+            const payload = $.extend({ expression: expression }, data);
+            if (response && response.success) {
+                payload.severity = payload.severity || (Array.isArray(payload.warnings) && payload.warnings.length ? 'warning' : 'success');
+                cronPreviewCache.set(expression, payload);
+                renderCronPreviewState($item, payload);
+            } else {
+                payload.severity = payload.severity || 'error';
+                if (!payload.message && typeof data.message === 'string') {
+                    payload.message = data.message;
+                }
+                renderCronPreviewState($item, payload);
+            }
+        }).fail(function(jqXHR) {
+            if (jqXHR && jqXHR.statusText === 'abort') {
                 return;
             }
-            applyCronSuggestion($input, suggestion);
+            const data = jqXHR && jqXHR.responseJSON ? jqXHR.responseJSON.data || jqXHR.responseJSON : {};
+            const payload = {
+                expression: expression,
+                severity: 'error',
+                message: data && typeof data.message === 'string' ? data.message : (cronLabels.error || 'Erreur lors de l’analyse de l’expression.'),
+            };
+            renderCronPreviewState($item, payload);
+        }).always(function() {
+            cronPreviewRequest = null;
         });
+    }
 
-        $input.on('focus input keyup click', function() {
-            updateCronAssistantState($input);
-        });
+    function refreshCronAssistant($item, immediate) {
+        ensureCronAssistant($item);
+        const recurrence = ($item.find('[data-field="recurrence"]').val() || '').toString();
+        if (recurrence !== 'custom') {
+            clearCronAssistant($item);
+            return;
+        }
 
-        $input.on('change', function() {
-            updateCronAssistantState($input);
-        });
+        const $input = $item.find('[data-field="custom_cron"]');
+        const expression = ($input.val() || '').toString().trim();
 
-        updateCronAssistantState($input);
+        if (!expression) {
+            clearCronAssistant($item);
+            return;
+        }
+
+        if (immediate) {
+            requestCronPreview($item, expression);
+        } else {
+            queueCronPreview($item, expression);
+        }
     }
 
     const badgeStyles = {
@@ -2026,6 +1806,7 @@ jQuery(function($) {
 
         initCronAssistant($item);
         toggleScheduleRows($item);
+        ensureCronAssistant($item);
         updateScheduleSummaryForItem($item);
         updateRunButtonState($item);
     }
@@ -2418,12 +2199,20 @@ jQuery(function($) {
     });
 
     $scheduleForm.on('change', '.bjlg-schedule-item [data-field="components"], .bjlg-schedule-item [data-field="encrypt"], .bjlg-schedule-item [data-field="incremental"], .bjlg-schedule-item [data-field="day"], .bjlg-schedule-item [data-field="day_of_month"], .bjlg-schedule-item [data-field="time"], .bjlg-schedule-item [data-field="custom_cron"], .bjlg-schedule-item [data-field="post_checks"], .bjlg-schedule-item [data-field="secondary_destinations"]', function() {
-        updateScheduleSummaryForItem($(this).closest('.bjlg-schedule-item'));
+        const $item = $(this).closest('.bjlg-schedule-item');
+        if ($(this).is('[data-field="custom_cron"]')) {
+            refreshCronAssistant($item, true);
+        }
+        updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
     });
 
     $scheduleForm.on('input', '.bjlg-schedule-item [data-field="label"], .bjlg-schedule-item textarea[data-field], .bjlg-schedule-item [data-field="custom_cron"]', function() {
-        updateScheduleSummaryForItem($(this).closest('.bjlg-schedule-item'));
+        const $item = $(this).closest('.bjlg-schedule-item');
+        if ($(this).is('[data-field="custom_cron"]')) {
+            refreshCronAssistant($item, false);
+        }
+        updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
     });
 

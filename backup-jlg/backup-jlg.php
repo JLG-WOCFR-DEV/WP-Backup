@@ -706,6 +706,37 @@ final class BJLG_Plugin {
             'tab_modules' => $section_modules,
             'section_modules' => $section_modules,
             'onboarding_nonce' => wp_create_nonce('bjlg_onboarding_progress'),
+            'cron_assistant' => [
+                'examples' => [
+                    [
+                        'label' => __('Tous les jours à 03h00', 'backup-jlg'),
+                        'expression' => '0 3 * * *',
+                    ],
+                    [
+                        'label' => __('Chaque lundi à 01h30', 'backup-jlg'),
+                        'expression' => '30 1 * * 1',
+                    ],
+                    [
+                        'label' => __('Du lundi au vendredi à 22h00', 'backup-jlg'),
+                        'expression' => '0 22 * * 1-5',
+                    ],
+                    [
+                        'label' => __('Le premier jour du mois à 04h15', 'backup-jlg'),
+                        'expression' => '15 4 1 * *',
+                    ],
+                    [
+                        'label' => __('Toutes les deux heures', 'backup-jlg'),
+                        'expression' => '0 */2 * * *',
+                    ],
+                ],
+                'labels' => [
+                    'empty' => __('Saisissez une expression Cron (minute heure jour mois jour-semaine).', 'backup-jlg'),
+                    'loading' => __('Analyse de l’expression…', 'backup-jlg'),
+                    'error' => __('Impossible d’analyser cette expression Cron.', 'backup-jlg'),
+                    'apply_example' => __('Utiliser “%s”', 'backup-jlg'),
+                    'preview_title' => __('Prochaines exécutions', 'backup-jlg'),
+                ],
+            ],
         ]);
     }
 
