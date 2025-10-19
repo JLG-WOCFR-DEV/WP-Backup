@@ -455,7 +455,7 @@ final class BJLG_ActionsTest extends TestCase
         $this->assertSame([], $queue);
     }
 
-    public function test_validate_download_token_restores_user_context(): void
+    public function test_validate_download_token_requires_authenticated_user(): void
     {
         $actions = new BJLG\BJLG_Actions();
 
@@ -472,9 +472,9 @@ final class BJLG_ActionsTest extends TestCase
         ];
 
         $GLOBALS['bjlg_test_users'] = [$user_id => $user];
+        $previous_can = $GLOBALS['bjlg_test_current_user_can'] ?? null;
         $GLOBALS['bjlg_test_current_user_can'] = false;
-        $GLOBALS['current_user'] = null;
-        $GLOBALS['current_user_id'] = 0;
+        wp_set_current_user(0);
 
         set_transient('bjlg_download_' . $token, [
             'file' => $filepath,
@@ -489,11 +489,29 @@ final class BJLG_ActionsTest extends TestCase
         try {
             $result = $method->invoke($actions, $token);
 
+            $this->assertInstanceOf(\WP_Error::class, $result);
+            $this->assertSame('bjlg_forbidden', $result->get_error_code());
+            $this->assertSame(0, get_current_user_id());
+            $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
+
+            wp_set_current_user($user_id);
+            $GLOBALS['bjlg_test_current_user_can'] = null;
+
+            $result = $method->invoke($actions, $token);
+
             $this->assertIsArray($result);
             $this->assertSame($filepath, $result[0]);
             $this->assertSame('bjlg_download_' . $token, $result[1]);
             $this->assertSame($user_id, get_current_user_id());
         } finally {
+            if ($previous_can !== null) {
+                $GLOBALS['bjlg_test_current_user_can'] = $previous_can;
+            } else {
+                unset($GLOBALS['bjlg_test_current_user_can']);
+            }
+
+            wp_set_current_user(0);
+
             if (file_exists($filepath)) {
                 unlink($filepath);
             }

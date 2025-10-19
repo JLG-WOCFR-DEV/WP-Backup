@@ -154,15 +154,15 @@ final class BJLG_ActionsDownloadTest extends TestCase
 
         $token = 'valid-token';
         $user_id = 321;
-        $GLOBALS['bjlg_test_users'] = [
-            $user_id => (object) [
-                'ID' => $user_id,
-                'caps' => [bjlg_get_required_capability() => true],
-                'allcaps' => [bjlg_get_required_capability() => true],
-            ],
+        $user = (object) [
+            'ID' => $user_id,
+            'caps' => [bjlg_get_required_capability() => true],
+            'allcaps' => [bjlg_get_required_capability() => true],
         ];
-        $GLOBALS['current_user'] = null;
-        $GLOBALS['current_user_id'] = 0;
+
+        $GLOBALS['bjlg_test_users'] = [
+            $user_id => $user,
+        ];
 
         set_transient('bjlg_download_' . $token, [
             'file' => $realpath,
@@ -171,8 +171,24 @@ final class BJLG_ActionsDownloadTest extends TestCase
             'issued_by' => $user_id,
         ], 3600);
 
+        $previous_can = $GLOBALS['bjlg_test_current_user_can'] ?? null;
+        $GLOBALS['bjlg_test_current_user_can'] = false;
+
         $_REQUEST['token'] = $token;
         $_SERVER['REMOTE_ADDR'] = '192.0.2.55';
+
+        try {
+            $actions->handle_download_request();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown for unauthenticated download.');
+        } catch (\BJLG_Test_JSON_Response $exception) {
+            $this->assertSame(403, $exception->status_code);
+        }
+
+        $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
+
+        wp_set_current_user($user_id);
+        $GLOBALS['bjlg_test_current_user_can'] = null;
+        $_REQUEST['token'] = $token;
 
         $previous_filter = $GLOBALS['bjlg_test_hooks']['filters']['bjlg_pre_stream_backup'] ?? null;
         $GLOBALS['bjlg_test_hooks']['filters']['bjlg_pre_stream_backup'] = [];
@@ -191,6 +207,12 @@ final class BJLG_ActionsDownloadTest extends TestCase
             }
 
             unset($GLOBALS['bjlg_test_transients']['bjlg_download_' . $token]);
+
+            if ($previous_can !== null) {
+                $GLOBALS['bjlg_test_current_user_can'] = $previous_can;
+            } else {
+                unset($GLOBALS['bjlg_test_current_user_can']);
+            }
 
             if (file_exists($filepath)) {
                 unlink($filepath);
