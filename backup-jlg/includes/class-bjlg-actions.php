@@ -13,6 +13,17 @@ if (!defined('ABSPATH')) {
  */
 class BJLG_Actions {
 
+    private const DOWNLOAD_TRANSIENT_PREFIX = 'bjlg_download_';
+    private const DOWNLOAD_SCHEMA_OPTION = 'bjlg_download_token_schema_version';
+    private const DOWNLOAD_SCHEMA_VERSION = 2;
+
+    /**
+     * Boots static routines for download handling.
+     */
+    public static function bootstrap() {
+        add_action('init', [__CLASS__, 'maybe_upgrade_download_tokens'], 1);
+    }
+
     public function __construct() {
         add_action('wp_ajax_bjlg_delete_backup', [$this, 'handle_delete_backup']);
         add_action('wp_ajax_bjlg_prepare_download', [$this, 'prepare_download']);
@@ -68,7 +79,7 @@ class BJLG_Actions {
         }
 
         $download_token = wp_generate_password(32, false);
-        $transient_key = 'bjlg_download_' . $download_token;
+        $transient_key = self::DOWNLOAD_TRANSIENT_PREFIX . $download_token;
         $ttl = self::get_download_token_ttl($real_filepath);
         $payload = self::build_download_token_payload($real_filepath);
 
@@ -265,26 +276,51 @@ class BJLG_Actions {
             return new WP_Error('bjlg_missing_token', 'Token de téléchargement manquant.', ['status' => 400]);
         }
 
-        $transient_key = 'bjlg_download_' . $token;
+        $transient_key = self::DOWNLOAD_TRANSIENT_PREFIX . $token;
         $payload = get_transient($transient_key);
 
-        if (is_array($payload)) {
-            $filepath = isset($payload['file']) ? $payload['file'] : '';
-            $required_capability = isset($payload['requires_cap']) ? $payload['requires_cap'] : null;
-            $issued_by = isset($payload['issued_by']) ? (int) $payload['issued_by'] : 0;
-            $delete_after_download = !empty($payload['delete_after_download']);
-        } else {
-            $filepath = $payload;
-            $required_capability = null;
-            $issued_by = 0;
-            $delete_after_download = false;
+        if (!is_array($payload)) {
+            if ($payload !== false) {
+                delete_transient($transient_key);
+            }
+
+            return new WP_Error('bjlg_invalid_token', 'Lien de téléchargement invalide ou expiré.', ['status' => 403]);
         }
 
-        if (empty($filepath)) {
+        if (!array_key_exists('file', $payload) || !is_string($payload['file']) || $payload['file'] === '') {
+            delete_transient($transient_key);
+
+            return new WP_Error('bjlg_invalid_token', 'Lien de téléchargement invalide ou expiré.', ['status' => 403]);
+        }
+
+        if (!array_key_exists('requires_cap', $payload) || !is_string($payload['requires_cap']) || $payload['requires_cap'] === '') {
+            delete_transient($transient_key);
+
+            return new WP_Error('bjlg_invalid_token', 'Lien de téléchargement invalide ou expiré.', ['status' => 403]);
+        }
+
+        if (!array_key_exists('issued_by', $payload)) {
+            delete_transient($transient_key);
+
+            return new WP_Error('bjlg_invalid_token', 'Lien de téléchargement invalide ou expiré.', ['status' => 403]);
+        }
+
+        $filepath = (string) $payload['file'];
+        $required_capability = (string) $payload['requires_cap'];
+        $issued_by = (int) $payload['issued_by'];
+        $delete_after_download = !empty($payload['delete_after_download']);
+
+        if (!array_key_exists('issued_at', $payload) || !is_numeric($payload['issued_at']) || (int) $payload['issued_at'] <= 0) {
+            delete_transient($transient_key);
+
             return new WP_Error('bjlg_invalid_token', 'Lien de téléchargement invalide ou expiré.', ['status' => 403]);
         }
 
         $current_user_id = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
+
+        if (function_exists('current_user_can') && !current_user_can(\bjlg_get_required_capability())) {
+            return new WP_Error('bjlg_forbidden', 'Permissions insuffisantes pour télécharger cette sauvegarde.', ['status' => 403]);
+        }
 
         if ($issued_by > 0 && $current_user_id !== $issued_by) {
             return new WP_Error(
@@ -294,7 +330,7 @@ class BJLG_Actions {
             );
         }
 
-        if ($required_capability && !current_user_can($required_capability)) {
+        if ($required_capability !== '' && function_exists('current_user_can') && !current_user_can($required_capability)) {
             return new WP_Error('bjlg_forbidden', 'Permissions insuffisantes pour télécharger cette sauvegarde.', ['status' => 403]);
         }
 
@@ -322,6 +358,107 @@ class BJLG_Actions {
         }
 
         return [$real_filepath, $transient_key, $delete_after_download];
+    }
+
+    /**
+     * Upgrades persisted download token payloads to the latest schema.
+     */
+    public static function maybe_upgrade_download_tokens() {
+        $stored_version = (int) get_option(self::DOWNLOAD_SCHEMA_OPTION, 0);
+
+        if ($stored_version >= self::DOWNLOAD_SCHEMA_VERSION) {
+            return;
+        }
+
+        self::purge_download_transients();
+
+        update_option(self::DOWNLOAD_SCHEMA_OPTION, self::DOWNLOAD_SCHEMA_VERSION);
+    }
+
+    /**
+     * Deletes legacy download transients.
+     */
+    private static function purge_download_transients() {
+        global $wpdb;
+
+        if (isset($wpdb)) {
+            $options_table = $wpdb->options ?? ($wpdb->prefix ?? 'wp_') . 'options';
+
+            if (method_exists($wpdb, 'get_col')) {
+                $transient_option_names = (array) $wpdb->get_col("SELECT option_name FROM {$options_table} WHERE option_name LIKE '\\_transient\\_" . self::DOWNLOAD_TRANSIENT_PREFIX . "%'");
+                self::delete_download_transients_from_options($transient_option_names, false);
+
+                if (function_exists('delete_site_transient')) {
+                    $site_transient_option_names = (array) $wpdb->get_col("SELECT option_name FROM {$options_table} WHERE option_name LIKE '\\_site\\_transient\\_" . self::DOWNLOAD_TRANSIENT_PREFIX . "%'");
+                    self::delete_download_transients_from_options($site_transient_option_names, true);
+
+                    if (isset($wpdb->sitemeta)) {
+                        $site_meta_table = $wpdb->sitemeta;
+                        $network_transient_keys = (array) $wpdb->get_col("SELECT meta_key FROM {$site_meta_table} WHERE meta_key LIKE '\\_site\\_transient\\_" . self::DOWNLOAD_TRANSIENT_PREFIX . "%'");
+                        self::delete_download_transients_from_options($network_transient_keys, true);
+                    }
+                }
+            } elseif (method_exists($wpdb, 'query')) {
+                $wpdb->query("DELETE FROM {$options_table} WHERE option_name LIKE '\\_transient\\_" . self::DOWNLOAD_TRANSIENT_PREFIX . "%'");
+
+                if (function_exists('delete_site_transient')) {
+                    $wpdb->query("DELETE FROM {$options_table} WHERE option_name LIKE '\\_site\\_transient\\_" . self::DOWNLOAD_TRANSIENT_PREFIX . "%'");
+
+                    if (isset($wpdb->sitemeta)) {
+                        $site_meta_table = $wpdb->sitemeta;
+                        $wpdb->query("DELETE FROM {$site_meta_table} WHERE meta_key LIKE '\\_site\\_transient\\_" . self::DOWNLOAD_TRANSIENT_PREFIX . "%'");
+                    }
+                }
+            }
+        }
+
+        if (isset($GLOBALS['bjlg_test_transients']) && is_array($GLOBALS['bjlg_test_transients'])) {
+            foreach (array_keys($GLOBALS['bjlg_test_transients']) as $transient_key) {
+                if (strpos((string) $transient_key, self::DOWNLOAD_TRANSIENT_PREFIX) === 0) {
+                    if (function_exists('delete_transient')) {
+                        delete_transient((string) $transient_key);
+                    } else {
+                        unset($GLOBALS['bjlg_test_transients'][$transient_key]);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Deletes download transients from option names.
+     *
+     * @param array<int, string> $option_names
+     * @param bool $site_scope
+     */
+    private static function delete_download_transients_from_options(array $option_names, bool $site_scope) {
+        $prefix = $site_scope ? '_site_transient_' : '_transient_';
+
+        foreach ($option_names as $option_name) {
+            $option_name = (string) $option_name;
+
+            if (strpos($option_name, $prefix) !== 0) {
+                continue;
+            }
+
+            $transient = substr($option_name, strlen($prefix));
+
+            if ($transient === '') {
+                continue;
+            }
+
+            if ($site_scope) {
+                if (function_exists('delete_site_transient')) {
+                    delete_site_transient($transient);
+                }
+
+                continue;
+            }
+
+            if (function_exists('delete_transient')) {
+                delete_transient($transient);
+            }
+        }
     }
 
     /**

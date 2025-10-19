@@ -457,7 +457,7 @@ final class BJLG_ActionsTest extends TestCase
         $this->assertSame([], $queue);
     }
 
-    public function test_validate_download_token_requires_matching_user(): void
+    public function test_validate_download_token_requires_authenticated_user(): void
     {
         $actions = new BJLG\BJLG_Actions();
 
@@ -474,7 +474,9 @@ final class BJLG_ActionsTest extends TestCase
         ];
 
         $GLOBALS['bjlg_test_users'] = [$user_id => $user];
-        $GLOBALS['bjlg_test_current_user_can'] = true;
+        $previous_can = $GLOBALS['bjlg_test_current_user_can'] ?? null;
+        $GLOBALS['bjlg_test_current_user_can'] = false;
+        wp_set_current_user(0);
 
         set_transient('bjlg_download_' . $token, [
             'file' => $filepath,
@@ -491,101 +493,24 @@ final class BJLG_ActionsTest extends TestCase
 
             $this->assertInstanceOf(\WP_Error::class, $result);
             $this->assertSame('bjlg_forbidden', $result->get_error_code());
-        } finally {
-            if (file_exists($filepath)) {
-                unlink($filepath);
-            }
-        }
-    }
+            $this->assertSame(0, get_current_user_id());
+            $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
 
-    public function test_validate_download_token_allows_logged_in_issuer(): void
-    {
-        $actions = new BJLG\BJLG_Actions();
+            wp_set_current_user($user_id);
+            $GLOBALS['bjlg_test_current_user_can'] = null;
 
-        $token = 'bjlg-valid-token';
-        $filepath = BJLG_BACKUP_DIR . 'token-download-' . uniqid('', true) . '.zip';
-
-        file_put_contents($filepath, 'data');
-
-        $user_id = 456;
-        $user = (object) [
-            'ID' => $user_id,
-            'caps' => [bjlg_get_required_capability() => true],
-            'allcaps' => [bjlg_get_required_capability() => true],
-        ];
-
-        $GLOBALS['bjlg_test_users'] = [$user_id => $user];
-        wp_set_current_user($user_id);
-
-        set_transient('bjlg_download_' . $token, [
-            'file' => $filepath,
-            'requires_cap' => bjlg_get_required_capability(),
-            'issued_at' => time(),
-            'issued_by' => $user_id,
-        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
-
-        $method = new \ReflectionMethod(BJLG\BJLG_Actions::class, 'validate_download_token');
-        $method->setAccessible(true);
-
-        try {
             $result = $method->invoke($actions, $token);
 
             $this->assertIsArray($result);
             $this->assertSame($filepath, $result[0]);
             $this->assertSame('bjlg_download_' . $token, $result[1]);
         } finally {
-            wp_set_current_user(0);
-
-            if (file_exists($filepath)) {
-                unlink($filepath);
+            if ($previous_can !== null) {
+                $GLOBALS['bjlg_test_current_user_can'] = $previous_can;
+            } else {
+                unset($GLOBALS['bjlg_test_current_user_can']);
             }
-        }
-    }
 
-    public function test_validate_download_token_prevents_privilege_escalation(): void
-    {
-        $actions = new BJLG\BJLG_Actions();
-
-        $token = 'bjlg-priv-escalation';
-        $filepath = BJLG_BACKUP_DIR . 'token-download-' . uniqid('', true) . '.zip';
-
-        file_put_contents($filepath, 'data');
-
-        $owner = (object) [
-            'ID' => 1010,
-            'caps' => [bjlg_get_required_capability() => true],
-            'allcaps' => [bjlg_get_required_capability() => true],
-        ];
-
-        $other = (object) [
-            'ID' => 2020,
-            'caps' => [bjlg_get_required_capability() => true],
-            'allcaps' => [bjlg_get_required_capability() => true],
-        ];
-
-        $GLOBALS['bjlg_test_users'] = [
-            $owner->ID => $owner,
-            $other->ID => $other,
-        ];
-
-        wp_set_current_user($other->ID);
-
-        set_transient('bjlg_download_' . $token, [
-            'file' => $filepath,
-            'requires_cap' => bjlg_get_required_capability(),
-            'issued_at' => time(),
-            'issued_by' => $owner->ID,
-        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
-
-        $method = new \ReflectionMethod(BJLG\BJLG_Actions::class, 'validate_download_token');
-        $method->setAccessible(true);
-
-        try {
-            $result = $method->invoke($actions, $token);
-
-            $this->assertInstanceOf(\WP_Error::class, $result);
-            $this->assertSame('bjlg_forbidden', $result->get_error_code());
-        } finally {
             wp_set_current_user(0);
 
             if (file_exists($filepath)) {

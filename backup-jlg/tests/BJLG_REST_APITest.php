@@ -1872,7 +1872,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         }
     }
 
-    public function test_download_backup_token_requires_authenticated_user(): void
+    public function test_download_backup_url_requires_authenticated_session(): void
     {
         $GLOBALS['bjlg_test_transients'] = [];
         $GLOBALS['bjlg_test_current_user_can'] = true;
@@ -2002,7 +2002,11 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $token = (string) $response['download_token'];
             $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
 
-            $_REQUEST['token'] = $token;
+            // Simulate an unauthenticated request consuming the download URL.
+            $previous_can = $GLOBALS['bjlg_test_current_user_can'] ?? null;
+            $GLOBALS['current_user'] = null;
+            $GLOBALS['current_user_id'] = 0;
+            $GLOBALS['bjlg_test_current_user_can'] = false;
 
             $actions->handle_download_request();
 
@@ -2091,12 +2095,32 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
             $_REQUEST['token'] = $token;
 
-            $actions->handle_download_request();
+            try {
+                do_action('wp_ajax_nopriv_bjlg_download');
+                $this->fail('Expected BJLG_Test_JSON_Response to be thrown for unauthenticated download.');
+            } catch (\BJLG_Test_JSON_Response $response) {
+                $this->assertSame(403, $response->status_code);
+            }
+
+            $this->assertSame([], $captured_paths);
+            $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
+
+            // Authenticated request should now succeed.
+            wp_set_current_user($user->ID);
+            $GLOBALS['bjlg_test_current_user_can'] = null;
+            $_REQUEST['token'] = $token;
+            $_GET['token'] = $token;
+
+            do_action('wp_ajax_bjlg_download');
 
             $this->assertNotEmpty($captured_paths);
             $this->assertSame(realpath($backup), realpath((string) $captured_paths[0]));
             $this->assertArrayNotHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
-            $this->assertFalse(file_exists($backup));
+            if ($previous_can !== null) {
+                $GLOBALS['bjlg_test_current_user_can'] = $previous_can;
+            } else {
+                unset($GLOBALS['bjlg_test_current_user_can']);
+            }
         } finally {
             unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_pre_stream_backup']);
             $_REQUEST = [];

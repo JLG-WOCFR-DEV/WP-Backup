@@ -605,6 +605,7 @@ final class BJLG_Plugin {
 
         new BJLG\BJLG_Admin();
         new BJLG\BJLG_Admin_Fallbacks();
+        BJLG\BJLG_Actions::bootstrap();
         new BJLG\BJLG_Actions();
 
         $encryption_service = new BJLG\BJLG_Encryption();
