@@ -152,6 +152,98 @@ jQuery(function($) {
     const cronHistoryStorageKey = 'bjlg_cron_history_v1';
     const cronHistoryMaxEntries = 8;
 
+    function extractAlphaSegments(field) {
+        if (typeof field !== 'string') {
+            return [];
+        }
+        const matches = field.match(/[A-Za-z]+/g);
+        if (!matches || !matches.length) {
+            return [];
+        }
+        return matches.map(function(segment) {
+            return segment.toLowerCase();
+        });
+    }
+
+    function getCronStepValue(field) {
+        if (typeof field !== 'string') {
+            return null;
+        }
+        const stepMatch = field.match(/\/(\d+)/);
+        if (stepMatch && stepMatch[1]) {
+            const parsed = parseInt(stepMatch[1], 10);
+            return !isNaN(parsed) && isFinite(parsed) && parsed > 0 ? parsed : null;
+        }
+        return null;
+    }
+
+    function analyzeCronExpression(expression) {
+        const result = { errors: [], warnings: [] };
+        const sanitized = (expression || '').toString().trim();
+
+        if (!sanitized) {
+            return result;
+        }
+
+        if (!cronAllowedPattern.test(sanitized)) {
+            result.errors.push('L’expression contient des caractères non pris en charge. Utilisez uniquement les chiffres, espaces et symboles Cron classiques (* , - /).');
+            return result;
+        }
+
+        const parts = sanitized.split(/\s+/);
+
+        if (parts.length !== cronFieldCount) {
+            if (parts.length < cronFieldCount) {
+                result.errors.push('Expression incomplète : 5 segments sont requis (minute, heure, jour du mois, mois, jour de semaine).');
+            } else {
+                result.errors.push('Expression trop longue : limitez-vous à 5 segments (minute, heure, jour du mois, mois, jour de semaine).');
+            }
+            return result;
+        }
+
+        const minuteField = parts[0];
+        const hourField = parts[1];
+        const dayOfMonthField = parts[2];
+        const monthField = parts[3];
+        const dayOfWeekField = parts[4];
+
+        const invalidMonths = extractAlphaSegments(monthField).filter(function(token) {
+            return !cronMonthSet.has(token);
+        });
+        if (invalidMonths.length) {
+            result.errors.push('Mois non reconnus : ' + invalidMonths.join(', ') + '. Utilisez jan–dec ou leurs équivalents numériques.');
+        }
+
+        const invalidDays = extractAlphaSegments(dayOfWeekField).filter(function(token) {
+            return !cronDaySet.has(token);
+        });
+        if (invalidDays.length) {
+            result.errors.push('Jours de semaine non reconnus : ' + invalidDays.join(', ') + '. Utilisez sun–sat ou leurs équivalents numériques.');
+        }
+
+        if (result.errors.length) {
+            return result;
+        }
+
+        const minuteHasWildcard = minuteField.indexOf('*') !== -1;
+        const minuteStep = getCronStepValue(minuteField);
+        const minuteCadence = minuteHasWildcard ? (minuteStep || 1) : null;
+
+        if (minuteCadence && minuteCadence < 5) {
+            result.warnings.push('Cadence très fréquente : l’expression s’exécute plus d’une fois toutes les 5 minutes.');
+        }
+
+        if (minuteHasWildcard && hourField.indexOf('*') !== -1 && !minuteStep) {
+            result.warnings.push('Expression exécutée chaque minute en continu : vérifiez que la charge serveur reste acceptable.');
+        }
+
+        if (dayOfMonthField !== '*' && dayOfMonthField !== '?' && dayOfWeekField !== '*' && dayOfWeekField !== '?') {
+            result.warnings.push('Jour du mois et jour de semaine sont définis : Cron interprète ces segments avec un OU logique.');
+        }
+
+        return result;
+    }
+
     const componentLabels = {
         db: { label: 'Base de données', color: '#6366f1' },
         plugins: { label: 'Extensions', color: '#f59e0b' },
@@ -1859,10 +1951,42 @@ jQuery(function($) {
             cronPreviewRequest = null;
         }
 
+        const heuristics = analyzeCronExpression(expression);
+        if (heuristics.errors.length) {
+            renderCronPreviewState($item, {
+                expression: expression,
+                severity: 'error',
+                message: heuristics.errors[0],
+                errors: heuristics.errors.slice(),
+                warnings: []
+            });
+            return;
+        }
+
+        const heuristicsWarnings = heuristics.warnings.slice();
+
         if (cronPreviewCache.has(expression)) {
             const cached = cronPreviewCache.get(expression);
             if (cached) {
-                renderCronPreviewState($item, cached);
+                const payload = $.extend({}, cached);
+                if (heuristicsWarnings.length) {
+                    const combined = Array.isArray(payload.warnings) ? payload.warnings.slice() : [];
+                    heuristicsWarnings.forEach(function(entry) {
+                        if (typeof entry === 'string') {
+                            const trimmed = entry.trim();
+                            if (trimmed && combined.indexOf(trimmed) === -1) {
+                                combined.push(trimmed);
+                            }
+                        }
+                    });
+                    if (combined.length) {
+                        payload.warnings = combined;
+                        if (!payload.severity || payload.severity === 'success') {
+                            payload.severity = 'warning';
+                        }
+                    }
+                }
+                renderCronPreviewState($item, payload);
             }
             return;
         }
@@ -1879,6 +2003,20 @@ jQuery(function($) {
             const data = response && typeof response === 'object' ? response.data || {} : {};
             const payload = $.extend({ expression: expression }, data);
             if (response && response.success) {
+                if (heuristicsWarnings.length) {
+                    const combined = Array.isArray(payload.warnings) ? payload.warnings.slice() : [];
+                    heuristicsWarnings.forEach(function(entry) {
+                        if (typeof entry === 'string') {
+                            const trimmed = entry.trim();
+                            if (trimmed && combined.indexOf(trimmed) === -1) {
+                                combined.push(trimmed);
+                            }
+                        }
+                    });
+                    if (combined.length) {
+                        payload.warnings = combined;
+                    }
+                }
                 payload.severity = payload.severity || (Array.isArray(payload.warnings) && payload.warnings.length ? 'warning' : 'success');
                 cronPreviewCache.set(expression, payload);
                 renderCronPreviewState($item, payload);
@@ -2070,7 +2208,12 @@ jQuery(function($) {
             return;
         }
 
-        const baseClass = level === 'error' ? 'bjlg-cron-warning--error' : 'bjlg-cron-warning--warning';
+        const resolvedLevel = level === 'error' ? 'error' : 'warning';
+        if (resolvedLevel === 'error' || resolvedLevel === 'warning') {
+            setCronPanelVisibility(elements, true);
+        }
+
+        const baseClass = resolvedLevel === 'error' ? 'bjlg-cron-warning--error' : 'bjlg-cron-warning--warning';
         entries.forEach(function(entry) {
             $('<p/>', {
                 class: 'bjlg-cron-warning ' + baseClass,
@@ -2095,13 +2238,23 @@ jQuery(function($) {
         }
     }
 
-    function renderCronPreviewData(elements, data) {
+    function renderCronPreviewData(elements, data, extraWarnings) {
         if (!elements || !elements.previewList || !elements.previewList.length) {
             return;
         }
 
         const occurrences = Array.isArray(data && data.occurrences) ? data.occurrences : [];
-        const warnings = Array.isArray(data && data.warnings) ? data.warnings : [];
+        const warnings = Array.isArray(data && data.warnings) ? data.warnings.slice() : [];
+        if (Array.isArray(extraWarnings) && extraWarnings.length) {
+            extraWarnings.forEach(function(entry) {
+                if (typeof entry === 'string') {
+                    const trimmed = entry.trim();
+                    if (trimmed && warnings.indexOf(trimmed) === -1) {
+                        warnings.push(trimmed);
+                    }
+                }
+            });
+        }
 
         elements.previewList.empty();
 
@@ -2167,6 +2320,114 @@ jQuery(function($) {
         }
         const recurrence = ($item.find('[data-field="recurrence"]').val() || '').toString();
         return recurrence === 'custom';
+    }
+
+    function scheduleCronPreview($input, immediate) {
+        if (!$input || !$input.length) {
+            return;
+        }
+        const elements = getCronFieldElements($input);
+        if (!elements) {
+            return;
+        }
+
+        const rawValue = ($input.val() || '').toString();
+        const expression = rawValue.trim();
+
+        if (!recurrenceIsCustom($input)) {
+            resetCronAssistant($input.closest('.bjlg-schedule-item'));
+            return;
+        }
+
+        if (expression === '') {
+            clearCronPreview(elements);
+            return;
+        }
+
+        if (cronPreviewTimer) {
+            clearTimeout(cronPreviewTimer);
+        }
+
+        const runner = function() {
+            requestCronPreview(expression, elements);
+        };
+
+        if (immediate) {
+            runner();
+        } else {
+            cronPreviewTimer = setTimeout(runner, 320);
+        }
+    }
+
+    function requestCronPreview(expression, elements) {
+        if (!expression) {
+            clearCronPreview(elements);
+            return;
+        }
+
+        if (cronPreviewRequest && typeof cronPreviewRequest.abort === 'function') {
+            cronPreviewRequest.abort();
+        }
+        cronPreviewRequest = null;
+
+        const heuristics = analyzeCronExpression(expression);
+        if (heuristics.errors.length) {
+            renderCronPreviewError(elements, heuristics.errors[0], heuristics.errors.slice(1));
+            return;
+        }
+
+        if (cronPreviewCache.has(expression)) {
+            renderCronPreviewData(elements, cronPreviewCache.get(expression), heuristics.warnings);
+            return;
+        }
+
+        setCronPreviewLoading(elements);
+
+        if (heuristics.warnings.length) {
+            renderCronWarnings(elements, heuristics.warnings, 'warning');
+        }
+
+        cronPreviewRequest = $.ajax({
+            url: bjlg_ajax.ajax_url,
+            method: 'POST',
+            dataType: 'json',
+            data: {
+                action: 'bjlg_preview_cron_expression',
+                nonce: bjlg_ajax.nonce,
+                expression: expression
+            }
+        }).done(function(response) {
+            if (!response) {
+                renderCronPreviewError(elements, 'Réponse inattendue du serveur.', []);
+                return;
+            }
+            if (response.success) {
+                const data = response.data || {};
+                cronPreviewCache.set(expression, data);
+                renderCronPreviewData(elements, data, heuristics.warnings);
+            } else {
+                const payload = response.data || response || {};
+                const message = payload && typeof payload.message === 'string' ? payload.message : 'Expression Cron invalide.';
+                const details = normalizeErrorList(payload && (payload.errors || payload.validation_errors || payload.field_errors));
+                renderCronPreviewError(elements, message, details);
+            }
+        }).fail(function(jqXHR, textStatus) {
+            if (textStatus === 'abort') {
+                return;
+            }
+            let message = 'Erreur de communication avec le serveur.';
+            let details = [];
+            if (jqXHR && jqXHR.responseJSON) {
+                const data = jqXHR.responseJSON.data || jqXHR.responseJSON;
+                if (data && typeof data.message === 'string') {
+                    message = data.message;
+                }
+                details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
+            }
+            renderCronPreviewError(elements, message, details);
+        }).always(function() {
+            cronPreviewRequest = null;
+        });
     }
 
     function initCronAssistant($scope) {
