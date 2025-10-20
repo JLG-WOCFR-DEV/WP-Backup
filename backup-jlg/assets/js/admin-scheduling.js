@@ -148,11 +148,9 @@ jQuery(function($) {
     };
 
     const cronFieldCount = 5;
-    const cronAllowedPattern = /^[\d\*\-,\/A-Za-z\s]+$/;
-    const cronHistoryStorageKey = 'bjlg_cron_history_v1';
-    const cronHistoryMaxEntries = 8;
+    const cronAllowedPattern = /^[\d\*\-,\/A-Za-z\s\?#LW]+$/;
 
-    function extractAlphaSegments(field) {
+    function extractAlphaSegments(field, minLength) {
         if (typeof field !== 'string') {
             return [];
         }
@@ -160,8 +158,11 @@ jQuery(function($) {
         if (!matches || !matches.length) {
             return [];
         }
+        const threshold = typeof minLength === 'number' && minLength > 0 ? minLength : 1;
         return matches.map(function(segment) {
             return segment.toLowerCase();
+        }).filter(function(segment) {
+            return segment.length >= threshold;
         });
     }
 
@@ -182,6 +183,10 @@ jQuery(function($) {
         const sanitized = (expression || '').toString().trim();
 
         if (!sanitized) {
+            return result;
+        }
+
+        if (sanitized.charAt(0) === '@') {
             return result;
         }
 
@@ -207,14 +212,14 @@ jQuery(function($) {
         const monthField = parts[3];
         const dayOfWeekField = parts[4];
 
-        const invalidMonths = extractAlphaSegments(monthField).filter(function(token) {
+        const invalidMonths = extractAlphaSegments(monthField, 2).filter(function(token) {
             return !cronMonthSet.has(token);
         });
         if (invalidMonths.length) {
             result.errors.push('Mois non reconnus : ' + invalidMonths.join(', ') + '. Utilisez jan–dec ou leurs équivalents numériques.');
         }
 
-        const invalidDays = extractAlphaSegments(dayOfWeekField).filter(function(token) {
+        const invalidDays = extractAlphaSegments(dayOfWeekField, 2).filter(function(token) {
             return !cronDaySet.has(token);
         });
         if (invalidDays.length) {
