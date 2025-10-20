@@ -149,6 +149,8 @@ jQuery(function($) {
 
     const cronFieldCount = 5;
     const cronAllowedPattern = /^[\d\*\-,\/A-Za-z\s]+$/;
+    const cronHistoryStorageKey = 'bjlg_cron_history_v1';
+    const cronHistoryMaxEntries = 8;
 
     const componentLabels = {
         db: { label: 'Base de données', color: '#6366f1' },
@@ -208,6 +210,84 @@ jQuery(function($) {
         } catch (error) {
             return null;
         }
+    }
+
+    function canUseLocalStorage() {
+        try {
+            return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function normalizeCronExpression(expression) {
+        return (expression || '').toString().replace(/\s+/g, ' ').trim();
+    }
+
+    function loadCronHistoryEntries() {
+        if (!canUseLocalStorage()) {
+            return [];
+        }
+        try {
+            const raw = window.localStorage.getItem(cronHistoryStorageKey);
+            if (typeof raw !== 'string' || raw === '') {
+                return [];
+            }
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed)) {
+                return [];
+            }
+            return parsed.map(function(entry) {
+                if (entry && typeof entry === 'object') {
+                    return {
+                        expression: normalizeCronExpression(entry.expression),
+                        lastUsed: typeof entry.lastUsed === 'number' ? entry.lastUsed : Date.now()
+                    };
+                }
+                return { expression: normalizeCronExpression(entry), lastUsed: Date.now() };
+            }).filter(function(entry) {
+                return entry.expression && cronAllowedPattern.test(entry.expression);
+            });
+        } catch (error) {
+            return [];
+        }
+    }
+
+    function saveCronHistoryEntries(entries) {
+        if (!canUseLocalStorage()) {
+            return;
+        }
+        try {
+            window.localStorage.setItem(cronHistoryStorageKey, JSON.stringify(entries));
+        } catch (error) {
+            // Ignore storage failures (private mode, quota exceeded, etc.)
+        }
+    }
+
+    function clearCronHistoryEntries() {
+        if (!canUseLocalStorage()) {
+            return;
+        }
+        try {
+            window.localStorage.removeItem(cronHistoryStorageKey);
+        } catch (error) {
+            // Ignore storage failures
+        }
+    }
+
+    function upsertCronHistoryExpression(expression) {
+        const normalized = normalizeCronExpression(expression);
+        if (!normalized || !cronAllowedPattern.test(normalized) || !canUseLocalStorage()) {
+            return null;
+        }
+        const entries = loadCronHistoryEntries();
+        const filtered = entries.filter(function(entry) {
+            return entry.expression !== normalized;
+        });
+        filtered.unshift({ expression: normalized, lastUsed: Date.now() });
+        const trimmed = filtered.slice(0, cronHistoryMaxEntries);
+        saveCronHistoryEntries(trimmed);
+        return trimmed;
     }
 
     function resetScheduleFeedback() {
@@ -1452,6 +1532,10 @@ jQuery(function($) {
             tokens: $assistant.find('[data-cron-tokens]'),
             guidance: $assistant.find('[data-cron-guidance]'),
             scenarios: $assistant.find('[data-cron-scenarios]'),
+            history: $assistant.find('[data-cron-history]'),
+            historyList: $assistant.find('[data-cron-history-list]'),
+            historyEmpty: $assistant.find('[data-cron-history-empty]'),
+            historyClear: $assistant.find('[data-cron-history-clear]'),
             examples: $assistant.find('[data-cron-examples]'),
             preview: $assistant.find('[data-cron-preview]'),
             list: $assistant.find('[data-cron-preview-list]'),
@@ -1460,10 +1544,114 @@ jQuery(function($) {
         };
     }
 
+    function renderCronHistory(helper, entries) {
+        if (!helper || !helper.history || !helper.history.length) {
+            return;
+        }
+
+        if (!canUseLocalStorage()) {
+            helper.history.hide();
+            return;
+        }
+
+        const listEntries = Array.isArray(entries) ? entries : loadCronHistoryEntries();
+        const sorted = listEntries.slice().sort(function(a, b) {
+            return (b && b.lastUsed ? b.lastUsed : 0) - (a && a.lastUsed ? a.lastUsed : 0);
+        }).filter(function(entry) {
+            return entry && entry.expression;
+        });
+
+        if (helper.historyList && helper.historyList.length) {
+            helper.historyList.empty();
+        }
+
+        if (!sorted.length) {
+            if (helper.historyEmpty && helper.historyEmpty.length) {
+                helper.historyEmpty.removeAttr('hidden').show();
+            }
+            if (helper.historyClear && helper.historyClear.length) {
+                helper.historyClear.prop('disabled', true);
+            }
+            helper.history.show();
+            return;
+        }
+
+        sorted.forEach(function(entry) {
+            const expression = entry.expression;
+            const $chip = $('<button/>', {
+                type: 'button',
+                class: 'bjlg-cron-history__chip',
+                text: expression,
+                'data-cron-history-expression': expression,
+                'aria-label': 'Réutiliser l’expression « ' + expression + ' »'
+            });
+            if (helper.historyList && helper.historyList.length) {
+                $('<div/>', {
+                    class: 'bjlg-cron-history__item',
+                    role: 'listitem'
+                }).append($chip).appendTo(helper.historyList);
+            }
+        });
+
+        if (helper.historyEmpty && helper.historyEmpty.length) {
+            helper.historyEmpty.attr('hidden', 'hidden').hide();
+        }
+        if (helper.historyClear && helper.historyClear.length) {
+            helper.historyClear.prop('disabled', false);
+        }
+        helper.history.show();
+    }
+
+    function initializeCronHistory(helper, $item) {
+        if (!helper || !helper.history || !helper.history.length || helper.history.data('initialized')) {
+            return;
+        }
+
+        if (!canUseLocalStorage()) {
+            helper.history.hide();
+            helper.history.data('initialized', '1');
+            return;
+        }
+
+        helper.history.data('initialized', '1');
+        renderCronHistory(helper);
+
+        if (helper.historyList && helper.historyList.length && !helper.historyList.data('listeners')) {
+            helper.historyList.on('click', '[data-cron-history-expression]', function(event) {
+                event.preventDefault();
+                const expression = ($(this).attr('data-cron-history-expression') || '').toString();
+                if (!expression) {
+                    return;
+                }
+                const $input = $item.find('[data-field="custom_cron"]');
+                if ($input.length) {
+                    $input.val(expression).trigger('input').trigger('change');
+                    $input.focus();
+                }
+            });
+            helper.historyList.data('listeners', '1');
+        }
+
+        if (helper.historyClear && helper.historyClear.length && !helper.historyClear.data('listeners')) {
+            helper.historyClear.on('click', function(event) {
+                event.preventDefault();
+                clearCronHistoryEntries();
+                renderCronHistory(helper, []);
+            });
+            helper.historyClear.data('listeners', '1');
+        }
+    }
+
     function ensureCronAssistant($item) {
         const helper = getCronAssistantHelper($item);
-        if (!helper || !helper.examples.length || helper.examples.data('initialized')) {
-            if (helper && helper.status.length && typeof helper.status.data('default') === 'undefined') {
+        if (!helper) {
+            return null;
+        }
+
+        initializeCronHistory(helper, $item);
+
+        if (!helper.examples.length || helper.examples.data('initialized')) {
+            if (helper.status.length && typeof helper.status.data('default') === 'undefined') {
                 helper.status.data('default', helper.status.text());
             }
             return helper;
@@ -1500,6 +1688,7 @@ jQuery(function($) {
 
         buildCronTokenPanel(helper.tokens, $item);
         buildCronScenarioPanel(helper.scenarios, $item);
+        initializeCronHistory(helper, $item);
 
         return helper;
     }
@@ -1633,6 +1822,13 @@ jQuery(function($) {
                 }
                 $list.append($itemElement);
             });
+        }
+
+        if (expression && combinedSeverity !== 'error') {
+            const updatedHistory = upsertCronHistoryExpression(expression);
+            if (updatedHistory) {
+                renderCronHistory(helper, updatedHistory);
+            }
         }
     }
 

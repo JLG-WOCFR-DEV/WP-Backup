@@ -4526,6 +4526,20 @@ class BJLG_Admin {
                                         <div class="bjlg-cron-assistant__fields" data-cron-guidance></div>
                                         <div class="bjlg-cron-assistant__tokens" data-cron-tokens></div>
                                         <div class="bjlg-cron-assistant__scenarios" data-cron-scenarios role="list"></div>
+                                        <div class="bjlg-cron-assistant__history" data-cron-history>
+                                            <div class="bjlg-cron-history__header">
+                                                <strong class="bjlg-cron-assistant__title"><?php esc_html_e('Expressions récentes', 'backup-jlg'); ?></strong>
+                                                <button type="button"
+                                                        class="button-link bjlg-cron-history__clear"
+                                                        data-cron-history-clear>
+                                                    <?php esc_html_e('Effacer l’historique', 'backup-jlg'); ?>
+                                                </button>
+                                            </div>
+                                            <p class="bjlg-cron-history__empty" data-cron-history-empty>
+                                                <?php esc_html_e('Les expressions validées apparaîtront ici pour un accès rapide.', 'backup-jlg'); ?>
+                                            </p>
+                                            <div class="bjlg-cron-history__chips" data-cron-history-list role="list"></div>
+                                        </div>
                                         <div class="bjlg-cron-assistant__examples" data-cron-examples role="list"></div>
                                         <div class="bjlg-cron-assistant__preview" data-cron-preview hidden>
                                             <strong class="bjlg-cron-assistant__title"><?php esc_html_e('Prochaines exécutions', 'backup-jlg'); ?></strong>
