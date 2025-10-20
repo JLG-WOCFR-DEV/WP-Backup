@@ -178,6 +178,49 @@ jQuery(function($) {
         return null;
     }
 
+    function collectOutOfRangeNumbers(field, min, max) {
+        if (typeof field !== 'string') {
+            return [];
+        }
+        const matches = field.match(/\d+/g);
+        if (!matches || !matches.length) {
+            return [];
+        }
+        const invalid = [];
+        matches.forEach(function(match) {
+            const value = parseInt(match, 10);
+            if (isNaN(value) || !isFinite(value)) {
+                return;
+            }
+            if (value < min || value > max) {
+                if (invalid.indexOf(value) === -1) {
+                    invalid.push(value);
+                }
+            }
+        });
+        return invalid;
+    }
+
+    function collectInvalidSteps(field) {
+        if (typeof field !== 'string') {
+            return [];
+        }
+        const matches = field.match(/\/(\d+)/g);
+        if (!matches || !matches.length) {
+            return [];
+        }
+        const invalid = [];
+        matches.forEach(function(match) {
+            const stepValue = parseInt(match.slice(1), 10);
+            if (!stepValue || stepValue < 1) {
+                if (invalid.indexOf(stepValue) === -1) {
+                    invalid.push(stepValue);
+                }
+            }
+        });
+        return invalid;
+    }
+
     function analyzeCronExpression(expression) {
         const result = { errors: [], warnings: [] };
         const sanitized = (expression || '').toString().trim();
@@ -228,6 +271,41 @@ jQuery(function($) {
 
         if (result.errors.length) {
             return result;
+        }
+
+        const invalidMinuteValues = collectOutOfRangeNumbers(minuteField, 0, 59);
+        if (invalidMinuteValues.length) {
+            result.errors.push('Segment minutes : valeurs hors plage 0–59 détectées (' + invalidMinuteValues.join(', ') + ').');
+        }
+
+        const invalidHourValues = collectOutOfRangeNumbers(hourField, 0, 23);
+        if (invalidHourValues.length) {
+            result.errors.push('Segment heures : valeurs hors plage 0–23 détectées (' + invalidHourValues.join(', ') + ').');
+        }
+
+        const invalidDayOfMonthValues = collectOutOfRangeNumbers(dayOfMonthField.replace(/L-?/gi, ''), 1, 31);
+        if (invalidDayOfMonthValues.length) {
+            result.errors.push('Segment jours du mois : valeurs hors plage 1–31 détectées (' + invalidDayOfMonthValues.join(', ') + ').');
+        }
+
+        const invalidMonthValues = collectOutOfRangeNumbers(monthField, 1, 12);
+        if (invalidMonthValues.length) {
+            result.errors.push('Segment mois : valeurs hors plage 1–12 détectées (' + invalidMonthValues.join(', ') + ').');
+        }
+
+        const invalidDayOfWeekValues = collectOutOfRangeNumbers(dayOfWeekField, 0, 7);
+        if (invalidDayOfWeekValues.length) {
+            result.errors.push('Segment jours de semaine : valeurs hors plage 0–7 détectées (' + invalidDayOfWeekValues.join(', ') + ').');
+        }
+
+        const invalidSteps = []
+            .concat(collectInvalidSteps(minuteField))
+            .concat(collectInvalidSteps(hourField))
+            .concat(collectInvalidSteps(dayOfMonthField))
+            .concat(collectInvalidSteps(monthField))
+            .concat(collectInvalidSteps(dayOfWeekField));
+        if (invalidSteps.length) {
+            result.errors.push('Les pas doivent être supérieurs ou égaux à 1 : vérifiez les segments contenant "/0" ou similaires.');
         }
 
         const minuteHasWildcard = minuteField.indexOf('*') !== -1;
