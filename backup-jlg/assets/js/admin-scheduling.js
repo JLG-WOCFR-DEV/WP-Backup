@@ -34,6 +34,48 @@ jQuery(function($) {
         { expression: '0 22 * * sun', label: 'Dimanche 22:00', description: 'Chaque dimanche soir' }
     ];
 
+    const cronScenarios = [
+        {
+            id: 'pre_deploy',
+            label: 'Snapshot pré-déploiement',
+            description: 'Rafraîchit la base, les extensions et les thèmes toutes les 10 minutes pendant une fenêtre de changement.',
+            expression: '*/10 * * * *',
+            adjustments: {
+                label: 'Snapshot pré-déploiement',
+                components: ['db', 'plugins', 'themes'],
+                incremental: false,
+                encrypt: true,
+                post_checks: ['checksum', 'dry_run']
+            }
+        },
+        {
+            id: 'nightly_full',
+            label: 'Archive complète nocturne',
+            description: 'Capture intégrale chaque nuit à 02:30 avec chiffrement et vérification.',
+            expression: '30 2 * * *',
+            adjustments: {
+                label: 'Archive nocturne',
+                components: ['db', 'plugins', 'themes', 'uploads'],
+                incremental: false,
+                encrypt: true,
+                post_checks: ['checksum']
+            }
+        },
+        {
+            id: 'weekly_media',
+            label: 'Médias hebdomadaires',
+            description: 'Synchronise spécifiquement les médias chaque dimanche à 04:00 en incrémental.',
+            expression: '0 4 * * sun',
+            adjustments: {
+                label: 'Médias hebdomadaires',
+                components: ['uploads'],
+                incremental: true,
+                encrypt: false,
+                post_checks: []
+            }
+        }
+    ];
+
     const cronMonthTokens = [
         { value: 'jan', label: 'Janvier (jan)' },
         { value: 'feb', label: 'Février (feb)' },
@@ -933,7 +975,10 @@ jQuery(function($) {
                 return;
             }
 
-            const $group = $('<div/>', { class: 'bjlg-cron-assistant__tokens-group' });
+            const $group = $('<div/>', {
+                class: 'bjlg-cron-assistant__tokens-group',
+                'data-cron-token-group': fieldIndex
+            });
             const label = cronFieldLabels[fieldIndex] || ('Champ #' + (fieldIndex + 1));
             $('<span/>', { class: 'bjlg-cron-assistant__tokens-title', text: label }).appendTo($group);
 
@@ -974,6 +1019,291 @@ jQuery(function($) {
         });
 
         $container.data('initialized', '1');
+    }
+
+    function getCronFieldIndexFromCaret($input) {
+        if (!$input || !$input.length) {
+            return 0;
+        }
+        const element = $input.get(0);
+        if (!element) {
+            return 0;
+        }
+        const value = (element.value || '').toString();
+        if (!value) {
+            return 0;
+        }
+        const caret = typeof element.selectionStart === 'number' ? element.selectionStart : value.length;
+        const beforeCaret = value.slice(0, caret);
+        const segments = beforeCaret.split(/\s+/).filter(function(entry) { return entry !== ''; });
+        let index = segments.length - 1;
+        if (/\s$/.test(beforeCaret)) {
+            index += 1;
+        }
+        if (index < 0) {
+            index = 0;
+        }
+        if (index >= cronFieldCount) {
+            index = cronFieldCount - 1;
+        }
+        return index;
+    }
+
+    function getCronFieldBoundaries(value) {
+        const bounds = [];
+        const raw = (value || '').toString();
+        const length = raw.length;
+        let inToken = false;
+        let tokenStart = 0;
+
+        for (let i = 0; i < length; i += 1) {
+            const char = raw.charAt(i);
+            if (/\s/.test(char)) {
+                if (inToken) {
+                    bounds.push({ start: tokenStart, end: i });
+                    inToken = false;
+                    if (bounds.length >= cronFieldCount) {
+                        break;
+                    }
+                }
+            } else if (!inToken) {
+                tokenStart = i;
+                inToken = true;
+            }
+        }
+
+        if (inToken && bounds.length < cronFieldCount) {
+            bounds.push({ start: tokenStart, end: length });
+        }
+
+        return bounds;
+    }
+
+    function focusCronFieldSegment($input, index) {
+        if (!$input || !$input.length) {
+            return;
+        }
+        const element = $input.get(0);
+        if (!element) {
+            return;
+        }
+        const bounds = getCronFieldBoundaries(element.value || '');
+        let start = element.value ? element.value.length : 0;
+        let end = start;
+        if (bounds[index]) {
+            start = bounds[index].start;
+            end = bounds[index].end;
+        }
+        window.requestAnimationFrame(function() {
+            element.focus();
+            if (typeof element.setSelectionRange === 'function') {
+                element.setSelectionRange(start, end);
+            }
+        });
+    }
+
+    function highlightCronTokenGroups(helper, activeIndex) {
+        if (!helper || !helper.tokens || !helper.tokens.length) {
+            return;
+        }
+        helper.tokens.find('[data-cron-token-group]').each(function() {
+            const $group = $(this);
+            const fieldIndex = parseInt($group.attr('data-cron-token-group'), 10);
+            if (!Number.isNaN(fieldIndex) && fieldIndex === activeIndex) {
+                $group.addClass('is-active');
+            } else {
+                $group.removeClass('is-active');
+            }
+        });
+    }
+
+    function renderCronFieldGuidance(helper, expression, activeIndex, $input) {
+        if (!helper || !helper.guidance || !helper.guidance.length) {
+            return;
+        }
+
+        const fields = parseCronFields(expression);
+        const normalized = [];
+        for (let i = 0; i < cronFieldCount; i += 1) {
+            normalized[i] = typeof fields[i] !== 'undefined' ? fields[i] : '';
+        }
+
+        const fragment = $(document.createDocumentFragment());
+        normalized.forEach(function(value, index) {
+            const label = cronFieldLabels[index] || ('Champ #' + (index + 1));
+            const $field = $('<button/>', {
+                type: 'button',
+                class: 'bjlg-cron-assistant__field',
+                'data-cron-guidance-index': index
+            });
+            if (index === activeIndex) {
+                $field.addClass('is-active');
+            }
+            $('<span/>', { class: 'bjlg-cron-assistant__field-label', text: label }).appendTo($field);
+            const display = value ? value : 'À compléter';
+            const valueClass = value ? 'bjlg-cron-assistant__field-value' : 'bjlg-cron-assistant__field-value bjlg-cron-assistant__field-empty';
+            $('<span/>', { class: valueClass, text: display }).appendTo($field);
+            fragment.append($field);
+        });
+
+        helper.guidance.empty().append(fragment);
+
+        if (!helper.guidance.data('listeners')) {
+            helper.guidance.on('click', '[data-cron-guidance-index]', function(event) {
+                event.preventDefault();
+                const index = parseInt($(this).attr('data-cron-guidance-index'), 10);
+                if (Number.isNaN(index)) {
+                    return;
+                }
+                focusCronFieldSegment($input, index);
+            });
+            helper.guidance.data('listeners', '1');
+        }
+    }
+
+    function markActiveScenario(helper, expression) {
+        if (!helper || !helper.scenarios || !helper.scenarios.length) {
+            return;
+        }
+        const trimmed = (expression || '').toString().trim();
+        helper.scenarios.find('[data-cron-scenario]').each(function() {
+            const $button = $(this);
+            const scenarioExpression = ($button.attr('data-cron-scenario-expression') || '').toString();
+            if (trimmed && trimmed === scenarioExpression) {
+                $button.addClass('is-active');
+            } else {
+                $button.removeClass('is-active');
+            }
+        });
+    }
+
+    function applyCronScenario($item, scenario) {
+        if (!$item || !scenario || typeof scenario !== 'object') {
+            return;
+        }
+        const $input = $item.find('[data-field="custom_cron"]');
+        if (!$input.length) {
+            return;
+        }
+
+        const expression = (scenario.expression || '').toString();
+        if (expression) {
+            $input.val(expression).trigger('input').trigger('change');
+        }
+
+        const $recurrence = $item.find('[data-field="recurrence"]');
+        if ($recurrence.length && $recurrence.val() !== 'custom') {
+            const current = ($recurrence.val() || '').toString();
+            $item.find('[data-field="previous_recurrence"]').val(current);
+            $recurrence.val('custom').trigger('change');
+        }
+
+        const adjustments = scenario.adjustments || {};
+        const $labelInput = $item.find('[data-field="label"]');
+        if ($labelInput.length) {
+            const currentLabel = ($labelInput.val() || '').toString().trim();
+            const desiredLabel = (adjustments.label || scenario.label || '').toString();
+            if (!currentLabel && desiredLabel) {
+                $labelInput.val(desiredLabel).trigger('input');
+            }
+        }
+
+        if (Array.isArray(adjustments.components)) {
+            const desiredComponents = new Set(adjustments.components.map(function(entry) { return entry.toString(); }));
+            $item.find('[data-field="components"]').each(function() {
+                const $checkbox = $(this);
+                const value = ($checkbox.val() || '').toString();
+                $checkbox.prop('checked', desiredComponents.has(value));
+            }).trigger('change');
+        }
+
+        if (typeof adjustments.incremental === 'boolean') {
+            const $incremental = $item.find('[data-field="incremental"]');
+            if ($incremental.length) {
+                $incremental.prop('checked', adjustments.incremental).trigger('change');
+            }
+        }
+
+        if (typeof adjustments.encrypt === 'boolean') {
+            const $encrypt = $item.find('[data-field="encrypt"]');
+            if ($encrypt.length) {
+                $encrypt.prop('checked', adjustments.encrypt).trigger('change');
+            }
+        }
+
+        if (Array.isArray(adjustments.post_checks)) {
+            const desiredChecks = new Set(adjustments.post_checks.map(function(entry) { return entry.toString(); }));
+            $item.find('[data-field="post_checks"]').each(function() {
+                const $checkbox = $(this);
+                const value = ($checkbox.val() || '').toString();
+                $checkbox.prop('checked', desiredChecks.has(value));
+            }).trigger('change');
+        }
+
+        const helper = ensureCronAssistant($item);
+        if (helper) {
+            markActiveScenario(helper, expression);
+            const elements = getCronFieldElements($input);
+            if (elements) {
+                setCronPanelVisibility(elements, true);
+            }
+        }
+
+        updateCronAssistantContext($input);
+        refreshCronAssistant($item, true);
+    }
+
+    function buildCronScenarioPanel($container, $item) {
+        if (!$container || !$container.length || $container.data('initialized')) {
+            return;
+        }
+        if (!Array.isArray(cronScenarios) || !cronScenarios.length) {
+            $container.hide();
+            return;
+        }
+
+        const fragment = $(document.createDocumentFragment());
+        cronScenarios.forEach(function(scenario) {
+            if (!scenario || typeof scenario !== 'object') {
+                return;
+            }
+            const expression = (scenario.expression || '').toString();
+            const label = (scenario.label || expression).toString();
+            const description = (scenario.description || '').toString();
+            const $button = $('<button/>', {
+                type: 'button',
+                class: 'bjlg-cron-scenario',
+                'data-cron-scenario': scenario.id || label,
+                'data-cron-scenario-expression': expression
+            });
+            $('<span/>', { class: 'bjlg-cron-scenario__title', text: label }).appendTo($button);
+            if (description) {
+                $('<span/>', { class: 'bjlg-cron-scenario__description', text: description }).appendTo($button);
+            }
+            $button.on('click', function(event) {
+                event.preventDefault();
+                applyCronScenario($item, scenario);
+            });
+            fragment.append($button);
+        });
+
+        $container.empty().append(fragment).data('initialized', '1');
+    }
+
+    function updateCronAssistantContext($input) {
+        if (!$input || !$input.length) {
+            return;
+        }
+        const $item = $input.closest('.bjlg-schedule-item');
+        const helper = ensureCronAssistant($item);
+        if (!helper) {
+            return;
+        }
+        const expression = ($input.val() || '').toString();
+        const activeIndex = getCronFieldIndexFromCaret($input);
+        renderCronFieldGuidance(helper, expression, activeIndex, $input);
+        highlightCronTokenGroups(helper, activeIndex);
+        markActiveScenario(helper, expression);
     }
 
     function isWildcardCronField(value) {
@@ -1119,6 +1449,9 @@ jQuery(function($) {
         }
         return {
             container: $assistant,
+            tokens: $assistant.find('[data-cron-tokens]'),
+            guidance: $assistant.find('[data-cron-guidance]'),
+            scenarios: $assistant.find('[data-cron-scenarios]'),
             examples: $assistant.find('[data-cron-examples]'),
             preview: $assistant.find('[data-cron-preview]'),
             list: $assistant.find('[data-cron-preview-list]'),
@@ -1165,7 +1498,8 @@ jQuery(function($) {
             helper.examples.append($button);
         });
 
-        buildCronTokenPanel(helper.container.find('[data-cron-tokens]'), $item);
+        buildCronTokenPanel(helper.tokens, $item);
+        buildCronScenarioPanel(helper.scenarios, $item);
 
         return helper;
     }
@@ -1183,6 +1517,9 @@ jQuery(function($) {
         const $empty = helper.empty;
 
         const expression = payload && payload.expression ? payload.expression : '';
+        if ($input.length) {
+            updateCronAssistantContext($input);
+        }
         const localSeverity = renderCronLocalWarnings($item, expression);
 
         if (!payload || !payload.expression) {
@@ -1636,103 +1973,6 @@ jQuery(function($) {
         return recurrence === 'custom';
     }
 
-    function scheduleCronPreview($input, immediate) {
-        if (!$input || !$input.length) {
-            return;
-        }
-        const elements = getCronFieldElements($input);
-        if (!elements) {
-            return;
-        }
-
-        const rawValue = ($input.val() || '').toString();
-        const expression = rawValue.trim();
-
-        if (!recurrenceIsCustom($input)) {
-            resetCronAssistant($input.closest('.bjlg-schedule-item'));
-            return;
-        }
-
-        if (expression === '') {
-            clearCronPreview(elements);
-            return;
-        }
-
-        if (cronPreviewTimer) {
-            clearTimeout(cronPreviewTimer);
-        }
-
-        const runner = function() {
-            requestCronPreview(expression, elements);
-        };
-
-        if (immediate) {
-            runner();
-        } else {
-            cronPreviewTimer = setTimeout(runner, 320);
-        }
-    }
-
-    function requestCronPreview(expression, elements) {
-        if (!expression) {
-            clearCronPreview(elements);
-            return;
-        }
-
-        if (cronPreviewRequest && typeof cronPreviewRequest.abort === 'function') {
-            cronPreviewRequest.abort();
-        }
-
-        if (cronPreviewCache.has(expression)) {
-            renderCronPreviewData(elements, cronPreviewCache.get(expression));
-            return;
-        }
-
-        setCronPreviewLoading(elements);
-
-        cronPreviewRequest = $.ajax({
-            url: bjlg_ajax.ajax_url,
-            method: 'POST',
-            dataType: 'json',
-            data: {
-                action: 'bjlg_preview_cron_expression',
-                nonce: bjlg_ajax.nonce,
-                expression: expression
-            }
-        }).done(function(response) {
-            if (!response) {
-                renderCronPreviewError(elements, 'Réponse inattendue du serveur.', []);
-                return;
-            }
-            if (response.success) {
-                const data = response.data || {};
-                cronPreviewCache.set(expression, data);
-                renderCronPreviewData(elements, data);
-            } else {
-                const payload = response.data || response || {};
-                const message = payload && typeof payload.message === 'string' ? payload.message : 'Expression Cron invalide.';
-                const details = normalizeErrorList(payload && (payload.errors || payload.validation_errors || payload.field_errors));
-                renderCronPreviewError(elements, message, details);
-            }
-        }).fail(function(jqXHR, textStatus) {
-            if (textStatus === 'abort') {
-                return;
-            }
-            let message = 'Erreur de communication avec le serveur.';
-            let details = [];
-            if (jqXHR && jqXHR.responseJSON) {
-                const data = jqXHR.responseJSON.data || jqXHR.responseJSON;
-                if (data && typeof data.message === 'string') {
-                    message = data.message;
-                }
-                details = normalizeErrorList(data && (data.errors || data.validation_errors || data.field_errors));
-            }
-            renderCronPreviewError(elements, message, details);
-        }).always(function() {
-            cronPreviewRequest = null;
-        });
-    }
-
     function initCronAssistant($scope) {
         if (!$scope || !$scope.length) {
             return;
@@ -1745,6 +1985,7 @@ jQuery(function($) {
             }
             $input.data('cronAssistantReady', true);
 
+            const $item = $input.closest('.bjlg-schedule-item');
             const elements = getCronFieldElements($input);
             if (!elements) {
                 return;
@@ -1752,6 +1993,7 @@ jQuery(function($) {
 
             setCronPanelVisibility(elements, false);
             clearCronPreview(elements);
+            updateCronAssistantContext($input);
 
             if (elements.toggle && elements.toggle.length) {
                 elements.toggle.on('click', function(event) {
@@ -1760,7 +2002,8 @@ jQuery(function($) {
                     const expanded = $button.attr('aria-expanded') === 'true';
                     setCronPanelVisibility(elements, !expanded);
                     if (!expanded) {
-                        scheduleCronPreview($input, true);
+                        updateCronAssistantContext($input);
+                        refreshCronAssistant($item, true);
                     }
                 });
             }
@@ -1774,13 +2017,20 @@ jQuery(function($) {
                     }
                     $input.val(value).trigger('input');
                     setCronPanelVisibility(elements, true);
-                    scheduleCronPreview($input, true);
+                    refreshCronAssistant($item, true);
                 });
             }
 
+            const refreshContext = function() {
+                updateCronAssistantContext($input);
+            };
+
             $input.on('input', function() {
-                scheduleCronPreview($input, false);
+                refreshContext();
+                refreshCronAssistant($item, false);
             });
+
+            $input.on('focus click keyup mouseup', refreshContext);
 
             $input.on('blur', function() {
                 if (($input.val() || '').toString().trim() === '') {
@@ -1789,7 +2039,7 @@ jQuery(function($) {
             });
 
             if (($input.val() || '').toString().trim() !== '' && recurrenceIsCustom($input)) {
-                scheduleCronPreview($input, false);
+                refreshCronAssistant($item, false);
             }
         });
     }
