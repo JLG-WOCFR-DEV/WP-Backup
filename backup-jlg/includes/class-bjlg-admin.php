@@ -4499,7 +4499,7 @@ class BJLG_Admin {
                         <td>
                             <input type="text"
                                    id="<?php echo esc_attr($custom_id); ?>"
-                                   class="regular-text code"
+                                   class="regular-text code bjlg-cron-input"
                                    data-field="custom_cron"
                                    data-id-template="bjlg-schedule-custom-%s"
                                    data-describedby-template="bjlg-schedule-custom-%s-description"
@@ -4512,13 +4512,15 @@ class BJLG_Admin {
                             </p>
                             <div class="bjlg-cron-assistant" data-cron-assistant>
                                 <p class="description bjlg-cron-assistant__hint" data-cron-empty>
-                                    <?php esc_html_e('Saisissez une expression pour prévisualiser les prochaines exécutions ou sélectionnez un exemple.', 'backup-jlg'); ?>
+                                    <?php esc_html_e('Saisissez une expression, utilisez les raccourcis ou sélectionnez un exemple pour prévisualiser les prochaines exécutions.', 'backup-jlg'); ?>
                                 </p>
+                                <div class="bjlg-cron-assistant__tokens" data-cron-tokens></div>
                                 <div class="bjlg-cron-assistant__examples" data-cron-examples role="list"></div>
                                 <div class="bjlg-cron-assistant__preview" data-cron-preview hidden>
                                     <strong class="bjlg-cron-assistant__title"><?php esc_html_e('Prochaines exécutions', 'backup-jlg'); ?></strong>
-                                    <ol class="bjlg-cron-assistant__runs" data-cron-preview-list></ol>
+                                    <ol class="bjlg-cron-assistant__runs" data-cron-preview-list data-default-message="<?php echo esc_attr__('Les prochaines occurrences s’afficheront après validation de l’expression.', 'backup-jlg'); ?>"></ol>
                                 </div>
+                                <div class="bjlg-cron-assistant__warnings" data-cron-warnings aria-live="polite"></div>
                                 <p class="bjlg-cron-assistant__status" data-cron-status aria-live="polite"></p>
                             </div>
                         </td>
