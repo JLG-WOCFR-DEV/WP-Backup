@@ -146,10 +146,6 @@ jQuery(function($) {
         paused: { label: 'En pause', className: 'bjlg-status-badge--paused' }
     };
 
-    const cronPreviewCache = new Map();
-    let cronPreviewRequest = null;
-    let cronPreviewTimer = null;
-
     $scheduleForm.find('[data-field="secondary_destinations"]').each(function() {
         const value = ($(this).val() || '').toString();
         if (!value || destinationLabels[value]) {
