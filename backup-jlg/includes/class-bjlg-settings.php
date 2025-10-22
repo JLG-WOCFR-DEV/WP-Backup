@@ -1958,11 +1958,9 @@ class BJLG_Settings {
     }
 
     public static function get_backup_presets(): array {
-        $instance = self::get_instance();
-
-        $presets = $instance->get_option_value('bjlg_backup_presets', []);
-
-        return self::sanitize_backup_presets($presets);
+        return self::sanitize_backup_presets(
+            self::get_instance()->get_option_value('bjlg_backup_presets', [])
+        );
     }
 
     public static function sanitize_backup_presets($presets): array {
