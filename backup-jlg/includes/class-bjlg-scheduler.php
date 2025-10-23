@@ -1,9 +1,14 @@
 <?php
 namespace BJLG;
 
+use Throwable;
+
 if (!defined('ABSPATH')) {
     exit;
 }
+
+require_once __DIR__ . '/class-bjlg-history.php';
+require_once __DIR__ . '/class-bjlg-restore.php';
 
 /**
  * Gère la planification avancée des sauvegardes automatiques.
@@ -11,6 +16,7 @@ if (!defined('ABSPATH')) {
 class BJLG_Scheduler {
 
     const SCHEDULE_HOOK = 'bjlg_scheduled_backup_hook';
+    const SANDBOX_VALIDATION_HOOK = 'bjlg_sandbox_validation_hook';
     const MIN_CUSTOM_CRON_INTERVAL = 5 * MINUTE_IN_SECONDS;
 
     /**
@@ -55,6 +61,7 @@ class BJLG_Scheduler {
             BJLG_Remote_Storage_Metrics::CRON_HOOK,
             [BJLG_Remote_Storage_Metrics::class, 'refresh_snapshot']
         );
+        add_action(self::SANDBOX_VALIDATION_HOOK, [self::class, 'run_sandbox_validation_job']);
     }
 
     /**
@@ -68,6 +75,123 @@ class BJLG_Scheduler {
             $recurrence = apply_filters('bjlg_remote_storage_metrics_recurrence', 'hourly');
             wp_schedule_event($start, $recurrence, $hook);
         }
+
+        $sandbox_hook = self::SANDBOX_VALIDATION_HOOK;
+        if (!wp_next_scheduled($sandbox_hook)) {
+            $start = time() + (int) apply_filters('bjlg_sandbox_validation_delay', DAY_IN_SECONDS);
+            $recurrence = apply_filters('bjlg_sandbox_validation_recurrence', 'daily');
+            if (!is_string($recurrence) || $recurrence === '') {
+                $recurrence = 'daily';
+            }
+
+            wp_schedule_event($start, $recurrence, $sandbox_hook);
+        }
+    }
+
+    /**
+     * Callback CRON pour la validation sandbox.
+     */
+    public static function run_sandbox_validation_job(): void {
+        self::instance()->execute_sandbox_validation_job();
+    }
+
+    /**
+     * Exécute réellement la validation sandbox et enregistre le rapport.
+     */
+    private function execute_sandbox_validation_job(): void {
+        if (!class_exists(BJLG_Restore::class)) {
+            return;
+        }
+
+        try {
+            $restore = new BJLG_Restore();
+
+            $args = [];
+            $components_override = apply_filters('bjlg_sandbox_validation_components', null);
+            if (is_array($components_override) || is_string($components_override)) {
+                $args['components'] = $components_override;
+            }
+
+            $sandbox_path = apply_filters('bjlg_sandbox_validation_path', '');
+            if (is_string($sandbox_path) && $sandbox_path !== '') {
+                $args['sandbox_path'] = $sandbox_path;
+            }
+
+            $password_override = apply_filters('bjlg_sandbox_validation_password', null);
+            if (is_string($password_override) && $password_override !== '') {
+                $args['password'] = $password_override;
+            }
+
+            $report = $restore->run_sandbox_validation($args);
+            $metadata = [
+                'report' => $report,
+                'triggered_at' => time(),
+                'source' => 'scheduler',
+            ];
+
+            $status = isset($report['status']) ? (string) $report['status'] : 'failure';
+            $summary = $this->summarize_sandbox_report($report);
+            $base_message = $report['message'] ?? '';
+
+            if ($status === 'success') {
+                $message = $summary !== '' ? $summary : ($base_message !== '' ? $base_message : __('Validation sandbox réussie.', 'backup-jlg'));
+                BJLG_History::log('sandbox_restore_validation', 'success', $message, null, null, $metadata);
+                do_action('bjlg_sandbox_restore_validation_passed', $report);
+            } else {
+                $failure_message = $base_message !== '' ? $base_message : __('Validation sandbox échouée.', 'backup-jlg');
+                $message = $summary !== '' ? $summary . ' | ' . $failure_message : $failure_message;
+                BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $metadata);
+                do_action('bjlg_sandbox_restore_validation_failed', $report);
+            }
+        } catch (Throwable $throwable) {
+            $message = 'Validation sandbox échouée : ' . $throwable->getMessage();
+            BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, [
+                'error' => $throwable->getMessage(),
+                'triggered_at' => time(),
+                'source' => 'scheduler',
+            ]);
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('[Sandbox validation job] ' . $throwable->getMessage(), 'error');
+            }
+
+            do_action('bjlg_sandbox_restore_validation_failed', [
+                'status' => 'failure',
+                'message' => $message,
+                'error' => $throwable->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Construit un résumé lisible pour un rapport de validation sandbox.
+     *
+     * @param array<string,mixed> $report
+     * @return string
+     */
+    private function summarize_sandbox_report(array $report): string {
+        $parts = [];
+
+        if (!empty($report['backup_file']) && is_string($report['backup_file'])) {
+            $parts[] = sprintf(__('Archive : %s', 'backup-jlg'), basename($report['backup_file']));
+        }
+
+        $rto = '';
+        if (!empty($report['objectives']['rto_human']) && is_string($report['objectives']['rto_human'])) {
+            $rto = $report['objectives']['rto_human'];
+        } elseif (!empty($report['timings']['duration_human']) && is_string($report['timings']['duration_human'])) {
+            $rto = $report['timings']['duration_human'];
+        }
+
+        if ($rto !== '') {
+            $parts[] = sprintf(__('RTO ≈ %s', 'backup-jlg'), $rto);
+        }
+
+        if (!empty($report['objectives']['rpo_human']) && is_string($report['objectives']['rpo_human'])) {
+            $parts[] = sprintf(__('RPO ≈ %s', 'backup-jlg'), $report['objectives']['rpo_human']);
+        }
+
+        return implode(' | ', $parts);
     }
 
     private function __construct() {

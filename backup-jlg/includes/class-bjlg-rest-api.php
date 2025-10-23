@@ -328,49 +328,11 @@ class BJLG_REST_API {
             ])
         ]);
 
-        register_rest_route(self::API_NAMESPACE, '/network/history', [
+        register_rest_route(self::API_NAMESPACE, '/sla-report', [
             'methods' => 'GET',
-            'callback' => [$this, 'get_network_history'],
+            'callback' => [$this, 'get_sla_report'],
             'permission_callback' => [$this, 'check_permissions'],
-            'args' => [
-                'limit' => [
-                    'default' => 50,
-                    'validate_callback' => function($param) {
-                        $value = filter_var(
-                            $param,
-                            FILTER_VALIDATE_INT,
-                            [
-                                'options' => [
-                                    'min_range' => 1,
-                                    'max_range' => 500,
-                                ],
-                            ]
-                        );
-
-                        if ($value === false) {
-                            return new WP_Error(
-                                'rest_invalid_param',
-                                __('Le paramètre limit doit être un entier compris entre 1 et 500.', 'backup-jlg'),
-                                ['status' => 400]
-                            );
-                        }
-
-                        return true;
-                    }
-                ],
-                'action' => [
-                    'type' => 'string',
-                ],
-                'status' => [
-                    'enum' => ['success', 'failure', 'info'],
-                ],
-            ],
-        ]);
-
-        register_rest_route(self::API_NAMESPACE, '/network/sites', [
-            'methods' => 'GET',
-            'callback' => [$this, 'get_network_sites'],
-            'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args(),
         ]);
 
         // Routes : Configuration
@@ -2787,114 +2749,55 @@ class BJLG_REST_API {
         });
     }
 
-    public function get_network_history($request)
-    {
-        $availability = $this->ensure_network_context_available();
-        if (is_wp_error($availability)) {
-            return $availability;
-        }
+    /**
+     * Endpoint : Dernier rapport de validation SLA.
+     */
+    public function get_sla_report($request) {
+        return $this->with_request_site($request, function () {
+            $entry = BJLG_History::get_last_event_metadata('sandbox_restore_validation');
 
-        $limit = $request->get_param('limit');
-        $action = $request->get_param('action');
-        $status = $request->get_param('status');
-
-        $filters = [];
-        if ($action) {
-            $filters['action_type'] = $action;
-        }
-        if ($status) {
-            $filters['status'] = $status;
-        }
-
-        $limit = max(1, min(500, (int) $limit));
-
-        $history = BJLG_History::get_history($limit, $filters, 0);
-
-        return rest_ensure_response([
-            'entries' => $history,
-            'total' => count($history),
-        ]);
-    }
-
-    public function get_network_sites($request)
-    {
-        $availability = $this->ensure_network_context_available();
-        if (is_wp_error($availability)) {
-            return $availability;
-        }
-
-        if (!function_exists('get_sites')) {
-            return new WP_Error(
-                'bjlg_network_context_unavailable',
-                __('La liste des sites n’est pas disponible sur cette installation.', 'backup-jlg'),
-                ['status' => 400]
-            );
-        }
-
-        $site_objects = get_sites([
-            'number' => 0,
-        ]);
-
-        $sites = [];
-
-        foreach ((array) $site_objects as $site) {
-            $blog_id = 0;
-            if (is_object($site)) {
-                $blog_id = isset($site->blog_id) ? (int) $site->blog_id : (isset($site->id) ? (int) $site->id : 0);
-            } elseif (is_array($site)) {
-                $blog_id = isset($site['blog_id']) ? (int) $site['blog_id'] : (isset($site['id']) ? (int) $site['id'] : 0);
-            } else {
-                $blog_id = (int) $site;
+            if (!is_array($entry)) {
+                return rest_ensure_response([
+                    'available' => false,
+                    'entry' => null,
+                    'report' => null,
+                ]);
             }
 
-            if ($blog_id <= 0) {
-                continue;
-            }
+            $metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+            $report = isset($metadata['report']) && is_array($metadata['report']) ? $metadata['report'] : [];
+            $timestamp = isset($entry['timestamp']) ? strtotime($entry['timestamp']) : false;
 
-            $site_data = bjlg_with_site($blog_id, function () use ($blog_id) {
-                $history_stats = BJLG_History::get_stats('month', $blog_id);
-                $metrics = \bjlg_get_option('bjlg_remote_storage_metrics', []);
+            $response = [
+                'available' => true,
+                'entry' => [
+                    'id' => isset($entry['id']) ? (int) $entry['id'] : 0,
+                    'timestamp' => $entry['timestamp'],
+                    'status' => $entry['status'],
+                    'details' => $entry['details'],
+                    'metadata' => $metadata,
+                ],
+                'report' => $report,
+            ];
 
-                $quota_used = 0;
-                if (is_array($metrics)) {
-                    foreach ($metrics as $metric) {
-                        if (!is_array($metric)) {
-                            continue;
-                        }
-
-                        $quota_used += isset($metric['used']) ? (int) $metric['used'] : 0;
-                    }
+            if ($timestamp) {
+                $response['entry']['timestamp_unix'] = $timestamp;
+                if (function_exists('human_time_diff')) {
+                    $response['entry']['relative'] = human_time_diff($timestamp, time());
                 }
-
-                $site_name = function_exists('get_option') ? get_option('blogname', 'Site #' . $blog_id) : ('Site #' . $blog_id);
-                $site_url = function_exists('get_site_url') ? get_site_url($blog_id) : '';
-
-                return [
-                    'id' => $blog_id,
-                    'name' => $site_name,
-                    'url' => $site_url,
-                    'history' => [
-                        'total_actions' => isset($history_stats['total_actions']) ? (int) $history_stats['total_actions'] : 0,
-                        'successful' => isset($history_stats['successful']) ? (int) $history_stats['successful'] : 0,
-                        'failed' => isset($history_stats['failed']) ? (int) $history_stats['failed'] : 0,
-                    ],
-                    'quota' => [
-                        'used' => $quota_used,
-                    ],
-                ];
-            });
-
-            if (is_wp_error($site_data)) {
-                continue;
             }
 
-            $sites[] = $site_data;
-        }
+            $response['summary'] = [
+                'status' => $entry['status'],
+                'rto_seconds' => $report['objectives']['rto_seconds'] ?? null,
+                'rpo_seconds' => $report['objectives']['rpo_seconds'] ?? null,
+                'rto_human' => $report['objectives']['rto_human'] ?? ($report['timings']['duration_human'] ?? null),
+                'rpo_human' => $report['objectives']['rpo_human'] ?? null,
+                'validated_at' => $entry['timestamp'],
+            ];
 
-        return rest_ensure_response([
-            'sites' => $sites,
-            'mode' => BJLG_Site_Context::get_network_mode(),
-        ]);
+            return rest_ensure_response($response);
+        });
     }
     
     /**
@@ -3463,6 +3366,7 @@ class BJLG_REST_API {
             'GET /health' => 'Get system health',
             'GET /stats' => 'Get statistics',
             'GET /history' => 'Get activity history',
+            'GET /sla-report' => 'Get latest SLA validation report',
             'GET /settings' => 'Get current settings',
             'PUT /settings' => 'Update settings',
             'GET /schedules' => 'Get backup schedules',
