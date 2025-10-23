@@ -11,6 +11,9 @@ if (!defined('ABSPATH')) {
 class BJLG_Site_Context {
 
     private const NO_VALUE = '__bjlg__no_value__';
+    public const HISTORY_SCOPE_OPTION = 'bjlg_history_scope';
+    public const HISTORY_SCOPE_SITE = 'site';
+    public const HISTORY_SCOPE_NETWORK = 'network';
 
     /**
      * Liste des options gérées par le plugin. Sert à brancher les hooks de synchronisation multisite.
@@ -69,6 +72,128 @@ class BJLG_Site_Context {
 
     /** @var int */
     private static $network_stack = 0;
+
+    /**
+     * Sanitize a history scope value.
+     */
+    public static function sanitize_history_scope($scope): string {
+        $sanitized = sanitize_key((string) $scope);
+
+        if ($sanitized === self::HISTORY_SCOPE_NETWORK) {
+            return self::HISTORY_SCOPE_NETWORK;
+        }
+
+        return self::HISTORY_SCOPE_SITE;
+    }
+
+    /**
+     * Returns the configured history storage scope.
+     */
+    public static function get_history_scope(): string {
+        $default = apply_filters('bjlg_default_history_scope', self::HISTORY_SCOPE_SITE);
+        $default = self::sanitize_history_scope($default);
+
+        $stored = $default;
+
+        if (function_exists('is_multisite') && is_multisite() && function_exists('get_site_option')) {
+            $value = get_site_option(self::HISTORY_SCOPE_OPTION, $default);
+        } else {
+            $value = get_option(self::HISTORY_SCOPE_OPTION, $default);
+        }
+
+        if (is_string($value)) {
+            $stored = self::sanitize_history_scope($value);
+        }
+
+        if ($stored === '') {
+            $stored = self::HISTORY_SCOPE_SITE;
+        }
+
+        return apply_filters('bjlg_history_scope', $stored);
+    }
+
+    /**
+     * Updates the history scope option.
+     */
+    public static function set_history_scope(string $scope): void {
+        $scope = self::sanitize_history_scope($scope);
+
+        if (function_exists('is_multisite') && is_multisite() && function_exists('update_site_option')) {
+            update_site_option(self::HISTORY_SCOPE_OPTION, $scope);
+
+            return;
+        }
+
+        if (function_exists('update_option')) {
+            update_option(self::HISTORY_SCOPE_OPTION, $scope);
+        }
+    }
+
+    /**
+     * Returns whether the network scope is enabled for history/API keys.
+     */
+    public static function history_uses_network_storage(): bool {
+        return function_exists('is_multisite')
+            && is_multisite()
+            && self::get_history_scope() === self::HISTORY_SCOPE_NETWORK;
+    }
+
+    /**
+     * Helper exposing option arguments for history-aware storage.
+     *
+     * @return array<string, bool>
+     */
+    public static function get_history_option_args(): array {
+        if (self::history_uses_network_storage()) {
+            return ['network' => true];
+        }
+
+        return [];
+    }
+
+    /**
+     * Returns the table prefix for the requested context.
+     */
+    public static function get_table_prefix(string $context = self::HISTORY_SCOPE_SITE): string {
+        global $wpdb;
+
+        $default = 'wp_';
+
+        if (!is_object($wpdb)) {
+            return $default;
+        }
+
+        if ($context === self::HISTORY_SCOPE_NETWORK
+            && property_exists($wpdb, 'base_prefix')
+            && is_string($wpdb->base_prefix)
+            && $wpdb->base_prefix !== ''
+        ) {
+            return $wpdb->base_prefix;
+        }
+
+        if (property_exists($wpdb, 'prefix') && is_string($wpdb->prefix) && $wpdb->prefix !== '') {
+            return $wpdb->prefix;
+        }
+
+        if ($context === self::HISTORY_SCOPE_NETWORK && property_exists($wpdb, 'base_prefix')) {
+            $base_prefix = $wpdb->base_prefix;
+
+            if (is_string($base_prefix) && $base_prefix !== '') {
+                return $base_prefix;
+            }
+        }
+
+        return $default;
+    }
+
+    /**
+     * Builds the full table name for the network context.
+     */
+    public static function get_network_table_name(string $table_suffix): string {
+        $suffix = ltrim($table_suffix, '_');
+
+        return self::get_table_prefix(self::HISTORY_SCOPE_NETWORK) . $suffix;
+    }
 
     /**
      * Initialise les hooks pour synchroniser les options site/réseau.
