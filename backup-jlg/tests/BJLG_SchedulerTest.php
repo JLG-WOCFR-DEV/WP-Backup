@@ -197,33 +197,9 @@ final class BJLG_SchedulerTest extends TestCase
             $this->assertIsArray($response->data['next_runs']);
             $this->assertArrayHasKey($saved_schedule['id'], $response->data['next_runs']);
             $next_run_entry = $response->data['next_runs'][$saved_schedule['id']];
-        $this->assertArrayHasKey('next_run', $next_run_entry);
-    }
-
-    public function test_generate_cron_impact_summary_uses_recent_durations_filter(): void
-    {
-        $scheduler = BJLG\BJLG_Scheduler::instance();
-
-        $callback = static function () {
-            return [120, 150, 180];
-        };
-
-        add_filter('bjlg_scheduler_recent_durations', $callback, 10, 3);
-
-        try {
-            $impact = $scheduler->generate_cron_impact_summary('*/5 * * * *');
-        } finally {
-            remove_filter('bjlg_scheduler_recent_durations', $callback, 10);
+            $this->assertArrayHasKey('next_run', $next_run_entry);
+            $this->assertNotEmpty($next_run_entry['next_run']);
         }
-
-        $this->assertIsArray($impact);
-        $this->assertSame(288.0, $impact['runs_per_day']);
-        $this->assertSame(150.0, $impact['average_duration']);
-        $this->assertSame(43200.0, $impact['estimated_load']);
-        $this->assertSame('high', $impact['risk']['level']);
-        $this->assertGreaterThan(0, $impact['history_samples']);
-        $this->assertNotEmpty($impact['risk']['reasons']);
-    }
 
         $collection = bjlg_get_option('bjlg_schedule_settings');
 
@@ -271,6 +247,31 @@ final class BJLG_SchedulerTest extends TestCase
         $this->assertSame([$stored_schedule['id']], $event['args']);
         $this->assertIsInt($event['timestamp']);
         $this->assertGreaterThan(0, $event['timestamp']);
+    }
+
+    public function test_generate_cron_impact_summary_uses_recent_durations_filter(): void
+    {
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+
+        $callback = static function () {
+            return [120, 150, 180];
+        };
+
+        add_filter('bjlg_scheduler_recent_durations', $callback, 10, 3);
+
+        try {
+            $impact = $scheduler->generate_cron_impact_summary('*/5 * * * *');
+        } finally {
+            remove_filter('bjlg_scheduler_recent_durations', $callback, 10);
+        }
+
+        $this->assertIsArray($impact);
+        $this->assertSame(288.0, $impact['runs_per_day']);
+        $this->assertSame(150.0, $impact['average_duration']);
+        $this->assertSame(43200.0, $impact['estimated_load']);
+        $this->assertSame('high', $impact['risk']['level']);
+        $this->assertGreaterThan(0, $impact['history_samples']);
+        $this->assertNotEmpty($impact['risk']['reasons']);
     }
 
     public function test_handle_save_schedule_accepts_fifteen_minute_recurrence(): void
