@@ -22,6 +22,7 @@ class BJLG_Admin {
     private $google_drive_notice;
     private $onboarding_progress = [];
     private $is_network_screen = false;
+    private $active_scope = BJLG_Site_Context::HISTORY_SCOPE_SITE;
 
     public function __construct() {
         $this->load_destinations();
@@ -96,6 +97,110 @@ class BJLG_Admin {
         if (class_exists(BJLG_SFTP::class)) {
             $this->destinations['sftp'] = new BJLG_SFTP();
         }
+    }
+
+    private function get_scope_choices(): array {
+        $choices = [
+            BJLG_Site_Context::HISTORY_SCOPE_SITE => __('Site courant', 'backup-jlg'),
+        ];
+
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return $choices;
+        }
+
+        $can_view_network = function_exists('bjlg_can_manage_plugin') && bjlg_can_manage_plugin(null, 'manage_network');
+
+        if ($can_view_network) {
+            $choices[BJLG_Site_Context::HISTORY_SCOPE_NETWORK] = __('Réseau', 'backup-jlg');
+        }
+
+        return $choices;
+    }
+
+    private function determine_active_scope(array $choices): string {
+        $default = $this->is_network_screen ? BJLG_Site_Context::HISTORY_SCOPE_NETWORK : BJLG_Site_Context::HISTORY_SCOPE_SITE;
+
+        $requested = isset($_GET['bjlg_scope'])
+            ? sanitize_key((string) wp_unslash($_GET['bjlg_scope']))
+            : $default;
+
+        if (!isset($choices[$requested])) {
+            $requested = $default;
+        }
+
+        if (!isset($choices[$requested])) {
+            $requested = (string) array_key_first($choices);
+        }
+
+        if ($requested === '') {
+            $requested = BJLG_Site_Context::HISTORY_SCOPE_SITE;
+        }
+
+        return $requested;
+    }
+
+    private function collect_metrics_for_scope(string $scope): array {
+        if (!$this->advanced_admin) {
+            return [];
+        }
+
+        return $this->run_with_scope(function () {
+            return $this->advanced_admin->get_dashboard_metrics();
+        }, $scope);
+    }
+
+    private function run_with_scope(callable $callback, ?string $scope = null)
+    {
+        $target_scope = $scope ?? $this->active_scope;
+
+        if ($target_scope === BJLG_Site_Context::HISTORY_SCOPE_NETWORK) {
+            return BJLG_Site_Context::with_network($callback);
+        }
+
+        return $callback();
+    }
+
+    private function render_scope_switcher(array $choices, string $active_scope): void {
+        if (count($choices) < 2) {
+            return;
+        }
+
+        $preserved_params = [];
+
+        foreach ($_GET as $key => $value) {
+            if ($key === 'bjlg_scope') {
+                continue;
+            }
+
+            $sanitized_key = sanitize_key((string) $key);
+
+            if ($sanitized_key === '') {
+                continue;
+            }
+
+            if (is_scalar($value)) {
+                $preserved_params[$sanitized_key] = sanitize_text_field((string) wp_unslash($value));
+            }
+        }
+
+        ?>
+        <form method="get" class="bjlg-scope-switcher">
+            <?php foreach ($preserved_params as $param_key => $param_value): ?>
+                <input type="hidden" name="<?php echo esc_attr($param_key); ?>" value="<?php echo esc_attr($param_value); ?>">
+            <?php endforeach; ?>
+            <label class="screen-reader-text" for="bjlg-scope-select"><?php esc_html_e('Périmètre des données', 'backup-jlg'); ?></label>
+            <select id="bjlg-scope-select" name="bjlg_scope" class="bjlg-scope-switcher__select" onchange="this.form.submit()">
+                <?php foreach ($choices as $scope_value => $label): ?>
+                    <option value="<?php echo esc_attr($scope_value); ?>" <?php selected($active_scope, $scope_value); ?>>
+                        <?php echo esc_html($label); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <noscript>
+                <button type="submit" class="button button-secondary"><?php esc_html_e('Appliquer', 'backup-jlg'); ?></button>
+            </noscript>
+        </form>
+        <?php
     }
 
     /**
@@ -403,7 +508,9 @@ class BJLG_Admin {
             return false;
         }
 
-        $keys = BJLG_API_Keys::get_keys();
+        $keys = $this->run_with_scope(static function () {
+            return BJLG_API_Keys::get_keys();
+        });
 
         return is_array($keys) && !empty($keys);
     }
@@ -532,7 +639,9 @@ class BJLG_Admin {
             $active_section = $requested_section;
         }
 
-        $metrics = $this->advanced_admin ? $this->advanced_admin->get_dashboard_metrics() : [];
+        $scope_choices = $this->get_scope_choices();
+        $this->active_scope = $this->determine_active_scope($scope_choices);
+        $metrics = $this->collect_metrics_for_scope($this->active_scope);
 
         $notice_type = isset($_GET['bjlg_notice']) ? sanitize_key($_GET['bjlg_notice']) : '';
         $notice_message = '';
@@ -587,7 +696,7 @@ class BJLG_Admin {
         <a class="bjlg-skip-link" href="#bjlg-main-content">
             <?php esc_html_e('Aller au contenu principal', 'backup-jlg'); ?>
         </a>
-        <div id="bjlg-main-content" class="wrap bjlg-wrap is-light" data-bjlg-theme="light" role="main" tabindex="-1" data-active-section="<?php echo esc_attr($active_section); ?>">
+        <div id="bjlg-main-content" class="wrap bjlg-wrap is-light" data-bjlg-theme="light" role="main" tabindex="-1" data-active-section="<?php echo esc_attr($active_section); ?>" data-bjlg-scope="<?php echo esc_attr($this->active_scope); ?>">
             <header class="bjlg-page-header">
                 <h1>
                     <span class="dashicons dashicons-database-export" aria-hidden="true"></span>
@@ -605,6 +714,7 @@ class BJLG_Admin {
                     >
                         <?php echo esc_html__('Activer le contraste renforcé', 'backup-jlg'); ?>
                     </button>
+                    <?php $this->render_scope_switcher($scope_choices, $this->active_scope); ?>
                 </div>
             </header>
 
@@ -2658,7 +2768,9 @@ class BJLG_Admin {
      * Section : Historique
      */
     private function render_history_section() {
-        $history = class_exists(BJLG_History::class) ? BJLG_History::get_history(50) : [];
+        $history = $this->run_with_scope(static function () {
+            return class_exists(BJLG_History::class) ? BJLG_History::get_history(50) : [];
+        });
         ?>
         <div class="bjlg-section">
             <h2>Historique des 50 dernières actions</h2>
@@ -3966,7 +4078,9 @@ class BJLG_Admin {
      * Section : API & Intégrations
      */
     private function render_api_section() {
-        $keys = BJLG_API_Keys::get_keys();
+        $keys = $this->run_with_scope(static function () {
+            return BJLG_API_Keys::get_keys();
+        });
         $has_keys = !empty($keys);
         ?>
         <div class="bjlg-section" id="bjlg-api-keys-section">

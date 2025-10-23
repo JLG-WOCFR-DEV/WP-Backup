@@ -237,7 +237,13 @@ if (!function_exists('bjlg_get_capability_map')) {
      * @return array<string,string>
      */
     function bjlg_get_capability_map() {
-        $is_network_context = function_exists('is_multisite') && is_multisite() && function_exists('is_network_admin') && is_network_admin();
+        $is_multisite = function_exists('is_multisite') && is_multisite();
+        $is_network_admin = $is_multisite && function_exists('is_network_admin') && is_network_admin();
+        $is_network_context = $is_multisite
+            && (
+                $is_network_admin
+                || (class_exists('BJLG\\BJLG_Site_Context') && \BJLG\BJLG_Site_Context::is_network_context())
+            );
         $default_capability = $is_network_context ? 'manage_network_options' : BJLG_DEFAULT_CAPABILITY;
 
         $defaults = [
@@ -747,6 +753,11 @@ final class BJLG_Plugin {
     public function activate() {
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-debug.php';
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-history.php';
+
+        $default_history_scope = \BJLG\BJLG_Site_Context::sanitize_history_scope(
+            apply_filters('bjlg_default_history_scope', \BJLG\BJLG_Site_Context::HISTORY_SCOPE_SITE)
+        );
+
         if (function_exists('is_multisite') && is_multisite()) {
             $site_ids = get_sites(['fields' => 'ids']);
 
@@ -756,7 +767,7 @@ final class BJLG_Plugin {
                 });
             }
 
-            bjlg_with_network(function () {
+            bjlg_with_network(function () use ($default_history_scope) {
                 if (bjlg_get_option('bjlg_required_capability', null, ['network' => true]) === null) {
                     bjlg_update_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY, ['network' => true]);
                 }
@@ -764,12 +775,24 @@ final class BJLG_Plugin {
                 if (bjlg_get_option('bjlg_capability_map', null, ['network' => true]) === null) {
                     bjlg_update_option('bjlg_capability_map', [], ['network' => true]);
                 }
+
+                if (get_site_option(\BJLG\BJLG_Site_Context::HISTORY_SCOPE_OPTION, null) === null) {
+                    \BJLG\BJLG_Site_Context::set_history_scope($default_history_scope);
+                }
+
+                if (\BJLG\BJLG_Site_Context::history_uses_network_storage()) {
+                    \BJLG\BJLG_History::create_table();
+                }
             });
 
             return;
         }
 
         $this->activate_single_site();
+
+        if (get_option(\BJLG\BJLG_Site_Context::HISTORY_SCOPE_OPTION, null) === null) {
+            \BJLG\BJLG_Site_Context::set_history_scope($default_history_scope);
+        }
     }
 
     public function deactivate() {

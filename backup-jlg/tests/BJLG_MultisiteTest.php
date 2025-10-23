@@ -1,7 +1,11 @@
 <?php
 
+use BJLG\BJLG_API_Keys;
+use BJLG\BJLG_History;
+use BJLG\BJLG_Plugin;
 use BJLG\BJLG_REST_API;
 use BJLG\BJLG_Settings;
+use BJLG\BJLG_Site_Context;
 use PHPUnit\Framework\TestCase;
 
 final class BJLG_MultisiteTest extends TestCase {
@@ -10,6 +14,10 @@ final class BJLG_MultisiteTest extends TestCase {
     private $previous_stack = [];
     private $previous_multisite = false;
     private $previous_network_admin = false;
+    private $previous_site_options = [];
+    private $previous_is_multisite_flag = false;
+    private $previous_is_network_admin_flag = false;
+    private $previous_dbdelta_calls = [];
 
     protected function setUp(): void {
         parent::setUp();
@@ -18,6 +26,10 @@ final class BJLG_MultisiteTest extends TestCase {
         $this->previous_stack = $GLOBALS['bjlg_tests_blog_stack'] ?? [1];
         $this->previous_multisite = $GLOBALS['bjlg_tests_multisite'] ?? false;
         $this->previous_network_admin = $GLOBALS['bjlg_tests_network_admin'] ?? false;
+        $this->previous_site_options = $GLOBALS['bjlg_test_site_options'] ?? [];
+        $this->previous_is_multisite_flag = $GLOBALS['bjlg_test_is_multisite'] ?? false;
+        $this->previous_is_network_admin_flag = $GLOBALS['bjlg_test_is_network_admin'] ?? false;
+        $this->previous_dbdelta_calls = $GLOBALS['bjlg_test_dbdelta_calls'] ?? [];
 
         $GLOBALS['bjlg_test_options'] = [];
         $GLOBALS['bjlg_tests_multisite'] = false;
@@ -50,6 +62,10 @@ final class BJLG_MultisiteTest extends TestCase {
         $GLOBALS['bjlg_tests_blog_stack'] = $this->previous_stack ?: [1];
         $GLOBALS['bjlg_tests_multisite'] = $this->previous_multisite;
         $GLOBALS['bjlg_tests_network_admin'] = $this->previous_network_admin;
+        $GLOBALS['bjlg_test_site_options'] = $this->previous_site_options;
+        $GLOBALS['bjlg_test_is_multisite'] = $this->previous_is_multisite_flag;
+        $GLOBALS['bjlg_test_is_network_admin'] = $this->previous_is_network_admin_flag;
+        $GLOBALS['bjlg_test_dbdelta_calls'] = $this->previous_dbdelta_calls;
         $GLOBALS['bjlg_test_current_user_can'] = false;
 
         parent::tearDown();
@@ -135,5 +151,85 @@ final class BJLG_MultisiteTest extends TestCase {
 
         $api->restore_site_after_request(null, null, $request);
         $this->assertSame(1, get_current_blog_id());
+    }
+
+    public function test_activation_creates_network_history_table_when_scope_network(): void {
+        require_once __DIR__ . '/../backup-jlg.php';
+
+        $GLOBALS['bjlg_test_dbdelta_calls'] = [];
+        $GLOBALS['bjlg_test_is_multisite'] = true;
+        $GLOBALS['bjlg_tests_multisite'] = true;
+        $GLOBALS['bjlg_tests_network_admin'] = true;
+        $GLOBALS['bjlg_test_is_network_admin'] = true;
+        $GLOBALS['bjlg_tests_sites'] = [
+            1 => (object) [
+                'blog_id' => 1,
+                'domain' => 'example.test',
+                'path' => '/',
+            ],
+            2 => (object) [
+                'blog_id' => 2,
+                'domain' => 'network.test',
+                'path' => '/',
+            ],
+        ];
+
+        $GLOBALS['wpdb']->prefix = 'wp_1_';
+        $GLOBALS['wpdb']->base_prefix = 'wp_';
+
+        BJLG_Site_Context::set_history_scope(BJLG_Site_Context::HISTORY_SCOPE_NETWORK);
+
+        $plugin = new BJLG_Plugin();
+        $plugin->activate();
+
+        $network_calls = array_filter($GLOBALS['bjlg_test_dbdelta_calls'], static function ($sql) {
+            return strpos($sql, 'CREATE TABLE wp_bjlg_history') !== false;
+        });
+
+        $this->assertNotEmpty($network_calls, 'Expected a network history table to be created.');
+    }
+
+    public function test_api_keys_prefer_network_storage_when_history_scope_network(): void {
+        $GLOBALS['bjlg_test_is_multisite'] = true;
+        $GLOBALS['bjlg_tests_multisite'] = true;
+
+        BJLG_Site_Context::set_history_scope(BJLG_Site_Context::HISTORY_SCOPE_NETWORK);
+
+        $now = time();
+        update_site_option(
+            BJLG_API_Keys::OPTION_NAME,
+            [
+                [
+                    'id' => 'network-key',
+                    'label' => 'Network Key',
+                    'display_secret' => 'net-secret',
+                    'key' => wp_hash_password('net-secret'),
+                    'created_at' => $now,
+                    'last_rotated_at' => $now,
+                ],
+            ]
+        );
+
+        update_option(
+            BJLG_API_Keys::OPTION_NAME,
+            [
+                [
+                    'id' => 'site-key',
+                    'label' => 'Site Key',
+                    'display_secret' => 'site-secret',
+                    'key' => wp_hash_password('site-secret'),
+                    'created_at' => $now,
+                    'last_rotated_at' => $now,
+                ],
+            ]
+        );
+
+        $keys = BJLG_API_Keys::get_keys();
+        $identifiers = array_map(static function ($record) {
+            return isset($record['id']) ? (string) $record['id'] : '';
+        }, $keys);
+
+        $this->assertContains('network-key', $identifiers);
+        $this->assertNotContains('site-key', $identifiers);
     }
 }
