@@ -69,6 +69,7 @@ if ( ! function_exists( 'bjlg_uninstall_site' ) ) {
             'bjlg_whitelabel_settings',
             'bjlg_cleanup_settings',
             'bjlg_schedule_settings',
+            'bjlg_supervised_sites',
             'bjlg_notification_settings',
             'bjlg_encryption_settings',
             'bjlg_encryption_key',

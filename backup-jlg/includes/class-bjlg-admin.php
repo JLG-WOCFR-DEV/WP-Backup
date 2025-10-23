@@ -22,6 +22,7 @@ class BJLG_Admin {
     private $google_drive_notice;
     private $onboarding_progress = [];
     private $is_network_screen = false;
+    private $network_notice = null;
 
     public function __construct() {
         $this->load_destinations();
@@ -195,6 +196,18 @@ class BJLG_Admin {
             ],
         ];
 
+        if ($this->is_network_screen) {
+            $defaults = array_merge(
+                [
+                    'network' => [
+                        'label' => __('Réseau', 'backup-jlg'),
+                        'icon' => 'admin-network',
+                    ],
+                ],
+                $defaults
+            );
+        }
+
         if (is_array($sections) && !empty($sections)) {
             return array_merge($defaults, $sections);
         }
@@ -244,6 +257,7 @@ class BJLG_Admin {
         $this->is_network_screen = true;
 
         bjlg_with_network(function () {
+            $this->handle_network_admin_actions();
             $this->render_admin_page();
         });
 
@@ -549,6 +563,16 @@ class BJLG_Admin {
             'info' => 'notice notice-info',
         ];
 
+        if (is_array($this->network_notice) && !empty($this->network_notice['message'])) {
+            $type = isset($this->network_notice['type']) ? (string) $this->network_notice['type'] : 'info';
+            $class = $notice_classes[$type] ?? $notice_classes['info'];
+            printf(
+                '<div class="%1$s"><p>%2$s</p></div>',
+                esc_attr($class),
+                esc_html((string) $this->network_notice['message'])
+            );
+        }
+
         $section_modules_map = $this->get_section_module_mapping();
         $sections_for_js = array_values($sections);
         $sections_json = !empty($sections_for_js) ? wp_json_encode($sections_for_js) : '';
@@ -742,6 +766,13 @@ class BJLG_Admin {
                 break;
             case 'integrations':
                 $this->render_api_section();
+                break;
+            case 'network':
+                if ($this->is_network_screen) {
+                    $this->render_network_section();
+                } else {
+                    $handled = false;
+                }
                 break;
             default:
                 $handled = false;
@@ -3973,6 +4004,242 @@ class BJLG_Admin {
             </table>
         </div>
         <?php
+    }
+
+    private function handle_network_admin_actions(): void
+    {
+        $method = isset($_SERVER['REQUEST_METHOD']) ? strtoupper((string) $_SERVER['REQUEST_METHOD']) : 'GET';
+
+        if ($method !== 'POST') {
+            return;
+        }
+
+        if (!isset($_POST['bjlg_network_action'])) {
+            return;
+        }
+
+        if (!function_exists('bjlg_can_manage_plugin') || !bjlg_can_manage_plugin()) {
+            $this->network_notice = [
+                'type' => 'error',
+                'message' => __('Permission refusée pour modifier les réglages réseau.', 'backup-jlg'),
+            ];
+
+            return;
+        }
+
+        $action = sanitize_key(wp_unslash((string) $_POST['bjlg_network_action']));
+
+        if ($action === 'save_sites') {
+            check_admin_referer('bjlg_network_settings', 'bjlg_network_settings_nonce');
+
+            $selected = isset($_POST['bjlg_supervised_sites']) ? (array) wp_unslash($_POST['bjlg_supervised_sites']) : [];
+            $site_ids = [];
+            $valid_sites = array_column($this->get_network_sites(), 'id');
+
+            foreach ($selected as $candidate) {
+                $site_id = absint($candidate);
+                if ($site_id > 0 && in_array($site_id, $valid_sites, true)) {
+                    $site_ids[] = $site_id;
+                }
+            }
+
+            $site_ids = array_values(array_unique($site_ids));
+            bjlg_update_option('bjlg_supervised_sites', $site_ids, ['network' => true]);
+
+            $this->network_notice = [
+                'type' => 'success',
+                'message' => __('Liste des sites supervisés mise à jour.', 'backup-jlg'),
+            ];
+        }
+    }
+
+    private function render_network_section(): void
+    {
+        $overview = $this->get_network_credentials_overview();
+        $sites = $this->get_network_sites();
+        $managed = bjlg_get_option('bjlg_supervised_sites', [], ['network' => true]);
+        if (!is_array($managed)) {
+            $managed = [];
+        }
+
+        $managed = array_map('absint', $managed);
+        $managed = array_values(array_unique(array_filter($managed)));
+
+        $manage_integrations_url = add_query_arg(
+            [
+                'page' => 'backup-jlg-network',
+                'section' => 'integrations',
+            ],
+            network_admin_url('admin.php')
+        );
+
+        ?>
+        <div class="bjlg-section" id="bjlg-network-overview">
+            <h2><?php esc_html_e('Gestion réseau', 'backup-jlg'); ?></h2>
+            <div class="bjlg-network-grid">
+                <div class="card bjlg-network-card">
+                    <h3><?php esc_html_e('Credentials partagés', 'backup-jlg'); ?></h3>
+                    <p>
+                        <?php
+                        printf(
+                            esc_html(_n('%d clé API active sur le réseau.', '%d clés API actives sur le réseau.', (int) $overview['api_keys'], 'backup-jlg')),
+                            (int) $overview['api_keys']
+                        );
+                        ?>
+                    </p>
+                    <p>
+                        <?php if ($overview['notifications'] !== ''): ?>
+                            <?php echo esc_html(sprintf(__('Notifications e-mail envoyées à : %s', 'backup-jlg'), $overview['notifications'])); ?>
+                        <?php else: ?>
+                            <?php esc_html_e('Aucune notification e-mail configurée.', 'backup-jlg'); ?>
+                        <?php endif; ?>
+                    </p>
+                    <p>
+                        <?php
+                        printf(
+                            esc_html(_n('Suivi des quotas activé pour %d destination.', 'Suivi des quotas activé pour %d destinations.', (int) $overview['quotas'], 'backup-jlg')),
+                            (int) $overview['quotas']
+                        );
+                        ?>
+                    </p>
+                    <p>
+                        <a class="button button-secondary" href="<?php echo esc_url($manage_integrations_url); ?>">
+                            <?php esc_html_e('Gérer les clés et notifications', 'backup-jlg'); ?>
+                        </a>
+                    </p>
+                </div>
+                <div class="card bjlg-network-card">
+                    <h3><?php esc_html_e('Sites supervisés', 'backup-jlg'); ?></h3>
+                    <p><?php esc_html_e('Sélectionnez les sites qui doivent hériter des réglages réseau.', 'backup-jlg'); ?></p>
+                    <form method="post">
+                        <?php wp_nonce_field('bjlg_network_settings', 'bjlg_network_settings_nonce'); ?>
+                        <input type="hidden" name="bjlg_network_action" value="save_sites" />
+                        <ul class="bjlg-network-sites">
+                            <?php if (empty($sites)): ?>
+                                <li><?php esc_html_e('Aucun site n’est disponible.', 'backup-jlg'); ?></li>
+                            <?php else: ?>
+                                <?php foreach ($sites as $site): ?>
+                                    <?php
+                                    $site_id = (int) $site['id'];
+                                    $label = $site['name'] !== '' ? $site['name'] : sprintf(__('Site #%d', 'backup-jlg'), $site_id);
+                                    ?>
+                                    <li>
+                                        <label>
+                                            <input type="checkbox" name="bjlg_supervised_sites[]" value="<?php echo esc_attr($site_id); ?>" <?php checked(in_array($site_id, $managed, true)); ?> />
+                                            <strong><?php echo esc_html($label); ?></strong>
+                                            <?php if ($site['url'] !== ''): ?>
+                                                <span class="description"><?php echo esc_html($site['url']); ?></span>
+                                            <?php endif; ?>
+                                        </label>
+                                    </li>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </ul>
+                        <p>
+                            <button type="submit" class="button button-primary"><?php esc_html_e('Enregistrer les modifications', 'backup-jlg'); ?></button>
+                        </p>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <?php
+    }
+
+    private function get_network_credentials_overview(): array
+    {
+        $api_keys = bjlg_get_option('bjlg_api_keys', [], ['network' => true]);
+        $api_key_count = is_array($api_keys) ? count($api_keys) : 0;
+
+        $notification_settings = bjlg_get_option('bjlg_notification_settings', [], ['network' => true]);
+        $notifications = '';
+        if (is_array($notification_settings) && !empty($notification_settings['email_recipients'])) {
+            $emails = preg_split('/[,;\r\n]+/', (string) $notification_settings['email_recipients']);
+            if (is_array($emails)) {
+                $emails = array_filter(array_map('trim', $emails));
+                if (!empty($emails)) {
+                    $notifications = implode(', ', $emails);
+                }
+            }
+        }
+
+        $metrics = bjlg_get_option('bjlg_remote_storage_metrics', [], ['network' => true]);
+        $quota_sources = 0;
+        if (is_array($metrics)) {
+            foreach ($metrics as $entry) {
+                if (is_array($entry)) {
+                    $quota_sources++;
+                }
+            }
+        }
+
+        return [
+            'api_keys' => $api_key_count,
+            'notifications' => $notifications,
+            'quotas' => $quota_sources,
+        ];
+    }
+
+    private function get_network_sites(): array
+    {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return [];
+        }
+
+        if (!function_exists('get_sites')) {
+            return [];
+        }
+
+        $sites = get_sites([
+            'number' => 0,
+        ]);
+
+        $results = [];
+
+        foreach ((array) $sites as $site) {
+            $blog_id = 0;
+            $name = '';
+            $url = '';
+
+            if (is_object($site)) {
+                $blog_id = isset($site->blog_id) ? (int) $site->blog_id : (isset($site->id) ? (int) $site->id : 0);
+                if (isset($site->blogname) && is_string($site->blogname)) {
+                    $name = $site->blogname;
+                }
+                if (isset($site->domain) || isset($site->path)) {
+                    $domain = isset($site->domain) ? (string) $site->domain : '';
+                    $path = isset($site->path) ? (string) $site->path : '/';
+                    $url = $domain !== '' ? 'https://' . $domain . $path : '';
+                }
+            } elseif (is_array($site)) {
+                $blog_id = isset($site['blog_id']) ? (int) $site['blog_id'] : (isset($site['id']) ? (int) $site['id'] : 0);
+                if (isset($site['blogname']) && is_string($site['blogname'])) {
+                    $name = $site['blogname'];
+                }
+                $domain = isset($site['domain']) ? (string) $site['domain'] : '';
+                $path = isset($site['path']) ? (string) $site['path'] : '/';
+                $url = $domain !== '' ? 'https://' . $domain . $path : '';
+            }
+
+            if ($blog_id <= 0) {
+                continue;
+            }
+
+            if (function_exists('get_site_url')) {
+                $url = get_site_url($blog_id);
+            }
+
+            $results[] = [
+                'id' => $blog_id,
+                'name' => (string) $name,
+                'url' => (string) $url,
+            ];
+        }
+
+        usort($results, static function ($a, $b) {
+            return strcmp((string) $a['name'], (string) $b['name']);
+        });
+
+        return $results;
     }
 
     private function get_permission_choices() {

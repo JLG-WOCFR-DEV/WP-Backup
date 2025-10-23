@@ -751,12 +751,13 @@ final class BJLG_Plugin {
             $site_ids = get_sites(['fields' => 'ids']);
 
             foreach ((array) $site_ids as $site_id) {
-                bjlg_with_site((int) $site_id, function () {
-                    $this->activate_single_site();
+                bjlg_with_site((int) $site_id, function () use ($site_id) {
+                    $this->activate_single_site((int) $site_id);
                 });
             }
 
             bjlg_with_network(function () {
+                BJLG\BJLG_History::create_table(0);
                 if (bjlg_get_option('bjlg_required_capability', null, ['network' => true]) === null) {
                     bjlg_update_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY, ['network' => true]);
                 }
@@ -777,8 +778,8 @@ final class BJLG_Plugin {
         wp_clear_scheduled_hook('bjlg_daily_cleanup_hook');
     }
 
-    private function activate_single_site(): void {
-        BJLG\BJLG_History::create_table();
+    private function activate_single_site(?int $blog_id = null): void {
+        BJLG\BJLG_History::create_table($blog_id);
 
         if (bjlg_get_option('bjlg_required_capability', null) === null) {
             bjlg_update_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY);

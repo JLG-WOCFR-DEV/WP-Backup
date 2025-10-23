@@ -423,6 +423,43 @@ class BJLG_REST_API {
      * @return array<string, mixed>
      */
     private function merge_site_args(array $args = []): array {
+        $args['context'] = [
+            'required' => false,
+            'sanitize_callback' => static function ($param) {
+                if (!is_string($param)) {
+                    return null;
+                }
+
+                $value = strtolower($param);
+
+                return in_array($value, ['site', 'network'], true) ? $value : null;
+            },
+            'validate_callback' => static function ($param) {
+                if ($param === null || $param === '' || $param === false) {
+                    return true;
+                }
+
+                if (!is_string($param)) {
+                    return new WP_Error(
+                        'bjlg_invalid_context',
+                        __('Le paramètre context doit être une chaîne de caractères.', 'backup-jlg'),
+                        ['status' => 400]
+                    );
+                }
+
+                $value = strtolower($param);
+                if (!in_array($value, ['site', 'network'], true)) {
+                    return new WP_Error(
+                        'bjlg_invalid_context',
+                        __('Le paramètre context doit être "site" ou "network".', 'backup-jlg'),
+                        ['status' => 400]
+                    );
+                }
+
+                return true;
+            },
+        ];
+
         $args['site_id'] = [
             'required' => false,
             'sanitize_callback' => static function ($param) {
@@ -460,6 +497,10 @@ class BJLG_REST_API {
      * @param \WP_REST_Request $request
      */
     private function get_requested_site_id($request) {
+        if ($this->get_requested_context($request) === 'network') {
+            return null;
+        }
+
         $site_id = $request->get_param('site_id');
 
         if (($site_id === null || $site_id === '' || $site_id === false) && method_exists($request, 'get_header')) {
@@ -479,6 +520,33 @@ class BJLG_REST_API {
     }
 
     /**
+     * Détermine le contexte ciblé par la requête (site ou réseau).
+     */
+    private function get_requested_context($request): string
+    {
+        $context = null;
+
+        if (method_exists($request, 'get_param')) {
+            $context = $request->get_param('context');
+        }
+
+        if (($context === null || $context === '' || $context === false) && method_exists($request, 'get_header')) {
+            $header_value = $request->get_header('X-WP-Context');
+            if ($header_value !== null && $header_value !== '' && $header_value !== false) {
+                $context = $header_value;
+            }
+        }
+
+        if (!is_string($context)) {
+            return 'site';
+        }
+
+        $value = strtolower($context);
+
+        return $value === 'network' ? 'network' : 'site';
+    }
+
+    /**
      * Exécute un callback dans le contexte multisite demandé.
      *
      * @param callable $callback
@@ -486,6 +554,42 @@ class BJLG_REST_API {
      * @return mixed
      */
     private function with_request_site($request, callable $callback) {
+        $context = $this->get_requested_context($request);
+
+        if ($context === 'network') {
+            if (!function_exists('is_multisite') || !is_multisite()) {
+                return new WP_Error(
+                    'bjlg_network_context_unavailable',
+                    __('Le contexte réseau n’est pas disponible sur cette installation.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+
+            if ($this->get_requested_site_id($request)) {
+                return new WP_Error(
+                    'bjlg_context_conflict',
+                    __('Impossible de combiner un identifiant de site avec le contexte réseau.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+
+            $has_network_access = \bjlg_with_network(static function () {
+                return \bjlg_can_manage_plugin();
+            });
+
+            if (!$has_network_access) {
+                return new WP_Error(
+                    'bjlg_network_forbidden',
+                    __('Vous n’avez pas les permissions requises pour gérer le réseau.', 'backup-jlg'),
+                    ['status' => 403]
+                );
+            }
+
+            return \bjlg_with_network(static function () use ($callback) {
+                return $callback();
+            });
+        }
+
         $site_id = $this->get_requested_site_id($request);
 
         if (!$site_id) {
@@ -493,7 +597,11 @@ class BJLG_REST_API {
         }
 
         if (!function_exists('is_multisite') || !is_multisite()) {
-            return $callback();
+            return new WP_Error(
+                'bjlg_multisite_required',
+                __('Le paramètre site_id nécessite un réseau multisite.', 'backup-jlg'),
+                ['status' => 400]
+            );
         }
 
         if (function_exists('get_site') && !get_site($site_id)) {
