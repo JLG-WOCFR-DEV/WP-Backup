@@ -314,9 +314,106 @@ class BJLG_Notifications {
     public function handle_storage_warning($data) {
         $data = is_array($data) ? $data : [];
 
+        $type = '';
+        if (isset($data['type']) && is_string($data['type'])) {
+            $candidate = strtolower(trim($data['type']));
+            if (in_array($candidate, ['local', 'remote'], true)) {
+                $type = $candidate;
+            }
+        }
+
+        $destination_id = '';
+        if (isset($data['destination_id']) && is_scalar($data['destination_id'])) {
+            $destination_id = (string) $data['destination_id'];
+            if (function_exists('sanitize_key')) {
+                $destination_id = sanitize_key($destination_id);
+            } else {
+                $destination_id = strtolower(preg_replace('/[^a-z0-9_\-]/i', '', $destination_id));
+            }
+        }
+
+        $ratio = null;
+        if (isset($data['ratio']) && is_numeric($data['ratio'])) {
+            $ratio = max(0.0, min(1.0, (float) $data['ratio']));
+        }
+
+        $quota_bytes = null;
+        if (isset($data['quota_bytes']) && is_numeric($data['quota_bytes'])) {
+            $quota_bytes = max(0, (int) $data['quota_bytes']);
+        }
+
+        $free_bytes = null;
+        if (isset($data['free_bytes']) && is_numeric($data['free_bytes'])) {
+            $free_bytes = max(0, (int) $data['free_bytes']);
+        }
+
+        $free_space = null;
+        if (isset($data['free_space']) && is_numeric($data['free_space'])) {
+            $free_space = max(0, (int) $data['free_space']);
+        }
+
+        if ($free_bytes === null && $free_space !== null) {
+            $free_bytes = $free_space;
+        }
+
+        $threshold_bytes = null;
+        if (isset($data['threshold']) && is_numeric($data['threshold'])) {
+            $threshold_bytes = max(0, (int) $data['threshold']);
+        }
+
+        $threshold_percent = null;
+        if (isset($data['threshold_percent']) && is_numeric($data['threshold_percent'])) {
+            $threshold_percent = max(0.0, min(100.0, (float) $data['threshold_percent']));
+        }
+
+        $generated_at = null;
+        if (isset($data['generated_at']) && is_numeric($data['generated_at'])) {
+            $generated_at = (int) $data['generated_at'];
+        }
+
+        $path = isset($data['path']) ? (string) $data['path'] : '';
+        $name = isset($data['name']) ? (string) $data['name'] : '';
+        if ($name !== '' && function_exists('sanitize_text_field')) {
+            $name = sanitize_text_field($name);
+        }
+
+        $destination_label = '';
+        if ($destination_id !== '') {
+            $destination_label = $this->resolve_destination_label($destination_id);
+        } elseif ($name !== '') {
+            $destination_label = $name;
+        }
+
+        if ($destination_label === '' && $destination_id !== '') {
+            $destination_label = $destination_id;
+        }
+
+        $destination_link = '';
+        if ($destination_id !== '' && function_exists('admin_url')) {
+            $destination_link = admin_url('admin.php?page=backup-jlg&section=integrations&destination=' . rawurlencode($destination_id));
+        }
+
+        $quota_human = $quota_bytes !== null ? $this->format_storage_bytes($quota_bytes) : '';
+        $free_human = $free_bytes !== null ? $this->format_storage_bytes($free_bytes) : '';
+        $threshold_human = $threshold_bytes !== null ? $this->format_storage_bytes($threshold_bytes) : '';
+
+        $ratio_percent = null;
+        $ratio_label = '';
+        if ($ratio !== null) {
+            $ratio_percent = round($ratio * 100, 2);
+            $ratio_label = $this->format_storage_percentage($ratio_percent, $ratio_percent >= 10 ? 1 : 2);
+        }
+
+        $threshold_ratio_label = '';
+        if ($threshold_percent !== null) {
+            $threshold_ratio_label = $this->format_storage_percentage($threshold_percent, $threshold_percent >= 10 ? 0 : 1);
+        }
+
         $context = [
             'free_space' => isset($data['free_space']) ? (int) $data['free_space'] : null,
-            'threshold' => isset($data['threshold']) ? (int) $data['threshold'] : null,
+            'threshold' => isset($data['threshold'])
+                ? (int) $data['threshold']
+                : (isset($data['threshold_percent']) ? (int) round((float) $data['threshold_percent']) : null),
             'path' => isset($data['path']) ? (string) $data['path'] : '',
         ];
 
@@ -419,6 +516,9 @@ class BJLG_Notifications {
      */
     public function handle_restore_self_test_passed($report) {
         $report = is_array($report) ? $report : [];
+        $metrics = isset($report['metrics']) && is_array($report['metrics']) ? $report['metrics'] : [];
+        $attachments = isset($report['attachments']) && is_array($report['attachments']) ? $report['attachments'] : [];
+        $files = isset($report['report_files']) && is_array($report['report_files']) ? $report['report_files'] : [];
 
         $context = [
             'archive' => isset($report['archive']) ? (string) $report['archive'] : '',
@@ -426,6 +526,12 @@ class BJLG_Notifications {
             'components' => isset($report['components']) && is_array($report['components']) ? $report['components'] : [],
             'started_at' => isset($report['started_at']) ? (int) $report['started_at'] : null,
             'completed_at' => isset($report['completed_at']) ? (int) $report['completed_at'] : null,
+            'rto_seconds' => isset($metrics['rto_seconds']) ? (float) $metrics['rto_seconds'] : null,
+            'rpo_seconds' => isset($metrics['rpo_seconds']) ? (int) $metrics['rpo_seconds'] : null,
+            'rto_human' => isset($metrics['rto_human']) ? (string) $metrics['rto_human'] : '',
+            'rpo_human' => isset($metrics['rpo_human']) ? (string) $metrics['rpo_human'] : '',
+            'attachments' => $attachments,
+            'report_files' => $files,
         ];
 
         $this->notify('restore_self_test_passed', $context);
@@ -438,12 +544,21 @@ class BJLG_Notifications {
      */
     public function handle_restore_self_test_failed($report) {
         $report = is_array($report) ? $report : [];
+        $metrics = isset($report['metrics']) && is_array($report['metrics']) ? $report['metrics'] : [];
+        $attachments = isset($report['attachments']) && is_array($report['attachments']) ? $report['attachments'] : [];
+        $files = isset($report['report_files']) && is_array($report['report_files']) ? $report['report_files'] : [];
 
         $context = [
             'archive' => isset($report['archive']) ? (string) $report['archive'] : '',
             'error' => isset($report['exception']) ? trim((string) $report['exception']) : ($report['message'] ?? ''),
             'started_at' => isset($report['started_at']) ? (int) $report['started_at'] : null,
             'completed_at' => isset($report['completed_at']) ? (int) $report['completed_at'] : null,
+            'rto_seconds' => isset($metrics['rto_seconds']) ? (float) $metrics['rto_seconds'] : null,
+            'rpo_seconds' => isset($metrics['rpo_seconds']) ? (int) $metrics['rpo_seconds'] : null,
+            'rto_human' => isset($metrics['rto_human']) ? (string) $metrics['rto_human'] : '',
+            'rpo_human' => isset($metrics['rpo_human']) ? (string) $metrics['rpo_human'] : '',
+            'attachments' => $attachments,
+            'report_files' => $files,
         ];
 
         $this->notify('restore_self_test_failed', $context);
@@ -562,13 +677,18 @@ class BJLG_Notifications {
             'channels' => $channels,
             'created_at' => time(),
             'severity' => $severity,
+            'resolution' => $this->build_resolution_payload('test_notification', $meta['context']),
         ];
 
-        BJLG_Notification_Queue::enqueue($entry);
+        $queued = BJLG_Notification_Queue::enqueue($entry);
+
+        if (is_array($queued) && class_exists(__NAMESPACE__ . '\\BJLG_Notification_Receipts')) {
+            BJLG_Notification_Receipts::record_creation($queued);
+        }
 
         return [
             'success' => true,
-            'entry' => $entry,
+            'entry' => $queued ?? $entry,
             'channels' => array_keys($channels),
         ];
     }
@@ -670,14 +790,26 @@ class BJLG_Notifications {
         $merged['escalation']['stages'] = $stages;
 
         $template_defaults = self::default_severity_templates();
-        $merged['templates'] = isset($merged['templates']) && is_array($merged['templates'])
+        $raw_templates = isset($merged['templates']) && is_array($merged['templates'])
             ? $merged['templates']
             : [];
 
+        $default_template_shape = [
+            'label' => '',
+            'intro' => '',
+            'outro' => '',
+            'resolution' => '',
+            'intent' => 'info',
+            'actions' => [],
+        ];
+        $info_defaults = isset($template_defaults['info']) && is_array($template_defaults['info'])
+            ? $template_defaults['info']
+            : $default_template_shape;
+
         $templates = [];
         foreach ($template_defaults as $severity => $definition) {
-            $current = isset($merged['templates'][$severity]) && is_array($merged['templates'][$severity])
-                ? $merged['templates'][$severity]
+            $current = isset($raw_templates[$severity]) && is_array($raw_templates[$severity])
+                ? $raw_templates[$severity]
                 : [];
 
             $templates[$severity] = [
@@ -687,6 +819,43 @@ class BJLG_Notifications {
                 'resolution' => $this->sanitize_template_text($current['resolution'] ?? $definition['resolution']),
                 'intent' => $this->sanitize_template_intent($current['intent'] ?? $definition['intent']),
                 'actions' => $this->sanitize_template_actions($current['actions'] ?? $definition['actions']),
+            ];
+        }
+
+        foreach ($raw_templates as $key => $definition) {
+            if (isset($templates[$key]) || !is_array($definition)) {
+                continue;
+            }
+
+            if (!is_string($key)) {
+                continue;
+            }
+
+            $sanitized_key = function_exists('sanitize_key')
+                ? sanitize_key($key)
+                : strtolower(preg_replace('/[^a-z0-9_\-]/i', '', (string) $key));
+
+            if ($sanitized_key === '') {
+                continue;
+            }
+
+            if (isset($templates[$sanitized_key])) {
+                continue;
+            }
+
+            $parts = preg_split('/[-_]/', $sanitized_key);
+            $base_candidate = isset($parts[0]) ? strtolower((string) $parts[0]) : '';
+            $base_defaults = isset($template_defaults[$base_candidate]) && is_array($template_defaults[$base_candidate])
+                ? $template_defaults[$base_candidate]
+                : $info_defaults;
+
+            $templates[$sanitized_key] = [
+                'label' => $this->sanitize_template_label($definition['label'] ?? ($base_defaults['label'] ?? '')),
+                'intro' => $this->sanitize_template_text($definition['intro'] ?? ($base_defaults['intro'] ?? '')),
+                'outro' => $this->sanitize_template_text($definition['outro'] ?? ($base_defaults['outro'] ?? '')),
+                'resolution' => $this->sanitize_template_text($definition['resolution'] ?? ($base_defaults['resolution'] ?? '')),
+                'intent' => $this->sanitize_template_intent($definition['intent'] ?? ($base_defaults['intent'] ?? 'info')),
+                'actions' => $this->sanitize_template_actions($definition['actions'] ?? ($base_defaults['actions'] ?? [])),
             ];
         }
 
@@ -795,6 +964,7 @@ class BJLG_Notifications {
             'channels' => $channels,
             'created_at' => time(),
             'severity' => $final_severity,
+            'resolution' => $this->build_resolution_payload($event, $payload['context'] ?? []),
         ];
 
         if (!empty($escalation['meta']['channels'])) {
@@ -803,9 +973,33 @@ class BJLG_Notifications {
 
         $entry = $this->apply_quiet_hours_constraints($event, $entry);
 
-        BJLG_Notification_Queue::enqueue($entry);
+        $queued = BJLG_Notification_Queue::enqueue($entry);
+
+        if (is_array($queued) && class_exists(__NAMESPACE__ . '\\BJLG_Notification_Receipts')) {
+            BJLG_Notification_Receipts::record_creation($queued);
+        }
 
         BJLG_Debug::log(sprintf('Notification "%s" mise en file d\'attente.', $event));
+    }
+
+    private function build_resolution_payload($event, $context) {
+        $timestamp = time();
+        $title = $this->get_event_title($event, $context);
+
+        $summary = $event === 'test_notification'
+            ? __('Notification de test enregistrée.', 'backup-jlg')
+            : sprintf(__('Notification générée pour "%s".', 'backup-jlg'), $title);
+
+        return [
+            'acknowledged_at' => null,
+            'resolved_at' => null,
+            'steps' => [[
+                'timestamp' => $timestamp,
+                'actor' => __('Système', 'backup-jlg'),
+                'summary' => $summary,
+                'type' => 'created',
+            ]],
+        ];
     }
 
     /**
@@ -1183,6 +1377,11 @@ class BJLG_Notifications {
             ? wp_parse_args($templates[$severity], $defaults)
             : $defaults;
 
+        $variant_template = $this->resolve_template_variant($severity, $templates, $defaults, $meta);
+        if (!empty($variant_template)) {
+            $template = $variant_template;
+        }
+
         $context = $this->prepare_template_context($severity, $meta, $template['label'] ?? $defaults['label']);
 
         $label = $this->render_template_string($template['label'] ?? $defaults['label'], $context, $defaults['label']);
@@ -1210,6 +1409,56 @@ class BJLG_Notifications {
             'actions' => $actions,
             'resolution' => $resolution,
         ];
+    }
+
+    private function resolve_template_variant($severity, array $templates, array $defaults, array $meta): ?array {
+        $variant = '';
+
+        if (isset($meta['context']) && is_array($meta['context'])) {
+            $context_variant = $meta['context']['template_variant'] ?? '';
+            if (is_string($context_variant)) {
+                $variant = $context_variant;
+            }
+        }
+
+        if ($variant === '' && isset($meta['template_variant']) && is_string($meta['template_variant'])) {
+            $variant = $meta['template_variant'];
+        }
+
+        if ($variant === '') {
+            return null;
+        }
+
+        if (function_exists('sanitize_key')) {
+            $variant = sanitize_key($variant);
+        } else {
+            $variant = strtolower(preg_replace('/[^a-z0-9_\-]/i', '', (string) $variant));
+        }
+
+        if ($variant === '') {
+            return null;
+        }
+
+        $candidates = [
+            $severity . '_' . $variant,
+            $severity . '-' . $variant,
+            $variant,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (!isset($templates[$candidate]) || !is_array($templates[$candidate])) {
+                continue;
+            }
+
+            $definition = $templates[$candidate];
+            if (function_exists('wp_parse_args')) {
+                return wp_parse_args($definition, $defaults);
+            }
+
+            return $definition + $defaults;
+        }
+
+        return null;
     }
 
     /**
@@ -1258,6 +1507,43 @@ class BJLG_Notifications {
             'severity_label' => $severity_label,
             'timestamp' => $timestamp,
         ], 'strlen');
+    }
+
+    private function format_storage_bytes($bytes): string {
+        if (!is_numeric($bytes) || (int) $bytes < 0) {
+            return '';
+        }
+
+        $bytes = (int) $bytes;
+
+        if (function_exists('size_format')) {
+            return size_format($bytes);
+        }
+
+        $units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+        $position = 0;
+
+        while ($bytes >= 1024 && $position < count($units) - 1) {
+            $bytes /= 1024;
+            $position++;
+        }
+
+        return round($bytes, 2) . ' ' . $units[$position];
+    }
+
+    private function format_storage_percentage($value, $decimals = 0): string {
+        if (!is_numeric($value)) {
+            return '';
+        }
+
+        $value = max(0.0, (float) $value);
+        $decimals = max(0, (int) $decimals);
+
+        if (function_exists('number_format_i18n')) {
+            return number_format_i18n($value, $decimals) . '%';
+        }
+
+        return number_format($value, $decimals) . '%';
     }
 
     /**

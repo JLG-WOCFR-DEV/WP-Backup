@@ -37,6 +37,19 @@ namespace {
     require_once __DIR__ . '/../includes/class-bjlg-client-ip-helper.php';
     require_once __DIR__ . '/../includes/class-bjlg-history.php';
 
+    if (!function_exists('dbDelta')) {
+        function dbDelta($sql)
+        {
+            if (!isset($GLOBALS['bjlg_test_dbdelta'])) {
+                $GLOBALS['bjlg_test_dbdelta'] = [];
+            }
+
+            $GLOBALS['bjlg_test_dbdelta'][] = (string) $sql;
+
+            return [];
+        }
+    }
+
     /**
      * Minimal in-memory replacement for the WordPress $wpdb object used by BJLG_History.
      */
@@ -44,6 +57,12 @@ namespace {
     {
         /** @var string */
         public $prefix = 'wp_';
+
+        /** @var string */
+        public $last_prepared_query = '';
+
+        /** @var string|null */
+        public $last_insert_table = null;
 
         /** @var array<int, array<string, mixed>> */
         private $rows;
@@ -79,10 +98,37 @@ namespace {
          */
         public function prepare($query, ...$args): array
         {
+            $this->last_prepared_query = (string) $query;
+
             return [
                 'query' => (string) $query,
                 'args'  => $args,
             ];
+        }
+
+        public function insert($table, $data, $formats)
+        {
+            $this->last_insert_table = (string) $table;
+
+            $this->rows[] = array_merge(['id' => count($this->rows) + 1], (array) $data);
+
+            return 1;
+        }
+
+        public function get_charset_collate(): string
+        {
+            return 'DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci';
+        }
+
+        public function get_blog_prefix($blog_id = null): string
+        {
+            $blog_id = $blog_id !== null ? (int) $blog_id : 0;
+
+            if ($blog_id <= 0) {
+                return 'wp_';
+            }
+
+            return 'wp_' . $blog_id . '_';
         }
 
         /**
@@ -585,6 +631,34 @@ namespace {
             $remaining = $wpdb->get_rows();
             self::assertCount(1, $remaining);
             self::assertSame(12, $remaining[0]['id']);
+        }
+
+        public function test_create_table_uses_blog_prefix(): void
+        {
+            $GLOBALS['bjlg_test_dbdelta'] = [];
+            $wpdb = new BJLG_Test_History_WPDB([]);
+            $GLOBALS['wpdb'] = $wpdb;
+
+            \BJLG\BJLG_History::create_table(7);
+
+            self::assertNotEmpty($GLOBALS['bjlg_test_dbdelta']);
+            $sql = (string) end($GLOBALS['bjlg_test_dbdelta']);
+            self::assertStringContainsString('wp_7_bjlg_history', $sql);
+
+            $GLOBALS['bjlg_test_dbdelta'] = [];
+            \BJLG\BJLG_History::create_table(0);
+            $sql_base = (string) end($GLOBALS['bjlg_test_dbdelta']);
+            self::assertStringContainsString('wp_bjlg_history', $sql_base);
+        }
+
+        public function test_get_history_honors_requested_blog_id(): void
+        {
+            $wpdb = new BJLG_Test_History_WPDB([]);
+            $GLOBALS['wpdb'] = $wpdb;
+
+            \BJLG\BJLG_History::get_history(5, [], 12);
+
+            self::assertStringContainsString('wp_12_bjlg_history', $wpdb->last_prepared_query);
         }
     }
 }
