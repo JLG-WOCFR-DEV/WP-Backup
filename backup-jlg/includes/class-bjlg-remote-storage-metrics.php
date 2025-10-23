@@ -297,8 +297,13 @@ class BJLG_Remote_Storage_Metrics {
         }
 
         $ratio = null;
-        if ($entry['quota_bytes'] !== null && $entry['quota_bytes'] > 0 && $entry['used_bytes'] !== null) {
-            $ratio = max(0.0, min(1.0, (int) $entry['used_bytes'] / max(1, (int) $entry['quota_bytes'])));
+        if ($quota_bytes !== null && $quota_bytes > 0) {
+            if ($entry['used_bytes'] !== null) {
+                $ratio = max(0.0, min(1.0, (int) $entry['used_bytes'] / max(1, $quota_bytes)));
+            } elseif ($free_bytes !== null) {
+                $free_ratio = max(0.0, min(1.0, $free_bytes / max(1, $quota_bytes)));
+                $ratio = 1.0 - $free_ratio;
+            }
         }
 
         $entry['utilization_ratio'] = $ratio;
