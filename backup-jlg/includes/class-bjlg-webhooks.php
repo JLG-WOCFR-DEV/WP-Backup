@@ -491,7 +491,7 @@ class BJLG_Webhooks {
      */
     public function get_webhook_stats() {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'bjlg_history';
+        $table_name = BJLG_History::get_table_name();
         
         $stats = [
             'total_triggered' => 0,

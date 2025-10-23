@@ -372,6 +372,9 @@ class BJLG_Notifications {
      */
     public function handle_restore_self_test_passed($report) {
         $report = is_array($report) ? $report : [];
+        $metrics = isset($report['metrics']) && is_array($report['metrics']) ? $report['metrics'] : [];
+        $attachments = isset($report['attachments']) && is_array($report['attachments']) ? $report['attachments'] : [];
+        $files = isset($report['report_files']) && is_array($report['report_files']) ? $report['report_files'] : [];
 
         $context = [
             'archive' => isset($report['archive']) ? (string) $report['archive'] : '',
@@ -379,6 +382,12 @@ class BJLG_Notifications {
             'components' => isset($report['components']) && is_array($report['components']) ? $report['components'] : [],
             'started_at' => isset($report['started_at']) ? (int) $report['started_at'] : null,
             'completed_at' => isset($report['completed_at']) ? (int) $report['completed_at'] : null,
+            'rto_seconds' => isset($metrics['rto_seconds']) ? (float) $metrics['rto_seconds'] : null,
+            'rpo_seconds' => isset($metrics['rpo_seconds']) ? (int) $metrics['rpo_seconds'] : null,
+            'rto_human' => isset($metrics['rto_human']) ? (string) $metrics['rto_human'] : '',
+            'rpo_human' => isset($metrics['rpo_human']) ? (string) $metrics['rpo_human'] : '',
+            'attachments' => $attachments,
+            'report_files' => $files,
         ];
 
         $this->notify('restore_self_test_passed', $context);
@@ -391,12 +400,21 @@ class BJLG_Notifications {
      */
     public function handle_restore_self_test_failed($report) {
         $report = is_array($report) ? $report : [];
+        $metrics = isset($report['metrics']) && is_array($report['metrics']) ? $report['metrics'] : [];
+        $attachments = isset($report['attachments']) && is_array($report['attachments']) ? $report['attachments'] : [];
+        $files = isset($report['report_files']) && is_array($report['report_files']) ? $report['report_files'] : [];
 
         $context = [
             'archive' => isset($report['archive']) ? (string) $report['archive'] : '',
             'error' => isset($report['exception']) ? trim((string) $report['exception']) : ($report['message'] ?? ''),
             'started_at' => isset($report['started_at']) ? (int) $report['started_at'] : null,
             'completed_at' => isset($report['completed_at']) ? (int) $report['completed_at'] : null,
+            'rto_seconds' => isset($metrics['rto_seconds']) ? (float) $metrics['rto_seconds'] : null,
+            'rpo_seconds' => isset($metrics['rpo_seconds']) ? (int) $metrics['rpo_seconds'] : null,
+            'rto_human' => isset($metrics['rto_human']) ? (string) $metrics['rto_human'] : '',
+            'rpo_human' => isset($metrics['rpo_human']) ? (string) $metrics['rpo_human'] : '',
+            'attachments' => $attachments,
+            'report_files' => $files,
         ];
 
         $this->notify('restore_self_test_failed', $context);
