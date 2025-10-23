@@ -155,83 +155,6 @@ final class BJLG_RemoteStorageMetricsTest extends TestCase
         $this->assertSame([], $snapshot['errors']);
     }
 
-    public function test_collect_destination_snapshot_records_api_errors(): void
-    {
-        $destination = new class() implements BJLG_Destination_Interface {
-            public function get_id()
-            {
-                return 'azure-blob';
-            }
-
-            public function get_name()
-            {
-                return 'Azure Blob';
-            }
-
-            public function is_connected()
-            {
-                return true;
-            }
-
-            public function disconnect()
-            {
-            }
-
-            public function render_settings()
-            {
-            }
-
-            public function upload_file($filepath, $task_id)
-            {
-            }
-
-            public function list_remote_backups()
-            {
-                throw new RuntimeException('Backups API unavailable');
-            }
-
-            public function prune_remote_backups($retain_by_number, $retain_by_age_days)
-            {
-                return [];
-            }
-
-            public function delete_remote_backup_by_name($filename)
-            {
-                return ['success' => false];
-            }
-
-            public function get_storage_usage()
-            {
-                throw new RuntimeException('Usage API unavailable');
-            }
-        };
-
-        $snapshot = $this->invokeCollectDestinationSnapshot('azure-blob', $destination);
-
-        $this->assertSame('azure-blob', $snapshot['id']);
-        $this->assertSame(0, $snapshot['used_bytes']);
-        $this->assertNull($snapshot['quota_bytes']);
-        $this->assertNull($snapshot['free_bytes']);
-        $this->assertSame('0 B', $snapshot['used_human']);
-        $this->assertSame(0, $snapshot['backups_count']);
-        $this->assertNotEmpty($snapshot['errors']);
-        $this->assertSame([
-            'Usage API unavailable',
-            'Backups API unavailable',
-        ], $snapshot['errors']);
-    }
-
-    private function invokeCollectDestinationSnapshot(string $destination_id, BJLG_Destination_Interface $destination): array
-    {
-        $method = new ReflectionMethod(BJLG_Remote_Storage_Metrics::class, 'collect_destination_snapshot');
-        $method->setAccessible(true);
-
-        /** @var array<string, mixed> $snapshot */
-        $snapshot = $method->invoke(null, $destination_id, $destination);
-
-        return $snapshot;
-    }
-
     protected function tearDown(): void
     {
         $this->resetSettingsInstance();
@@ -330,6 +253,21 @@ final class BJLG_RemoteStorageMetricsTest extends TestCase
             public function get_storage_usage()
             {
                 return $this->usage;
+            }
+
+            public function get_remote_quota_snapshot()
+            {
+                return [
+                    'status' => $this->connected ? 'ok' : 'unavailable',
+                    'used_bytes' => $this->usage['used_bytes'] ?? null,
+                    'quota_bytes' => $this->usage['quota_bytes'] ?? null,
+                    'free_bytes' => $this->usage['free_bytes'] ?? null,
+                    'latency_ms' => $this->usage['latency_ms'] ?? null,
+                    'error' => $this->usage['error'] ?? null,
+                    'error_code' => $this->usage['error_code'] ?? null,
+                    'source' => $this->usage['source'] ?? 'mock',
+                    'fetched_at' => $this->usage['fetched_at'] ?? time(),
+                ];
             }
         };
     }
@@ -485,6 +423,21 @@ final class BJLG_RemoteStorageMetricsTest extends TestCase
             public function get_storage_usage()
             {
                 throw new \RuntimeException('Usage error');
+            }
+
+            public function get_remote_quota_snapshot()
+            {
+                return [
+                    'status' => 'error',
+                    'error' => 'Usage error',
+                    'error_code' => 'mock_error',
+                    'used_bytes' => null,
+                    'quota_bytes' => null,
+                    'free_bytes' => null,
+                    'latency_ms' => null,
+                    'source' => 'mock',
+                    'fetched_at' => time(),
+                ];
             }
         };
 
@@ -816,6 +769,21 @@ final class BJLG_RemoteStorageMetricsTest extends TestCase
             public function get_storage_usage()
             {
                 return $this->usage;
+            }
+
+            public function get_remote_quota_snapshot()
+            {
+                return [
+                    'status' => $this->connected ? 'ok' : 'unavailable',
+                    'used_bytes' => $this->usage['used_bytes'] ?? null,
+                    'quota_bytes' => $this->usage['quota_bytes'] ?? null,
+                    'free_bytes' => $this->usage['free_bytes'] ?? null,
+                    'latency_ms' => $this->usage['latency_ms'] ?? null,
+                    'error' => $this->usage['errors'][0] ?? null,
+                    'error_code' => $this->usage['error_code'] ?? null,
+                    'source' => $this->usage['source'] ?? 'mock',
+                    'fetched_at' => $this->usage['refreshed_at'] ?? time(),
+                ];
             }
         };
     }

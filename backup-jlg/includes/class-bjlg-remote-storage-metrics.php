@@ -322,13 +322,20 @@ class BJLG_Remote_Storage_Metrics {
             $entry['free_human'] = size_format((int) $entry['free_bytes']);
         }
 
-        if (!method_exists($destination, 'list_remote_backups')) {
-            self::maybe_dispatch_error_alert($destination_id, $entry);
+        $backups = null;
+        if (method_exists($destination, 'list_remote_backups')) {
+            try {
+                $backups = $destination->list_remote_backups();
+            } catch (\Throwable $exception) {
+                $entry['errors'][] = $exception->getMessage();
+            }
 
-            return $entry;
-        }
-
-            if (is_array($backups)) {
+            if (function_exists('is_wp_error') && is_wp_error($backups)) {
+                $message = trim((string) $backups->get_error_message());
+                if ($message !== '') {
+                    $entry['errors'][] = $message;
+                }
+            } elseif (is_array($backups)) {
                 $entry['backups_count'] = count($backups);
 
                 if ($entry['used_bytes'] === null) {
@@ -340,6 +347,18 @@ class BJLG_Remote_Storage_Metrics {
                     $entry['used_human'] = size_format($total);
                 }
             }
+        }
+
+        $has_backups = method_exists($destination, 'list_remote_backups');
+        $backups_error = false;
+        if ($has_backups && function_exists('is_wp_error')) {
+            $backups_error = is_wp_error($backups);
+        }
+
+        if (!$has_backups || $backups_error) {
+            self::maybe_dispatch_error_alert($destination_id, $entry);
+
+            return $entry;
         }
 
         if ($entry['used_bytes'] !== null && is_array($previous_entry)) {

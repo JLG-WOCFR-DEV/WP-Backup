@@ -502,7 +502,9 @@ class BJLG_History {
             'webhook_triggered' => 'Webhook déclenché',
             'api_key_created' => 'Clé API créée',
             'encryption_key_generated' => 'Clé de chiffrement générée',
-            'support_package' => 'Pack de support créé'
+            'support_package' => 'Pack de support créé',
+            'event_trigger' => 'Sauvegarde événementielle',
+            'event_trigger_settings' => 'Réglages des déclencheurs événementiels'
         ];
     }
 }

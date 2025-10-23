@@ -12,6 +12,11 @@ class BJLG_Scheduler {
 
     const SCHEDULE_HOOK = 'bjlg_scheduled_backup_hook';
     const MIN_CUSTOM_CRON_INTERVAL = 5 * MINUTE_IN_SECONDS;
+    const EVENT_CRON_HOOK = 'bjlg_process_event_triggers';
+
+    private const EVENT_SETTINGS_OPTION = 'bjlg_event_trigger_settings';
+    private const EVENT_STATE_OPTION = 'bjlg_event_trigger_state';
+    private const MAX_EVENT_SAMPLES = 10;
 
     /**
      * Instance unique du planificateur.
@@ -82,12 +87,14 @@ class BJLG_Scheduler {
 
         // Hook Cron pour l'exécution automatique
         add_action(self::SCHEDULE_HOOK, [$this, 'run_scheduled_backup']);
-        
+        add_action(self::EVENT_CRON_HOOK, [$this, 'process_event_trigger_queue'], 10, 1);
+
         // Filtres pour les intervalles personnalisés
         add_filter('cron_schedules', [$this, 'add_custom_schedules']);
-        
+
         // Vérifier et appliquer la planification au chargement
         add_action('init', [$this, 'check_schedule']);
+        add_action('init', [$this, 'resume_event_trigger_queue'], 15);
     }
 
     private function __clone() {}
@@ -160,6 +167,16 @@ class BJLG_Scheduler {
         check_ajax_referer('bjlg_nonce', 'nonce');
 
         $posted = wp_unslash($_POST);
+
+        $raw_event_triggers = $posted['event_triggers'] ?? [];
+        if (is_string($raw_event_triggers)) {
+            $decoded_event_triggers = json_decode($raw_event_triggers, true);
+            if (is_array($decoded_event_triggers)) {
+                $raw_event_triggers = $decoded_event_triggers;
+            }
+        }
+
+        $event_settings = self::sanitize_event_trigger_settings($raw_event_triggers);
 
         $raw_schedules = $posted['schedules'] ?? [];
         if (is_string($raw_schedules)) {
@@ -244,6 +261,7 @@ class BJLG_Scheduler {
         $collection['schedules'] = $schedules;
 
         \bjlg_update_option('bjlg_schedule_settings', $collection);
+        $this->save_event_trigger_settings($event_settings);
 
         $primary = $this->get_primary_schedule($schedules);
         $aggregated_secondary = array_values(array_unique($all_secondary));
@@ -256,6 +274,11 @@ class BJLG_Scheduler {
         );
 
         BJLG_Debug::log('Réglages de planification enregistrés : ' . print_r($collection, true));
+        BJLG_History::log(
+            'event_trigger_settings',
+            'info',
+            __('Réglages des déclencheurs événementiels mis à jour.', 'backup-jlg')
+        );
 
         $this->sync_schedules($schedules);
 
@@ -265,6 +288,7 @@ class BJLG_Scheduler {
             'message' => 'Planifications enregistrées !',
             'schedules' => $schedules,
             'next_runs' => $next_runs,
+            'event_triggers' => $event_settings['triggers'],
         ]);
     }
     
@@ -2044,5 +2068,577 @@ class BJLG_Scheduler {
             'schedules' => $collection['schedules'],
             'next_runs' => $next_runs,
         ]);
+    }
+
+    public static function get_event_trigger_defaults(): array
+    {
+        return [
+            'version' => 1,
+            'triggers' => [
+                'filesystem' => [
+                    'enabled' => false,
+                    'cooldown' => 600,
+                    'batch_window' => 120,
+                    'max_batch' => 10,
+                ],
+                'database' => [
+                    'enabled' => false,
+                    'cooldown' => 300,
+                    'batch_window' => 60,
+                    'max_batch' => 10,
+                ],
+            ],
+        ];
+    }
+
+    public static function sanitize_event_trigger_settings($raw): array
+    {
+        if (is_string($raw)) {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                $raw = $decoded;
+            }
+        }
+
+        $defaults = self::get_event_trigger_defaults();
+        $sanitized = ['version' => 1, 'triggers' => []];
+        $raw_triggers = [];
+
+        if (is_array($raw) && isset($raw['triggers']) && is_array($raw['triggers'])) {
+            $raw_triggers = $raw['triggers'];
+        } elseif (is_array($raw)) {
+            $raw_triggers = $raw;
+        }
+
+        foreach ($defaults['triggers'] as $trigger_key => $default_settings) {
+            $entry = isset($raw_triggers[$trigger_key]) && is_array($raw_triggers[$trigger_key])
+                ? $raw_triggers[$trigger_key]
+                : [];
+
+            $enabled = !empty($entry['enabled']);
+            $cooldown = isset($entry['cooldown']) ? (int) $entry['cooldown'] : $default_settings['cooldown'];
+            $batch_window = isset($entry['batch_window']) ? (int) $entry['batch_window'] : $default_settings['batch_window'];
+            $max_batch = isset($entry['max_batch']) ? (int) $entry['max_batch'] : $default_settings['max_batch'];
+
+            $sanitized['triggers'][$trigger_key] = [
+                'enabled' => $enabled,
+                'cooldown' => max(0, $cooldown),
+                'batch_window' => max(0, $batch_window),
+                'max_batch' => max(1, $max_batch),
+            ];
+        }
+
+        return $sanitized;
+    }
+
+    public function get_event_trigger_settings(): array
+    {
+        $stored = \bjlg_get_option(self::EVENT_SETTINGS_OPTION, []);
+        $sanitized = self::sanitize_event_trigger_settings($stored);
+
+        if (!is_array($stored) || $stored !== $sanitized) {
+            $this->save_event_trigger_settings($sanitized);
+        }
+
+        return $sanitized;
+    }
+
+    private function save_event_trigger_settings(array $settings): void
+    {
+        \bjlg_update_option(self::EVENT_SETTINGS_OPTION, $settings, null, null, false);
+    }
+
+    public function handle_event_trigger(string $trigger_key, array $payload = []): void
+    {
+        $normalized_key = $this->normalize_trigger_key($trigger_key);
+        $defaults = self::get_event_trigger_defaults();
+
+        if (!isset($defaults['triggers'][$normalized_key])) {
+            return;
+        }
+
+        $settings = $this->get_event_trigger_settings();
+        $trigger_settings = $settings['triggers'][$normalized_key] ?? $defaults['triggers'][$normalized_key];
+
+        if (empty($trigger_settings['enabled'])) {
+            return;
+        }
+
+        $state = $this->get_event_state();
+        $now = current_time('timestamp');
+
+        $bucket = isset($state['pending'][$normalized_key]) && is_array($state['pending'][$normalized_key])
+            ? $state['pending'][$normalized_key]
+            : [
+                'first_seen' => $now,
+                'last_seen' => $now,
+                'count' => 0,
+                'payloads' => [],
+            ];
+
+        $bucket['first_seen'] = isset($bucket['first_seen']) ? (int) $bucket['first_seen'] : $now;
+        $bucket['last_seen'] = $now;
+        $bucket['count'] = (int) ($bucket['count'] ?? 0) + 1;
+
+        $normalized_payload = $this->normalize_event_payload($payload);
+        if (!empty($normalized_payload)) {
+            $bucket = $this->append_event_payload($bucket, $normalized_payload);
+        }
+
+        $state['pending'][$normalized_key] = $bucket;
+
+        if ($this->should_dispatch_event($normalized_key, $trigger_settings, $bucket, $now, $state)) {
+            $dispatched = $this->dispatch_event_trigger($normalized_key, $trigger_settings, $bucket, $now);
+            if ($dispatched) {
+                unset($state['pending'][$normalized_key]);
+                $state['last_dispatch'][$normalized_key] = $now;
+                unset($state['next_run'][$normalized_key]);
+            } else {
+                $next_attempt = $this->calculate_next_event_run($normalized_key, $trigger_settings, $bucket, $now, $state);
+                if ($next_attempt !== null) {
+                    $state['next_run'][$normalized_key] = $next_attempt;
+                    $this->schedule_event_trigger($normalized_key, $next_attempt);
+                }
+            }
+
+            $this->save_event_state($state);
+
+            return;
+        }
+
+        $next_run = $this->calculate_next_event_run($normalized_key, $trigger_settings, $bucket, $now, $state);
+        if ($next_run !== null) {
+            $state['next_run'][$normalized_key] = $next_run;
+            $this->schedule_event_trigger($normalized_key, $next_run);
+        }
+
+        $this->save_event_state($state);
+    }
+
+    public function process_event_trigger_queue($trigger_key = null): void
+    {
+        $state = $this->get_event_state();
+        $settings = $this->get_event_trigger_settings();
+        $now = current_time('timestamp');
+        $updated = false;
+
+        $targets = [];
+        if (is_string($trigger_key) && $trigger_key !== '') {
+            $targets[] = $this->normalize_trigger_key($trigger_key);
+        } else {
+            $targets = array_keys($state['pending']);
+        }
+
+        foreach ($targets as $key) {
+            if (!isset($state['pending'][$key])) {
+                continue;
+            }
+
+            $bucket = $state['pending'][$key];
+            $trigger_settings = $settings['triggers'][$key] ?? null;
+
+            if (!$trigger_settings || empty($trigger_settings['enabled'])) {
+                unset($state['pending'][$key], $state['next_run'][$key]);
+                $updated = true;
+                continue;
+            }
+
+            if ($this->should_dispatch_event($key, $trigger_settings, $bucket, $now, $state)) {
+                $dispatched = $this->dispatch_event_trigger($key, $trigger_settings, $bucket, $now);
+                if ($dispatched) {
+                    unset($state['pending'][$key]);
+                    $state['last_dispatch'][$key] = $now;
+                    unset($state['next_run'][$key]);
+                    $updated = true;
+                    continue;
+                }
+            }
+
+            $next_run = $this->calculate_next_event_run($key, $trigger_settings, $bucket, $now, $state);
+            if ($next_run !== null) {
+                $state['next_run'][$key] = $next_run;
+                $this->schedule_event_trigger($key, $next_run);
+            } else {
+                unset($state['next_run'][$key]);
+            }
+            $updated = true;
+        }
+
+        if ($updated) {
+            $this->save_event_state($state);
+        }
+    }
+
+    public function resume_event_trigger_queue(): void
+    {
+        $state = $this->get_event_state();
+        if (empty($state['pending'])) {
+            return;
+        }
+
+        $settings = $this->get_event_trigger_settings();
+        $now = current_time('timestamp');
+        $updated = false;
+
+        foreach ($state['pending'] as $key => $bucket) {
+            $trigger_settings = $settings['triggers'][$key] ?? null;
+
+            if (!$trigger_settings || empty($trigger_settings['enabled'])) {
+                unset($state['pending'][$key], $state['next_run'][$key]);
+                $updated = true;
+                continue;
+            }
+
+            $next_run = isset($state['next_run'][$key]) ? (int) $state['next_run'][$key] : null;
+            if ($next_run === null || $next_run < $now) {
+                $next_run = $this->calculate_next_event_run($key, $trigger_settings, $bucket, $now, $state);
+            }
+
+            if ($next_run !== null) {
+                $state['next_run'][$key] = $next_run;
+                $this->schedule_event_trigger($key, $next_run);
+                $updated = true;
+            }
+        }
+
+        if ($updated) {
+            $this->save_event_state($state);
+        }
+    }
+
+    private function should_dispatch_event(string $trigger_key, array $settings, array $bucket, int $now, array $state): bool
+    {
+        if (empty($settings['enabled'])) {
+            return false;
+        }
+
+        $last_dispatch = isset($state['last_dispatch'][$trigger_key]) ? (int) $state['last_dispatch'][$trigger_key] : 0;
+        $cooldown = max(0, (int) ($settings['cooldown'] ?? 0));
+
+        if ($cooldown > 0 && $last_dispatch > 0 && ($now - $last_dispatch) < $cooldown) {
+            return false;
+        }
+
+        $count = isset($bucket['count']) ? (int) $bucket['count'] : 0;
+        $max_batch = max(1, (int) ($settings['max_batch'] ?? 1));
+
+        if ($count >= $max_batch) {
+            return true;
+        }
+
+        $batch_window = max(0, (int) ($settings['batch_window'] ?? 0));
+        if ($batch_window === 0) {
+            return true;
+        }
+
+        $first_seen = isset($bucket['first_seen']) ? (int) $bucket['first_seen'] : $now;
+
+        return ($now - $first_seen) >= $batch_window;
+    }
+
+    private function dispatch_event_trigger(string $trigger_key, array $settings, array $bucket, int $now): bool
+    {
+        $task_id = 'bjlg_backup_' . md5(uniqid('event', true));
+        $default_schedule = BJLG_Settings::get_default_schedule_entry();
+        $components = $this->resolve_event_components($trigger_key, $default_schedule);
+
+        $samples = isset($bucket['payloads']) && is_array($bucket['payloads'])
+            ? array_values($bucket['payloads'])
+            : [];
+
+        $task_data = [
+            'progress' => 5,
+            'status' => 'pending',
+            'status_text' => __('Initialisation (événement)...', 'backup-jlg'),
+            'components' => $components,
+            'encrypt' => (bool) ($default_schedule['encrypt'] ?? false),
+            'incremental' => true,
+            'source' => 'event',
+            'start_time' => $now,
+            'include_patterns' => $default_schedule['include_patterns'],
+            'exclude_patterns' => $default_schedule['exclude_patterns'],
+            'post_checks' => $default_schedule['post_checks'],
+            'secondary_destinations' => $default_schedule['secondary_destinations'],
+            'secondary_destination_batches' => $default_schedule['secondary_destination_batches'],
+            'event_trigger' => [
+                'key' => $trigger_key,
+                'count' => (int) ($bucket['count'] ?? 1),
+                'first_seen' => isset($bucket['first_seen']) ? (int) $bucket['first_seen'] : $now,
+                'last_seen' => isset($bucket['last_seen']) ? (int) $bucket['last_seen'] : $now,
+                'samples' => $samples,
+            ],
+        ];
+
+        if (!set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl())) {
+            BJLG_Debug::log("ERREUR : Impossible d'initialiser la sauvegarde événementielle $task_id.");
+            BJLG_History::log(
+                'event_trigger',
+                'failure',
+                __('Échec de l\'initialisation de la sauvegarde événementielle.', 'backup-jlg')
+            );
+
+            return false;
+        }
+
+        $scheduled = wp_schedule_single_event($now, 'bjlg_run_backup_task', ['task_id' => $task_id]);
+        if (!$scheduled) {
+            delete_transient($task_id);
+            BJLG_Debug::log("ERREUR : Impossible de planifier la sauvegarde événementielle $task_id.");
+            BJLG_History::log(
+                'event_trigger',
+                'failure',
+                __('Échec de la planification de la sauvegarde événementielle.', 'backup-jlg')
+            );
+
+            return false;
+        }
+
+        BJLG_Debug::log(sprintf('Sauvegarde événementielle déclenchée (%s) - Task ID: %s', $trigger_key, $task_id));
+        BJLG_History::log(
+            'event_trigger',
+            'info',
+            sprintf(
+                __('Déclencheur "%1$s" : %2$d évènement(s) regroupé(s).', 'backup-jlg'),
+                $trigger_key,
+                (int) ($bucket['count'] ?? 1)
+            )
+        );
+
+        return true;
+    }
+
+    private function resolve_event_components(string $trigger_key, array $default_schedule): array
+    {
+        if ($trigger_key === 'filesystem') {
+            return ['uploads', 'plugins', 'themes'];
+        }
+
+        if ($trigger_key === 'database') {
+            return ['db'];
+        }
+
+        return isset($default_schedule['components']) && is_array($default_schedule['components'])
+            ? $default_schedule['components']
+            : ['db'];
+    }
+
+    private function calculate_next_event_run(string $trigger_key, array $settings, array $bucket, int $now, array $state): ?int
+    {
+        if (empty($settings['enabled'])) {
+            return null;
+        }
+
+        $last_dispatch = isset($state['last_dispatch'][$trigger_key]) ? (int) $state['last_dispatch'][$trigger_key] : 0;
+        $cooldown = max(0, (int) ($settings['cooldown'] ?? 0));
+        $batch_window = max(0, (int) ($settings['batch_window'] ?? 0));
+        $max_batch = max(1, (int) ($settings['max_batch'] ?? 1));
+        $count = isset($bucket['count']) ? (int) $bucket['count'] : 0;
+        $first_seen = isset($bucket['first_seen']) ? (int) $bucket['first_seen'] : $now;
+
+        $cooldown_until = ($cooldown > 0 && $last_dispatch > 0) ? $last_dispatch + $cooldown : $now;
+
+        if ($count >= $max_batch && $cooldown_until <= $now) {
+            return $now;
+        }
+
+        $window_deadline = $batch_window > 0 ? $first_seen + $batch_window : $now;
+
+        return max($now, $cooldown_until, $window_deadline);
+    }
+
+    private function schedule_event_trigger(string $trigger_key, int $timestamp): void
+    {
+        if (!function_exists('wp_schedule_single_event') || !function_exists('wp_next_scheduled')) {
+            return;
+        }
+
+        $timestamp = max(current_time('timestamp'), $timestamp);
+        $args = [$trigger_key];
+        $existing = wp_next_scheduled(self::EVENT_CRON_HOOK, $args);
+
+        if ($existing !== false && $existing <= $timestamp) {
+            return;
+        }
+
+        if ($existing !== false && function_exists('wp_unschedule_event')) {
+            wp_unschedule_event($existing, self::EVENT_CRON_HOOK, $args);
+        }
+
+        wp_schedule_single_event($timestamp, self::EVENT_CRON_HOOK, $args);
+    }
+
+    private function get_event_state(): array
+    {
+        $stored = \bjlg_get_option(self::EVENT_STATE_OPTION, []);
+        $defaults = self::get_event_trigger_defaults();
+        $valid_triggers = array_keys($defaults['triggers']);
+        $state = [
+            'version' => 1,
+            'pending' => [],
+            'last_dispatch' => [],
+            'next_run' => [],
+        ];
+
+        if (is_array($stored)) {
+            if (isset($stored['pending']) && is_array($stored['pending'])) {
+                foreach ($stored['pending'] as $key => $bucket) {
+                    if (!in_array($key, $valid_triggers, true) || !is_array($bucket)) {
+                        continue;
+                    }
+
+                    $state['pending'][$key] = [
+                        'first_seen' => isset($bucket['first_seen']) ? (int) $bucket['first_seen'] : current_time('timestamp'),
+                        'last_seen' => isset($bucket['last_seen']) ? (int) $bucket['last_seen'] : current_time('timestamp'),
+                        'count' => max(1, (int) ($bucket['count'] ?? 1)),
+                        'payloads' => $this->sanitize_payload_samples($bucket['payloads'] ?? []),
+                    ];
+                }
+            }
+
+            if (isset($stored['last_dispatch']) && is_array($stored['last_dispatch'])) {
+                foreach ($stored['last_dispatch'] as $key => $timestamp) {
+                    if (in_array($key, $valid_triggers, true)) {
+                        $state['last_dispatch'][$key] = (int) $timestamp;
+                    }
+                }
+            }
+
+            if (isset($stored['next_run']) && is_array($stored['next_run'])) {
+                foreach ($stored['next_run'] as $key => $timestamp) {
+                    if (in_array($key, $valid_triggers, true)) {
+                        $state['next_run'][$key] = (int) $timestamp;
+                    }
+                }
+            }
+        }
+
+        return $state;
+    }
+
+    private function save_event_state(array $state): void
+    {
+        \bjlg_update_option(self::EVENT_STATE_OPTION, $state, null, null, false);
+    }
+
+    private function sanitize_payload_samples($raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $samples = [];
+        foreach ($raw as $sample) {
+            if (!is_array($sample)) {
+                continue;
+            }
+
+            $normalized = [];
+            foreach ($sample as $key => $value) {
+                if (!is_scalar($value)) {
+                    continue;
+                }
+
+                $normalized_key = $this->sanitize_payload_key($key);
+                if ($normalized_key === '') {
+                    continue;
+                }
+
+                $normalized[$normalized_key] = $this->sanitize_payload_string((string) $value);
+            }
+
+            if (!empty($normalized)) {
+                $samples[] = $normalized;
+            }
+
+            if (count($samples) >= self::MAX_EVENT_SAMPLES) {
+                break;
+            }
+        }
+
+        return $samples;
+    }
+
+    private function normalize_event_payload(array $payload): array
+    {
+        $normalized = [];
+
+        foreach ($payload as $key => $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+
+            $normalized_key = $this->sanitize_payload_key($key);
+            if ($normalized_key === '') {
+                continue;
+            }
+
+            $normalized[$normalized_key] = $this->sanitize_payload_string((string) $value);
+        }
+
+        return $normalized;
+    }
+
+    private function append_event_payload(array $bucket, array $payload): array
+    {
+        if (empty($payload)) {
+            return $bucket;
+        }
+
+        $existing = isset($bucket['payloads']) && is_array($bucket['payloads']) ? $bucket['payloads'] : [];
+        $serialized_payload = function_exists('wp_json_encode') ? wp_json_encode($payload) : json_encode($payload);
+
+        foreach ($existing as $entry) {
+            $encoded = function_exists('wp_json_encode') ? wp_json_encode($entry) : json_encode($entry);
+            if ($encoded === $serialized_payload) {
+                return $bucket;
+            }
+        }
+
+        $existing[] = $payload;
+
+        if (count($existing) > self::MAX_EVENT_SAMPLES) {
+            $existing = array_slice($existing, -self::MAX_EVENT_SAMPLES);
+        }
+
+        $bucket['payloads'] = array_values($existing);
+
+        return $bucket;
+    }
+
+    private function sanitize_payload_key($key): string
+    {
+        $key = is_string($key) ? $key : '';
+
+        if (function_exists('sanitize_key')) {
+            return sanitize_key($key);
+        }
+
+        return preg_replace('/[^a-z0-9_\-]/', '', strtolower($key));
+    }
+
+    private function sanitize_payload_string(string $value): string
+    {
+        if (function_exists('sanitize_text_field')) {
+            $value = sanitize_text_field($value);
+        } else {
+            $value = trim(strip_tags($value));
+        }
+
+        if (function_exists('mb_substr')) {
+            $value = mb_substr($value, 0, 160);
+        } else {
+            $value = substr($value, 0, 160);
+        }
+
+        return $value;
+    }
+
+    private function normalize_trigger_key(string $trigger_key): string
+    {
+        if (function_exists('sanitize_key')) {
+            return sanitize_key($trigger_key);
+        }
+
+        return preg_replace('/[^a-z0-9_\-]/', '', strtolower($trigger_key));
     }
 }

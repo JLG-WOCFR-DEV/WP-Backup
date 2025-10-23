@@ -23,6 +23,11 @@ jQuery(function($) {
         };
     }
 
+    if (typeof window !== 'undefined') {
+        window.__BJLG_SCHEDULING_TEST__ = window.__BJLG_SCHEDULING_TEST__ || {};
+        window.__BJLG_SCHEDULING_TEST__.summarizeForecast = summarizeForecastForDisplay;
+    }
+
     const $scheduleForm = $('#bjlg-schedule-form');
     if (!$scheduleForm.length || typeof bjlg_ajax !== 'object') {
         return;
@@ -450,12 +455,15 @@ jQuery(function($) {
     const destinationLabels = {};
     const $timeline = $('#bjlg-schedule-timeline');
     const initialSchedules = parseJSONAttr($scheduleForm.attr('data-schedules')) || [];
+    const initialEventTriggers = parseJSONAttr($scheduleForm.attr('data-event-triggers')) || {};
+    const eventTriggerDefaults = parseJSONAttr($scheduleForm.attr('data-event-defaults')) || {};
     const state = {
         schedules: Array.isArray(initialSchedules) ? initialSchedules : [],
         nextRuns: initialNextRuns,
         timelineView: 'week',
         timezone: $timeline.length ? ($timeline.data('timezone') || '').toString() : '',
-        timezoneOffset: $timeline.length ? parseFloat($timeline.data('offset')) || 0 : 0
+        timezoneOffset: $timeline.length ? parseFloat($timeline.data('offset')) || 0 : 0,
+        eventTriggers: normalizeEventTriggerState(initialEventTriggers)
     };
     const timelineRanges = { week: 7, month: 30 };
     const statusLabels = {
@@ -474,6 +482,7 @@ jQuery(function($) {
     });
 
     const $feedback = $('#bjlg-schedule-feedback');
+    const $eventTriggerList = $scheduleForm.find('[data-role="event-trigger-list"]');
 
     function parseJSONAttr(raw) {
         if (typeof raw !== 'string' || raw.trim() === '') {
@@ -655,6 +664,109 @@ jQuery(function($) {
         } catch (error) {
             return null;
         }
+    }
+
+    function toNonNegativeInt(value, fallback) {
+        const number = parseInt(value, 10);
+        if (Number.isFinite(number) && number >= 0) {
+            return number;
+        }
+        const fallbackNumber = parseInt(fallback, 10);
+        if (Number.isFinite(fallbackNumber) && fallbackNumber >= 0) {
+            return fallbackNumber;
+        }
+        return 0;
+    }
+
+    function normalizeEventTriggerState(raw) {
+        const defaults = eventTriggerDefaults && typeof eventTriggerDefaults === 'object' ? eventTriggerDefaults : {};
+        const normalized = {};
+
+        Object.keys(defaults).forEach(function(key) {
+            const base = defaults[key] && typeof defaults[key] === 'object' ? defaults[key] : {};
+            const source = raw && typeof raw === 'object' && raw[key] ? raw[key] : {};
+
+            normalized[key] = {
+                enabled: !!source.enabled,
+                cooldown: toNonNegativeInt(source.cooldown, base.cooldown || 0),
+                batch_window: toNonNegativeInt(source.batch_window, base.batch_window || 0),
+                max_batch: Math.max(1, toNonNegativeInt(source.max_batch, base.max_batch || 1)),
+            };
+        });
+
+        return normalized;
+    }
+
+    function syncEventTriggerUI() {
+        if (!$eventTriggerList.length) {
+            return;
+        }
+
+        const defaults = eventTriggerDefaults && typeof eventTriggerDefaults === 'object' ? eventTriggerDefaults : {};
+
+        Object.keys(state.eventTriggers).forEach(function(key) {
+            const config = state.eventTriggers[key] || {};
+            const base = defaults[key] && typeof defaults[key] === 'object' ? defaults[key] : {};
+            const enabled = !!config.enabled;
+            const cooldown = toNonNegativeInt(config.cooldown, base.cooldown || 0);
+            const batchWindow = toNonNegativeInt(config.batch_window, base.batch_window || 0);
+            const maxBatch = Math.max(1, toNonNegativeInt(config.max_batch, base.max_batch || 1));
+            const $fieldset = $eventTriggerList.find('[data-event-trigger="' + key + '"]');
+
+            if (!$fieldset.length) {
+                return;
+            }
+
+            $fieldset.find('[data-field="event-enabled"]').prop('checked', enabled);
+            $fieldset.find('[data-field="event-cooldown"]').val(cooldown).prop('disabled', !enabled);
+            $fieldset.find('[data-field="event-batch-window"]').val(batchWindow).prop('disabled', !enabled);
+            $fieldset.find('[data-field="event-max-batch"]').val(maxBatch).prop('disabled', !enabled);
+        });
+    }
+
+    function setEventTriggerState(triggers, options) {
+        state.eventTriggers = normalizeEventTriggerState(triggers);
+        const triggersJson = safeJson(state.eventTriggers);
+        if (triggersJson) {
+            $scheduleForm.attr('data-event-triggers', triggersJson);
+        }
+
+        if (!options || options.sync !== false) {
+            syncEventTriggerUI();
+        }
+    }
+
+    function collectEventTriggersForRequest() {
+        if (!$eventTriggerList.length) {
+            return normalizeEventTriggerState(state.eventTriggers);
+        }
+
+        const defaults = eventTriggerDefaults && typeof eventTriggerDefaults === 'object' ? eventTriggerDefaults : {};
+        const collected = {};
+
+        $eventTriggerList.find('[data-event-trigger]').each(function() {
+            const $fieldset = $(this);
+            const key = ($fieldset.data('event-trigger') || '').toString();
+
+            if (!key) {
+                return;
+            }
+
+            const base = defaults[key] && typeof defaults[key] === 'object' ? defaults[key] : {};
+            const enabled = $fieldset.find('[data-field="event-enabled"]').is(':checked');
+            const cooldown = toNonNegativeInt($fieldset.find('[data-field="event-cooldown"]').val(), base.cooldown || 0);
+            const batchWindow = toNonNegativeInt($fieldset.find('[data-field="event-batch-window"]').val(), base.batch_window || 0);
+            const maxBatch = Math.max(1, toNonNegativeInt($fieldset.find('[data-field="event-max-batch"]').val(), base.max_batch || 1));
+
+            collected[key] = {
+                enabled: enabled,
+                cooldown: cooldown,
+                batch_window: batchWindow,
+                max_batch: maxBatch,
+            };
+        });
+
+        return normalizeEventTriggerState(collected);
     }
 
     function getScheduleStatusKey(schedule, info) {
@@ -1056,6 +1168,10 @@ jQuery(function($) {
 
         if (nextRuns && typeof nextRuns === 'object') {
             state.nextRuns = $.extend(true, {}, nextRuns);
+        }
+
+        if (options.eventTriggers && typeof options.eventTriggers === 'object') {
+            setEventTriggerState(options.eventTriggers);
         }
 
         const schedulesJson = safeJson(state.schedules);
@@ -4009,6 +4125,53 @@ jQuery(function($) {
         setupCronAssistantForItem($(this));
     });
 
+    setEventTriggerState(state.eventTriggers);
+
+    if ($eventTriggerList.length) {
+        const normalizedDefaults = normalizeEventTriggerState(eventTriggerDefaults);
+
+        $eventTriggerList.on('change', '[data-field="event-enabled"]', function() {
+            const key = ($(this).closest('[data-event-trigger]').data('event-trigger') || '').toString();
+            if (!key) {
+                return;
+            }
+
+            const triggers = $.extend(true, {}, state.eventTriggers);
+            if (!Object.prototype.hasOwnProperty.call(triggers, key)) {
+                const defaultsForKey = normalizedDefaults[key] || { enabled: false, cooldown: 0, batch_window: 0, max_batch: 1 };
+                triggers[key] = $.extend(true, {}, defaultsForKey);
+            }
+
+            triggers[key].enabled = $(this).is(':checked');
+            setEventTriggerState(triggers);
+        });
+
+        $eventTriggerList.on('input change', 'input[data-field="event-cooldown"], input[data-field="event-batch-window"], input[data-field="event-max-batch"]', function() {
+            const $input = $(this);
+            const key = ($input.closest('[data-event-trigger]').data('event-trigger') || '').toString();
+            if (!key) {
+                return;
+            }
+
+            const defaultsForKey = normalizedDefaults[key] || { enabled: false, cooldown: 0, batch_window: 0, max_batch: 1 };
+            const triggers = $.extend(true, {}, state.eventTriggers);
+            if (!Object.prototype.hasOwnProperty.call(triggers, key)) {
+                triggers[key] = $.extend(true, {}, defaultsForKey);
+            }
+
+            if ($input.is('[data-field="event-cooldown"]')) {
+                triggers[key].cooldown = toNonNegativeInt($input.val(), defaultsForKey.cooldown);
+            } else if ($input.is('[data-field="event-batch-window"]')) {
+                triggers[key].batch_window = toNonNegativeInt($input.val(), defaultsForKey.batch_window);
+            } else if ($input.is('[data-field="event-max-batch"]')) {
+                triggers[key].max_batch = Math.max(1, toNonNegativeInt($input.val(), defaultsForKey.max_batch));
+            }
+
+            setEventTriggerState(triggers, { sync: false });
+            syncEventTriggerUI();
+        });
+    }
+
     // Ajout d'une planification
     $scheduleForm.on('click', '.bjlg-add-schedule', function(event) {
         event.preventDefault();
@@ -4062,14 +4225,19 @@ jQuery(function($) {
             return;
         }
 
+        const eventTriggers = collectEventTriggersForRequest();
+
         const payload = {
             action: 'bjlg_save_schedule_settings',
             nonce: bjlg_ajax.nonce,
-            schedules: JSON.stringify(schedules)
+            schedules: JSON.stringify(schedules),
+            event_triggers: JSON.stringify(eventTriggers)
         };
 
         const $submitButton = $scheduleForm.find('button[type="submit"]').first();
         $submitButton.prop('disabled', true);
+
+        setEventTriggerState(eventTriggers, { sync: false });
 
         $.ajax({
             url: bjlg_ajax.ajax_url,
@@ -4086,7 +4254,7 @@ jQuery(function($) {
 
                 rebuildScheduleItems(schedulesData, nextRuns);
                 rebuildOverview(schedulesData, nextRuns);
-                updateState(schedulesData, nextRuns);
+                updateState(schedulesData, nextRuns, { eventTriggers: data.event_triggers });
                 return;
             }
 
@@ -4159,9 +4327,5 @@ jQuery(function($) {
         });
     }
 
-    if (typeof window !== 'undefined') {
-        window.__BJLG_SCHEDULING_TEST__ = window.__BJLG_SCHEDULING_TEST__ || {};
-        window.__BJLG_SCHEDULING_TEST__.summarizeForecast = summarizeForecastForDisplay;
-    }
 })();
 });
