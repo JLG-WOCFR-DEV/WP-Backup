@@ -68,6 +68,7 @@ class BJLG_Admin_Advanced {
             'alerts' => [],
             'onboarding' => $this->get_onboarding_resources(),
             'summary' => [],
+            'restore_self_test' => [],
             'generated_at' => $this->format_datetime($now),
         ];
 
@@ -196,6 +197,7 @@ class BJLG_Admin_Advanced {
 
         $metrics['summary'] = $this->build_summary($metrics);
         $metrics['alerts'] = $this->build_alerts($metrics);
+        $metrics['restore_self_test'] = $this->get_restore_self_test_snapshot($now);
         $metrics['reliability'] = $this->build_reliability($metrics);
 
         return $metrics;
@@ -1221,6 +1223,40 @@ class BJLG_Admin_Advanced {
         }
     }
 
+    private function get_restore_self_test_snapshot(int $now): array {
+        $snapshot = get_option('bjlg_restore_self_test_report', []);
+        if (!is_array($snapshot) || empty($snapshot)) {
+            return [];
+        }
+
+        $status = isset($snapshot['status']) ? sanitize_key((string) $snapshot['status']) : '';
+        $message = isset($snapshot['message']) ? (string) $snapshot['message'] : '';
+        $archive = isset($snapshot['archive']) ? (string) $snapshot['archive'] : '';
+        $generated_at = isset($snapshot['generated_at']) ? (int) $snapshot['generated_at'] : 0;
+        $metrics = isset($snapshot['metrics']) && is_array($snapshot['metrics']) ? $snapshot['metrics'] : [];
+
+        $result = [
+            'status' => $status,
+            'message' => $message,
+            'archive' => $archive,
+            'generated_at' => $generated_at,
+            'generated_at_formatted' => $generated_at > 0 ? $this->format_datetime($generated_at) : '',
+            'generated_at_relative' => $generated_at > 0
+                ? sprintf(__('il y a %s', 'backup-jlg'), human_time_diff($generated_at, $now))
+                : '',
+            'rto_seconds' => isset($metrics['rto_seconds']) ? (float) $metrics['rto_seconds'] : null,
+            'rpo_seconds' => isset($metrics['rpo_seconds']) ? (int) $metrics['rpo_seconds'] : null,
+            'rto_human' => isset($metrics['rto_human']) ? (string) $metrics['rto_human'] : '',
+            'rpo_human' => isset($metrics['rpo_human']) ? (string) $metrics['rpo_human'] : '',
+            'files' => isset($snapshot['files']) && is_array($snapshot['files'])
+                ? $this->sanitize_report_files($snapshot['files'])
+                : [],
+            'summary_markdown' => isset($snapshot['summary_markdown']) ? (string) $snapshot['summary_markdown'] : '',
+        ];
+
+        return $result;
+    }
+
     private function build_reliability(array $metrics): array {
         $score = 100.0;
         $pillars = [];
@@ -1276,6 +1312,77 @@ class BJLG_Admin_Advanced {
             'message' => $scheduler_message,
             'intent' => $scheduler_intent,
             'icon' => 'dashicons-clock',
+        ];
+
+        $self_test = isset($metrics['restore_self_test']) && is_array($metrics['restore_self_test'])
+            ? $metrics['restore_self_test']
+            : [];
+        $self_test_status = isset($self_test['status']) ? sanitize_key((string) $self_test['status']) : '';
+        $self_test_intent = 'warning';
+        $self_test_message = __('Aucun test de restauration enregistré.', 'backup-jlg');
+        $history_url = add_query_arg(['page' => 'backup-jlg', 'section' => 'history'], admin_url('admin.php')) . '#bjlg-history';
+
+        if (empty($self_test)) {
+            $score -= 10;
+            $insights[] = __('Planifier un test de restauration automatique', 'backup-jlg');
+            $this->add_recommendation($recommendations, __('Lancer un test de restauration', 'backup-jlg'), $history_url, 'primary');
+        } else {
+            $message_parts = [];
+            $rto_human = isset($self_test['rto_human']) ? (string) $self_test['rto_human'] : '';
+            $rpo_human = isset($self_test['rpo_human']) ? (string) $self_test['rpo_human'] : '';
+            $generated_relative = isset($self_test['generated_at_relative']) ? (string) $self_test['generated_at_relative'] : '';
+
+            if ($rto_human !== '') {
+                $message_parts[] = sprintf(__('RTO %s', 'backup-jlg'), $rto_human);
+            }
+
+            if ($rpo_human !== '') {
+                $message_parts[] = sprintf(__('RPO %s', 'backup-jlg'), $rpo_human);
+            }
+
+            if ($generated_relative !== '') {
+                $message_parts[] = sprintf(__('mis à jour %s', 'backup-jlg'), $generated_relative);
+            }
+
+            $self_test_message = !empty($message_parts)
+                ? implode(' • ', $message_parts)
+                : __('Tests de restauration en cours de suivi.', 'backup-jlg');
+
+            if ($self_test_status === 'failure') {
+                $self_test_intent = 'danger';
+                $score -= 18;
+                $self_test_message = __('Dernier test de restauration en échec.', 'backup-jlg');
+                $insights[] = __('Corriger le test de restauration automatique', 'backup-jlg');
+                $this->add_recommendation($recommendations, __('Consulter le rapport de test', 'backup-jlg'), $history_url, 'primary');
+            } elseif ($self_test_status === 'success') {
+                $self_test_intent = 'success';
+                $rpo_seconds = isset($self_test['rpo_seconds']) ? (int) $self_test['rpo_seconds'] : null;
+                if ($rpo_seconds !== null && $rpo_seconds > 2 * DAY_IN_SECONDS) {
+                    $self_test_intent = 'warning';
+                    $score -= 6;
+                    $self_test_message .= ' — ' . __('Archive testée trop ancienne.', 'backup-jlg');
+                    $insights[] = __('Réduire l’âge des archives testées', 'backup-jlg');
+                    $this->add_recommendation(
+                        $recommendations,
+                        __('Planifier une sauvegarde complète', 'backup-jlg'),
+                        add_query_arg(['page' => 'backup-jlg', 'section' => 'backup'], admin_url('admin.php')),
+                        'primary'
+                    );
+                }
+            } else {
+                $self_test_intent = 'warning';
+                $score -= 6;
+                $insights[] = __('Exécuter un test de restauration', 'backup-jlg');
+                $this->add_recommendation($recommendations, __('Lancer un test de restauration', 'backup-jlg'), $history_url, 'primary');
+            }
+        }
+
+        $pillars[] = [
+            'key' => 'restore_self_test',
+            'label' => __('Tests de restauration', 'backup-jlg'),
+            'message' => $self_test_message,
+            'intent' => $self_test_intent,
+            'icon' => 'dashicons-backup',
         ];
 
         $encryption = isset($metrics['encryption']) && is_array($metrics['encryption']) ? $metrics['encryption'] : [];
@@ -1477,6 +1584,31 @@ class BJLG_Admin_Advanced {
         return null;
     }
 
+    private function sanitize_report_files(array $files): array {
+        $sanitized = [];
+        foreach (['json', 'html', 'markdown'] as $type) {
+            if (isset($files[$type]) && is_array($files[$type])) {
+                $entry = $files[$type];
+                $sanitized[$type] = [
+                    'filename' => isset($entry['filename']) ? (string) $entry['filename'] : '',
+                    'path' => isset($entry['path']) ? (string) $entry['path'] : '',
+                    'url' => isset($entry['url']) ? (string) $entry['url'] : '',
+                    'mime_type' => isset($entry['mime_type']) ? (string) $entry['mime_type'] : '',
+                ];
+            }
+        }
+
+        if (isset($files['base_path'])) {
+            $sanitized['base_path'] = (string) $files['base_path'];
+        }
+
+        if (isset($files['base_url'])) {
+            $sanitized['base_url'] = (string) $files['base_url'];
+        }
+
+        return $sanitized;
+    }
+
     /**
      * Génère la liste d'alertes à partir des métriques agrégées.
      */
@@ -1514,6 +1646,48 @@ class BJLG_Admin_Advanced {
                     ),
                 ]
             );
+        }
+
+        $restore = isset($metrics['restore_self_test']) && is_array($metrics['restore_self_test'])
+            ? $metrics['restore_self_test']
+            : [];
+        $history_url = add_query_arg(['page' => 'backup-jlg', 'section' => 'history'], admin_url('admin.php')) . '#bjlg-history';
+        if (empty($restore)) {
+            $alerts[] = $this->make_alert(
+                'warning',
+                __('Test de restauration automatique non exécuté', 'backup-jlg'),
+                __('Lancez un test de restauration pour valider vos procédures de reprise.', 'backup-jlg'),
+                [
+                    'label' => __('Ouvrir l’historique', 'backup-jlg'),
+                    'url' => $history_url,
+                ]
+            );
+        } else {
+            $status = isset($restore['status']) ? sanitize_key((string) $restore['status']) : '';
+            if ($status === 'failure') {
+                $alerts[] = $this->make_alert(
+                    'error',
+                    __('Dernier test de restauration en échec', 'backup-jlg'),
+                    __('Consultez le rapport détaillé et corrigez l’incident avant la prochaine sauvegarde.', 'backup-jlg'),
+                    [
+                        'label' => __('Voir le rapport', 'backup-jlg'),
+                        'url' => $history_url,
+                    ]
+                );
+            } elseif (!empty($restore['rpo_seconds']) && (int) $restore['rpo_seconds'] > 2 * DAY_IN_SECONDS) {
+                $rpo_label = isset($restore['rpo_human']) && $restore['rpo_human'] !== ''
+                    ? (string) $restore['rpo_human']
+                    : sprintf(__('il y a %s', 'backup-jlg'), human_time_diff(time() - (int) $restore['rpo_seconds'], time()));
+                $alerts[] = $this->make_alert(
+                    'warning',
+                    __('RPO dégradé sur le test de restauration', 'backup-jlg'),
+                    sprintf(__('L’archive testée datait de %s. Planifiez une nouvelle sauvegarde complète.', 'backup-jlg'), $rpo_label),
+                    [
+                        'label' => __('Planifier une sauvegarde', 'backup-jlg'),
+                        'url' => add_query_arg(['page' => 'backup-jlg', 'section' => 'backup'], admin_url('admin.php')),
+                    ]
+                );
+            }
         }
 
         if (!empty($metrics['scheduler']['overdue'])) {

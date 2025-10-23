@@ -35,6 +35,7 @@ class BJLG_Admin {
         add_action('wp_dashboard_setup', [$this, 'register_dashboard_widget']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_dashboard_widget_assets']);
         add_action('wp_ajax_bjlg_update_onboarding_progress', [$this, 'ajax_update_onboarding_progress']);
+        add_action('admin_post_bjlg_download_self_test_report', [$this, 'handle_download_self_test_report']);
     }
 
     /**
@@ -2798,12 +2799,21 @@ class BJLG_Admin {
      * Section : Historique
      */
     private function render_history_section() {
-        $history = $this->run_with_scope(static function () {
-            return class_exists(BJLG_History::class) ? BJLG_History::get_history(50) : [];
-        });
+        $history = class_exists(BJLG_History::class) ? BJLG_History::get_history(50) : [];
+        $report_links = $this->get_self_test_report_links();
         ?>
         <div class="bjlg-section">
             <h2>Historique des 50 dernières actions</h2>
+            <?php if (!empty($report_links)): ?>
+                <div class="bjlg-history-report-actions">
+                    <?php foreach ($report_links as $link): ?>
+                        <a class="button" href="<?php echo esc_url($link['url']); ?>">
+                            <span class="dashicons dashicons-media-default" aria-hidden="true"></span>
+                            <?php echo esc_html($link['label']); ?>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
             <?php if (!empty($history)): ?>
                 <table class="wp-list-table widefat striped bjlg-responsive-table bjlg-history-table">
                     <caption class="bjlg-table-caption">
@@ -2841,6 +2851,117 @@ class BJLG_Admin {
             <p class="description" style="margin-top: 20px;">L'historique est conservé pendant 30 jours. Les entrées plus anciennes sont automatiquement supprimées.</p>
         </div>
         <?php
+    }
+
+    private function get_self_test_report_links(): array {
+        $snapshot = get_option('bjlg_restore_self_test_report', []);
+        if (!is_array($snapshot) || empty($snapshot['files'])) {
+            return [];
+        }
+
+        $files = is_array($snapshot['files']) ? $snapshot['files'] : [];
+        $links = [];
+        $nonce_action = 'bjlg_download_self_test_report';
+        $base_url = admin_url('admin-post.php');
+
+        $targets = [
+            'html' => __('Télécharger le rapport HTML', 'backup-jlg'),
+            'json' => __('Télécharger le rapport JSON', 'backup-jlg'),
+            'markdown' => __('Télécharger le résumé Markdown', 'backup-jlg'),
+        ];
+
+        foreach ($targets as $type => $label) {
+            if (empty($files[$type]['path'])) {
+                continue;
+            }
+
+            $url = add_query_arg(
+                [
+                    'action' => 'bjlg_download_self_test_report',
+                    'type' => $type,
+                ],
+                $base_url
+            );
+
+            $url = function_exists('wp_nonce_url')
+                ? wp_nonce_url($url, $nonce_action)
+                : add_query_arg('_wpnonce', wp_create_nonce($nonce_action), $url);
+
+            $links[] = [
+                'type' => $type,
+                'label' => $label,
+                'url' => $url,
+            ];
+        }
+
+        return $links;
+    }
+
+    public function handle_download_self_test_report() {
+        if (!bjlg_can_manage_backups()) {
+            wp_die(__('Permission refusée.', 'backup-jlg'), '', ['response' => 403]);
+        }
+
+        $nonce = isset($_GET['_wpnonce']) ? $_GET['_wpnonce'] : '';
+        if (function_exists('wp_verify_nonce') && !wp_verify_nonce($nonce, 'bjlg_download_self_test_report')) {
+            wp_die(__('Jeton de sécurité invalide.', 'backup-jlg'), '', ['response' => 403]);
+        }
+
+        $type = isset($_GET['type']) ? sanitize_key((string) wp_unslash($_GET['type'])) : 'html';
+        if (!in_array($type, ['html', 'json', 'markdown'], true)) {
+            $type = 'html';
+        }
+
+        $snapshot = get_option('bjlg_restore_self_test_report', []);
+        if (!is_array($snapshot) || empty($snapshot['files'])) {
+            wp_die(__('Aucun rapport disponible.', 'backup-jlg'), '', ['response' => 404]);
+        }
+
+        $files = is_array($snapshot['files']) ? $snapshot['files'] : [];
+        $entry = isset($files[$type]) && is_array($files[$type]) ? $files[$type] : null;
+
+        if (!$entry || empty($entry['path'])) {
+            wp_die(__('Le fichier demandé est introuvable.', 'backup-jlg'), '', ['response' => 404]);
+        }
+
+        $path = (string) $entry['path'];
+        $real_path = realpath($path);
+        if ($real_path === false || !is_readable($real_path)) {
+            wp_die(__('Impossible de lire le rapport demandé.', 'backup-jlg'), '', ['response' => 404]);
+        }
+
+        $base_path = isset($files['base_path']) ? (string) $files['base_path'] : dirname($real_path);
+        $normalized_base = realpath($base_path);
+        if ($normalized_base !== false) {
+            $normalized_base = rtrim(str_replace('\\', '/', $normalized_base), '/') . '/';
+            $normalized_target = str_replace('\\', '/', $real_path);
+            if (strpos($normalized_target, $normalized_base) !== 0) {
+                wp_die(__('Accès au rapport refusé.', 'backup-jlg'), '', ['response' => 403]);
+            }
+        }
+
+        $mime_type = isset($entry['mime_type']) && $entry['mime_type'] !== '' ? (string) $entry['mime_type'] : 'application/octet-stream';
+        if (strpos($mime_type, 'text/') === 0) {
+            $mime_type .= '; charset=utf-8';
+        }
+
+        $filename = isset($entry['filename']) && $entry['filename'] !== ''
+            ? sanitize_file_name($entry['filename'])
+            : basename($real_path);
+
+        if (function_exists('nocache_headers')) {
+            nocache_headers();
+        }
+        header('Content-Type: ' . $mime_type);
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Content-Length: ' . filesize($real_path));
+
+        $sent = readfile($real_path);
+        if ($sent === false) {
+            wp_die(__('Impossible de transmettre le rapport.', 'backup-jlg'), '', ['response' => 500]);
+        }
+
+        exit;
     }
 
     /**
