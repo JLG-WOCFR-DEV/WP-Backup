@@ -417,6 +417,53 @@ class BJLG_Notifications {
             'path' => isset($data['path']) ? (string) $data['path'] : '',
         ];
 
+        $destination_id = isset($data['destination_id']) ? sanitize_key((string) $data['destination_id']) : '';
+        if ($destination_id !== '') {
+            $destination_name = isset($data['name']) && is_string($data['name']) && $data['name'] !== ''
+                ? (string) $data['name']
+                : $destination_id;
+
+            $ratio = null;
+            if (isset($data['ratio']) && is_numeric($data['ratio'])) {
+                $ratio_value = (float) $data['ratio'];
+                if (is_finite($ratio_value)) {
+                    $ratio = max(0.0, min(1.0, $ratio_value));
+                }
+            }
+
+            $threshold_percent = null;
+            if (isset($data['threshold_percent']) && is_numeric($data['threshold_percent'])) {
+                $threshold_value = (float) $data['threshold_percent'];
+                if (is_finite($threshold_value)) {
+                    $threshold_percent = max(0.0, $threshold_value);
+                }
+            }
+
+            $used_bytes = $this->sanitize_bytes($data['used_bytes'] ?? null);
+            $quota_bytes = $this->sanitize_bytes($data['quota_bytes'] ?? null);
+            $free_bytes = $this->sanitize_bytes($data['free_bytes'] ?? null);
+
+            if ($free_bytes === null && $quota_bytes !== null && $used_bytes !== null) {
+                $free_bytes = max(0, $quota_bytes - $used_bytes);
+            }
+
+            $context['destination_id'] = $destination_id;
+            $context['destination_name'] = $destination_name;
+            $context['ratio'] = $ratio;
+            $context['threshold_percent'] = $threshold_percent;
+            $context['used_bytes'] = $used_bytes;
+            $context['quota_bytes'] = $quota_bytes;
+            $context['free_bytes'] = $free_bytes;
+
+            if ($context['path'] === '') {
+                $context['path'] = sprintf('%s (%s)', $destination_name, $destination_id);
+            }
+
+            if ($context['free_space'] === null && $free_bytes !== null) {
+                $context['free_space'] = $free_bytes;
+            }
+        }
+
         $this->notify('storage_warning', $context);
     }
 
@@ -1105,45 +1152,50 @@ class BJLG_Notifications {
                 $lines[] = __("Entrées d'historique supprimées : ", 'backup-jlg') . (int) $context['history_entries_deleted'];
                 break;
             case 'storage_warning':
-                $type = isset($context['type']) ? (string) $context['type'] : '';
-                if ($type === 'remote') {
-                    $lines[] = __('Une destination distante approche de sa capacité maximale.', 'backup-jlg');
-                } else {
-                    $lines[] = __("L'espace disque local devient critique.", 'backup-jlg');
-                }
+                if (!empty($context['destination_id'])) {
+                    $name = isset($context['destination_name']) && $context['destination_name'] !== ''
+                        ? (string) $context['destination_name']
+                        : (string) $context['destination_id'];
+                    $lines[] = sprintf(__('La destination distante %s approche de la saturation.', 'backup-jlg'), $name);
 
-                if ($type === 'remote') {
-                    if (!empty($context['destination_label'])) {
-                        $destination_line = __('Destination : ', 'backup-jlg') . $context['destination_label'];
-                        if (!empty($context['destination_link'])) {
-                            $destination_line .= ' — ' . $context['destination_link'];
-                        }
-                        $lines[] = $destination_line;
+                    if (isset($context['ratio']) && $context['ratio'] !== null) {
+                        $ratio_percent = (float) $context['ratio'] * 100;
+                        $lines[] = sprintf(
+                            __('Utilisation actuelle : %s%%', 'backup-jlg'),
+                            number_format_i18n($ratio_percent, $ratio_percent >= 1 ? 0 : 2)
+                        );
+                    }
+
+                    if (isset($context['threshold_percent']) && $context['threshold_percent'] !== null) {
+                        $threshold_percent = (float) $context['threshold_percent'];
+                        $lines[] = sprintf(
+                            __('Seuil configuré : %s%%', 'backup-jlg'),
+                            number_format_i18n($threshold_percent, $threshold_percent >= 1 ? 0 : 2)
+                        );
+                    }
+
+                    if (isset($context['used_bytes']) && $context['used_bytes'] !== null) {
+                        $lines[] = __('Espace utilisé : ', 'backup-jlg') . size_format((int) $context['used_bytes']);
+                    }
+
+                    if (isset($context['quota_bytes']) && $context['quota_bytes'] !== null) {
+                        $lines[] = __('Quota total : ', 'backup-jlg') . size_format((int) $context['quota_bytes']);
+                    }
+
+                    if (isset($context['free_bytes']) && $context['free_bytes'] !== null) {
+                        $lines[] = __('Espace libre estimé : ', 'backup-jlg') . size_format((int) $context['free_bytes']);
                     }
                 } else {
+                    $lines[] = __("L'espace disque disponible devient critique.", 'backup-jlg');
                     if (!empty($context['path'])) {
                         $lines[] = __('Chemin surveillé : ', 'backup-jlg') . $context['path'];
                     }
-                }
-
-                if (!empty($context['ratio_label'])) {
-                    $lines[] = __('Utilisation : ', 'backup-jlg') . $context['ratio_label'];
-                }
-
-                if (!empty($context['threshold_label'])) {
-                    $lines[] = __('Seuil d\'alerte : ', 'backup-jlg') . $context['threshold_label'];
-                } elseif (!empty($context['threshold_human'])) {
-                    $lines[] = __('Seuil configuré : ', 'backup-jlg') . $context['threshold_human'];
-                }
-
-                if (!empty($context['quota_human'])) {
-                    $lines[] = __('Quota total : ', 'backup-jlg') . $context['quota_human'];
-                }
-
-                if (!empty($context['free_human'])) {
-                    $lines[] = __('Espace restant : ', 'backup-jlg') . $context['free_human'];
-                } elseif (isset($context['free_space'])) {
-                    $lines[] = __('Espace restant : ', 'backup-jlg') . size_format((int) $context['free_space']);
+                    if (isset($context['free_space'])) {
+                        $lines[] = __('Espace libre : ', 'backup-jlg') . size_format((int) $context['free_space']);
+                    }
+                    if (isset($context['threshold'])) {
+                        $lines[] = __('Seuil configuré : ', 'backup-jlg') . size_format((int) $context['threshold']);
+                    }
                 }
                 break;
             case 'remote_purge_failed':
@@ -2385,6 +2437,17 @@ class BJLG_Notifications {
         }
 
         return array_values(array_unique($sanitized));
+    }
+
+    private function sanitize_bytes($value) {
+        if (is_numeric($value)) {
+            $numeric = (float) $value;
+            if (is_finite($numeric) && $numeric >= 0) {
+                return (int) round($numeric);
+            }
+        }
+
+        return null;
     }
 
     /**
