@@ -102,6 +102,9 @@ class BJLG_Admin {
         if (class_exists(BJLG_SFTP::class)) {
             $this->destinations['sftp'] = new BJLG_SFTP();
         }
+        if (class_exists(BJLG_Managed_Replication::class)) {
+            $this->destinations['managed_replication'] = new BJLG_Managed_Replication();
+        }
     }
 
     private function get_scope_choices(): array {
@@ -4925,6 +4928,7 @@ class BJLG_Admin {
                 'pcloud' => 'pCloud',
                 'sftp' => 'Serveur SFTP',
                 'wasabi' => 'Wasabi',
+                'managed_replication' => __('Stockage managé multi-régions', 'backup-jlg'),
             ];
         }
 

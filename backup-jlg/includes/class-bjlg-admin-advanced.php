@@ -192,6 +192,8 @@ class BJLG_Admin_Advanced {
         $metrics['storage']['remote_warning_threshold'] = $remote_snapshot['threshold_percent'];
         $metrics['storage']['remote_warning_threshold_ratio'] = $remote_snapshot['threshold_ratio'];
 
+        $metrics['resilience'] = $this->collect_resilience_metrics();
+
         $metrics['queues'] = $this->build_queue_metrics($now);
 
         $metrics['encryption'] = $this->get_encryption_metrics();
@@ -1048,6 +1050,7 @@ class BJLG_Admin_Advanced {
         $history_stats = $metrics['history']['stats'] ?? [];
         $scheduler_stats = $metrics['scheduler']['stats'] ?? [];
         $storage = $metrics['storage'] ?? [];
+        $resilience = isset($metrics['resilience']) && is_array($metrics['resilience']) ? $metrics['resilience'] : [];
 
         $success_rate = isset($scheduler_stats['success_rate']) ? (float) $scheduler_stats['success_rate'] : 0.0;
         $formatted_rate = sprintf('%s%%', number_format_i18n($success_rate, $success_rate >= 1 ? 0 : 2));
@@ -1063,6 +1066,9 @@ class BJLG_Admin_Advanced {
             'scheduler_success_rate' => $formatted_rate,
             'storage_total_size_human' => $storage['total_size_human'] ?? size_format(0),
             'storage_backup_count' => intval($storage['backup_count'] ?? 0),
+            'resilience_status' => $resilience['status'] ?? 'inactive',
+            'resilience_summary' => $this->format_resilience_summary($resilience),
+            'resilience_updated_relative' => $resilience['updated_relative'] ?? '',
         ];
 
         if (!empty($metrics['history']['last_backup'])) {
@@ -1076,6 +1082,87 @@ class BJLG_Admin_Advanced {
         }
 
         return $summary;
+    }
+
+    private function collect_resilience_metrics(): array {
+        $now = current_time('timestamp');
+        $settings = \bjlg_get_option('bjlg_managed_replication_settings', []);
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+
+        $enabled = !empty($settings['enabled']);
+        $expected = isset($settings['expected_copies']) ? (int) $settings['expected_copies'] : 0;
+
+        if (!class_exists(__NAMESPACE__ . '\\BJLG_Managed_Replication')) {
+            return [
+                'enabled' => $enabled,
+                'status' => $enabled ? 'inactive' : 'disabled',
+                'available_copies' => 0,
+                'expected_copies' => $expected,
+                'latency_ms' => null,
+                'replicas' => [],
+                'errors' => [],
+                'updated_at' => 0,
+                'updated_relative' => '',
+            ];
+        }
+
+        $status = BJLG_Managed_Replication::get_status_snapshot();
+        $available = isset($status['available_copies']) ? max(0, (int) $status['available_copies']) : 0;
+        $expected_copies = isset($status['expected_copies']) ? max(0, (int) $status['expected_copies']) : $expected;
+        $latency = isset($status['latency_ms']) && $status['latency_ms'] !== null ? (int) $status['latency_ms'] : null;
+        $updated_at = isset($status['updated_at']) ? (int) $status['updated_at'] : 0;
+        $updated_relative = $updated_at > 0 ? sprintf(__('il y a %s', 'backup-jlg'), human_time_diff($updated_at, $now)) : '';
+        $status_code = isset($status['status']) ? (string) $status['status'] : ($enabled ? 'inactive' : 'disabled');
+        $errors = isset($status['errors']) && is_array($status['errors']) ? array_map('strval', $status['errors']) : [];
+        $replicas = isset($status['replicas']) && is_array($status['replicas']) ? $status['replicas'] : [];
+
+        return [
+            'enabled' => $enabled,
+            'status' => $status_code,
+            'available_copies' => $available,
+            'expected_copies' => $expected_copies,
+            'latency_ms' => $latency,
+            'replicas' => $replicas,
+            'errors' => $errors,
+            'updated_at' => $updated_at,
+            'updated_relative' => $updated_relative,
+        ];
+    }
+
+    private function format_resilience_summary(array $resilience): string {
+        $enabled = !empty($resilience['enabled']);
+        $available = isset($resilience['available_copies']) ? max(0, (int) $resilience['available_copies']) : 0;
+        $expected = isset($resilience['expected_copies']) ? max(0, (int) $resilience['expected_copies']) : ($enabled ? 1 : 0);
+        $status = isset($resilience['status']) ? (string) $resilience['status'] : ($enabled ? 'inactive' : 'disabled');
+        $latency = isset($resilience['latency_ms']) && $resilience['latency_ms'] !== null
+            ? sprintf(__('Latence moyenne : %sms', 'backup-jlg'), number_format_i18n(max(0, (int) $resilience['latency_ms'])))
+            : __('Latence non mesurée', 'backup-jlg');
+
+        if (!$enabled && $expected === 0) {
+            return __('Destination managée inactive.', 'backup-jlg');
+        }
+
+        $base = sprintf(
+            __('Copies disponibles : %1$s / %2$s', 'backup-jlg'),
+            number_format_i18n($available),
+            number_format_i18n(max(1, $expected))
+        );
+
+        if ($status === 'healthy') {
+            return $base . ' • ' . $latency;
+        }
+
+        if ($status === 'degraded') {
+            return $base . ' • ' . $latency . ' — ' . __('Réplication partielle détectée.', 'backup-jlg');
+        }
+
+        if ($status === 'failed') {
+            return $base . ' • ' . __('Aucune copie valide', 'backup-jlg');
+        }
+
+        return $base . ' • ' . $latency;
     }
 
     private function collect_remote_storage_metrics(): array {
@@ -1527,6 +1614,13 @@ class BJLG_Admin_Advanced {
             } elseif (!empty($storage['total_size_human'])) {
                 $storage_message .= ' • ' . sprintf(__('Stockage local : %s', 'backup-jlg'), $storage['total_size_human']);
             }
+
+            if (!empty($resilience) && !empty($resilience['enabled'])) {
+                $replication_summary = $this->format_resilience_summary($resilience);
+                if ($replication_summary !== '') {
+                    $storage_message .= ' • ' . $replication_summary;
+                }
+            }
         }
 
         $pillars[] = [
@@ -1745,6 +1839,33 @@ class BJLG_Admin_Advanced {
                         ['page' => 'backup-jlg', 'section' => 'backup'],
                         admin_url('admin.php')
                     ) . '#bjlg-schedule',
+                ]
+            );
+        }
+
+        $resilience = isset($metrics['resilience']) && is_array($metrics['resilience']) ? $metrics['resilience'] : [];
+        $resilience_status = isset($resilience['status']) ? (string) $resilience['status'] : 'inactive';
+        if (in_array($resilience_status, ['degraded', 'failed'], true)) {
+            $available = isset($resilience['available_copies']) ? max(0, (int) $resilience['available_copies']) : 0;
+            $expected = isset($resilience['expected_copies']) ? max(1, (int) $resilience['expected_copies']) : 1;
+            $errors = isset($resilience['errors']) && is_array($resilience['errors']) ? $resilience['errors'] : [];
+            $description = sprintf(
+                __('Copies disponibles : %1$s / %2$s. Vérifiez les régions configurées et l’état des destinations secondaires.', 'backup-jlg'),
+                number_format_i18n($available),
+                number_format_i18n($expected)
+            );
+
+            if (!empty($errors)) {
+                $description .= ' ' . implode(' | ', array_map('sanitize_text_field', $errors));
+            }
+
+            $alerts[] = $this->make_alert(
+                $resilience_status === 'failed' ? 'error' : 'warning',
+                $resilience_status === 'failed' ? __('Réplication managée indisponible', 'backup-jlg') : __('Réplication managée dégradée', 'backup-jlg'),
+                $description,
+                [
+                    'label' => __('Ouvrir les destinations', 'backup-jlg'),
+                    'url' => add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php')) . '#bjlg-destinations',
                 ]
             );
         }
