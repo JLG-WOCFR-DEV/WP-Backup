@@ -515,13 +515,18 @@ class BJLG_Notifications {
             'channels' => $channels,
             'created_at' => time(),
             'severity' => $severity,
+            'resolution' => $this->build_resolution_payload('test_notification', $meta['context']),
         ];
 
-        BJLG_Notification_Queue::enqueue($entry);
+        $queued = BJLG_Notification_Queue::enqueue($entry);
+
+        if (is_array($queued) && class_exists(__NAMESPACE__ . '\\BJLG_Notification_Receipts')) {
+            BJLG_Notification_Receipts::record_creation($queued);
+        }
 
         return [
             'success' => true,
-            'entry' => $entry,
+            'entry' => $queued ?? $entry,
             'channels' => array_keys($channels),
         ];
     }
@@ -748,6 +753,7 @@ class BJLG_Notifications {
             'channels' => $channels,
             'created_at' => time(),
             'severity' => $final_severity,
+            'resolution' => $this->build_resolution_payload($event, $payload['context'] ?? []),
         ];
 
         if (!empty($escalation['meta']['channels'])) {
@@ -756,9 +762,33 @@ class BJLG_Notifications {
 
         $entry = $this->apply_quiet_hours_constraints($event, $entry);
 
-        BJLG_Notification_Queue::enqueue($entry);
+        $queued = BJLG_Notification_Queue::enqueue($entry);
+
+        if (is_array($queued) && class_exists(__NAMESPACE__ . '\\BJLG_Notification_Receipts')) {
+            BJLG_Notification_Receipts::record_creation($queued);
+        }
 
         BJLG_Debug::log(sprintf('Notification "%s" mise en file d\'attente.', $event));
+    }
+
+    private function build_resolution_payload($event, $context) {
+        $timestamp = time();
+        $title = $this->get_event_title($event, $context);
+
+        $summary = $event === 'test_notification'
+            ? __('Notification de test enregistrée.', 'backup-jlg')
+            : sprintf(__('Notification générée pour "%s".', 'backup-jlg'), $title);
+
+        return [
+            'acknowledged_at' => null,
+            'resolved_at' => null,
+            'steps' => [[
+                'timestamp' => $timestamp,
+                'actor' => __('Système', 'backup-jlg'),
+                'summary' => $summary,
+                'type' => 'created',
+            ]],
+        ];
     }
 
     /**

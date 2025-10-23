@@ -12,16 +12,20 @@ class BJLG_Notification_Queue {
 
     private const OPTION = 'bjlg_notification_queue';
     private const HOOK = 'bjlg_process_notification_queue';
+    private const REMINDER_HOOK = 'bjlg_notification_queue_reminder';
     private const LOCK_TRANSIENT = 'bjlg_notification_queue_lock';
     private const LOCK_DURATION = 45; // seconds
     private const MAX_ATTEMPTS = 5;
     private const MAX_ENTRIES_PER_RUN = 5;
     private const VALID_SEVERITIES = ['info', 'warning', 'critical'];
+    private const DEFAULT_REMINDER_INTERVAL = 900; // 15 minutes
+    private const MAX_REMINDER_INTERVAL = 86400; // 24 hours
 
     public function __construct() {
         add_filter('cron_schedules', [$this, 'register_cron_schedule']);
         add_action('init', [$this, 'ensure_schedule']);
         add_action(self::HOOK, [$this, 'process_queue']);
+        add_action(self::REMINDER_HOOK, [$this, 'handle_reminder']);
     }
 
     /**
@@ -63,7 +67,7 @@ class BJLG_Notification_Queue {
     public static function enqueue(array $entry) {
         $normalized = self::normalize_entry($entry);
         if (empty($normalized)) {
-            return;
+            return null;
         }
 
         $queue = self::get_queue();
@@ -75,6 +79,10 @@ class BJLG_Notification_Queue {
         }
 
         do_action('bjlg_notification_queued', $normalized);
+
+        self::schedule_entry_reminder($normalized, isset($normalized['reminders']) ? (int) ($normalized['reminders']['attempts'] ?? 0) : 0);
+
+        return $normalized;
     }
 
     /**
@@ -194,6 +202,14 @@ class BJLG_Notification_Queue {
                 $snapshot['next_attempt_at'] = self::min_time_value($snapshot['next_attempt_at'], $entry_next_attempt);
             }
 
+            $resolution = isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : [];
+            $resolution_status = 'pending';
+            if (!empty($resolution['resolved_at'])) {
+                $resolution_status = 'resolved';
+            } elseif (!empty($resolution['acknowledged_at'])) {
+                $resolution_status = 'acknowledged';
+            }
+
             $snapshot['entries'][] = [
                 'id' => isset($entry['id']) ? sanitize_text_field((string) $entry['id']) : '',
                 'event' => isset($entry['event']) ? sanitize_text_field((string) $entry['event']) : '',
@@ -209,6 +225,9 @@ class BJLG_Notification_Queue {
                 'has_escalation_pending' => $escalation_pending,
                 'escalation_next_attempt' => $escalation_next,
                 'severity' => isset($entry['severity']) ? sanitize_key((string) $entry['severity']) : 'info',
+                'resolution' => $resolution,
+                'resolution_status' => $resolution_status,
+                'reminders' => isset($entry['reminders']) && is_array($entry['reminders']) ? $entry['reminders'] : [],
             ];
         }
 
@@ -785,6 +804,11 @@ class BJLG_Notification_Queue {
             'severity' => self::normalize_severity_value($entry['severity'] ?? ''),
         ];
 
+        $normalized['resolution'] = self::normalize_resolution(
+            isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : []
+        );
+        $normalized['reminders'] = self::normalize_reminders($entry, $normalized['severity'], $now);
+
         if (isset($entry['quiet_until'])) {
             $normalized['quiet_until'] = (int) $entry['quiet_until'];
         }
@@ -874,6 +898,266 @@ class BJLG_Notification_Queue {
         }
 
         return $normalized;
+    }
+
+    private static function normalize_resolution(array $resolution, array $fallback = []) {
+        $source = !empty($resolution) ? $resolution : $fallback;
+
+        $normalized = [
+            'acknowledged_at' => null,
+            'resolved_at' => null,
+            'steps' => [],
+        ];
+
+        if (isset($source['acknowledged_at']) && (int) $source['acknowledged_at'] > 0) {
+            $normalized['acknowledged_at'] = (int) $source['acknowledged_at'];
+        }
+
+        if (isset($source['resolved_at']) && (int) $source['resolved_at'] > 0) {
+            $normalized['resolved_at'] = (int) $source['resolved_at'];
+        }
+
+        if (!empty($source['steps']) && is_array($source['steps'])) {
+            foreach ($source['steps'] as $step) {
+                if (!is_array($step)) {
+                    continue;
+                }
+                $normalized['steps'][] = self::sanitize_resolution_step($step);
+            }
+        }
+
+        return $normalized;
+    }
+
+    private static function sanitize_resolution_step(array $step) {
+        $timestamp = isset($step['timestamp']) ? (int) $step['timestamp'] : time();
+        $actor = isset($step['actor']) ? (string) $step['actor'] : '';
+        $summary = isset($step['summary']) ? (string) $step['summary'] : '';
+        $type = isset($step['type']) ? (string) $step['type'] : 'update';
+
+        if ($actor === '') {
+            $actor = __('Système', 'backup-jlg');
+        }
+
+        if ($summary === '') {
+            $summary = __('Mise à jour enregistrée.', 'backup-jlg');
+        }
+
+        return [
+            'timestamp' => $timestamp,
+            'actor' => $actor,
+            'summary' => $summary,
+            'type' => $type !== '' ? $type : 'update',
+        ];
+    }
+
+    private static function normalize_reminders(array $entry, $severity, $now) {
+        $reminders = isset($entry['reminders']) && is_array($entry['reminders']) ? $entry['reminders'] : [];
+        $base = isset($reminders['base_interval']) && (int) $reminders['base_interval'] > 0
+            ? (int) $reminders['base_interval']
+            : self::get_base_reminder_interval((string) $severity, $entry);
+
+        $attempts = isset($reminders['attempts']) ? max(0, (int) $reminders['attempts']) : 0;
+        $next = isset($reminders['next_at']) ? (int) $reminders['next_at'] : 0;
+        if ($next <= $now) {
+            $next = $now + max($base, 60);
+        }
+
+        return [
+            'attempts' => $attempts,
+            'base_interval' => $base,
+            'next_at' => $next,
+            'last_triggered_at' => isset($reminders['last_triggered_at']) ? (int) $reminders['last_triggered_at'] : 0,
+            'active' => isset($reminders['active']) ? (bool) $reminders['active'] : true,
+        ];
+    }
+
+    private static function get_base_reminder_interval($severity, array $entry) {
+        $minute = 60;
+        $severity = is_string($severity) ? strtolower($severity) : 'info';
+
+        switch ($severity) {
+            case 'critical':
+                $base = 5 * $minute;
+                break;
+            case 'warning':
+                $base = 10 * $minute;
+                break;
+            default:
+                $base = self::DEFAULT_REMINDER_INTERVAL;
+                break;
+        }
+
+        $filtered = apply_filters('bjlg_notification_reminder_base_interval', $base, $severity, $entry);
+
+        if (!is_int($filtered)) {
+            $filtered = (int) $filtered;
+        }
+
+        if ($filtered <= 0) {
+            $filtered = $base;
+        }
+
+        return max(60, $filtered);
+    }
+
+    private static function compute_reminder_delay($attempt, array $entry) {
+        $attempt = max(0, (int) $attempt);
+        $reminders = isset($entry['reminders']) && is_array($entry['reminders']) ? $entry['reminders'] : [];
+        $base = isset($reminders['base_interval']) && (int) $reminders['base_interval'] > 0
+            ? (int) $reminders['base_interval']
+            : self::get_base_reminder_interval($entry['severity'] ?? 'info', $entry);
+
+        $multiplier = max(1, pow(2, $attempt));
+        $delay = (int) round($base * $multiplier);
+        $delay = min(self::MAX_REMINDER_INTERVAL, max($base, $delay));
+
+        $delay = apply_filters('bjlg_notification_reminder_backoff', $delay, $attempt, $entry);
+        if (!is_int($delay)) {
+            $delay = (int) $delay;
+        }
+
+        if ($delay <= 0) {
+            $delay = $base;
+        }
+
+        return max(60, $delay);
+    }
+
+    private static function schedule_entry_reminder(array $entry, $attempt) {
+        if (!class_exists(__NAMESPACE__ . '\\BJLG_Notification_Receipts')) {
+            return;
+        }
+
+        $entry_id = isset($entry['id']) ? (string) $entry['id'] : '';
+        if ($entry_id === '') {
+            return;
+        }
+
+        $reminders = isset($entry['reminders']) && is_array($entry['reminders']) ? $entry['reminders'] : [];
+        if (isset($reminders['active']) && $reminders['active'] === false) {
+            return;
+        }
+
+        if (BJLG_Notification_Receipts::is_acknowledged($entry_id) || BJLG_Notification_Receipts::is_resolved($entry_id)) {
+            self::deactivate_reminders_for_entry($entry_id);
+            return;
+        }
+
+        $next_at = isset($reminders['next_at']) ? (int) $reminders['next_at'] : 0;
+        if ($next_at <= time()) {
+            $next_at = time() + self::compute_reminder_delay($attempt, $entry);
+        }
+
+        wp_schedule_single_event($next_at, self::REMINDER_HOOK, [$entry_id]);
+    }
+
+    private static function deactivate_reminders_for_entry($entry_id) {
+        $queue = self::get_queue();
+        $updated = false;
+
+        foreach ($queue as &$entry) {
+            if (!is_array($entry) || (string) ($entry['id'] ?? '') !== $entry_id) {
+                continue;
+            }
+
+            if (!isset($entry['reminders']) || !is_array($entry['reminders'])) {
+                $entry['reminders'] = [];
+            }
+
+            if (empty($entry['reminders']['active'])) {
+                break;
+            }
+
+            $entry['reminders']['active'] = false;
+            $entry['reminders']['next_at'] = 0;
+            $updated = true;
+            break;
+        }
+        unset($entry);
+
+        if ($updated) {
+            self::save_queue($queue);
+        }
+    }
+
+    public static function update_resolution($entry_id, array $resolution) {
+        $entry_id = is_string($entry_id) ? trim($entry_id) : '';
+        if ($entry_id === '') {
+            return;
+        }
+
+        $queue = self::get_queue();
+        $updated = false;
+
+        foreach ($queue as &$entry) {
+            if (!is_array($entry) || (string) ($entry['id'] ?? '') !== $entry_id) {
+                continue;
+            }
+
+            $entry['resolution'] = self::normalize_resolution($resolution, isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : []);
+            $entry['updated_at'] = time();
+            if (!empty($entry['resolution']['acknowledged_at']) || !empty($entry['resolution']['resolved_at'])) {
+                if (!isset($entry['reminders']) || !is_array($entry['reminders'])) {
+                    $entry['reminders'] = [];
+                }
+                $entry['reminders']['active'] = false;
+                $entry['reminders']['next_at'] = 0;
+            }
+            $updated = true;
+            break;
+        }
+        unset($entry);
+
+        if ($updated) {
+            self::save_queue($queue);
+        }
+    }
+
+    public function handle_reminder($entry_id) {
+        $entry_id = is_string($entry_id) ? trim($entry_id) : '';
+        if ($entry_id === '' || !class_exists(__NAMESPACE__ . '\\BJLG_Notification_Receipts')) {
+            return;
+        }
+
+        if (BJLG_Notification_Receipts::is_acknowledged($entry_id) || BJLG_Notification_Receipts::is_resolved($entry_id)) {
+            self::deactivate_reminders_for_entry($entry_id);
+            return;
+        }
+
+        $queue = self::get_queue();
+        $updated = false;
+
+        foreach ($queue as &$entry) {
+            if (!is_array($entry) || (string) ($entry['id'] ?? '') !== $entry_id) {
+                continue;
+            }
+
+            $reminders = isset($entry['reminders']) && is_array($entry['reminders']) ? $entry['reminders'] : [];
+            if (isset($reminders['active']) && $reminders['active'] === false) {
+                break;
+            }
+
+            $attempt = isset($reminders['attempts']) ? (int) $reminders['attempts'] : 0;
+            $attempt++;
+            $now = time();
+            $reminders['attempts'] = $attempt;
+            $reminders['last_triggered_at'] = $now;
+            $reminders['next_at'] = $now + self::compute_reminder_delay($attempt, $entry);
+            $entry['reminders'] = $reminders;
+            $entry['updated_at'] = $now;
+            $updated = true;
+
+            $this->log_channel_retry('reminder', $entry, __('Accusé de réception toujours en attente.', 'backup-jlg'), $attempt);
+
+            self::schedule_entry_reminder($entry, $attempt);
+            break;
+        }
+        unset($entry);
+
+        if ($updated) {
+            self::save_queue($queue);
+        }
     }
 
     private static function normalize_severity_value($value) {
