@@ -186,7 +186,7 @@ final class BJLG_IncrementalManifestTest extends TestCase
             }
         };
 
-        $this->manifestPath = BJLG_BACKUP_DIR . '.incremental-manifest.json';
+        $this->manifestPath = bjlg_get_backup_directory() . '.incremental-manifest.json';
         $this->originalManifestContent = null;
         if (file_exists($this->manifestPath)) {
             $this->originalManifestContent = (string) file_get_contents($this->manifestPath);
@@ -266,7 +266,7 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $this->assertArrayHasKey('components', $full_backup);
         $this->assertArrayHasKey('path', $full_backup);
 
-        $backup_path = BJLG_BACKUP_DIR . $full_backup['file'];
+        $backup_path = bjlg_get_backup_directory() . $full_backup['file'];
         $this->createdPaths[] = $backup_path;
 
         $this->assertFileExists($backup_path);
@@ -317,7 +317,7 @@ final class BJLG_IncrementalManifestTest extends TestCase
 
         $this->assertGreaterThan(0, $full_backup['size']);
         $this->assertSame($components, $full_backup['components']);
-        $this->assertSame(realpath(BJLG_BACKUP_DIR . $full_backup['file']), realpath((string) $full_backup['path']));
+        $this->assertSame(realpath(bjlg_get_backup_directory() . $full_backup['file']), realpath((string) $full_backup['path']));
     }
 
     public function test_rotation_moves_old_incremental_into_synthetic_full(): void
@@ -611,7 +611,7 @@ final class BJLG_IncrementalManifestTest extends TestCase
      */
     private function updateManifestManually(array $components): void
     {
-        $filepath = BJLG_BACKUP_DIR . 'manual-backup-' . uniqid('', true) . '.zip';
+        $filepath = bjlg_get_backup_directory() . 'manual-backup-' . uniqid('', true) . '.zip';
         file_put_contents($filepath, 'manual backup');
         $this->createdPaths[] = $filepath;
 
@@ -669,7 +669,7 @@ final class BJLG_IncrementalManifestTest extends TestCase
 
     private function createBackupFile(string $prefix): string
     {
-        $filepath = BJLG_BACKUP_DIR . $prefix . '-' . uniqid('', true) . '.zip';
+        $filepath = bjlg_get_backup_directory() . $prefix . '-' . uniqid('', true) . '.zip';
         file_put_contents($filepath, $prefix . ' backup');
         $this->createdPaths[] = $filepath;
 

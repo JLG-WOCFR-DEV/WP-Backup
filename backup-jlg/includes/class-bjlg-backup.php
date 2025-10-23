@@ -928,7 +928,7 @@ class BJLG_Backup {
             }
 
             $backup_filename = $this->generate_backup_filename($backup_type, $components);
-            $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
+            $backup_filepath = bjlg_get_backup_directory() . $backup_filename;
             $use_parallel_flow = !empty($task_data['use_parallel'])
                 && !$task_data['incremental']
                 && empty($include_patterns)
@@ -1243,13 +1243,13 @@ class BJLG_Backup {
      * @throws Exception Quand le dossier ne peut pas être créé ou n'est pas accessible en écriture.
      */
     private function ensure_backup_directory_is_ready() {
-        if (!is_dir(BJLG_BACKUP_DIR)) {
-            if (!wp_mkdir_p(BJLG_BACKUP_DIR)) {
+        if (!is_dir(bjlg_get_backup_directory())) {
+            if (!wp_mkdir_p(bjlg_get_backup_directory())) {
                 throw new Exception("Le dossier de sauvegarde est introuvable et n'a pas pu être créé.");
             }
         }
 
-        $is_writable = function_exists('wp_is_writable') ? wp_is_writable(BJLG_BACKUP_DIR) : is_writable(BJLG_BACKUP_DIR);
+        $is_writable = function_exists('wp_is_writable') ? wp_is_writable(bjlg_get_backup_directory()) : is_writable(bjlg_get_backup_directory());
 
         if (!$is_writable) {
             throw new Exception("Le dossier de sauvegarde n'est pas accessible en écriture.");
@@ -1275,7 +1275,7 @@ class BJLG_Backup {
                 'free_bytes' => null,
                 'checked_at' => time(),
                 'status' => 'skipped',
-                'target_path' => BJLG_BACKUP_DIR,
+                'target_path' => bjlg_get_backup_directory(),
             ];
         }
 
@@ -1304,7 +1304,7 @@ class BJLG_Backup {
 
         $required_bytes = $estimated_bytes + $margin_bytes;
 
-        $disk_probe_path = BJLG_BACKUP_DIR;
+        $disk_probe_path = bjlg_get_backup_directory();
         if (!is_dir($disk_probe_path)) {
             $probe_parent = dirname($disk_probe_path);
             if (is_dir($probe_parent)) {
@@ -1617,7 +1617,7 @@ class BJLG_Backup {
         do {
             $unique_suffix = str_replace('.', '', uniqid('', true));
             $filename = "{$base}-{$unique_suffix}.zip";
-            $filepath = BJLG_BACKUP_DIR . $filename;
+            $filepath = bjlg_get_backup_directory() . $filename;
         } while (file_exists($filepath) || file_exists($filepath . '.enc'));
 
         return $filename;

@@ -288,6 +288,51 @@ class BJLG_REST_API {
             ])
         ]);
 
+        register_rest_route(self::API_NAMESPACE, '/network/history', [
+            'methods' => 'GET',
+            'callback' => [$this, 'get_network_history'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => [
+                'limit' => [
+                    'default' => 50,
+                    'validate_callback' => function($param) {
+                        $value = filter_var(
+                            $param,
+                            FILTER_VALIDATE_INT,
+                            [
+                                'options' => [
+                                    'min_range' => 1,
+                                    'max_range' => 500,
+                                ],
+                            ]
+                        );
+
+                        if ($value === false) {
+                            return new WP_Error(
+                                'rest_invalid_param',
+                                __('Le paramètre limit doit être un entier compris entre 1 et 500.', 'backup-jlg'),
+                                ['status' => 400]
+                            );
+                        }
+
+                        return true;
+                    }
+                ],
+                'action' => [
+                    'type' => 'string',
+                ],
+                'status' => [
+                    'enum' => ['success', 'failure', 'info'],
+                ],
+            ],
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/network/sites', [
+            'methods' => 'GET',
+            'callback' => [$this, 'get_network_sites'],
+            'permission_callback' => [$this, 'check_permissions'],
+        ]);
+
         // Routes : Configuration
         register_rest_route(self::API_NAMESPACE, '/settings', [
             [
@@ -575,12 +620,9 @@ class BJLG_REST_API {
         $context = $this->get_requested_context($request);
 
         if ($context === 'network') {
-            if (!function_exists('is_multisite') || !is_multisite()) {
-                return new WP_Error(
-                    'bjlg_network_context_unavailable',
-                    __('Le contexte réseau n’est pas disponible sur cette installation.', 'backup-jlg'),
-                    ['status' => 400]
-                );
+            $availability = $this->ensure_network_context_available();
+            if (is_wp_error($availability)) {
+                return $availability;
             }
 
             if ($this->get_requested_site_id($request)) {
@@ -633,6 +675,27 @@ class BJLG_REST_API {
         return \bjlg_with_site($site_id, static function () use ($callback) {
             return $callback();
         });
+    }
+
+    private function ensure_network_context_available()
+    {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return new WP_Error(
+                'bjlg_network_context_unavailable',
+                __('Le contexte réseau n’est pas disponible sur cette installation.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        if (!BJLG_Site_Context::is_network_mode_enabled()) {
+            return new WP_Error(
+                'bjlg_network_mode_disabled',
+                __('Le mode réseau est désactivé pour Backup JLG.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        return true;
     }
     
     /**
@@ -1445,7 +1508,7 @@ class BJLG_REST_API {
             $per_page = max(1, min(100, (int) $per_page));
 
             $backups = [];
-            $files = glob(BJLG_BACKUP_DIR . '*.zip*');
+            $files = glob(bjlg_get_backup_directory() . '*.zip*');
 
             if (empty($files)) {
                 return rest_ensure_response([
@@ -2407,9 +2470,9 @@ class BJLG_REST_API {
      */
     public function get_status($request) {
         return $this->with_request_site($request, function () use ($request) {
-            $backup_files = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
+            $backup_files = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
 
-            $backup_directory = BJLG_BACKUP_DIR;
+            $backup_directory = bjlg_get_backup_directory();
             $disk_free_space = null;
             $disk_space_error = false;
 
@@ -2538,6 +2601,116 @@ class BJLG_REST_API {
                 'total' => count($history)
             ]);
         });
+    }
+
+    public function get_network_history($request)
+    {
+        $availability = $this->ensure_network_context_available();
+        if (is_wp_error($availability)) {
+            return $availability;
+        }
+
+        $limit = $request->get_param('limit');
+        $action = $request->get_param('action');
+        $status = $request->get_param('status');
+
+        $filters = [];
+        if ($action) {
+            $filters['action_type'] = $action;
+        }
+        if ($status) {
+            $filters['status'] = $status;
+        }
+
+        $limit = max(1, min(500, (int) $limit));
+
+        $history = BJLG_History::get_history($limit, $filters, 0);
+
+        return rest_ensure_response([
+            'entries' => $history,
+            'total' => count($history),
+        ]);
+    }
+
+    public function get_network_sites($request)
+    {
+        $availability = $this->ensure_network_context_available();
+        if (is_wp_error($availability)) {
+            return $availability;
+        }
+
+        if (!function_exists('get_sites')) {
+            return new WP_Error(
+                'bjlg_network_context_unavailable',
+                __('La liste des sites n’est pas disponible sur cette installation.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        $site_objects = get_sites([
+            'number' => 0,
+        ]);
+
+        $sites = [];
+
+        foreach ((array) $site_objects as $site) {
+            $blog_id = 0;
+            if (is_object($site)) {
+                $blog_id = isset($site->blog_id) ? (int) $site->blog_id : (isset($site->id) ? (int) $site->id : 0);
+            } elseif (is_array($site)) {
+                $blog_id = isset($site['blog_id']) ? (int) $site['blog_id'] : (isset($site['id']) ? (int) $site['id'] : 0);
+            } else {
+                $blog_id = (int) $site;
+            }
+
+            if ($blog_id <= 0) {
+                continue;
+            }
+
+            $site_data = bjlg_with_site($blog_id, function () use ($blog_id) {
+                $history_stats = BJLG_History::get_stats('month', $blog_id);
+                $metrics = \bjlg_get_option('bjlg_remote_storage_metrics', []);
+
+                $quota_used = 0;
+                if (is_array($metrics)) {
+                    foreach ($metrics as $metric) {
+                        if (!is_array($metric)) {
+                            continue;
+                        }
+
+                        $quota_used += isset($metric['used']) ? (int) $metric['used'] : 0;
+                    }
+                }
+
+                $site_name = function_exists('get_option') ? get_option('blogname', 'Site #' . $blog_id) : ('Site #' . $blog_id);
+                $site_url = function_exists('get_site_url') ? get_site_url($blog_id) : '';
+
+                return [
+                    'id' => $blog_id,
+                    'name' => $site_name,
+                    'url' => $site_url,
+                    'history' => [
+                        'total_actions' => isset($history_stats['total_actions']) ? (int) $history_stats['total_actions'] : 0,
+                        'successful' => isset($history_stats['successful']) ? (int) $history_stats['successful'] : 0,
+                        'failed' => isset($history_stats['failed']) ? (int) $history_stats['failed'] : 0,
+                    ],
+                    'quota' => [
+                        'used' => $quota_used,
+                    ],
+                ];
+            });
+
+            if (is_wp_error($site_data)) {
+                continue;
+            }
+
+            $sites[] = $site_data;
+        }
+
+        return rest_ensure_response([
+            'sites' => $sites,
+            'mode' => BJLG_Site_Context::get_network_mode(),
+        ]);
     }
     
     /**
@@ -3065,7 +3238,7 @@ class BJLG_REST_API {
      */
     private function get_total_backup_size() {
         $total = 0;
-        $files = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
+        $files = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
 
         foreach ($files as $file) {
             $total += filesize($file);

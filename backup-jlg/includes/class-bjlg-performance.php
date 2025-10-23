@@ -465,7 +465,7 @@ class BJLG_Performance {
     private function backup_database_optimized($task) {
         global $wpdb;
         
-        $temp_file = BJLG_BACKUP_DIR . 'db_' . uniqid() . '.sql';
+        $temp_file = bjlg_get_backup_directory() . 'db_' . uniqid() . '.sql';
         $handle = fopen($temp_file, 'w');
         
         if (!$handle) {
@@ -607,7 +607,7 @@ class BJLG_Performance {
      * Sauvegarde un chunk de fichiers
      */
     private function backup_files_chunk($task) {
-        $temp_file = BJLG_BACKUP_DIR . 'files_' . $task['subtype'] . '_' . $task['chunk_id'] . '_' . uniqid() . '.zip';
+        $temp_file = bjlg_get_backup_directory() . 'files_' . $task['subtype'] . '_' . $task['chunk_id'] . '_' . uniqid() . '.zip';
         
         $zip = new ZipArchive();
         if ($zip->open($temp_file, ZipArchive::CREATE) !== TRUE) {
@@ -685,7 +685,7 @@ class BJLG_Performance {
      */
     private function combine_temp_files($temp_files, $task_id, $target_filepath = null, array $context = []) {
         $filename = $context['filename'] ?? ('backup-' . date('Y-m-d-H-i-s') . '.zip');
-        $final_backup = $target_filepath ?: BJLG_BACKUP_DIR . $filename;
+        $final_backup = $target_filepath ?: bjlg_get_backup_directory() . $filename;
 
         if ($target_filepath && file_exists($target_filepath)) {
             @unlink($target_filepath);
@@ -1014,7 +1014,7 @@ class BJLG_Performance {
         
         // Test 1: Vitesse d'écriture
         $start = microtime(true);
-        $test_file = BJLG_BACKUP_DIR . 'benchmark_' . uniqid() . '.tmp';
+        $test_file = bjlg_get_backup_directory() . 'benchmark_' . uniqid() . '.tmp';
         $data = str_repeat('A', 1024 * 1024); // 1MB
         
         for ($i = 0; $i < 10; $i++) {

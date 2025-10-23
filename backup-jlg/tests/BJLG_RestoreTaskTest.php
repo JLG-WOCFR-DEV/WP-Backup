@@ -131,7 +131,7 @@ final class BJLG_RestoreTaskTest extends TestCase
         $zip->addFromString('database.sql', "CREATE TABLE `wp_test` (id INT);\nINSERT INTO `wp_test` VALUES (1);\n");
         $zip->close();
 
-        $destination = BJLG_BACKUP_DIR . 'db-only-' . uniqid('', true) . '.zip';
+        $destination = bjlg_get_backup_directory() . 'db-only-' . uniqid('', true) . '.zip';
         copy($zip_path, $destination);
 
         $restore = new BJLG\BJLG_Restore();
@@ -189,7 +189,7 @@ final class BJLG_RestoreTaskTest extends TestCase
         $zip->addFromString('database.sql', "SELECT 1;\n");
         $zip->close();
 
-        $destination = BJLG_BACKUP_DIR . 'pre-backup-' . uniqid('', true) . '.zip';
+        $destination = bjlg_get_backup_directory() . 'pre-backup-' . uniqid('', true) . '.zip';
         copy($zip_path, $destination);
 
         $restore = new class extends BJLG\BJLG_Restore {
@@ -202,7 +202,7 @@ final class BJLG_RestoreTaskTest extends TestCase
 
                 return [
                     'filename' => 'dummy-pre-restore.zip',
-                    'filepath' => BJLG_BACKUP_DIR . 'dummy-pre-restore.zip',
+                    'filepath' => bjlg_get_backup_directory() . 'dummy-pre-restore.zip',
                 ];
             }
         };
@@ -257,10 +257,10 @@ final class BJLG_RestoreTaskTest extends TestCase
         $zip->addFromString('wp-content/uploads/example.txt', 'sandbox file');
         $zip->close();
 
-        $destination = BJLG_BACKUP_DIR . 'sandbox-' . uniqid('', true) . '.zip';
+        $destination = bjlg_get_backup_directory() . 'sandbox-' . uniqid('', true) . '.zip';
         copy($zip_path, $destination);
 
-        $sandbox_target = BJLG_BACKUP_DIR . 'sandbox-target-' . uniqid('', true);
+        $sandbox_target = bjlg_get_backup_directory() . 'sandbox-target-' . uniqid('', true);
         $environment_config = BJLG\BJLG_Restore::prepare_environment(
             BJLG\BJLG_Restore::ENV_SANDBOX,
             ['sandbox_path' => $sandbox_target]
@@ -329,7 +329,7 @@ final class BJLG_RestoreTaskTest extends TestCase
     {
         $restore = new BJLG\BJLG_Restore();
 
-        $backup_path = BJLG_BACKUP_DIR . 'restore-lock-' . uniqid('', true) . '.zip';
+        $backup_path = bjlg_get_backup_directory() . 'restore-lock-' . uniqid('', true) . '.zip';
         file_put_contents($backup_path, 'dummy');
 
         $existing_task = 'bjlg_restore_' . md5(uniqid('existing', true));
@@ -371,7 +371,7 @@ final class BJLG_RestoreTaskTest extends TestCase
         $upload_slug = 'component-upload-' . uniqid('', true);
 
         $zip_filename = 'components-' . uniqid('', true) . '.zip';
-        $zip_path = BJLG_BACKUP_DIR . $zip_filename;
+        $zip_path = bjlg_get_backup_directory() . $zip_filename;
 
         $zip = new ZipArchive();
         $open_result = $zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE);
@@ -532,7 +532,7 @@ final class BJLG_RestoreTaskTest extends TestCase
             {
                 return [
                     'filename' => 'dummy.zip',
-                    'filepath' => BJLG_BACKUP_DIR . 'dummy.zip',
+                    'filepath' => bjlg_get_backup_directory() . 'dummy.zip',
                 ];
             }
         };
@@ -614,7 +614,7 @@ final class BJLG_RestoreTaskTest extends TestCase
             {
                 return [
                     'filename' => 'pre-restore.zip',
-                    'filepath' => BJLG_BACKUP_DIR . 'pre-restore.zip',
+                    'filepath' => bjlg_get_backup_directory() . 'pre-restore.zip',
                 ];
             }
         };
@@ -688,7 +688,7 @@ final class BJLG_RestoreTaskTest extends TestCase
         @unlink($productionKeep);
         @unlink($productionOld);
         @unlink($uploadsDir . '/new.txt');
-        @unlink(BJLG_BACKUP_DIR . 'pre-restore.zip');
+        @unlink(bjlg_get_backup_directory() . 'pre-restore.zip');
         delete_transient($fullTaskId);
         delete_transient($incrementalTaskId);
         @unlink($fullArchive['path']);

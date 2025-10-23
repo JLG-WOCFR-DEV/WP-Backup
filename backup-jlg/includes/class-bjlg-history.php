@@ -414,45 +414,30 @@ class BJLG_History {
         global $wpdb;
 
         $table_suffix = 'bjlg_history';
-        $context = BJLG_Site_Context::HISTORY_SCOPE_SITE;
-        $scope = BJLG_Site_Context::HISTORY_SCOPE_SITE;
-        $is_multisite = function_exists('is_multisite') && is_multisite();
-        $is_network_context = false;
-        $is_network_admin = false;
-
-        if ($is_multisite) {
-            $scope = BJLG_Site_Context::get_history_scope();
-            $is_network_context = BJLG_Site_Context::is_network_context();
-            $is_network_admin = function_exists('is_network_admin') && is_network_admin();
-
-            if ($scope === BJLG_Site_Context::HISTORY_SCOPE_NETWORK && ($is_network_context || $is_network_admin)) {
-                $context = BJLG_Site_Context::HISTORY_SCOPE_NETWORK;
-            }
-        }
 
         if (!is_object($wpdb)) {
-            return $prefix . 'bjlg_history';
+            return 'wp_' . $table_suffix;
         }
 
+        $is_multisite = function_exists('is_multisite') && is_multisite();
+        $desired_scope = BJLG_Site_Context::HISTORY_SCOPE_SITE;
         $resolved_blog_id = null;
-        if ($blog_id !== null) {
-            $resolved_blog_id = (int) $blog_id;
+
+        if ($blog_id === 0) {
+            $desired_scope = BJLG_Site_Context::HISTORY_SCOPE_NETWORK;
+        } elseif ($blog_id !== null) {
+            $resolved_blog_id = max(0, (int) $blog_id);
+        } elseif (BJLG_Site_Context::history_uses_network_storage() && BJLG_Site_Context::is_network_context()) {
+            $desired_scope = BJLG_Site_Context::HISTORY_SCOPE_NETWORK;
         } elseif (function_exists('get_current_blog_id')) {
-            $resolved_blog_id = (int) get_current_blog_id();
+            $resolved_blog_id = max(0, (int) get_current_blog_id());
         }
 
-        if (method_exists($wpdb, 'get_blog_prefix')) {
-            $prefix = $wpdb->get_blog_prefix($resolved_blog_id ?? 0);
-        } elseif (property_exists($wpdb, 'prefix')) {
-            $raw_prefix = $wpdb->prefix;
-            if (is_string($raw_prefix) && $raw_prefix !== '') {
-                $prefix = $raw_prefix;
-            }
+        if ($desired_scope === BJLG_Site_Context::HISTORY_SCOPE_NETWORK && $is_multisite) {
+            return BJLG_Site_Context::get_table_prefix(BJLG_Site_Context::HISTORY_SCOPE_NETWORK) . 'bjlg_history_network';
         }
 
-        $prefix = BJLG_Site_Context::get_table_prefix(BJLG_Site_Context::HISTORY_SCOPE_SITE);
-
-        return $prefix . $table_suffix;
+        return BJLG_Site_Context::get_table_prefix(BJLG_Site_Context::HISTORY_SCOPE_SITE, $resolved_blog_id) . $table_suffix;
     }
 
     /**

@@ -192,7 +192,7 @@ class BJLG_Restore_Self_Test {
             return null;
         }
 
-        $pattern = trailingslashit(BJLG_BACKUP_DIR) . '*.{zip,enc}';
+        $pattern = trailingslashit(bjlg_get_backup_directory()) . '*.{zip,enc}';
         $files = glob($pattern, GLOB_BRACE);
         if (!is_array($files) || empty($files)) {
             return null;
@@ -586,7 +586,7 @@ class BJLG_Restore_Self_Test {
 
         if (defined('BJLG_BACKUP_DIR')) {
             return [
-                'path' => trailingslashit(BJLG_BACKUP_DIR) . 'self-tests/',
+                'path' => trailingslashit(bjlg_get_backup_directory()) . 'self-tests/',
                 'url' => '',
             ];
         }
