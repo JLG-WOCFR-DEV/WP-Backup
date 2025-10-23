@@ -99,6 +99,110 @@ class BJLG_Admin {
         }
     }
 
+    private function get_scope_choices(): array {
+        $choices = [
+            BJLG_Site_Context::HISTORY_SCOPE_SITE => __('Site courant', 'backup-jlg'),
+        ];
+
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return $choices;
+        }
+
+        $can_view_network = function_exists('bjlg_can_manage_plugin') && bjlg_can_manage_plugin(null, 'manage_network');
+
+        if ($can_view_network) {
+            $choices[BJLG_Site_Context::HISTORY_SCOPE_NETWORK] = __('Réseau', 'backup-jlg');
+        }
+
+        return $choices;
+    }
+
+    private function determine_active_scope(array $choices): string {
+        $default = $this->is_network_screen ? BJLG_Site_Context::HISTORY_SCOPE_NETWORK : BJLG_Site_Context::HISTORY_SCOPE_SITE;
+
+        $requested = isset($_GET['bjlg_scope'])
+            ? sanitize_key((string) wp_unslash($_GET['bjlg_scope']))
+            : $default;
+
+        if (!isset($choices[$requested])) {
+            $requested = $default;
+        }
+
+        if (!isset($choices[$requested])) {
+            $requested = (string) array_key_first($choices);
+        }
+
+        if ($requested === '') {
+            $requested = BJLG_Site_Context::HISTORY_SCOPE_SITE;
+        }
+
+        return $requested;
+    }
+
+    private function collect_metrics_for_scope(string $scope): array {
+        if (!$this->advanced_admin) {
+            return [];
+        }
+
+        return $this->run_with_scope(function () {
+            return $this->advanced_admin->get_dashboard_metrics();
+        }, $scope);
+    }
+
+    private function run_with_scope(callable $callback, ?string $scope = null)
+    {
+        $target_scope = $scope ?? $this->active_scope;
+
+        if ($target_scope === BJLG_Site_Context::HISTORY_SCOPE_NETWORK) {
+            return BJLG_Site_Context::with_network($callback);
+        }
+
+        return $callback();
+    }
+
+    private function render_scope_switcher(array $choices, string $active_scope): void {
+        if (count($choices) < 2) {
+            return;
+        }
+
+        $preserved_params = [];
+
+        foreach ($_GET as $key => $value) {
+            if ($key === 'bjlg_scope') {
+                continue;
+            }
+
+            $sanitized_key = sanitize_key((string) $key);
+
+            if ($sanitized_key === '') {
+                continue;
+            }
+
+            if (is_scalar($value)) {
+                $preserved_params[$sanitized_key] = sanitize_text_field((string) wp_unslash($value));
+            }
+        }
+
+        ?>
+        <form method="get" class="bjlg-scope-switcher">
+            <?php foreach ($preserved_params as $param_key => $param_value): ?>
+                <input type="hidden" name="<?php echo esc_attr($param_key); ?>" value="<?php echo esc_attr($param_value); ?>">
+            <?php endforeach; ?>
+            <label class="screen-reader-text" for="bjlg-scope-select"><?php esc_html_e('Périmètre des données', 'backup-jlg'); ?></label>
+            <select id="bjlg-scope-select" name="bjlg_scope" class="bjlg-scope-switcher__select" onchange="this.form.submit()">
+                <?php foreach ($choices as $scope_value => $label): ?>
+                    <option value="<?php echo esc_attr($scope_value); ?>" <?php selected($active_scope, $scope_value); ?>>
+                        <?php echo esc_html($label); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <noscript>
+                <button type="submit" class="button button-secondary"><?php esc_html_e('Appliquer', 'backup-jlg'); ?></button>
+            </noscript>
+        </form>
+        <?php
+    }
+
     /**
      * Retourne les onglets par défaut
      */
@@ -417,7 +521,9 @@ class BJLG_Admin {
             return false;
         }
 
-        $keys = BJLG_API_Keys::get_keys();
+        $keys = $this->run_with_scope(static function () {
+            return BJLG_API_Keys::get_keys();
+        });
 
         return is_array($keys) && !empty($keys);
     }
@@ -546,7 +652,9 @@ class BJLG_Admin {
             $active_section = $requested_section;
         }
 
-        $metrics = $this->advanced_admin ? $this->advanced_admin->get_dashboard_metrics() : [];
+        $scope_choices = $this->get_scope_choices();
+        $this->active_scope = $this->determine_active_scope($scope_choices);
+        $metrics = $this->collect_metrics_for_scope($this->active_scope);
 
         $notice_type = isset($_GET['bjlg_notice']) ? sanitize_key($_GET['bjlg_notice']) : '';
         $notice_message = '';
@@ -611,7 +719,7 @@ class BJLG_Admin {
         <a class="bjlg-skip-link" href="#bjlg-main-content">
             <?php esc_html_e('Aller au contenu principal', 'backup-jlg'); ?>
         </a>
-        <div id="bjlg-main-content" class="wrap bjlg-wrap is-light" data-bjlg-theme="light" role="main" tabindex="-1" data-active-section="<?php echo esc_attr($active_section); ?>">
+        <div id="bjlg-main-content" class="wrap bjlg-wrap is-light" data-bjlg-theme="light" role="main" tabindex="-1" data-active-section="<?php echo esc_attr($active_section); ?>" data-bjlg-scope="<?php echo esc_attr($this->active_scope); ?>">
             <header class="bjlg-page-header">
                 <h1>
                     <span class="dashicons dashicons-database-export" aria-hidden="true"></span>
@@ -629,6 +737,7 @@ class BJLG_Admin {
                     >
                         <?php echo esc_html__('Activer le contraste renforcé', 'backup-jlg'); ?>
                     </button>
+                    <?php $this->render_scope_switcher($scope_choices, $this->active_scope); ?>
                 </div>
             </header>
 
@@ -2689,7 +2798,9 @@ class BJLG_Admin {
      * Section : Historique
      */
     private function render_history_section() {
-        $history = class_exists(BJLG_History::class) ? BJLG_History::get_history(50) : [];
+        $history = $this->run_with_scope(static function () {
+            return class_exists(BJLG_History::class) ? BJLG_History::get_history(50) : [];
+        });
         ?>
         <div class="bjlg-section">
             <h2>Historique des 50 dernières actions</h2>
@@ -2806,6 +2917,41 @@ class BJLG_Admin {
             'themes' => 'Thèmes',
             'uploads' => 'Médias',
         ];
+        $update_guard_defaults = [
+            'enabled' => true,
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'reminder' => [
+                'enabled' => false,
+                'message' => 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.',
+            ],
+        ];
+        $raw_update_guard_settings = \bjlg_get_option('bjlg_update_guard_settings', []);
+        if (!is_array($raw_update_guard_settings)) {
+            $raw_update_guard_settings = [];
+        }
+        $update_guard_settings = BJLG_Settings::merge_settings_with_defaults($raw_update_guard_settings, $update_guard_defaults);
+        $explicit_components = [];
+        if (isset($raw_update_guard_settings['components']) && is_array($raw_update_guard_settings['components'])) {
+            foreach ($raw_update_guard_settings['components'] as $component) {
+                $key = sanitize_key((string) $component);
+                if ($key === '' || isset($explicit_components[$key])) {
+                    continue;
+                }
+                $explicit_components[$key] = true;
+            }
+        }
+        $update_guard_components = array_keys($explicit_components);
+        $valid_component_keys = array_keys($components_labels);
+        $update_guard_components = array_values(array_filter(
+            $update_guard_components,
+            static function ($component) use ($valid_component_keys) {
+                return in_array($component, $valid_component_keys, true);
+            }
+        ));
+        if (!array_key_exists('components', $raw_update_guard_settings)) {
+            $update_guard_components = $update_guard_settings['components'];
+        }
+        $update_guard_settings['components'] = $update_guard_components;
         $default_next_run_summary = [
             'next_run_formatted' => 'Non planifié',
             'next_run_relative' => '',
@@ -3251,6 +3397,62 @@ class BJLG_Admin {
                                     Activer la fusion automatique en sauvegarde synthétique («&nbsp;synth full&nbsp;»)
                                 </label>
                                 <p class="description">Lorsque la limite d'incréments est atteinte, les plus anciens sont fusionnés dans la dernière complète sans lancer un nouvel export complet.</p>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+
+                <h3><span class="dashicons dashicons-shield" aria-hidden="true"></span> Snapshot pré-mise à jour</h3>
+                <table class="form-table bjlg-update-guard-settings" data-bjlg-reminder-message-default="<?php echo esc_attr($update_guard_defaults['reminder']['message']); ?>">
+                    <tr>
+                        <th scope="row">Activation</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <label>
+                                    <input type="checkbox" name="update_guard_enabled" value="1" <?php checked(!empty($update_guard_settings['enabled'])); ?>>
+                                    Lancer automatiquement une sauvegarde avant les mises à jour WordPress
+                                </label>
+                                <p class="description">Empêche l'installation d'une mise à jour sans snapshot récent.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Composants inclus</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <fieldset class="bjlg-update-guard-components" aria-describedby="bjlg-update-guard-components-description">
+                                    <legend class="screen-reader-text">Composants couverts par le snapshot</legend>
+                                    <ul class="bjlg-checkbox-list" role="list">
+                                        <?php foreach ($components_labels as $component_key => $component_label): ?>
+                                            <li>
+                                                <label>
+                                                    <input type="checkbox" name="update_guard_components[]" value="<?php echo esc_attr($component_key); ?>" <?php checked(in_array($component_key, $update_guard_settings['components'], true)); ?>>
+                                                    <span><?php echo esc_html($component_label); ?></span>
+                                                </label>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                </fieldset>
+                                <p id="bjlg-update-guard-components-description" class="description">Sélectionnez les éléments à inclure dans le snapshot préventif.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Rappel</th>
+                        <td>
+                            <div class="bjlg-field-control bjlg-update-guard-reminder">
+                                <label class="bjlg-mb-10">
+                                    <input type="checkbox" name="update_guard_reminder_enabled" value="1" <?php checked(!empty($update_guard_settings['reminder']['enabled'])); ?> data-bjlg-toggle="reminder-message">
+                                    Afficher un rappel si aucun snapshot n'est déclenché
+                                </label>
+                                <textarea
+                                    name="update_guard_reminder_message"
+                                    class="large-text"
+                                    rows="3"
+                                    data-bjlg-reminder-message
+                                    <?php disabled(empty($update_guard_settings['reminder']['enabled'])); ?>
+                                ><?php echo esc_textarea($update_guard_settings['reminder']['message']); ?></textarea>
+                                <p class="description">Personnalisez le message affiché (par exemple dans vos notifications ou journaux).</p>
                             </div>
                         </td>
                     </tr>
@@ -3906,7 +4108,9 @@ class BJLG_Admin {
      * Section : API & Intégrations
      */
     private function render_api_section() {
-        $keys = BJLG_API_Keys::get_keys();
+        $keys = $this->run_with_scope(static function () {
+            return BJLG_API_Keys::get_keys();
+        });
         $has_keys = !empty($keys);
         ?>
         <div class="bjlg-section" id="bjlg-api-keys-section">

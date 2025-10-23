@@ -1694,6 +1694,7 @@ class BJLG_REST_API {
                 case 'notifications':
                 case 'performance':
                 case 'webhooks':
+                case 'update_guard':
                     $validated_value = $this->validate_generic_settings($value, $key);
                     break;
                 default:
@@ -2531,6 +2532,7 @@ class BJLG_REST_API {
                 'schedule' => \bjlg_get_option('bjlg_schedule_settings', []),
                 'encryption' => \bjlg_get_option('bjlg_encryption_settings', []),
                 'notifications' => \bjlg_get_option('bjlg_notification_settings', []),
+                'update_guard' => \bjlg_get_option('bjlg_update_guard_settings', []),
                 'performance' => \bjlg_get_option('bjlg_performance_settings', []),
                 'webhooks' => \bjlg_get_option('bjlg_webhook_settings', [])
             ];

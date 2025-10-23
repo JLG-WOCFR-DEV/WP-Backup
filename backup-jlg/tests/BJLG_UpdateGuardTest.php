@@ -228,4 +228,65 @@ final class BJLG_UpdateGuardTest extends TestCase
         $this->assertNotNull($second_attempt);
         $this->assertCount(1, $backup_stub->task_ids);
     }
+
+    public function test_disabled_setting_triggers_reminder(): void
+    {
+        bjlg_update_option('bjlg_update_guard_settings', [
+            'enabled' => false,
+            'components' => ['db', 'plugins'],
+            'reminder' => ['enabled' => true, 'message' => 'Pensez à sauvegarder avant la mise à jour.'],
+        ]);
+
+        $backup_stub = new BJLG_Test_BackupStub();
+        $guard = new BJLG\BJLG_Update_Guard($backup_stub);
+
+        $reminders = [];
+        add_action(
+            'bjlg_pre_update_backup_reminder',
+            static function ($context, $reason, $reminder) use (&$reminders): void {
+                $reminders[] = [$context, $reason, $reminder];
+            },
+            10,
+            3
+        );
+
+        $hook_extra = [
+            'type' => 'plugin',
+            'action' => 'update',
+            'plugin' => 'akismet/akismet.php',
+        ];
+
+        $task_id = $guard->maybe_trigger_pre_update_backup($hook_extra);
+
+        $this->assertNull($task_id);
+        $this->assertEmpty($backup_stub->task_ids);
+        $this->assertCount(1, $reminders);
+        $this->assertSame('disabled', $reminders[0][1]);
+        $this->assertSame('Pensez à sauvegarder avant la mise à jour.', $reminders[0][2]['message']);
+    }
+
+    public function test_components_are_filtered_by_settings(): void
+    {
+        bjlg_update_option('bjlg_update_guard_settings', [
+            'enabled' => true,
+            'components' => ['db'],
+            'reminder' => ['enabled' => false, 'message' => ''],
+        ]);
+
+        $backup_stub = new BJLG_Test_BackupStub();
+        $guard = new BJLG\BJLG_Update_Guard($backup_stub);
+
+        $hook_extra = [
+            'type' => 'plugin',
+            'action' => 'update',
+            'plugin' => 'hello/hello.php',
+        ];
+
+        $task_id = $guard->maybe_trigger_pre_update_backup($hook_extra);
+
+        $this->assertNotNull($task_id);
+        $this->assertSame([$task_id], $backup_stub->task_ids);
+        $this->assertArrayHasKey($task_id, $GLOBALS['bjlg_test_transients']);
+        $this->assertSame(['db'], $GLOBALS['bjlg_test_transients'][$task_id]['components']);
+    }
 }

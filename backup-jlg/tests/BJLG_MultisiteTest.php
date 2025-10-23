@@ -1,7 +1,11 @@
 <?php
 
+use BJLG\BJLG_API_Keys;
+use BJLG\BJLG_History;
+use BJLG\BJLG_Plugin;
 use BJLG\BJLG_REST_API;
 use BJLG\BJLG_Settings;
+use BJLG\BJLG_Site_Context;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 
@@ -11,6 +15,10 @@ final class BJLG_MultisiteTest extends TestCase {
     private $previous_stack = [];
     private $previous_multisite = false;
     private $previous_network_admin = false;
+    private $previous_site_options = [];
+    private $previous_is_multisite_flag = false;
+    private $previous_is_network_admin_flag = false;
+    private $previous_dbdelta_calls = [];
 
     protected function setUp(): void {
         parent::setUp();
@@ -19,6 +27,10 @@ final class BJLG_MultisiteTest extends TestCase {
         $this->previous_stack = $GLOBALS['bjlg_tests_blog_stack'] ?? [1];
         $this->previous_multisite = $GLOBALS['bjlg_tests_multisite'] ?? false;
         $this->previous_network_admin = $GLOBALS['bjlg_tests_network_admin'] ?? false;
+        $this->previous_site_options = $GLOBALS['bjlg_test_site_options'] ?? [];
+        $this->previous_is_multisite_flag = $GLOBALS['bjlg_test_is_multisite'] ?? false;
+        $this->previous_is_network_admin_flag = $GLOBALS['bjlg_test_is_network_admin'] ?? false;
+        $this->previous_dbdelta_calls = $GLOBALS['bjlg_test_dbdelta_calls'] ?? [];
 
         $GLOBALS['bjlg_test_options'] = [];
         $GLOBALS['bjlg_tests_multisite'] = false;

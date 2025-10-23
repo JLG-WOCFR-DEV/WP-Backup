@@ -178,7 +178,8 @@ class BJLG_API_Keys {
      * @return array<string, array<string, mixed>>
      */
     private static function get_indexed_keys() {
-        $stored = bjlg_get_option(self::OPTION_NAME, []);
+        $option_args = BJLG_Site_Context::get_history_option_args();
+        $stored = bjlg_get_option(self::OPTION_NAME, [], $option_args);
 
         if (!is_array($stored)) {
             return [];
@@ -229,7 +230,8 @@ class BJLG_API_Keys {
             $prepared[$normalized['id']] = $normalized;
         }
 
-        bjlg_update_option(self::OPTION_NAME, $prepared);
+        $option_args = BJLG_Site_Context::get_history_option_args();
+        bjlg_update_option(self::OPTION_NAME, $prepared, $option_args);
     }
 
     /**

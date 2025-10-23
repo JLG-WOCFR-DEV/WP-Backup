@@ -413,7 +413,22 @@ class BJLG_History {
     private static function get_table_name($blog_id = null) {
         global $wpdb;
 
-        $prefix = 'wp_';
+        $table_suffix = 'bjlg_history';
+        $context = BJLG_Site_Context::HISTORY_SCOPE_SITE;
+        $scope = BJLG_Site_Context::HISTORY_SCOPE_SITE;
+        $is_multisite = function_exists('is_multisite') && is_multisite();
+        $is_network_context = false;
+        $is_network_admin = false;
+
+        if ($is_multisite) {
+            $scope = BJLG_Site_Context::get_history_scope();
+            $is_network_context = BJLG_Site_Context::is_network_context();
+            $is_network_admin = function_exists('is_network_admin') && is_network_admin();
+
+            if ($scope === BJLG_Site_Context::HISTORY_SCOPE_NETWORK && ($is_network_context || $is_network_admin)) {
+                $context = BJLG_Site_Context::HISTORY_SCOPE_NETWORK;
+            }
+        }
 
         if (!is_object($wpdb)) {
             return $prefix . 'bjlg_history';
@@ -435,7 +450,9 @@ class BJLG_History {
             }
         }
 
-        return $prefix . 'bjlg_history';
+        $prefix = BJLG_Site_Context::get_table_prefix(BJLG_Site_Context::HISTORY_SCOPE_SITE);
+
+        return $prefix . $table_suffix;
     }
 
     /**

@@ -141,8 +141,19 @@ if ( ! function_exists( 'bjlg_uninstall_site' ) ) {
             }
         }
 
-        $history_table = $wpdb->prefix . 'bjlg_history';
-        $wpdb->query( "DROP TABLE IF EXISTS `{$history_table}`" );
+        $history_tables = array();
+
+        if ( isset( $wpdb->prefix ) && is_string( $wpdb->prefix ) ) {
+            $history_tables[] = $wpdb->prefix . 'bjlg_history';
+        }
+
+        if ( isset( $wpdb->base_prefix ) && is_string( $wpdb->base_prefix ) ) {
+            $history_tables[] = $wpdb->base_prefix . 'bjlg_history';
+        }
+
+        foreach ( array_unique( $history_tables ) as $history_table ) {
+            $wpdb->query( "DROP TABLE IF EXISTS `{$history_table}`" );
+        }
 
         $upload_dir = wp_get_upload_dir();
 
