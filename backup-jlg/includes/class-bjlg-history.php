@@ -499,7 +499,8 @@ class BJLG_History {
             'api_key_created' => 'Clé API créée',
             'encryption_key_generated' => 'Clé de chiffrement générée',
             'support_package' => 'Pack de support créé',
-            'sandbox_restore_validation' => 'Validation de restauration sandbox'
+            'event_trigger' => 'Sauvegarde événementielle',
+            'event_trigger_settings' => 'Réglages des déclencheurs événementiels'
         ];
     }
 

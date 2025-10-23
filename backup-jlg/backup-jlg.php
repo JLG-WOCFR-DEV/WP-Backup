@@ -659,6 +659,7 @@ final class BJLG_Plugin {
         new BJLG\BJLG_Remote_Storage_Metrics();
         new BJLG\BJLG_Restore_Self_Test();
         new BJLG\BJLG_Update_Guard();
+        BJLG\BJLG_Event_Triggers::instance();
     }
 
     public function enqueue_admin_assets($hook) {

@@ -315,6 +315,26 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
             {
                 return [];
             }
+
+            public function get_remote_quota_snapshot()
+            {
+                $payload = is_array($this->quotaPayload) ? $this->quotaPayload : [];
+
+                return array_merge(
+                    [
+                        'status' => 'ok',
+                        'used_bytes' => $payload['used_bytes'] ?? null,
+                        'quota_bytes' => $payload['quota_bytes'] ?? null,
+                        'free_bytes' => $payload['free_bytes'] ?? null,
+                        'latency_ms' => null,
+                        'error' => null,
+                        'error_code' => null,
+                        'source' => 'mock',
+                        'fetched_at' => time(),
+                    ],
+                    []
+                );
+            }
         };
 
         $registeredId = $destination->get_id();

@@ -2704,6 +2704,21 @@ class BJLG_Admin {
             ],
         ];
 
+        $event_defaults = BJLG_Scheduler::get_event_trigger_defaults();
+        $data['event_triggers'] = [
+            'defaults' => $event_defaults['triggers'],
+            'labels' => [
+                'filesystem' => [
+                    'title' => __('Fichiers & médias', 'backup-jlg'),
+                    'description' => __('Déclenche une sauvegarde lors des modifications sur le système de fichiers.', 'backup-jlg'),
+                ],
+                'database' => [
+                    'title' => __('Base de données', 'backup-jlg'),
+                    'description' => __('Surveille les changements de contenu, d’options et de commentaires.', 'backup-jlg'),
+                ],
+            ],
+        ];
+
         wp_add_inline_script('bjlg-admin', 'window.bjlgSchedulingData = ' . wp_json_encode($data) . ';', 'before');
         self::$schedule_data_injected = true;
     }
@@ -3338,6 +3353,24 @@ class BJLG_Admin {
             : BJLG_Settings::get_default_schedule_entry();
         $schedules_json = esc_attr(wp_json_encode($schedules));
         $next_runs_json = esc_attr(wp_json_encode($next_runs));
+        $event_defaults = isset($schedule_collection['event_defaults']) && is_array($schedule_collection['event_defaults'])
+            ? $schedule_collection['event_defaults']
+            : BJLG_Scheduler::get_event_trigger_defaults()['triggers'];
+        $event_triggers = isset($schedule_collection['event_triggers']) && is_array($schedule_collection['event_triggers'])
+            ? wp_parse_args($schedule_collection['event_triggers'], $event_defaults)
+            : $event_defaults;
+        $event_triggers_json = esc_attr(wp_json_encode($event_triggers));
+        $event_defaults_json = esc_attr(wp_json_encode($event_defaults));
+        $event_trigger_labels = [
+            'filesystem' => [
+                'title' => __('Fichiers & médias', 'backup-jlg'),
+                'description' => __('Déclenche une sauvegarde lorsqu’un fichier est ajouté, modifié ou supprimé.', 'backup-jlg'),
+            ],
+            'database' => [
+                'title' => __('Base de données', 'backup-jlg'),
+                'description' => __('Surveille les modifications de contenu, d’options et de commentaires.', 'backup-jlg'),
+            ],
+        ];
 
         $monitoring_settings = BJLG_Settings::get_monitoring_settings();
         $storage_warning_threshold = isset($monitoring_settings['storage_quota_warning_threshold'])
@@ -3642,6 +3675,8 @@ class BJLG_Admin {
                 data-default-schedule="<?php echo esc_attr(wp_json_encode($default_schedule)); ?>"
                 data-next-runs="<?php echo $next_runs_json; ?>"
                 data-schedules="<?php echo $schedules_json; ?>"
+                data-event-triggers="<?php echo $event_triggers_json; ?>"
+                data-event-defaults="<?php echo $event_defaults_json; ?>"
             >
                 <div id="bjlg-schedule-feedback" class="notice" role="status" aria-live="polite" style="display:none;"></div>
                 <div class="bjlg-schedule-list">
@@ -3688,6 +3723,55 @@ class BJLG_Admin {
                     );
                     ?>
                 </div>
+                <section class="bjlg-event-trigger-settings" aria-labelledby="bjlg-event-triggers-title">
+                    <header class="bjlg-event-trigger-settings__header">
+                        <h4 id="bjlg-event-triggers-title"><?php esc_html_e('Déclencheurs événementiels', 'backup-jlg'); ?></h4>
+                        <p class="description"><?php esc_html_e('Automatisez des sauvegardes supplémentaires en réponse aux modifications détectées sur le site.', 'backup-jlg'); ?></p>
+                    </header>
+                    <div class="bjlg-event-trigger-settings__grid" data-role="event-trigger-list">
+                        <?php foreach ($event_defaults as $trigger_key => $defaults):
+                            if (!is_array($defaults)) {
+                                continue;
+                            }
+                            $current = isset($event_triggers[$trigger_key]) && is_array($event_triggers[$trigger_key])
+                                ? wp_parse_args($event_triggers[$trigger_key], $defaults)
+                                : $defaults;
+                            $enabled = !empty($current['enabled']);
+                            $cooldown = (int) ($current['cooldown'] ?? $defaults['cooldown']);
+                            $batch_window = (int) ($current['batch_window'] ?? $defaults['batch_window']);
+                            $max_batch = (int) ($current['max_batch'] ?? $defaults['max_batch']);
+                            $label_info = $event_trigger_labels[$trigger_key] ?? [
+                                'title' => ucfirst($trigger_key),
+                                'description' => '',
+                            ];
+                        ?>
+                            <fieldset class="bjlg-event-trigger" data-event-trigger="<?php echo esc_attr($trigger_key); ?>">
+                                <legend><?php echo esc_html($label_info['title']); ?></legend>
+                                <?php if (!empty($label_info['description'])): ?>
+                                    <p class="description"><?php echo esc_html($label_info['description']); ?></p>
+                                <?php endif; ?>
+                                <label class="bjlg-event-trigger__toggle">
+                                    <input type="checkbox" data-field="event-enabled" name="event_triggers[<?php echo esc_attr($trigger_key); ?>][enabled]" value="1" <?php checked($enabled); ?>>
+                                    <span><?php esc_html_e('Activer ce déclencheur', 'backup-jlg'); ?></span>
+                                </label>
+                                <div class="bjlg-event-trigger__controls">
+                                    <label>
+                                        <span><?php esc_html_e('Temps minimum entre deux sauvegardes (s)', 'backup-jlg'); ?></span>
+                                        <input type="number" min="0" step="30" data-field="event-cooldown" name="event_triggers[<?php echo esc_attr($trigger_key); ?>][cooldown]" value="<?php echo esc_attr($cooldown); ?>" <?php disabled(!$enabled); ?>>
+                                    </label>
+                                    <label>
+                                        <span><?php esc_html_e('Fenêtre de regroupement (s)', 'backup-jlg'); ?></span>
+                                        <input type="number" min="0" step="10" data-field="event-batch-window" name="event_triggers[<?php echo esc_attr($trigger_key); ?>][batch_window]" value="<?php echo esc_attr($batch_window); ?>" <?php disabled(!$enabled); ?>>
+                                    </label>
+                                    <label>
+                                        <span><?php esc_html_e('Seuil d’événements', 'backup-jlg'); ?></span>
+                                        <input type="number" min="1" step="1" data-field="event-max-batch" name="event_triggers[<?php echo esc_attr($trigger_key); ?>][max_batch]" value="<?php echo esc_attr($max_batch); ?>" <?php disabled(!$enabled); ?>>
+                                    </label>
+                                </div>
+                            </fieldset>
+                        <?php endforeach; ?>
+                    </div>
+                </section>
                 <p class="bjlg-schedule-actions">
                     <button type="button" class="button button-secondary bjlg-add-schedule">
                         <span class="dashicons dashicons-plus" aria-hidden="true"></span>
@@ -5174,10 +5258,28 @@ class BJLG_Admin {
             $schedules = [$default_schedule];
         }
 
+        $event_defaults = BJLG_Scheduler::get_event_trigger_defaults()['triggers'];
+        $event_triggers = $event_defaults;
+
+        if (isset($scheduler) && $scheduler && method_exists($scheduler, 'get_event_trigger_settings')) {
+            $event_settings = $scheduler->get_event_trigger_settings();
+            if (isset($event_settings['triggers']) && is_array($event_settings['triggers'])) {
+                $event_triggers = wp_parse_args($event_settings['triggers'], $event_defaults);
+            }
+        } else {
+            $stored_events = \bjlg_get_option('bjlg_event_trigger_settings', []);
+            $sanitized_events = BJLG_Scheduler::sanitize_event_trigger_settings($stored_events);
+            if (isset($sanitized_events['triggers']) && is_array($sanitized_events['triggers'])) {
+                $event_triggers = wp_parse_args($sanitized_events['triggers'], $event_defaults);
+            }
+        }
+
         return [
             'schedules' => $schedules,
             'next_runs' => $next_runs,
             'default' => $default_schedule,
+            'event_triggers' => $event_triggers,
+            'event_defaults' => $event_defaults,
         ];
     }
 

@@ -595,6 +595,19 @@ final class BJLG_BackupTest extends TestCase
             {
                 return ['used_bytes' => null, 'quota_bytes' => null, 'free_bytes' => null];
             }
+
+            public function get_remote_quota_snapshot()
+            {
+                return [
+                    'status' => 'ok',
+                    'used_bytes' => null,
+                    'quota_bytes' => null,
+                    'free_bytes' => null,
+                    'latency_ms' => null,
+                    'source' => 'mock',
+                    'fetched_at' => time(),
+                ];
+            }
         };
 
         $secondary = new class implements BJLG_Destination_Interface {
@@ -646,6 +659,19 @@ final class BJLG_BackupTest extends TestCase
             public function get_storage_usage()
             {
                 return ['used_bytes' => 0, 'quota_bytes' => null, 'free_bytes' => null];
+            }
+
+            public function get_remote_quota_snapshot()
+            {
+                return [
+                    'status' => 'ok',
+                    'used_bytes' => 0,
+                    'quota_bytes' => null,
+                    'free_bytes' => null,
+                    'latency_ms' => null,
+                    'source' => 'mock',
+                    'fetched_at' => time(),
+                ];
             }
         };
 

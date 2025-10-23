@@ -323,49 +323,26 @@ class BJLG_Backblaze_B2 implements BJLG_Destination_Interface {
             return $defaults;
         }
 
-        $settings = $this->get_settings();
-        $started_at = microtime(true);
+        $snapshot = $this->get_remote_quota_snapshot();
 
-        try {
-            $snapshot = $this->fetch_usage_snapshot($settings);
-        } catch (Exception $exception) {
-            $latency = (int) round((microtime(true) - $started_at) * 1000);
+        if (($snapshot['status'] ?? '') !== 'ok') {
+            $latency = isset($snapshot['latency_ms']) ? (int) $snapshot['latency_ms'] : 0;
+            $error_code = isset($snapshot['error_code']) ? (string) $snapshot['error_code'] : self::ERROR_USAGE_API_FAILURE;
+            $error_message = isset($snapshot['error']) && $snapshot['error'] !== ''
+                ? $snapshot['error']
+                : __('Backblaze B2 : impossible de récupérer les quotas.', 'backup-jlg');
 
             throw new BJLG_Remote_Storage_Usage_Exception(
-                'Backblaze B2 : impossible de récupérer les quotas — ' . $exception->getMessage(),
-                self::ERROR_USAGE_API_FAILURE,
-                $latency,
-                (int) $exception->getCode(),
-                $exception
-            );
-        }
-
-        $latency = (int) round((microtime(true) - $started_at) * 1000);
-
-        if (!is_array($snapshot) || (
-            !array_key_exists('used_bytes', $snapshot)
-            && !array_key_exists('quota_bytes', $snapshot)
-            && !array_key_exists('free_bytes', $snapshot)
-        )) {
-            throw new BJLG_Remote_Storage_Usage_Exception(
-                'Backblaze B2 : la réponse de `b2_get_usage` est vide.',
-                self::ERROR_USAGE_EMPTY,
+                $error_message,
+                $error_code,
                 $latency
             );
         }
 
-        $usage = array_merge($defaults, $snapshot);
-
-        if ($usage['quota_bytes'] !== null && $usage['used_bytes'] !== null && $usage['free_bytes'] === null) {
-            $usage['free_bytes'] = max(0, (int) $usage['quota_bytes'] - (int) $usage['used_bytes']);
-        }
-        if ($usage['quota_bytes'] === null && $usage['used_bytes'] !== null && $usage['free_bytes'] !== null) {
-            $usage['quota_bytes'] = max(0, (int) $usage['used_bytes'] + (int) $usage['free_bytes']);
-        }
-
-        $usage['latency_ms'] = max(0, $latency);
-        $usage['source'] = 'provider';
-        $usage['refreshed_at'] = $this->get_time();
+        $usage = array_merge($defaults, array_intersect_key($snapshot, $defaults));
+        $usage['latency_ms'] = isset($snapshot['latency_ms']) ? (int) max(0, $snapshot['latency_ms']) : null;
+        $usage['source'] = $snapshot['source'] ?? 'provider';
+        $usage['refreshed_at'] = $snapshot['fetched_at'] ?? $this->get_time();
 
         if (class_exists(BJLG_Debug::class)) {
             BJLG_Debug::log(sprintf(
@@ -373,11 +350,77 @@ class BJLG_Backblaze_B2 implements BJLG_Destination_Interface {
                 $usage['used_bytes'] !== null ? number_format_i18n((int) $usage['used_bytes']) : 'n/a',
                 $usage['quota_bytes'] !== null ? number_format_i18n((int) $usage['quota_bytes']) : 'n/a',
                 $usage['free_bytes'] !== null ? number_format_i18n((int) $usage['free_bytes']) : 'n/a',
-                $usage['latency_ms']
+                $usage['latency_ms'] !== null ? $usage['latency_ms'] : 'n/a'
             ));
         }
 
         return $usage;
+    }
+
+    public function get_remote_quota_snapshot() {
+        $snapshot = [
+            'status' => 'unavailable',
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+            'latency_ms' => null,
+            'error' => null,
+            'error_code' => null,
+            'source' => 'provider',
+            'fetched_at' => $this->get_time(),
+        ];
+
+        if (!$this->is_connected()) {
+            $snapshot['error'] = __('Backblaze B2 n\'est pas configuré.', 'backup-jlg');
+
+            return $snapshot;
+        }
+
+        $settings = $this->get_settings();
+        $started_at = microtime(true);
+
+        try {
+            $raw_snapshot = $this->fetch_usage_snapshot($settings);
+        } catch (Exception $exception) {
+            $snapshot['status'] = 'error';
+            $snapshot['error_code'] = self::ERROR_USAGE_API_FAILURE;
+            $snapshot['error'] = sprintf(
+                'Backblaze B2 : impossible de récupérer les quotas — %s',
+                $exception->getMessage()
+            );
+            $snapshot['latency_ms'] = (int) round((microtime(true) - $started_at) * 1000);
+
+            return $snapshot;
+        }
+
+        $latency = (int) round((microtime(true) - $started_at) * 1000);
+        $snapshot['latency_ms'] = $latency;
+
+        if (!is_array($raw_snapshot) || (
+            !array_key_exists('used_bytes', $raw_snapshot)
+            && !array_key_exists('quota_bytes', $raw_snapshot)
+            && !array_key_exists('free_bytes', $raw_snapshot)
+        )) {
+            $snapshot['status'] = 'error';
+            $snapshot['error_code'] = self::ERROR_USAGE_EMPTY;
+            $snapshot['error'] = __('Backblaze B2 : la réponse de `b2_get_usage` est vide.', 'backup-jlg');
+
+            return $snapshot;
+        }
+
+        $snapshot['status'] = 'ok';
+        $snapshot['used_bytes'] = isset($raw_snapshot['used_bytes']) ? $raw_snapshot['used_bytes'] : null;
+        $snapshot['quota_bytes'] = isset($raw_snapshot['quota_bytes']) ? $raw_snapshot['quota_bytes'] : null;
+        $snapshot['free_bytes'] = isset($raw_snapshot['free_bytes']) ? $raw_snapshot['free_bytes'] : null;
+
+        if ($snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null && $snapshot['free_bytes'] === null) {
+            $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
+        }
+        if ($snapshot['quota_bytes'] === null && $snapshot['used_bytes'] !== null && $snapshot['free_bytes'] !== null) {
+            $snapshot['quota_bytes'] = max(0, (int) $snapshot['used_bytes'] + (int) $snapshot['free_bytes']);
+        }
+
+        return $snapshot;
     }
 
     private function fetch_usage_snapshot(array $settings): ?array {

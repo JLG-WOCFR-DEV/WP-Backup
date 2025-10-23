@@ -37,6 +37,7 @@ if (!function_exists('get_date_from_gmt')) {
 require_once __DIR__ . '/../includes/class-bjlg-backup.php';
 require_once __DIR__ . '/../includes/class-bjlg-settings.php';
 require_once __DIR__ . '/../includes/class-bjlg-scheduler.php';
+require_once __DIR__ . '/../includes/class-bjlg-history.php';
 
 final class BJLG_SchedulerTest extends TestCase
 {
@@ -54,6 +55,8 @@ final class BJLG_SchedulerTest extends TestCase
         BJLG_Debug::$logs = [];
         $_POST = [];
         $_REQUEST = [];
+        bjlg_update_option('bjlg_event_trigger_settings', BJLG\BJLG_Scheduler::sanitize_event_trigger_settings([]));
+        bjlg_update_option('bjlg_event_trigger_state', []);
     }
 
     protected function tearDown(): void
@@ -286,33 +289,8 @@ final class BJLG_SchedulerTest extends TestCase
             $this->assertIsArray($response->data['next_runs']);
             $this->assertArrayHasKey($saved_schedule['id'], $response->data['next_runs']);
             $next_run_entry = $response->data['next_runs'][$saved_schedule['id']];
-        $this->assertArrayHasKey('next_run', $next_run_entry);
-    }
-
-    public function test_generate_cron_impact_summary_uses_recent_durations_filter(): void
-    {
-        $scheduler = BJLG\BJLG_Scheduler::instance();
-
-        $callback = static function () {
-            return [120, 150, 180];
-        };
-
-        add_filter('bjlg_scheduler_recent_durations', $callback, 10, 3);
-
-        try {
-            $impact = $scheduler->generate_cron_impact_summary('*/5 * * * *');
-        } finally {
-            remove_filter('bjlg_scheduler_recent_durations', $callback, 10);
+            $this->assertArrayHasKey('next_run', $next_run_entry);
         }
-
-        $this->assertIsArray($impact);
-        $this->assertSame(288.0, $impact['runs_per_day']);
-        $this->assertSame(150.0, $impact['average_duration']);
-        $this->assertSame(43200.0, $impact['estimated_load']);
-        $this->assertSame('high', $impact['risk']['level']);
-        $this->assertGreaterThan(0, $impact['history_samples']);
-        $this->assertNotEmpty($impact['risk']['reasons']);
-    }
 
         $collection = bjlg_get_option('bjlg_schedule_settings');
 
@@ -360,6 +338,31 @@ final class BJLG_SchedulerTest extends TestCase
         $this->assertSame([$stored_schedule['id']], $event['args']);
         $this->assertIsInt($event['timestamp']);
         $this->assertGreaterThan(0, $event['timestamp']);
+    }
+
+    public function test_generate_cron_impact_summary_uses_recent_durations_filter(): void
+    {
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+
+        $callback = static function () {
+            return [120, 150, 180];
+        };
+
+        add_filter('bjlg_scheduler_recent_durations', $callback, 10, 3);
+
+        try {
+            $impact = $scheduler->generate_cron_impact_summary('*/5 * * * *');
+        } finally {
+            remove_filter('bjlg_scheduler_recent_durations', $callback, 10);
+        }
+
+        $this->assertIsArray($impact);
+        $this->assertSame(288.0, $impact['runs_per_day']);
+        $this->assertSame(150.0, $impact['average_duration']);
+        $this->assertSame(43200.0, $impact['estimated_load']);
+        $this->assertSame('high', $impact['risk']['level']);
+        $this->assertGreaterThan(0, $impact['history_samples']);
+        $this->assertNotEmpty($impact['risk']['reasons']);
     }
 
     public function test_handle_save_schedule_accepts_fifteen_minute_recurrence(): void
@@ -473,6 +476,138 @@ final class BJLG_SchedulerTest extends TestCase
             (int) $runDate->format('j')
         );
         $this->assertSame('02:30', $runDate->format('H:i'));
+    }
+
+    public function test_handle_event_trigger_dispatches_immediately(): void
+    {
+        bjlg_update_option('bjlg_event_trigger_settings', [
+            'triggers' => [
+                'filesystem' => [
+                    'enabled' => true,
+                    'cooldown' => 0,
+                    'batch_window' => 0,
+                    'max_batch' => 1,
+                ],
+                'database' => [
+                    'enabled' => false,
+                    'cooldown' => 0,
+                    'batch_window' => 0,
+                    'max_batch' => 1,
+                ],
+            ],
+        ]);
+
+        $GLOBALS['bjlg_test_scheduled_events']['single'] = [];
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+        $scheduler->handle_event_trigger('filesystem', ['path' => 'wp-content/uploads/file.jpg']);
+
+        $scheduled = $GLOBALS['bjlg_test_scheduled_events']['single'];
+        $this->assertNotEmpty($scheduled);
+        $event = end($scheduled);
+        $this->assertSame('bjlg_run_backup_task', $event['hook']);
+        $this->assertArrayHasKey('task_id', $event['args']);
+
+        $state = bjlg_get_option('bjlg_event_trigger_state', []);
+        $this->assertArrayHasKey('pending', $state);
+        $this->assertArrayNotHasKey('filesystem', $state['pending']);
+        $this->assertArrayHasKey('last_dispatch', $state);
+        $this->assertArrayHasKey('filesystem', $state['last_dispatch']);
+    }
+
+    public function test_handle_event_trigger_batches_until_threshold(): void
+    {
+        bjlg_update_option('bjlg_event_trigger_settings', [
+            'triggers' => [
+                'filesystem' => [
+                    'enabled' => true,
+                    'cooldown' => 0,
+                    'batch_window' => 120,
+                    'max_batch' => 3,
+                ],
+                'database' => [
+                    'enabled' => false,
+                    'cooldown' => 0,
+                    'batch_window' => 0,
+                    'max_batch' => 1,
+                ],
+            ],
+        ]);
+
+        $GLOBALS['bjlg_test_scheduled_events']['single'] = [];
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+        $scheduler->handle_event_trigger('filesystem', ['path' => 'file-a']);
+        $scheduler->handle_event_trigger('filesystem', ['path' => 'file-b']);
+
+        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+
+        $state = bjlg_get_option('bjlg_event_trigger_state', []);
+        $this->assertArrayHasKey('pending', $state);
+        $this->assertSame(2, $state['pending']['filesystem']['count']);
+
+        $scheduler->handle_event_trigger('filesystem', ['path' => 'file-c']);
+
+        $scheduled = $GLOBALS['bjlg_test_scheduled_events']['single'];
+        $this->assertNotEmpty($scheduled);
+        $event = end($scheduled);
+        $this->assertSame('bjlg_run_backup_task', $event['hook']);
+
+        $state = bjlg_get_option('bjlg_event_trigger_state', []);
+        $this->assertArrayNotHasKey('filesystem', $state['pending']);
+        $this->assertArrayHasKey('filesystem', $state['last_dispatch']);
+    }
+
+    public function test_handle_event_trigger_respects_cooldown(): void
+    {
+        bjlg_update_option('bjlg_event_trigger_settings', [
+            'triggers' => [
+                'filesystem' => [
+                    'enabled' => true,
+                    'cooldown' => 300,
+                    'batch_window' => 0,
+                    'max_batch' => 1,
+                ],
+                'database' => [
+                    'enabled' => false,
+                    'cooldown' => 0,
+                    'batch_window' => 0,
+                    'max_batch' => 1,
+                ],
+            ],
+        ]);
+
+        bjlg_update_option('bjlg_event_trigger_state', [
+            'version' => 1,
+            'pending' => [],
+            'last_dispatch' => ['filesystem' => time()],
+            'next_run' => [],
+        ]);
+
+        $GLOBALS['bjlg_test_scheduled_events']['single'] = [];
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+        $scheduler->handle_event_trigger('filesystem', ['path' => 'file-d']);
+
+        $scheduled = $GLOBALS['bjlg_test_scheduled_events']['single'];
+        $this->assertNotEmpty($scheduled);
+
+        $eventHooks = array_map(static function ($event) {
+            return $event['hook'];
+        }, $scheduled);
+        $this->assertNotContains('bjlg_run_backup_task', $eventHooks);
+
+        $queuedEvent = array_values(array_filter($scheduled, static function ($event) {
+            return $event['hook'] === BJLG\BJLG_Scheduler::EVENT_CRON_HOOK;
+        }));
+        $this->assertNotEmpty($queuedEvent);
+        $this->assertSame(['filesystem'], $queuedEvent[0]['args']);
+
+        $state = bjlg_get_option('bjlg_event_trigger_state', []);
+        $this->assertArrayHasKey('filesystem', $state['pending']);
+        $this->assertArrayHasKey('filesystem', $state['next_run']);
+        $this->assertGreaterThan(time(), (int) $state['next_run']['filesystem']);
     }
 
     private function computeExpectedMonthlyTimestamp(\DateTimeImmutable $now, int $dayOfMonth, int $hour, int $minute): int

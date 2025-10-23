@@ -69,5 +69,20 @@ final class BJLG_Fake_Remote_Destination implements BJLG_Destination_Interface
     {
         return $this->usage;
     }
+
+    public function get_remote_quota_snapshot()
+    {
+        return [
+            'status' => $this->usage['status'] ?? ($this->connected ? 'ok' : 'unavailable'),
+            'used_bytes' => $this->usage['used_bytes'] ?? null,
+            'quota_bytes' => $this->usage['quota_bytes'] ?? null,
+            'free_bytes' => $this->usage['free_bytes'] ?? null,
+            'latency_ms' => $this->usage['latency_ms'] ?? null,
+            'error' => $this->usage['error'] ?? null,
+            'error_code' => $this->usage['error_code'] ?? null,
+            'source' => $this->usage['source'] ?? 'mock',
+            'fetched_at' => $this->usage['fetched_at'] ?? time(),
+        ];
+    }
 }
 
