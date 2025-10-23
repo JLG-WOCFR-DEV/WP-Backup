@@ -325,6 +325,31 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
             return $defaults;
         }
 
+        $snapshot = $this->get_remote_quota_snapshot();
+        if (($snapshot['status'] ?? '') === 'ok') {
+            return array_merge($defaults, array_intersect_key($snapshot, $defaults));
+        }
+
+        return array_merge($defaults, $this->estimate_usage_from_listing($this->get_settings()));
+    }
+
+    public function get_remote_quota_snapshot() {
+        $snapshot = [
+            'status' => 'unavailable',
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+            'fetched_at' => $this->get_time(),
+            'error' => null,
+            'source' => 'provider',
+        ];
+
+        if (!$this->is_connected()) {
+            $snapshot['error'] = __('Amazon S3 n\'est pas configuré.', 'backup-jlg');
+
+            return $snapshot;
+        }
+
         $settings = $this->get_settings();
         $started_at = microtime(true);
 

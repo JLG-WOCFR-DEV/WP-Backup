@@ -1,0 +1,21 @@
+{
+  "name": "backup-jlg",
+  "private": true,
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^30.2.0",
+    "jquery": "^3.7.1"
+  },
+  "scripts": {
+    "test": "jest"
+  },
+  "jest": {
+    "testMatch": [
+      "**/assets/js/__tests__/**/*.test.js"
+    ],
+    "testEnvironment": "jsdom",
+    "setupFiles": [
+      "<rootDir>/assets/js/__tests__/jest.setup.js"
+    ]
+  }
+}

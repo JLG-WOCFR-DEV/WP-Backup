@@ -17,6 +17,8 @@ if (!defined('ABSPATH')) {
 require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
 require_once __DIR__ . '/class-bjlg-restore.php';
 require_once __DIR__ . '/class-bjlg-settings.php';
+require_once __DIR__ . '/class-bjlg-history.php';
+require_once __DIR__ . '/class-bjlg-scheduler.php';
 
 class BJLG_REST_API {
     
@@ -302,6 +304,22 @@ class BJLG_REST_API {
             ]
         ]);
 
+        register_rest_route(self::API_NAMESPACE, '/cron/preview', [
+            'methods' => 'POST',
+            'callback' => [$this, 'preview_cron_expression'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args([
+                'expression' => [
+                    'required' => true,
+                    'type' => 'string',
+                ],
+                'components' => [
+                    'required' => false,
+                    'type' => 'array',
+                ],
+            ]),
+        ]);
+
         // Routes : Planification
         register_rest_route(self::API_NAMESPACE, '/schedules', [
             [
@@ -423,6 +441,43 @@ class BJLG_REST_API {
      * @return array<string, mixed>
      */
     private function merge_site_args(array $args = []): array {
+        $args['context'] = [
+            'required' => false,
+            'sanitize_callback' => static function ($param) {
+                if (!is_string($param)) {
+                    return null;
+                }
+
+                $value = strtolower($param);
+
+                return in_array($value, ['site', 'network'], true) ? $value : null;
+            },
+            'validate_callback' => static function ($param) {
+                if ($param === null || $param === '' || $param === false) {
+                    return true;
+                }
+
+                if (!is_string($param)) {
+                    return new WP_Error(
+                        'bjlg_invalid_context',
+                        __('Le paramètre context doit être une chaîne de caractères.', 'backup-jlg'),
+                        ['status' => 400]
+                    );
+                }
+
+                $value = strtolower($param);
+                if (!in_array($value, ['site', 'network'], true)) {
+                    return new WP_Error(
+                        'bjlg_invalid_context',
+                        __('Le paramètre context doit être "site" ou "network".', 'backup-jlg'),
+                        ['status' => 400]
+                    );
+                }
+
+                return true;
+            },
+        ];
+
         $args['site_id'] = [
             'required' => false,
             'sanitize_callback' => static function ($param) {
@@ -460,6 +515,10 @@ class BJLG_REST_API {
      * @param \WP_REST_Request $request
      */
     private function get_requested_site_id($request) {
+        if ($this->get_requested_context($request) === 'network') {
+            return null;
+        }
+
         $site_id = $request->get_param('site_id');
 
         if (($site_id === null || $site_id === '' || $site_id === false) && method_exists($request, 'get_header')) {
@@ -479,6 +538,33 @@ class BJLG_REST_API {
     }
 
     /**
+     * Détermine le contexte ciblé par la requête (site ou réseau).
+     */
+    private function get_requested_context($request): string
+    {
+        $context = null;
+
+        if (method_exists($request, 'get_param')) {
+            $context = $request->get_param('context');
+        }
+
+        if (($context === null || $context === '' || $context === false) && method_exists($request, 'get_header')) {
+            $header_value = $request->get_header('X-WP-Context');
+            if ($header_value !== null && $header_value !== '' && $header_value !== false) {
+                $context = $header_value;
+            }
+        }
+
+        if (!is_string($context)) {
+            return 'site';
+        }
+
+        $value = strtolower($context);
+
+        return $value === 'network' ? 'network' : 'site';
+    }
+
+    /**
      * Exécute un callback dans le contexte multisite demandé.
      *
      * @param callable $callback
@@ -486,6 +572,42 @@ class BJLG_REST_API {
      * @return mixed
      */
     private function with_request_site($request, callable $callback) {
+        $context = $this->get_requested_context($request);
+
+        if ($context === 'network') {
+            if (!function_exists('is_multisite') || !is_multisite()) {
+                return new WP_Error(
+                    'bjlg_network_context_unavailable',
+                    __('Le contexte réseau n’est pas disponible sur cette installation.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+
+            if ($this->get_requested_site_id($request)) {
+                return new WP_Error(
+                    'bjlg_context_conflict',
+                    __('Impossible de combiner un identifiant de site avec le contexte réseau.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+
+            $has_network_access = \bjlg_with_network(static function () {
+                return \bjlg_can_manage_plugin();
+            });
+
+            if (!$has_network_access) {
+                return new WP_Error(
+                    'bjlg_network_forbidden',
+                    __('Vous n’avez pas les permissions requises pour gérer le réseau.', 'backup-jlg'),
+                    ['status' => 403]
+                );
+            }
+
+            return \bjlg_with_network(static function () use ($callback) {
+                return $callback();
+            });
+        }
+
         $site_id = $this->get_requested_site_id($request);
 
         if (!$site_id) {
@@ -493,7 +615,11 @@ class BJLG_REST_API {
         }
 
         if (!function_exists('is_multisite') || !is_multisite()) {
-            return $callback();
+            return new WP_Error(
+                'bjlg_multisite_required',
+                __('Le paramètre site_id nécessite un réseau multisite.', 'backup-jlg'),
+                ['status' => 400]
+            );
         }
 
         if (function_exists('get_site') && !get_site($site_id)) {
@@ -1586,6 +1712,7 @@ class BJLG_REST_API {
                 case 'notifications':
                 case 'performance':
                 case 'webhooks':
+                case 'update_guard':
                     $validated_value = $this->validate_generic_settings($value, $key);
                     break;
                 default:
@@ -2423,6 +2550,7 @@ class BJLG_REST_API {
                 'schedule' => \bjlg_get_option('bjlg_schedule_settings', []),
                 'encryption' => \bjlg_get_option('bjlg_encryption_settings', []),
                 'notifications' => \bjlg_get_option('bjlg_notification_settings', []),
+                'update_guard' => \bjlg_get_option('bjlg_update_guard_settings', []),
                 'performance' => \bjlg_get_option('bjlg_performance_settings', []),
                 'webhooks' => \bjlg_get_option('bjlg_webhook_settings', [])
             ];
@@ -2573,6 +2701,130 @@ class BJLG_REST_API {
                 'success' => true,
                 'message' => 'Schedule created successfully',
                 'schedules' => $final_collection['schedules'],
+            ]);
+        });
+    }
+
+    public function preview_cron_expression($request) {
+        return $this->with_request_site($request, function () use ($request) {
+            $raw_expression = (string) $request->get_param('expression');
+            $sanitized = BJLG_Settings::sanitize_cron_expression($raw_expression);
+
+            if ($sanitized === '') {
+                return new WP_Error(
+                    'invalid_schedule_cron',
+                    __('L’expression Cron doit contenir cinq champs valides.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+
+            $components = [];
+            $components_param = $request->get_param('components');
+            if (is_array($components_param)) {
+                foreach ($components_param as $component) {
+                    if (is_scalar($component)) {
+                        $components[] = sanitize_key((string) $component);
+                    }
+                }
+            }
+
+            $scheduler = BJLG_Scheduler::instance();
+            if (!$scheduler) {
+                return new WP_Error(
+                    'scheduler_unavailable',
+                    __('Le planificateur est indisponible.', 'backup-jlg'),
+                    ['status' => 500]
+                );
+            }
+
+            $analysis = BJLG_Scheduler::analyze_custom_cron_expression($sanitized);
+            if (is_wp_error($analysis)) {
+                $details = $analysis->get_error_data();
+                return new WP_Error(
+                    'invalid_schedule_cron',
+                    $analysis->get_error_message(),
+                    [
+                        'status' => 400,
+                        'details' => isset($details['details']) ? (array) $details['details'] : [],
+                    ]
+                );
+            }
+
+            if (!empty($analysis['errors'])) {
+                return new WP_Error(
+                    'invalid_schedule_cron',
+                    (string) $analysis['errors'][0],
+                    [
+                        'status' => 400,
+                        'details' => $analysis['errors'],
+                    ]
+                );
+            }
+
+            $impact = $scheduler->generate_cron_impact_summary($sanitized, $components, $analysis);
+            $runs = isset($analysis['runs']) && is_array($analysis['runs']) ? $analysis['runs'] : [];
+            $current_timestamp = current_time('timestamp');
+            $formatted_runs = [];
+
+            foreach ($runs as $run) {
+                if (!$run instanceof \DateTimeImmutable) {
+                    continue;
+                }
+                $timestamp = $run->getTimestamp();
+                $formatted_runs[] = [
+                    'timestamp' => $timestamp,
+                    'formatted' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), $timestamp),
+                    'relative' => sprintf(__('dans %s', 'backup-jlg'), human_time_diff($current_timestamp, $timestamp)),
+                    'iso' => wp_date('c', $timestamp),
+                ];
+            }
+
+            $min_interval = isset($analysis['min_interval']) ? (int) $analysis['min_interval'] : null;
+            $interval_label = '';
+            if ($min_interval) {
+                $minute_in_seconds = defined('MINUTE_IN_SECONDS') ? (int) MINUTE_IN_SECONDS : 60;
+                if ($min_interval < $minute_in_seconds) {
+                    $interval_label = __('moins d’une minute', 'backup-jlg');
+                } else {
+                    $interval_label = human_time_diff($current_timestamp, $current_timestamp + $min_interval);
+                }
+            }
+
+            $severity = 'success';
+            if (!empty($analysis['warnings'])) {
+                $severity = 'warning';
+            }
+
+            $message = '';
+            if (!empty($analysis['warnings'])) {
+                $message = (string) $analysis['warnings'][0];
+            } elseif ($min_interval) {
+                $message = sprintf(
+                    __('Intervalle minimum détecté : %s.', 'backup-jlg'),
+                    $interval_label
+                );
+            } elseif (!empty($formatted_runs)) {
+                $message = sprintf(
+                    __('Prochaine exécution planifiée dans %s.', 'backup-jlg'),
+                    human_time_diff($current_timestamp, $formatted_runs[0]['timestamp'])
+                );
+            }
+
+            $timezone = function_exists('wp_timezone_string') ? wp_timezone_string() : 'UTC';
+
+            return rest_ensure_response([
+                'expression' => $sanitized,
+                'next_runs' => $formatted_runs,
+                'warnings' => $analysis['warnings'],
+                'errors' => $analysis['errors'],
+                'severity' => $severity,
+                'message' => $message,
+                'interval' => [
+                    'min' => $min_interval,
+                    'min_human' => $interval_label,
+                ],
+                'timezone' => $timezone,
+                'impact' => $impact,
             ]);
         });
     }

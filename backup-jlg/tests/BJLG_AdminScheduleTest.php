@@ -60,5 +60,7 @@ final class BJLG_AdminScheduleTest extends TestCase
         $this->assertStringContainsString('value="12"', $html);
         $this->assertStringContainsString('&quot;day_of_month&quot;:12', $html);
         $this->assertStringContainsString('&quot;day_of_month&quot;:1', $html);
+        $this->assertStringContainsString('data-cron-suggestions', $html);
+        $this->assertStringContainsString('data-cron-risk', $html);
     }
 }

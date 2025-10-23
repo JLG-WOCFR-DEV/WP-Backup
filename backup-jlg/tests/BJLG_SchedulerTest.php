@@ -35,6 +35,7 @@ if (!function_exists('get_date_from_gmt')) {
 }
 
 require_once __DIR__ . '/../includes/class-bjlg-backup.php';
+require_once __DIR__ . '/../includes/class-bjlg-settings.php';
 require_once __DIR__ . '/../includes/class-bjlg-scheduler.php';
 
 final class BJLG_SchedulerTest extends TestCase
@@ -153,6 +154,94 @@ final class BJLG_SchedulerTest extends TestCase
         );
     }
 
+    public function test_get_capacity_forecast_detects_overlaps_and_recommendations(): void
+    {
+        $collection = BJLG\BJLG_Settings::sanitize_schedule_collection([
+            'schedules' => [
+                [
+                    'id' => 'schedule_alpha',
+                    'label' => 'Alpha',
+                    'recurrence' => 'daily',
+                    'components' => ['db', 'uploads'],
+                    'time' => '02:00',
+                ],
+                [
+                    'id' => 'schedule_beta',
+                    'label' => 'Beta',
+                    'recurrence' => 'daily',
+                    'components' => ['db'],
+                    'incremental' => true,
+                    'time' => '02:10',
+                ],
+            ],
+        ]);
+
+        bjlg_update_option('bjlg_schedule_settings', $collection);
+
+        $now = time();
+        wp_schedule_event($now + 1200, 'daily', BJLG\BJLG_Scheduler::SCHEDULE_HOOK, ['schedule_alpha']);
+        wp_schedule_event($now + 1500, 'daily', BJLG\BJLG_Scheduler::SCHEDULE_HOOK, ['schedule_beta']);
+
+        bjlg_update_option('bjlg_performance_stats', [
+            ['duration' => 900],
+            ['duration' => 780],
+        ]);
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+        $forecast = $scheduler->get_capacity_forecast();
+
+        $this->assertArrayHasKey('estimated_load', $forecast);
+        $this->assertArrayHasKey('load_level', $forecast['estimated_load']);
+        $this->assertContains($forecast['estimated_load']['load_level'], ['medium', 'high']);
+        $this->assertNotEmpty($forecast['conflicts']);
+        $this->assertNotEmpty($forecast['ideal_windows']);
+        $this->assertArrayHasKey('suggested_adjustments', $forecast);
+        $this->assertIsArray($forecast['suggested_adjustments']);
+    }
+
+    public function test_handle_scheduler_recommendations_returns_forecast_payload(): void
+    {
+        $collection = BJLG\BJLG_Settings::sanitize_schedule_collection([
+            'schedules' => [
+                [
+                    'id' => 'schedule_gamma',
+                    'label' => 'Gamma',
+                    'recurrence' => 'weekly',
+                    'components' => ['uploads'],
+                    'incremental' => true,
+                    'time' => '04:00',
+                ],
+            ],
+        ]);
+
+        bjlg_update_option('bjlg_schedule_settings', $collection);
+        wp_schedule_event(time() + 3600, 'weekly', BJLG\BJLG_Scheduler::SCHEDULE_HOOK, ['schedule_gamma']);
+        bjlg_update_option('bjlg_performance_stats', [['duration' => 600]]);
+
+        $_POST = [
+            'nonce' => 'test-nonce',
+            'current_schedule' => [
+                'id' => 'schedule_gamma',
+                'recurrence' => 'weekly',
+                'components' => ['uploads'],
+                'incremental' => true,
+                'time' => '04:00',
+            ],
+        ];
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+
+        try {
+            $scheduler->handle_scheduler_recommendations();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertTrue($response->success);
+            $this->assertArrayHasKey('forecast', $response->data);
+            $this->assertArrayHasKey('estimated_load', $response->data['forecast']);
+            $this->assertArrayHasKey('advice', $response->data['forecast']);
+        }
+    }
+
     public function test_handle_save_schedule_updates_settings_and_returns_next_run(): void
     {
         $_POST = [
@@ -197,8 +286,33 @@ final class BJLG_SchedulerTest extends TestCase
             $this->assertIsArray($response->data['next_runs']);
             $this->assertArrayHasKey($saved_schedule['id'], $response->data['next_runs']);
             $next_run_entry = $response->data['next_runs'][$saved_schedule['id']];
-            $this->assertArrayHasKey('next_run', $next_run_entry);
+        $this->assertArrayHasKey('next_run', $next_run_entry);
+    }
+
+    public function test_generate_cron_impact_summary_uses_recent_durations_filter(): void
+    {
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+
+        $callback = static function () {
+            return [120, 150, 180];
+        };
+
+        add_filter('bjlg_scheduler_recent_durations', $callback, 10, 3);
+
+        try {
+            $impact = $scheduler->generate_cron_impact_summary('*/5 * * * *');
+        } finally {
+            remove_filter('bjlg_scheduler_recent_durations', $callback, 10);
         }
+
+        $this->assertIsArray($impact);
+        $this->assertSame(288.0, $impact['runs_per_day']);
+        $this->assertSame(150.0, $impact['average_duration']);
+        $this->assertSame(43200.0, $impact['estimated_load']);
+        $this->assertSame('high', $impact['risk']['level']);
+        $this->assertGreaterThan(0, $impact['history_samples']);
+        $this->assertNotEmpty($impact['risk']['reasons']);
+    }
 
         $collection = bjlg_get_option('bjlg_schedule_settings');
 
