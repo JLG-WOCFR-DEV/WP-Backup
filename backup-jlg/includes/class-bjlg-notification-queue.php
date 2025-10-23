@@ -1081,6 +1081,33 @@ class BJLG_Notification_Queue {
         }
     }
 
+    /**
+     * Finds a queue entry by its identifier.
+     *
+     * @param string $entry_id
+     *
+     * @return array<string,mixed>|null
+     */
+    public static function find_entry($entry_id) {
+        $entry_id = is_string($entry_id) ? trim($entry_id) : '';
+        if ($entry_id === '') {
+            return null;
+        }
+
+        $queue = self::get_queue();
+        foreach ($queue as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            if ((string) ($entry['id'] ?? '') === $entry_id) {
+                return $entry;
+            }
+        }
+
+        return null;
+    }
+
     public static function update_resolution($entry_id, array $resolution) {
         $entry_id = is_string($entry_id) ? trim($entry_id) : '';
         if ($entry_id === '') {
