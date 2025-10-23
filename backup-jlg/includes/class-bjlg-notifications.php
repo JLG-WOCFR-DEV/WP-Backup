@@ -316,7 +316,9 @@ class BJLG_Notifications {
 
         $context = [
             'free_space' => isset($data['free_space']) ? (int) $data['free_space'] : null,
-            'threshold' => isset($data['threshold']) ? (int) $data['threshold'] : null,
+            'threshold' => isset($data['threshold'])
+                ? (int) $data['threshold']
+                : (isset($data['threshold_percent']) ? (int) round((float) $data['threshold_percent']) : null),
             'path' => isset($data['path']) ? (string) $data['path'] : '',
         ];
 

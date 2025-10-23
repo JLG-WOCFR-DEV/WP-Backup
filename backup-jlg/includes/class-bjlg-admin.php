@@ -2756,6 +2756,11 @@ class BJLG_Admin {
             $incremental_settings = [];
         }
         $incremental_settings = wp_parse_args($incremental_settings, $incremental_defaults);
+        $monitoring_settings = BJLG_Settings::get_monitoring_settings();
+        $storage_threshold = isset($monitoring_settings['storage_quota_warning_threshold'])
+            ? (float) $monitoring_settings['storage_quota_warning_threshold']
+            : 85.0;
+        $storage_threshold = max(1.0, min(100.0, $storage_threshold));
         $schedule_collection = $this->get_schedule_settings_for_display();
         $schedules = isset($schedule_collection['schedules']) && is_array($schedule_collection['schedules'])
             ? array_values($schedule_collection['schedules'])
@@ -3220,6 +3225,38 @@ class BJLG_Admin {
                                     Activer la fusion automatique en sauvegarde synthétique («&nbsp;synth full&nbsp;»)
                                 </label>
                                 <p class="description">Lorsque la limite d'incréments est atteinte, les plus anciens sont fusionnés dans la dernière complète sans lancer un nouvel export complet.</p>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+
+                <h3><span class="dashicons dashicons-chart-area" aria-hidden="true"></span> <?php esc_html_e('Surveillance du stockage', 'backup-jlg'); ?></h3>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><label for="bjlg-storage-warning-threshold"><?php esc_html_e("Seuil d'alerte quota", 'backup-jlg'); ?></label></th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <div class="bjlg-form-field-group">
+                                    <div class="bjlg-form-field-control">
+                                        <input
+                                            id="bjlg-storage-warning-threshold"
+                                            name="storage_quota_warning_threshold"
+                                            type="number"
+                                            class="small-text"
+                                            value="<?php echo esc_attr($storage_threshold); ?>"
+                                            min="1"
+                                            max="100"
+                                            step="0.1"
+                                            aria-describedby="bjlg-storage-warning-threshold-description"
+                                        >
+                                    </div>
+                                    <div class="bjlg-form-field-actions">
+                                        <span class="bjlg-form-field-unit">%</span>
+                                    </div>
+                                </div>
+                                <p id="bjlg-storage-warning-threshold-description" class="description">
+                                    <?php esc_html_e("Déclenche les alertes et notifications lorsque l'utilisation d'une destination distante dépasse ce seuil.", 'backup-jlg'); ?>
+                                </p>
                             </div>
                         </td>
                     </tr>
