@@ -31,7 +31,7 @@ final class BJLG_RestoreSelfTestReportTest extends TestCase
     public function test_finalize_report_computes_metrics_and_persists_option(): void
     {
         $startedAt = time();
-        $archivePath = tempnam(BJLG_BACKUP_DIR, 'self-test-');
+        $archivePath = tempnam(bjlg_get_backup_directory(), 'self-test-');
         $this->assertNotFalse($archivePath);
 
         $archiveMtime = $startedAt - 7200;

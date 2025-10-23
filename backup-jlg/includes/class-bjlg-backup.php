@@ -928,7 +928,7 @@ class BJLG_Backup {
             }
 
             $backup_filename = $this->generate_backup_filename($backup_type, $components);
-            $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
+            $backup_filepath = bjlg_get_backup_directory() . $backup_filename;
             $use_parallel_flow = !empty($task_data['use_parallel'])
                 && !$task_data['incremental']
                 && empty($include_patterns)
@@ -1099,8 +1099,22 @@ class BJLG_Backup {
                 $backup_filepath,
                 $destination_queue,
                 $task_id,
-                $task_data['secondary_destination_batches'] ?? []
+                $task_data['secondary_destination_batches'] ?? [],
+                $task_data
             );
+
+            if (isset($destination_results['resume_state']['managed_vault'])) {
+                $managed_resume = $destination_results['resume_state']['managed_vault'];
+                if (empty($managed_resume)) {
+                    if (isset($task_data['managed_vault_resume'])) {
+                        unset($task_data['managed_vault_resume']);
+                        self::save_task_state($task_id, $task_data);
+                    }
+                } elseif (is_array($managed_resume)) {
+                    $task_data['managed_vault_resume'] = $managed_resume;
+                    self::save_task_state($task_id, $task_data);
+                }
+            }
 
             $destination_failure_notice = '';
             if (!empty($destination_results['failures'])) {
@@ -1131,7 +1145,9 @@ class BJLG_Backup {
 
             // Calculer les statistiques
             $file_size = filesize($backup_filepath);
-            $duration = time() - $task_data['start_time'];
+            $completion_timestamp = time();
+            $start_time = isset($task_data['start_time']) ? (int) $task_data['start_time'] : $completion_timestamp;
+            $duration = max(0, $completion_timestamp - $start_time);
 
             // Enregistrer le succès
             $post_check_history = $this->format_post_check_history_summary($check_results);
@@ -1162,9 +1178,47 @@ class BJLG_Backup {
                 );
             }
 
-            BJLG_History::log('backup_created', 'success', $history_message);
+            $metrics = $this->build_backup_metrics([
+                'start_time' => $start_time,
+                'completed_at' => $completion_timestamp,
+                'file_size' => $file_size,
+                'components' => $components,
+                'destination_queue' => $destination_queue,
+                'destination_results' => $destination_results,
+                'check_results' => $check_results,
+                'post_check_summary' => $post_check_history,
+                'post_check_message' => $check_results['overall_message'] ?? '',
+                'destination_notice' => $destination_failure_notice,
+                'encryption' => $effective_encryption,
+                'requested_encryption' => $requested_encryption,
+                'incremental' => $task_data['incremental'],
+                'backup_filename' => $backup_filename,
+                'backup_path' => $backup_filepath,
+            ]);
 
-            $completion_timestamp = time();
+            $history_metadata = [
+                'metrics' => $metrics,
+                'task_id' => $task_id,
+                'backup' => [
+                    'filename' => $backup_filename,
+                    'path' => $backup_filepath,
+                ],
+                'destinations' => [
+                    'failures' => $destination_results['failures'],
+                    'delivered' => $metrics['destinations']['delivered'],
+                ],
+                'post_checks' => [
+                    'overall_status' => $check_results['overall_status'] ?? '',
+                    'summary' => $post_check_history,
+                ],
+            ];
+
+            if ($destination_failure_notice !== '') {
+                $history_metadata['warnings'][] = $destination_failure_notice;
+            }
+
+            BJLG_History::log('backup_created', 'success', $history_message, null, null, $history_metadata);
+
             $manifest_details = [
                 'file' => $backup_filename,
                 'path' => $backup_filepath,
@@ -1184,6 +1238,7 @@ class BJLG_Backup {
             $manifest_details['post_checks_summary'] = $post_check_history;
             $manifest_details['destinations'] = $destination_queue;
             $manifest_details['destination_results'] = $destination_results;
+            $manifest_details['metrics'] = $metrics;
 
             // Notification de succès
             do_action('bjlg_backup_complete', $backup_filename, $manifest_details);
@@ -1243,13 +1298,13 @@ class BJLG_Backup {
      * @throws Exception Quand le dossier ne peut pas être créé ou n'est pas accessible en écriture.
      */
     private function ensure_backup_directory_is_ready() {
-        if (!is_dir(BJLG_BACKUP_DIR)) {
-            if (!wp_mkdir_p(BJLG_BACKUP_DIR)) {
+        if (!is_dir(bjlg_get_backup_directory())) {
+            if (!wp_mkdir_p(bjlg_get_backup_directory())) {
                 throw new Exception("Le dossier de sauvegarde est introuvable et n'a pas pu être créé.");
             }
         }
 
-        $is_writable = function_exists('wp_is_writable') ? wp_is_writable(BJLG_BACKUP_DIR) : is_writable(BJLG_BACKUP_DIR);
+        $is_writable = function_exists('wp_is_writable') ? wp_is_writable(bjlg_get_backup_directory()) : is_writable(bjlg_get_backup_directory());
 
         if (!$is_writable) {
             throw new Exception("Le dossier de sauvegarde n'est pas accessible en écriture.");
@@ -1275,7 +1330,7 @@ class BJLG_Backup {
                 'free_bytes' => null,
                 'checked_at' => time(),
                 'status' => 'skipped',
-                'target_path' => BJLG_BACKUP_DIR,
+                'target_path' => bjlg_get_backup_directory(),
             ];
         }
 
@@ -1304,7 +1359,7 @@ class BJLG_Backup {
 
         $required_bytes = $estimated_bytes + $margin_bytes;
 
-        $disk_probe_path = BJLG_BACKUP_DIR;
+        $disk_probe_path = bjlg_get_backup_directory();
         if (!is_dir($disk_probe_path)) {
             $probe_parent = dirname($disk_probe_path);
             if (is_dir($probe_parent)) {
@@ -1617,7 +1672,7 @@ class BJLG_Backup {
         do {
             $unique_suffix = str_replace('.', '', uniqid('', true));
             $filename = "{$base}-{$unique_suffix}.zip";
-            $filepath = BJLG_BACKUP_DIR . $filename;
+            $filepath = bjlg_get_backup_directory() . $filename;
         } while (file_exists($filepath) || file_exists($filepath . '.enc'));
 
         return $filename;
@@ -3087,14 +3142,20 @@ class BJLG_Backup {
         return $label;
     }
 
-    private function dispatch_to_destinations($filepath, array $destinations, $task_id, array $batches = []) {
+    private function dispatch_to_destinations($filepath, array $destinations, $task_id, array $batches = [], array $task_state = []) {
         $results = [
             'success' => [],
             'failures' => [],
+            'details' => [],
         ];
 
         if (empty($destinations)) {
             return $results;
+        }
+
+        $resume_state = [];
+        if (isset($task_state['managed_vault_resume']) && is_array($task_state['managed_vault_resume'])) {
+            $resume_state = $task_state['managed_vault_resume'];
         }
 
         if (!empty($batches)) {
@@ -3122,16 +3183,57 @@ class BJLG_Backup {
             }
 
             try {
-                $destination->upload_file($filepath, $task_id);
-                $results['success'][] = $destination_id;
-                BJLG_Debug::log(sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
-                BJLG_History::log('backup_upload', 'success', sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
+                if (method_exists($destination, 'upload_with_resilience')) {
+                    $context = [];
+                    if (isset($resume_state[$destination_id]) && is_array($resume_state[$destination_id])) {
+                        $context = $resume_state[$destination_id];
+                    }
+
+                    $destination->upload_with_resilience($filepath, $task_id, $context);
+                    $delivery = method_exists($destination, 'get_last_delivery_report')
+                        ? $destination->get_last_delivery_report()
+                        : [];
+
+                    if (is_array($delivery) && !empty($delivery)) {
+                        $results['details'][$destination_id] = $delivery;
+                    }
+
+                    unset($resume_state[$destination_id]);
+                    $results['success'][] = $destination_id;
+                    BJLG_Debug::log(sprintf('Sauvegarde envoyée vers %s (réplication multi-région).', $destination->get_name()));
+                    BJLG_History::log('backup_upload', 'success', sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
+                } else {
+                    $destination->upload_file($filepath, $task_id);
+                    $results['success'][] = $destination_id;
+                    BJLG_Debug::log(sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
+                    BJLG_History::log('backup_upload', 'success', sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
+                }
             } catch (Exception $exception) {
                 $error_message = sprintf('Envoi vers %s échoué : %s', $destination->get_name(), $exception->getMessage());
                 BJLG_Debug::log('ERREUR : ' . $error_message);
                 BJLG_History::log('backup_upload', 'failure', $error_message);
                 $results['failures'][$destination_id] = $exception->getMessage();
+
+                if (method_exists($destination, 'get_last_delivery_report')) {
+                    $delivery = $destination->get_last_delivery_report();
+                    if (is_array($delivery) && !empty($delivery)) {
+                        $results['details'][$destination_id] = $delivery;
+                        if (!empty($delivery['resume']) && is_array($delivery['resume'])) {
+                            $resume_state[$destination_id] = $delivery['resume'];
+                        }
+                    }
+                }
             }
+
+            if (class_exists(BJLG_Managed_Replication::class) && $destination instanceof BJLG_Managed_Replication) {
+                $this->log_managed_replication_report($destination);
+            }
+        }
+
+        if (!empty($resume_state)) {
+            $results['resume_state']['managed_vault'] = $resume_state;
+        } elseif (!empty($task_state['managed_vault_resume'])) {
+            $results['resume_state']['managed_vault'] = [];
         }
 
         return $results;
@@ -3144,6 +3246,60 @@ class BJLG_Backup {
         }
 
         return BJLG_Destination_Factory::create($destination_id);
+    }
+
+    private function log_managed_replication_report($destination): void {
+        if (!class_exists(BJLG_Managed_Replication::class) || !$destination instanceof BJLG_Managed_Replication) {
+            return;
+        }
+
+        if (!method_exists($destination, 'get_last_report')) {
+            return;
+        }
+
+        $report = $destination->get_last_report();
+        if (empty($report) || empty($report['replicas']) || !is_array($report['replicas'])) {
+            return;
+        }
+
+        $available = isset($report['available_copies']) ? (int) $report['available_copies'] : 0;
+        $expected = isset($report['expected_copies']) ? (int) $report['expected_copies'] : 0;
+
+        $parts = [];
+        foreach ($report['replicas'] as $replica) {
+            if (!is_array($replica)) {
+                continue;
+            }
+
+            $label = isset($replica['label']) ? (string) $replica['label'] : (isset($replica['provider']) ? (string) $replica['provider'] : '');
+            $region = isset($replica['region']) && $replica['region'] !== '' ? sprintf(' (%s)', $replica['region']) : '';
+            $status = isset($replica['status']) ? (string) $replica['status'] : 'unknown';
+            $latency_value = isset($replica['latency_ms']) && $replica['latency_ms'] !== null
+                ? (int) $replica['latency_ms']
+                : null;
+            $latency = $latency_value !== null
+                ? sprintf('%sms', number_format_i18n(max(0, $latency_value)))
+                : __('n/a', 'backup-jlg');
+            $message = isset($replica['message']) && $replica['message'] !== '' ? ' — ' . $replica['message'] : '';
+
+            $parts[] = trim(sprintf('%1$s%2$s : %3$s (%4$s)%5$s', $label, $region, $status, $latency, $message));
+        }
+
+        if (empty($parts)) {
+            return;
+        }
+
+        $summary = sprintf(
+            __('Réplication gérée : %1$s/%2$s copies • %3$s', 'backup-jlg'),
+            number_format_i18n($available),
+            number_format_i18n(max(1, $expected)),
+            implode(' | ', $parts)
+        );
+
+        BJLG_Debug::log($summary);
+
+        $history_status = (isset($report['status']) && $report['status'] === 'failed') ? 'failure' : 'success';
+        BJLG_History::log('backup_replication', $history_status, $summary);
     }
 
     /**
@@ -3299,6 +3455,263 @@ class BJLG_Backup {
                 $clean_text
             ));
         }
+    }
+
+    /**
+     * Construit les métriques détaillées d'une sauvegarde.
+     *
+     * @param array<string,mixed> $context
+     * @return array<string,mixed>
+     */
+    private function build_backup_metrics(array $context): array {
+        $generated_at = time();
+        $completed_at = isset($context['completed_at']) ? (int) $context['completed_at'] : $generated_at;
+        $start_time = isset($context['start_time']) ? (int) $context['start_time'] : $completed_at;
+
+        if ($start_time > $completed_at) {
+            $start_time = $completed_at;
+        }
+
+        $duration = max(0, $completed_at - $start_time);
+        $size_bytes = isset($context['file_size']) ? (int) $context['file_size'] : 0;
+        $components = array_values(array_filter(array_unique(array_map([
+            $this,
+            'normalize_identifier',
+        ], (array) ($context['components'] ?? [])))));
+
+        $destination_queue = isset($context['destination_queue']) && is_array($context['destination_queue'])
+            ? $context['destination_queue']
+            : [];
+        $requested_destinations = array_values(array_filter(array_unique(array_map([
+            $this,
+            'normalize_identifier',
+        ], $destination_queue))));
+
+        $destination_results = isset($context['destination_results']) && is_array($context['destination_results'])
+            ? $context['destination_results']
+            : [];
+
+        $delivered_destinations = [];
+        if (isset($destination_results['success']) && is_array($destination_results['success'])) {
+            $delivered_destinations = array_values(array_filter(array_unique(array_map([
+                $this,
+                'normalize_identifier',
+            ], $destination_results['success']))));
+        }
+
+        $destination_failures = [];
+        if (isset($destination_results['failures']) && is_array($destination_results['failures'])) {
+            foreach ($destination_results['failures'] as $destination_id => $message) {
+                $normalized_id = $this->normalize_identifier($destination_id);
+                if ($normalized_id === '') {
+                    continue;
+                }
+
+                $destination_failures[$normalized_id] = is_string($message) ? trim($message) : (string) $message;
+            }
+        }
+
+        $failed_destinations = array_keys($destination_failures);
+        $post_checks = isset($context['check_results']) && is_array($context['check_results'])
+            ? $context['check_results']
+            : [];
+        $post_check_status = isset($post_checks['overall_status']) ? (string) $post_checks['overall_status'] : 'passed';
+        $post_check_summary = isset($context['post_check_summary']) ? (string) $context['post_check_summary'] : '';
+        $post_check_message = isset($context['post_check_message']) ? (string) $context['post_check_message'] : '';
+
+        $state = 'success';
+        if ($post_check_status === 'failed') {
+            $state = 'failure';
+        } elseif (!empty($destination_failures)) {
+            $state = 'warning';
+        }
+
+        $previous_entry = BJLG_History::get_last_event_metadata('backup_created', 'success');
+        $rpo_seconds = null;
+        if (is_array($previous_entry)) {
+            $previous_completed = null;
+            if (!empty($previous_entry['metadata']['metrics']['timestamps']['completed_at'])) {
+                $previous_completed = (int) $previous_entry['metadata']['metrics']['timestamps']['completed_at'];
+            } elseif (!empty($previous_entry['metadata']['timestamps']['completed_at'])) {
+                $previous_completed = (int) $previous_entry['metadata']['timestamps']['completed_at'];
+            } else {
+                $previous_completed = strtotime((string) $previous_entry['timestamp']);
+            }
+
+            if ($previous_completed) {
+                $rpo_seconds = max(0, $completed_at - $previous_completed);
+            }
+        }
+
+        $size_human = function_exists('size_format') ? size_format($size_bytes) : $this->format_bytes_fallback($size_bytes);
+        $duration_human = $this->format_human_duration($duration, $start_time, $completed_at);
+        $rpo_human = $rpo_seconds !== null ? $this->format_human_duration($rpo_seconds, $completed_at - $rpo_seconds, $completed_at) : null;
+        $age_seconds = max(0, time() - $completed_at);
+
+        $warnings = [];
+        if ($post_check_message !== '') {
+            $warnings[] = $post_check_message;
+        }
+        if (!empty($context['destination_notice'])) {
+            $warnings[] = (string) $context['destination_notice'];
+        }
+
+        return [
+            'version' => 1,
+            'generated_at' => $generated_at,
+            'generated_at_iso' => gmdate('c', $generated_at),
+            'backup' => [
+                'filename' => isset($context['backup_filename']) ? (string) $context['backup_filename'] : '',
+                'path' => isset($context['backup_path']) ? (string) $context['backup_path'] : '',
+            ],
+            'components' => $components,
+            'incremental' => !empty($context['incremental']),
+            'encrypted' => !empty($context['encryption']),
+            'encryption_requested' => !empty($context['requested_encryption']),
+            'size' => [
+                'bytes' => $size_bytes,
+                'human' => $size_human,
+            ],
+            'duration' => [
+                'seconds' => $duration,
+                'human' => $duration_human,
+            ],
+            'timestamps' => [
+                'started_at' => $start_time,
+                'completed_at' => $completed_at,
+                'started_at_iso' => gmdate('c', $start_time),
+                'completed_at_iso' => gmdate('c', $completed_at),
+            ],
+            'age' => [
+                'seconds' => $age_seconds,
+                'human' => $this->format_human_duration($age_seconds, $completed_at, time()),
+            ],
+            'objectives' => [
+                'rto_seconds' => $duration,
+                'rto_human' => $duration_human,
+                'rpo_seconds' => $rpo_seconds,
+                'rpo_human' => $rpo_human,
+            ],
+            'destinations' => [
+                'requested' => $requested_destinations,
+                'delivered' => $delivered_destinations,
+                'failed' => $failed_destinations,
+                'failures' => $destination_failures,
+                'summary' => [
+                    'requested_total' => count($requested_destinations),
+                    'delivered_total' => count($delivered_destinations),
+                    'failed_total' => count($failed_destinations),
+                ],
+            ],
+            'status' => [
+                'state' => $state,
+                'post_checks' => $post_check_status,
+                'warnings' => $warnings,
+            ],
+            'post_checks' => [
+                'summary' => $post_check_summary,
+                'details' => $post_checks,
+            ],
+            'checksum' => [
+                'value' => $post_checks['checksum'] ?? null,
+                'algorithm' => $post_checks['checksum_algorithm'] ?? null,
+            ],
+        ];
+    }
+
+    /**
+     * Normalise un identifiant simple (composant, destination, etc.).
+     *
+     * @param mixed $value
+     * @return string
+     */
+    private function normalize_identifier($value): string {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        $string = (string) $value;
+
+        if ($string === '') {
+            return '';
+        }
+
+        if (function_exists('sanitize_key')) {
+            return sanitize_key($string);
+        }
+
+        $string = strtolower($string);
+        $filtered = preg_replace('/[^a-z0-9_\-]/', '', $string);
+
+        return is_string($filtered) ? $filtered : '';
+    }
+
+    /**
+     * Formate une durée en notation humaine.
+     */
+    private function format_human_duration($seconds, ?int $from = null, ?int $to = null): string {
+        $seconds = (int) $seconds;
+
+        if ($seconds <= 0) {
+            return '0s';
+        }
+
+        if (function_exists('human_time_diff')) {
+            $from_time = $from ?? (($to !== null) ? $to - $seconds : (time() - $seconds));
+            $to_time = $to ?? ($from_time + $seconds);
+
+            return human_time_diff($from_time, $to_time);
+        }
+
+        if ($seconds >= HOUR_IN_SECONDS) {
+            $hours = (int) floor($seconds / HOUR_IN_SECONDS);
+            $minutes = (int) floor(($seconds % HOUR_IN_SECONDS) / MINUTE_IN_SECONDS);
+
+            if ($minutes > 0) {
+                return sprintf('%dh %dm', $hours, $minutes);
+            }
+
+            return sprintf('%dh', $hours);
+        }
+
+        if ($seconds >= MINUTE_IN_SECONDS) {
+            $minutes = (int) floor($seconds / MINUTE_IN_SECONDS);
+            $remaining_seconds = $seconds % MINUTE_IN_SECONDS;
+
+            if ($remaining_seconds > 0) {
+                return sprintf('%dm %ds', $minutes, $remaining_seconds);
+            }
+
+            return sprintf('%dm', $minutes);
+        }
+
+        return sprintf('%ds', $seconds);
+    }
+
+    /**
+     * Formatage simplifié des octets lorsque size_format() est indisponible.
+     */
+    private function format_bytes_fallback($bytes): string {
+        $bytes = (int) $bytes;
+
+        if ($bytes < 1024) {
+            return $bytes . ' B';
+        }
+
+        $units = ['KB', 'MB', 'GB', 'TB'];
+        $value = $bytes;
+        $unit = 'KB';
+
+        foreach ($units as $candidate) {
+            if ($value < 1024) {
+                $unit = $candidate;
+                break;
+            }
+            $value = $value / 1024;
+            $unit = $candidate;
+        }
+
+        return sprintf('%.2f %s', $value, $unit);
     }
 
     /**

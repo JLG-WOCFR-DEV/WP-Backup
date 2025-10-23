@@ -8,6 +8,7 @@ namespace BJLG;
 
 use Exception;
 use WP_Error;
+use WP_REST_Server;
 use ZipArchive;
 
 if (!defined('ABSPATH')) {
@@ -19,6 +20,7 @@ require_once __DIR__ . '/class-bjlg-restore.php';
 require_once __DIR__ . '/class-bjlg-settings.php';
 require_once __DIR__ . '/class-bjlg-history.php';
 require_once __DIR__ . '/class-bjlg-scheduler.php';
+require_once __DIR__ . '/class-bjlg-rbac.php';
 
 class BJLG_REST_API {
     
@@ -79,7 +81,38 @@ class BJLG_REST_API {
                 ]
             ])
         ]);
-        
+
+        register_rest_route(self::API_NAMESPACE, '/rbac', [
+            [
+                'methods' => WP_REST_Server::READABLE,
+                'callback' => [$this, 'get_rbac_settings'],
+                'permission_callback' => [$this, 'check_rbac_permissions'],
+                'args' => $this->merge_site_args([
+                    'scope' => [
+                        'required' => false,
+                        'type' => 'string',
+                        'enum' => ['site', 'network'],
+                    ],
+                ]),
+            ],
+            [
+                'methods' => WP_REST_Server::CREATABLE,
+                'callback' => [$this, 'update_rbac_settings'],
+                'permission_callback' => [$this, 'check_rbac_permissions'],
+                'args' => $this->merge_site_args([
+                    'scope' => [
+                        'required' => false,
+                        'type' => 'string',
+                        'enum' => ['site', 'network'],
+                    ],
+                    'map' => [
+                        'required' => true,
+                        'type' => 'object',
+                    ],
+                ]),
+            ],
+        ]);
+
         // Routes : Gestion des sauvegardes
         register_rest_route(self::API_NAMESPACE, '/backups', [
             [
@@ -247,6 +280,13 @@ class BJLG_REST_API {
                 ]
             ])
         ]);
+
+        register_rest_route(self::API_NAMESPACE, '/managed-vault/report', [
+            'methods' => 'GET',
+            'callback' => [$this, 'get_managed_vault_report'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args(),
+        ]);
         
         // Routes : Historique
         register_rest_route(self::API_NAMESPACE, '/history', [
@@ -286,6 +326,13 @@ class BJLG_REST_API {
                     'enum' => ['success', 'failure', 'info']
                 ]
             ])
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/sla-report', [
+            'methods' => 'GET',
+            'callback' => [$this, 'get_sla_report'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args(),
         ]);
 
         // Routes : Configuration
@@ -433,6 +480,102 @@ class BJLG_REST_API {
         });
     }
 
+    public function check_rbac_permissions($request) {
+        if ($this->rate_limiter && !$this->rate_limiter->check($request)) {
+            return new WP_Error(
+                'rate_limit_exceeded',
+                __('Trop de requêtes. Veuillez patienter.', 'backup-jlg'),
+                ['status' => 429]
+            );
+        }
+
+        return $this->with_request_site($request, function () use ($request) {
+            $scope = BJLG_RBAC::normalize_scope($request ? $request->get_param('scope') : '');
+
+            if ($scope === 'network') {
+                if (function_exists('bjlg_can_manage_plugin')) {
+                    return bjlg_can_manage_plugin(null, 'manage_network');
+                }
+
+                return function_exists('current_user_can') ? current_user_can('manage_network_options') : false;
+            }
+
+            if (function_exists('bjlg_can_manage_settings')) {
+                return bjlg_can_manage_settings();
+            }
+
+            return function_exists('current_user_can') ? current_user_can('manage_options') : false;
+        });
+    }
+
+    public function get_rbac_settings($request) {
+        return $this->with_request_site($request, function () use ($request) {
+            $scope = BJLG_RBAC::normalize_scope($request ? $request->get_param('scope') : '');
+
+            if ($scope === 'network' && function_exists('bjlg_with_network')) {
+                $map = bjlg_with_network(function () {
+                    return bjlg_get_capability_map();
+                });
+            } else {
+                $map = bjlg_get_capability_map();
+            }
+
+            if (!is_array($map)) {
+                $map = [];
+            }
+
+            return rest_ensure_response([
+                'scope' => $scope,
+                'map' => $map,
+                'contexts' => BJLG_RBAC::get_context_definitions(),
+                'templates' => BJLG_RBAC::get_templates(),
+                'choices' => BJLG_RBAC::get_permission_choices(),
+            ]);
+        });
+    }
+
+    public function update_rbac_settings($request) {
+        return $this->with_request_site($request, function () use ($request) {
+            $scope = BJLG_RBAC::normalize_scope($request ? $request->get_param('scope') : '');
+            $params = method_exists($request, 'get_json_params') ? $request->get_json_params() : [];
+            $map_param = $request->get_param('map');
+
+            if (!is_array($map_param) && is_array($params) && isset($params['map'])) {
+                $map_param = $params['map'];
+            }
+
+            if (!is_array($map_param)) {
+                return new WP_Error(
+                    'bjlg_invalid_rbac_map',
+                    __('Le format des permissions est invalide.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+
+            $sanitized = BJLG_RBAC::sanitize_map($map_param);
+            $option_args = $scope === 'network' ? ['network' => true] : [];
+
+            bjlg_update_option('bjlg_capability_map', $sanitized, $option_args);
+
+            if ($scope === 'network' && function_exists('bjlg_with_network')) {
+                $map = bjlg_with_network(function () {
+                    return bjlg_get_capability_map();
+                });
+            } else {
+                $map = bjlg_get_capability_map();
+            }
+
+            if (!is_array($map)) {
+                $map = [];
+            }
+
+            return rest_ensure_response([
+                'scope' => $scope,
+                'map' => $map,
+            ]);
+        });
+    }
+
     /**
      * Étend les arguments REST avec la sélection de site.
      *
@@ -575,12 +718,9 @@ class BJLG_REST_API {
         $context = $this->get_requested_context($request);
 
         if ($context === 'network') {
-            if (!function_exists('is_multisite') || !is_multisite()) {
-                return new WP_Error(
-                    'bjlg_network_context_unavailable',
-                    __('Le contexte réseau n’est pas disponible sur cette installation.', 'backup-jlg'),
-                    ['status' => 400]
-                );
+            $availability = $this->ensure_network_context_available();
+            if (is_wp_error($availability)) {
+                return $availability;
             }
 
             if ($this->get_requested_site_id($request)) {
@@ -633,6 +773,27 @@ class BJLG_REST_API {
         return \bjlg_with_site($site_id, static function () use ($callback) {
             return $callback();
         });
+    }
+
+    private function ensure_network_context_available()
+    {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return new WP_Error(
+                'bjlg_network_context_unavailable',
+                __('Le contexte réseau n’est pas disponible sur cette installation.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        if (!BJLG_Site_Context::is_network_mode_enabled()) {
+            return new WP_Error(
+                'bjlg_network_mode_disabled',
+                __('Le mode réseau est désactivé pour Backup JLG.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        return true;
     }
     
     /**
@@ -1445,7 +1606,7 @@ class BJLG_REST_API {
             $per_page = max(1, min(100, (int) $per_page));
 
             $backups = [];
-            $files = glob(BJLG_BACKUP_DIR . '*.zip*');
+            $files = glob(bjlg_get_backup_directory() . '*.zip*');
 
             if (empty($files)) {
                 return rest_ensure_response([
@@ -2407,9 +2568,9 @@ class BJLG_REST_API {
      */
     public function get_status($request) {
         return $this->with_request_site($request, function () use ($request) {
-            $backup_files = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
+            $backup_files = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
 
-            $backup_directory = BJLG_BACKUP_DIR;
+            $backup_directory = bjlg_get_backup_directory();
             $disk_free_space = null;
             $disk_space_error = false;
 
@@ -2515,7 +2676,55 @@ class BJLG_REST_API {
             ]);
         });
     }
-    
+
+    public function get_managed_vault_report($request) {
+        if (!\bjlg_can_manage_backups()) {
+            return new WP_Error('rest_forbidden', __('Accès refusé.', 'backup-jlg'), ['status' => 403]);
+        }
+
+        $destination = BJLG_Destination_Factory::create('managed_vault');
+        if (!$destination instanceof BJLG_Destination_Interface) {
+            return rest_ensure_response([
+                'status' => 'unavailable',
+                'message' => __('Destination Managed Vault non disponible.', 'backup-jlg'),
+            ]);
+        }
+
+        $snapshot = method_exists($destination, 'get_remote_quota_snapshot')
+            ? $destination->get_remote_quota_snapshot()
+            : [];
+
+        $metrics = \bjlg_get_option('bjlg_managed_vault_metrics', []);
+        if (!is_array($metrics)) {
+            $metrics = [];
+        }
+
+        $versions = \bjlg_get_option('bjlg_managed_vault_versions', []);
+        if (!is_array($versions)) {
+            $versions = [];
+        }
+
+        $resume = \bjlg_get_option('bjlg_managed_vault_resume', []);
+        if (!is_array($resume)) {
+            $resume = [];
+        }
+
+        $latest_versions = array_slice(array_values($versions), -5);
+
+        return rest_ensure_response([
+            'status' => 'ok',
+            'destination' => [
+                'id' => 'managed_vault',
+                'name' => $destination->get_name(),
+                'connected' => $destination->is_connected(),
+            ],
+            'quota_snapshot' => $snapshot,
+            'metrics' => $metrics,
+            'resume_state' => $resume,
+            'versions' => $latest_versions,
+        ]);
+    }
+
     /**
      * Endpoint : Historique
      */
@@ -2537,6 +2746,57 @@ class BJLG_REST_API {
                 'entries' => $history,
                 'total' => count($history)
             ]);
+        });
+    }
+
+    /**
+     * Endpoint : Dernier rapport de validation SLA.
+     */
+    public function get_sla_report($request) {
+        return $this->with_request_site($request, function () {
+            $entry = BJLG_History::get_last_event_metadata('sandbox_restore_validation');
+
+            if (!is_array($entry)) {
+                return rest_ensure_response([
+                    'available' => false,
+                    'entry' => null,
+                    'report' => null,
+                ]);
+            }
+
+            $metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+            $report = isset($metadata['report']) && is_array($metadata['report']) ? $metadata['report'] : [];
+            $timestamp = isset($entry['timestamp']) ? strtotime($entry['timestamp']) : false;
+
+            $response = [
+                'available' => true,
+                'entry' => [
+                    'id' => isset($entry['id']) ? (int) $entry['id'] : 0,
+                    'timestamp' => $entry['timestamp'],
+                    'status' => $entry['status'],
+                    'details' => $entry['details'],
+                    'metadata' => $metadata,
+                ],
+                'report' => $report,
+            ];
+
+            if ($timestamp) {
+                $response['entry']['timestamp_unix'] = $timestamp;
+                if (function_exists('human_time_diff')) {
+                    $response['entry']['relative'] = human_time_diff($timestamp, time());
+                }
+            }
+
+            $response['summary'] = [
+                'status' => $entry['status'],
+                'rto_seconds' => $report['objectives']['rto_seconds'] ?? null,
+                'rpo_seconds' => $report['objectives']['rpo_seconds'] ?? null,
+                'rto_human' => $report['objectives']['rto_human'] ?? ($report['timings']['duration_human'] ?? null),
+                'rpo_human' => $report['objectives']['rpo_human'] ?? null,
+                'validated_at' => $entry['timestamp'],
+            ];
+
+            return rest_ensure_response($response);
         });
     }
     
@@ -3065,7 +3325,7 @@ class BJLG_REST_API {
      */
     private function get_total_backup_size() {
         $total = 0;
-        $files = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
+        $files = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
 
         foreach ($files as $file) {
             $total += filesize($file);
@@ -3106,6 +3366,7 @@ class BJLG_REST_API {
             'GET /health' => 'Get system health',
             'GET /stats' => 'Get statistics',
             'GET /history' => 'Get activity history',
+            'GET /sla-report' => 'Get latest SLA validation report',
             'GET /settings' => 'Get current settings',
             'PUT /settings' => 'Update settings',
             'GET /schedules' => 'Get backup schedules',

@@ -29,7 +29,7 @@ class BJLG_Backup_Path_Resolver {
             );
         }
 
-        $canonical_backup_dir = realpath(BJLG_BACKUP_DIR);
+        $canonical_backup_dir = realpath(bjlg_get_backup_directory());
 
         if ($canonical_backup_dir === false) {
             return new WP_Error(
@@ -41,10 +41,10 @@ class BJLG_Backup_Path_Resolver {
 
         $canonical_backup_dir = rtrim($canonical_backup_dir, "/\\") . DIRECTORY_SEPARATOR;
 
-        $candidate_paths = [BJLG_BACKUP_DIR . $sanitized_id];
+        $candidate_paths = [bjlg_get_backup_directory() . $sanitized_id];
 
         if (strtolower(substr($sanitized_id, -4)) !== '.zip') {
-            $candidate_paths[] = BJLG_BACKUP_DIR . $sanitized_id . '.zip';
+            $candidate_paths[] = bjlg_get_backup_directory() . $sanitized_id . '.zip';
         }
 
         $canonical_length = strlen($canonical_backup_dir);

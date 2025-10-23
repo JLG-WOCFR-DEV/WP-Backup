@@ -30,6 +30,49 @@ class BJLG_Settings {
 
     private const DEFAULT_REMOTE_STORAGE_THRESHOLD = 0.85;
 
+    private const DEFAULT_MANAGED_REPLICATION_SETTINGS = [
+        'enabled' => false,
+        'primary' => [
+            'provider' => 'aws_glacier',
+            'region' => '',
+        ],
+        'replica' => [
+            'provider' => 'azure_ra_grs',
+            'region' => '',
+            'secondary_region' => '',
+        ],
+        'retention' => [
+            'retain_by_number' => 3,
+            'retain_by_age_days' => 0,
+        ],
+        'expected_copies' => 2,
+    ];
+
+    private const MANAGED_REPLICATION_PROVIDER_BLUEPRINT = [
+        'aws_glacier' => [
+            'label' => 'Amazon S3 Glacier',
+            'destination_id' => 'aws_s3',
+            'regions' => [
+                'us-east-1' => 'USA Est (Virginie du Nord)',
+                'us-west-2' => 'USA Ouest (Oregon)',
+                'eu-west-1' => 'Europe (Irlande)',
+                'eu-west-3' => 'Europe (Paris)',
+                'ap-south-1' => 'Asie Pacifique (Mumbai)',
+            ],
+        ],
+        'azure_ra_grs' => [
+            'label' => 'Azure Blob RA-GRS',
+            'destination_id' => 'azure_blob',
+            'regions' => [
+                'francecentral' => 'France Central',
+                'northeurope' => 'Europe Nord',
+                'westeurope' => 'Europe Ouest',
+                'uksouth' => 'UK South',
+                'centralus' => 'Centre des États-Unis',
+            ],
+        ],
+    ];
+
     private $default_settings = [
         'cleanup' => [
             'by_number' => 3,
@@ -167,6 +210,26 @@ class BJLG_Settings {
             'object_prefix' => '',
             'enabled' => false,
         ],
+        'managed_vault' => [
+            'access_key' => '',
+            'secret_key' => '',
+            'bucket' => '',
+            'region' => '',
+            'primary_region' => '',
+            'replica_regions' => [],
+            'object_prefix' => '',
+            'immutability_days' => 0,
+            'retention_max_versions' => 20,
+            'credential_strategy' => 'manual',
+            'credential_rotation_interval' => 90,
+            'last_credential_rotation' => 0,
+            'latency_budget_ms' => 4000,
+            'object_lock_mode' => 'GOVERNANCE',
+            'versioning' => true,
+            'server_side_encryption' => '',
+            'kms_key_id' => '',
+            'enabled' => false,
+        ],
         'azure_blob' => [
             'account_name' => '',
             'account_key' => '',
@@ -203,7 +266,8 @@ class BJLG_Settings {
             'exclude_patterns' => [],
             'custom_backup_dir' => '',
             'remote_storage_threshold' => self::DEFAULT_REMOTE_STORAGE_THRESHOLD,
-        ]
+        ],
+        'managed_replication' => self::DEFAULT_MANAGED_REPLICATION_SETTINGS,
     ];
 
     private $default_backup_preferences = [
@@ -721,6 +785,13 @@ class BJLG_Settings {
                 BJLG_Debug::log('Réglages Amazon S3 sauvegardés.');
             }
 
+            if (!empty($_POST['managed_replication_submitted'])) {
+                $managed_settings = $this->sanitize_managed_replication_from_request($_POST);
+                $this->update_option_value('bjlg_managed_replication_settings', $managed_settings);
+                $saved_settings['managed_replication'] = $managed_settings;
+                BJLG_Debug::log('Réglages de réplication managée sauvegardés.');
+            }
+
             // --- Réglages Wasabi ---
             if (isset($_POST['wasabi_access_key']) || isset($_POST['wasabi_bucket'])) {
                 $wasabi_settings = [
@@ -737,6 +808,61 @@ class BJLG_Settings {
                 $this->update_option_value('bjlg_wasabi_settings', $wasabi_settings);
                 $saved_settings['wasabi'] = $wasabi_settings;
                 BJLG_Debug::log('Réglages Wasabi sauvegardés.');
+            }
+
+            // --- Réglages Managed Vault ---
+            if (isset($_POST['managed_vault_access_key']) || isset($_POST['managed_vault_bucket'])) {
+                $replica_input = $_POST['managed_vault_replica_regions'] ?? '';
+                $replica_regions = $this->sanitize_region_input($replica_input);
+
+                $primary_region = isset($_POST['managed_vault_primary_region'])
+                    ? sanitize_text_field(wp_unslash($_POST['managed_vault_primary_region']))
+                    : '';
+
+                $managed_vault_settings = [
+                    'access_key' => isset($_POST['managed_vault_access_key']) ? sanitize_text_field(wp_unslash($_POST['managed_vault_access_key'])) : '',
+                    'secret_key' => isset($_POST['managed_vault_secret_key']) ? sanitize_text_field(wp_unslash($_POST['managed_vault_secret_key'])) : '',
+                    'bucket' => isset($_POST['managed_vault_bucket']) ? sanitize_text_field(wp_unslash($_POST['managed_vault_bucket'])) : '',
+                    'object_prefix' => isset($_POST['managed_vault_object_prefix']) ? sanitize_text_field(wp_unslash($_POST['managed_vault_object_prefix'])) : '',
+                    'primary_region' => $primary_region,
+                    'replica_regions' => $replica_regions,
+                    'region' => $primary_region,
+                    'immutability_days' => isset($_POST['managed_vault_immutability_days']) ? max(0, (int) $_POST['managed_vault_immutability_days']) : 0,
+                    'retention_max_versions' => isset($_POST['managed_vault_retention_versions']) ? max(1, (int) $_POST['managed_vault_retention_versions']) : 20,
+                    'credential_strategy' => 'manual',
+                    'credential_rotation_interval' => isset($_POST['managed_vault_rotation_interval']) ? max(1, (int) $_POST['managed_vault_rotation_interval']) : 90,
+                    'last_credential_rotation' => $this->get_option_value('bjlg_managed_vault_settings', [])['last_credential_rotation'] ?? 0,
+                    'latency_budget_ms' => isset($_POST['managed_vault_latency_budget']) ? max(100, (int) $_POST['managed_vault_latency_budget']) : 4000,
+                    'object_lock_mode' => 'GOVERNANCE',
+                    'versioning' => true,
+                    'server_side_encryption' => isset($_POST['managed_vault_server_side_encryption']) ? sanitize_text_field(wp_unslash($_POST['managed_vault_server_side_encryption'])) : '',
+                    'kms_key_id' => isset($_POST['managed_vault_kms_key_id']) ? sanitize_text_field(wp_unslash($_POST['managed_vault_kms_key_id'])) : '',
+                    'enabled' => isset($_POST['managed_vault_enabled']) ? $this->to_bool(wp_unslash($_POST['managed_vault_enabled'])) : false,
+                ];
+
+                if (!in_array($managed_vault_settings['server_side_encryption'], ['', 'AES256', 'aws:kms'], true)) {
+                    $managed_vault_settings['server_side_encryption'] = '';
+                }
+
+                if ($managed_vault_settings['server_side_encryption'] !== 'aws:kms') {
+                    $managed_vault_settings['kms_key_id'] = '';
+                }
+
+                if (!empty($managed_vault_settings['server_side_encryption']) && $managed_vault_settings['kms_key_id'] === '') {
+                    $managed_vault_settings['kms_key_id'] = '';
+                }
+
+                if ($managed_vault_settings['primary_region'] === '' && !empty($managed_vault_settings['replica_regions'])) {
+                    $managed_vault_settings['primary_region'] = (string) array_shift($managed_vault_settings['replica_regions']);
+                    $managed_vault_settings['region'] = $managed_vault_settings['primary_region'];
+                }
+
+                $managed_vault_settings['object_prefix'] = trim($managed_vault_settings['object_prefix']);
+                $managed_vault_settings['replica_regions'] = $this->sanitize_region_input($managed_vault_settings['replica_regions']);
+
+                $this->update_option_value('bjlg_managed_vault_settings', $managed_vault_settings);
+                $saved_settings['managed_vault'] = $managed_vault_settings;
+                BJLG_Debug::log('Réglages Managed Vault sauvegardés.');
             }
 
             // --- Réglages Dropbox ---
@@ -1121,6 +1247,7 @@ class BJLG_Settings {
                     'gdrive' => $this->get_section_settings_with_defaults('gdrive'),
                     's3' => $this->get_section_settings_with_defaults('s3'),
                     'wasabi' => $this->get_section_settings_with_defaults('wasabi'),
+                    'managed_vault' => $this->get_section_settings_with_defaults('managed_vault'),
                     'dropbox' => $this->get_section_settings_with_defaults('dropbox'),
                     'onedrive' => $this->get_section_settings_with_defaults('onedrive'),
                     'pcloud' => $this->get_section_settings_with_defaults('pcloud'),
@@ -1219,6 +1346,7 @@ class BJLG_Settings {
                     'bjlg_onedrive_settings',
                     'bjlg_pcloud_settings',
                     'bjlg_s3_settings',
+                    'bjlg_managed_vault_settings',
                     'bjlg_wasabi_settings',
                     'bjlg_azure_blob_settings',
                     'bjlg_backblaze_b2_settings',
@@ -1692,6 +1820,57 @@ class BJLG_Settings {
 
                 return $sanitized;
 
+            case 'bjlg_managed_vault_settings':
+                $defaults = $this->default_settings['managed_vault'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['access_key'])) {
+                        $sanitized['access_key'] = sanitize_text_field((string) $value['access_key']);
+                    }
+                    if (isset($value['secret_key'])) {
+                        $sanitized['secret_key'] = sanitize_text_field((string) $value['secret_key']);
+                    }
+                    if (isset($value['bucket'])) {
+                        $sanitized['bucket'] = sanitize_text_field((string) $value['bucket']);
+                    }
+                    if (isset($value['object_prefix'])) {
+                        $sanitized['object_prefix'] = sanitize_text_field((string) $value['object_prefix']);
+                    }
+                    if (isset($value['primary_region'])) {
+                        $sanitized['primary_region'] = sanitize_text_field((string) $value['primary_region']);
+                        $sanitized['region'] = $sanitized['primary_region'];
+                    }
+                    if (isset($value['replica_regions'])) {
+                        $sanitized['replica_regions'] = $this->sanitize_region_input($value['replica_regions']);
+                    }
+                    if (isset($value['immutability_days'])) {
+                        $sanitized['immutability_days'] = max(0, (int) $value['immutability_days']);
+                    }
+                    if (isset($value['retention_max_versions'])) {
+                        $sanitized['retention_max_versions'] = max(1, (int) $value['retention_max_versions']);
+                    }
+                    if (isset($value['latency_budget_ms'])) {
+                        $sanitized['latency_budget_ms'] = max(100, (int) $value['latency_budget_ms']);
+                    }
+                    if (isset($value['object_lock_mode']) && in_array($value['object_lock_mode'], ['GOVERNANCE', 'COMPLIANCE'], true)) {
+                        $sanitized['object_lock_mode'] = $value['object_lock_mode'];
+                    }
+                    if (isset($value['server_side_encryption']) && in_array($value['server_side_encryption'], ['', 'AES256', 'aws:kms'], true)) {
+                        $sanitized['server_side_encryption'] = $value['server_side_encryption'];
+                    }
+                    if ($sanitized['server_side_encryption'] === 'aws:kms' && isset($value['kms_key_id'])) {
+                        $sanitized['kms_key_id'] = sanitize_text_field((string) $value['kms_key_id']);
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                $sanitized['object_prefix'] = trim($sanitized['object_prefix']);
+
+                return $sanitized;
+
             case 'bjlg_azure_blob_settings':
                 $defaults = $this->default_settings['azure_blob'];
                 $sanitized = $defaults;
@@ -1929,6 +2108,116 @@ class BJLG_Settings {
         return $permission;
     }
 
+    private function sanitize_managed_replication_from_request(array $source): array {
+        $defaults = self::get_default_managed_replication_settings();
+        $providers = self::get_managed_replication_providers();
+
+        $enabled = !empty($source['managed_replication_enabled'])
+            ? $this->to_bool(wp_unslash($source['managed_replication_enabled']))
+            : false;
+
+        $primary_provider = isset($source['managed_replication_primary_provider'])
+            ? sanitize_key((string) wp_unslash($source['managed_replication_primary_provider']))
+            : $defaults['primary']['provider'];
+        if (!isset($providers[$primary_provider])) {
+            $primary_provider = $defaults['primary']['provider'];
+        }
+
+        $primary_region = isset($source['managed_replication_primary_region'])
+            ? self::sanitize_managed_replication_region($primary_provider, (string) wp_unslash($source['managed_replication_primary_region']))
+            : $defaults['primary']['region'];
+
+        $replica_provider = isset($source['managed_replication_replica_provider'])
+            ? sanitize_key((string) wp_unslash($source['managed_replication_replica_provider']))
+            : $defaults['replica']['provider'];
+        if (!isset($providers[$replica_provider])) {
+            $replica_provider = $defaults['replica']['provider'];
+        }
+
+        $replica_region = isset($source['managed_replication_replica_region'])
+            ? self::sanitize_managed_replication_region($replica_provider, (string) wp_unslash($source['managed_replication_replica_region']))
+            : $defaults['replica']['region'];
+
+        $secondary_region = isset($source['managed_replication_replica_secondary'])
+            ? sanitize_text_field(wp_unslash($source['managed_replication_replica_secondary']))
+            : $defaults['replica']['secondary_region'];
+
+        $retain_number = isset($source['managed_replication_retain_number'])
+            ? (int) wp_unslash($source['managed_replication_retain_number'])
+            : $defaults['retention']['retain_by_number'];
+        $retain_number = max(1, min(50, $retain_number));
+
+        $retain_days = isset($source['managed_replication_retain_days'])
+            ? (int) wp_unslash($source['managed_replication_retain_days'])
+            : $defaults['retention']['retain_by_age_days'];
+        $retain_days = max(0, min(3650, $retain_days));
+
+        $expected_copies = isset($source['managed_replication_expected_copies'])
+            ? (int) wp_unslash($source['managed_replication_expected_copies'])
+            : $defaults['expected_copies'];
+        $expected_copies = max(1, min(5, $expected_copies));
+
+        return [
+            'enabled' => $enabled,
+            'primary' => [
+                'provider' => $primary_provider,
+                'region' => $primary_region,
+            ],
+            'replica' => [
+                'provider' => $replica_provider,
+                'region' => $replica_region,
+                'secondary_region' => $secondary_region,
+            ],
+            'retention' => [
+                'retain_by_number' => $retain_number,
+                'retain_by_age_days' => $retain_days,
+            ],
+            'expected_copies' => $expected_copies,
+        ];
+    }
+
+    /**
+     * Nettoie une liste de régions (string ou array).
+     *
+     * @param mixed $value
+     * @return array<int,string>
+     */
+    private function sanitize_region_input($value): array
+    {
+        if (is_string($value)) {
+            $tokens = preg_split('/[\s,]+/', wp_unslash($value));
+        } elseif (is_array($value)) {
+            $tokens = [];
+            foreach ($value as $token) {
+                if (is_array($token)) {
+                    $tokens = array_merge($tokens, $token);
+                    continue;
+                }
+                $tokens[] = $token;
+            }
+        } else {
+            return [];
+        }
+
+        $regions = [];
+        foreach ($tokens as $token) {
+            if (!is_scalar($token)) {
+                continue;
+            }
+            $candidate = strtolower(trim((string) $token));
+            if ($candidate === '') {
+                continue;
+            }
+            $candidate = preg_replace('/[^a-z0-9-]/', '', $candidate);
+            if ($candidate === '') {
+                continue;
+            }
+            $regions[$candidate] = true;
+        }
+
+        return array_values(array_keys($regions));
+    }
+
     /**
      * Vérifie si la permission correspond à un rôle enregistré.
      */
@@ -1990,6 +2279,7 @@ class BJLG_Settings {
             'onedrive' => 'bjlg_onedrive_settings',
             'pcloud' => 'bjlg_pcloud_settings',
             's3' => 'bjlg_s3_settings',
+            'managed_vault' => 'bjlg_managed_vault_settings',
             'wasabi' => 'bjlg_wasabi_settings',
             'azure_blob' => 'bjlg_azure_blob_settings',
             'backblaze_b2' => 'bjlg_backblaze_b2_settings',
@@ -2616,6 +2906,100 @@ class BJLG_Settings {
         return self::merge_settings_with_defaults($stored, $defaults);
     }
 
+    public static function get_managed_replication_providers(): array {
+        $providers = self::MANAGED_REPLICATION_PROVIDER_BLUEPRINT;
+        $normalized = [];
+
+        foreach ($providers as $key => $definition) {
+            $slug = sanitize_key((string) $key);
+            if ($slug === '') {
+                continue;
+            }
+
+            $label = isset($definition['label']) ? (string) $definition['label'] : ucwords(str_replace('_', ' ', $slug));
+            $destination_id = isset($definition['destination_id']) ? sanitize_key((string) $definition['destination_id']) : '';
+            $regions = isset($definition['regions']) && is_array($definition['regions']) ? $definition['regions'] : [];
+
+            $normalized[$slug] = [
+                'label' => __($label, 'backup-jlg'),
+                'destination_id' => $destination_id !== '' ? $destination_id : $slug,
+                'regions' => array_map('strval', $regions),
+            ];
+        }
+
+        /** @var array<string, array<string, mixed>>|null $filtered */
+        $filtered = apply_filters('bjlg_managed_replication_providers', $normalized);
+        if (is_array($filtered) && !empty($filtered)) {
+            $normalized = [];
+            foreach ($filtered as $key => $definition) {
+                $slug = sanitize_key((string) $key);
+                if ($slug === '') {
+                    continue;
+                }
+
+                $normalized[$slug] = [
+                    'label' => isset($definition['label']) ? (string) $definition['label'] : ucwords(str_replace('_', ' ', $slug)),
+                    'destination_id' => isset($definition['destination_id']) ? sanitize_key((string) $definition['destination_id']) : $slug,
+                    'regions' => isset($definition['regions']) && is_array($definition['regions']) ? array_map('strval', $definition['regions']) : [],
+                ];
+            }
+        }
+
+        return $normalized;
+    }
+
+    public static function get_managed_replication_region_choices(?string $provider = null): array {
+        $providers = self::get_managed_replication_providers();
+
+        if ($provider !== null) {
+            $slug = sanitize_key($provider);
+            if (isset($providers[$slug]['regions']) && is_array($providers[$slug]['regions'])) {
+                return $providers[$slug]['regions'];
+            }
+
+            return [];
+        }
+
+        $regions = [];
+        foreach ($providers as $definition) {
+            if (empty($definition['regions']) || !is_array($definition['regions'])) {
+                continue;
+            }
+
+            foreach ($definition['regions'] as $region_key => $region_label) {
+                $regions[(string) $region_key] = (string) $region_label;
+            }
+        }
+
+        return $regions;
+    }
+
+    public static function get_default_managed_replication_settings(): array {
+        $defaults = self::DEFAULT_MANAGED_REPLICATION_SETTINGS;
+        $providers = self::get_managed_replication_providers();
+
+        if (!isset($providers[$defaults['primary']['provider']])) {
+            $defaults['primary']['provider'] = (string) array_key_first($providers);
+        }
+
+        if (!isset($providers[$defaults['replica']['provider']])) {
+            $defaults['replica']['provider'] = $defaults['primary']['provider'];
+        }
+
+        return apply_filters('bjlg_default_managed_replication_settings', $defaults);
+    }
+
+    private static function sanitize_managed_replication_region(string $provider, string $region): string {
+        $regions = self::get_managed_replication_region_choices($provider);
+        $region_key = sanitize_key($region);
+
+        if ($region_key !== '' && isset($regions[$region_key])) {
+            return $region_key;
+        }
+
+        return '';
+    }
+
     public static function get_storage_warning_threshold(): float {
         $settings = self::get_monitoring_settings();
         $threshold = isset($settings['storage_quota_warning_threshold'])
@@ -2626,7 +3010,7 @@ class BJLG_Settings {
     }
 
     public static function get_known_destination_ids() {
-        $destinations = ['google_drive', 'aws_s3', 'sftp', 'dropbox', 'onedrive', 'pcloud', 'wasabi'];
+        $destinations = ['google_drive', 'aws_s3', 'sftp', 'dropbox', 'onedrive', 'pcloud', 'wasabi', 'managed_vault'];
 
         /** @var array<int, string> $filtered */
         $filtered = apply_filters('bjlg_known_destination_ids', $destinations);
@@ -2672,8 +3056,10 @@ class BJLG_Settings {
             'pcloud' => 'pCloud',
             'sftp' => 'Serveur SFTP',
             'wasabi' => 'Wasabi',
+            'managed_vault' => 'Managed Vault',
             'azure_blob' => 'Azure Blob Storage',
             'backblaze_b2' => 'Backblaze B2',
+            'managed_replication' => __('Stockage managé multi-régions', 'backup-jlg'),
         ];
 
         $label = isset($default_labels[$slug]) ? $default_labels[$slug] : '';

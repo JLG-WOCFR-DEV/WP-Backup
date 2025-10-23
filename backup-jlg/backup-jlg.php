@@ -460,8 +460,9 @@ if (!defined('BJLG_CAPABILITY')) {
 }
 
 if (!defined('BJLG_BACKUP_DIR')) {
-    $uploads = wp_get_upload_dir();
-    define('BJLG_BACKUP_DIR', trailingslashit($uploads['basedir']) . 'bjlg-backups/');
+    $current_blog_id = function_exists('get_current_blog_id') ? (int) get_current_blog_id() : null;
+    $backup_dir = \BJLG\BJLG_Site_Context::get_backup_directory($current_blog_id);
+    define('BJLG_BACKUP_DIR', $backup_dir);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -503,7 +504,7 @@ if (!function_exists('bjlg_get_backup_size')) {
      */
     function bjlg_get_backup_size() {
         $total_size = 0;
-        $files = glob(BJLG_BACKUP_DIR . '*.zip*');
+        $files = glob(bjlg_get_backup_directory() . '*.zip*');
         if (!empty($files)) {
             foreach ($files as $file) {
                 if (is_file($file)) {
@@ -512,6 +513,28 @@ if (!function_exists('bjlg_get_backup_size')) {
             }
         }
         return $total_size;
+    }
+}
+
+if (!function_exists('bjlg_get_backup_directory')) {
+    /**
+     * Returns the backup directory for the requested scope.
+     *
+     * @param int|null    $site_id Optional site identifier.
+     * @param string|null $context Either 'site' or 'network'.
+     */
+    function bjlg_get_backup_directory($site_id = null, $context = null) {
+        if (!class_exists('BJLG\\BJLG_Site_Context')) {
+            return defined('BJLG_BACKUP_DIR') ? BJLG_BACKUP_DIR : trailingslashit(WP_CONTENT_DIR) . 'uploads/bjlg-backups/';
+        }
+
+        $scope = $context === 'network'
+            ? \BJLG\BJLG_Site_Context::HISTORY_SCOPE_NETWORK
+            : \BJLG\BJLG_Site_Context::HISTORY_SCOPE_SITE;
+
+        $site_id = $site_id !== null ? (int) $site_id : null;
+
+        return \BJLG\BJLG_Site_Context::get_backup_directory($site_id, $scope);
     }
 }
 
@@ -569,7 +592,7 @@ final class BJLG_Plugin {
             'destinations/interface-bjlg-destination.php', 'destinations/class-bjlg-remote-storage-usage-exception.php', 'destinations/abstract-class-bjlg-s3-compatible.php',
             'destinations/class-bjlg-google-drive.php', 'destinations/class-bjlg-aws-s3.php', 'destinations/class-bjlg-sftp.php',
             'destinations/class-bjlg-wasabi.php', 'destinations/class-bjlg-dropbox.php', 'destinations/class-bjlg-onedrive.php',
-            'destinations/class-bjlg-pcloud.php',
+            'destinations/class-bjlg-pcloud.php', 'destinations/class-bjlg-managed-replication.php',
         ];
         foreach ($files_to_load as $file) {
             $path = BJLG_INCLUDES_DIR . $file;
@@ -644,6 +667,8 @@ final class BJLG_Plugin {
             return;
         }
 
+        $is_network_page = strpos($hook, 'backup-jlg-network') !== false;
+
         $active_section = isset($_GET['section']) ? sanitize_key($_GET['section']) : '';
         if ($active_section === '' && isset($_GET['tab'])) {
             $active_section = sanitize_key($_GET['tab']);
@@ -668,6 +693,7 @@ final class BJLG_Plugin {
             'settings' => 'assets/js/admin-settings.js',
             'logs' => 'assets/js/admin-logs.js',
             'api' => 'assets/js/admin-api.js',
+            'rbac' => 'assets/js/admin-rbac.js',
         ];
 
         $module_urls = [];
@@ -684,6 +710,7 @@ final class BJLG_Plugin {
             'restore' => ['backup'],
             'settings' => ['settings'],
             'integrations' => ['api'],
+            'rbac' => ['rbac'],
         ];
 
         wp_enqueue_script(
@@ -698,7 +725,7 @@ final class BJLG_Plugin {
             wp_set_script_translations('bjlg-admin', 'backup-jlg', BJLG_PLUGIN_DIR . 'languages');
         }
 
-        wp_localize_script('bjlg-admin', 'bjlg_ajax', [
+        $localized_data = [
             'ajax_url' => admin_url('admin-ajax.php'),
             'nonce'    => wp_create_nonce('bjlg_nonce'),
             'api_keys_nonce' => wp_create_nonce('bjlg_api_keys'),
@@ -744,7 +771,19 @@ final class BJLG_Plugin {
                     'preview_title' => __('Prochaines exécutions', 'backup-jlg'),
                 ],
             ],
-        ]);
+        ];
+
+        if ($is_network_page) {
+            $localized_data['network'] = [
+                'enabled' => \BJLG\BJLG_Site_Context::is_network_mode_enabled(),
+                'endpoints' => [
+                    'history' => esc_url_raw(rest_url(\BJLG\BJLG_REST_API::API_NAMESPACE . '/network/history')),
+                    'sites' => esc_url_raw(rest_url(\BJLG\BJLG_REST_API::API_NAMESPACE . '/network/sites')),
+                ],
+            ];
+        }
+
+        wp_localize_script('bjlg-admin', 'bjlg_ajax', $localized_data);
     }
 
     public function load_textdomain() {
@@ -768,7 +807,11 @@ final class BJLG_Plugin {
                 });
             }
 
-            bjlg_with_network(function () {
+            bjlg_with_network(function () use ($default_history_scope) {
+                if (get_site_option(\BJLG\BJLG_Site_Context::NETWORK_MODE_OPTION, null) === null) {
+                    \BJLG\BJLG_Site_Context::set_network_mode(\BJLG\BJLG_Site_Context::NETWORK_MODE_SITE);
+                }
+
                 BJLG\BJLG_History::create_table(0);
                 if (bjlg_get_option('bjlg_required_capability', null, ['network' => true]) === null) {
                     bjlg_update_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY, ['network' => true]);
@@ -782,9 +825,8 @@ final class BJLG_Plugin {
                     \BJLG\BJLG_Site_Context::set_history_scope($default_history_scope);
                 }
 
-                if (\BJLG\BJLG_Site_Context::history_uses_network_storage()) {
-                    \BJLG\BJLG_History::create_table();
-                }
+                $network_backup_dir = \BJLG\BJLG_Site_Context::get_backup_directory(null, \BJLG\BJLG_Site_Context::HISTORY_SCOPE_NETWORK);
+                $this->ensure_backup_directory($network_backup_dir);
             });
 
             return;
@@ -813,19 +855,13 @@ final class BJLG_Plugin {
             bjlg_update_option('bjlg_capability_map', []);
         }
 
-        $backup_dir = $this->get_backup_dir_for_current_site();
-        $this->ensure_backup_directory($backup_dir);
-    }
-
-    private function get_backup_dir_for_current_site(): string {
-        $uploads = wp_get_upload_dir();
-        $basedir = isset($uploads['basedir']) && is_string($uploads['basedir']) ? $uploads['basedir'] : ''; // phpcs:ignore WordPress.NamingConventions.ValidVariableName.NotSnakeCaseMemberVar
-
-        if ($basedir === '') {
-            return trailingslashit(WP_CONTENT_DIR) . 'uploads/bjlg-backups/';
+        $target_blog_id = $blog_id;
+        if ($target_blog_id === null && function_exists('get_current_blog_id')) {
+            $target_blog_id = (int) get_current_blog_id();
         }
 
-        return trailingslashit($basedir) . 'bjlg-backups/';
+        $backup_dir = \BJLG\BJLG_Site_Context::get_backup_directory($target_blog_id);
+        $this->ensure_backup_directory($backup_dir);
     }
 
     private function ensure_backup_directory(string $backup_dir): void {

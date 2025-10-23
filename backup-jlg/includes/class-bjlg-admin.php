@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
 }
 
 require_once __DIR__ . '/class-bjlg-scheduler.php';
+require_once __DIR__ . '/class-bjlg-rbac.php';
 
 /**
  * Gère la création et l'affichage de l'interface d'administration du plugin.
@@ -83,6 +84,9 @@ class BJLG_Admin {
         if (class_exists(BJLG_Wasabi::class)) {
             $this->destinations['wasabi'] = new BJLG_Wasabi();
         }
+        if (class_exists(BJLG_Managed_Vault::class)) {
+            $this->destinations['managed_vault'] = new BJLG_Managed_Vault();
+        }
         if (class_exists(BJLG_Dropbox::class)) {
             $this->destinations['dropbox'] = new BJLG_Dropbox();
         }
@@ -100,6 +104,9 @@ class BJLG_Admin {
         }
         if (class_exists(BJLG_SFTP::class)) {
             $this->destinations['sftp'] = new BJLG_SFTP();
+        }
+        if (class_exists(BJLG_Managed_Replication::class)) {
+            $this->destinations['managed_replication'] = new BJLG_Managed_Replication();
         }
     }
 
@@ -298,6 +305,10 @@ class BJLG_Admin {
                 'label' => __('Réglages', 'backup-jlg'),
                 'icon' => 'admin-generic',
             ],
+            'rbac' => [
+                'label' => __('Contrôles d’accès', 'backup-jlg'),
+                'icon' => 'lock',
+            ],
             'integrations' => [
                 'label' => __('Intégrations', 'backup-jlg'),
                 'icon' => 'admin-network',
@@ -366,10 +377,76 @@ class BJLG_Admin {
 
         bjlg_with_network(function () {
             $this->handle_network_admin_actions();
-            $this->render_admin_page();
         });
 
+        $network_mode_enabled = BJLG_Site_Context::is_network_mode_enabled();
+        $sites_snapshot = $this->collect_network_site_snapshot();
+        $sites_json = !empty($sites_snapshot) ? wp_json_encode($sites_snapshot) : '[]';
+
         $this->is_network_screen = $previous_state;
+
+        ?>
+        <div class="wrap bjlg-wrap bjlg-network-wrap">
+            <h1 class="wp-heading-inline"><?php esc_html_e('Gestion des sauvegardes réseau', 'backup-jlg'); ?></h1>
+
+            <?php if (!$network_mode_enabled): ?>
+                <div class="notice notice-warning"><p><?php esc_html_e('Le mode réseau est actuellement désactivé. Activez-le pour partager les historiques, quotas et paramètres à l’échelle du réseau.', 'backup-jlg'); ?></p></div>
+            <?php endif; ?>
+
+            <div id="bjlg-network-admin-app"
+                 data-network-enabled="<?php echo $network_mode_enabled ? '1' : '0'; ?>"
+                 data-sites="<?php echo esc_attr($sites_json); ?>">
+                <noscript><p><?php esc_html_e('Activez JavaScript pour administrer les sites du réseau.', 'backup-jlg'); ?></p></noscript>
+
+                <div class="bjlg-network-app__panel" aria-live="polite" aria-atomic="true">
+                    <div class="bjlg-network-app__loading"><?php esc_html_e('Chargement des données réseau…', 'backup-jlg'); ?></div>
+                </div>
+
+                <div class="bjlg-network-app__fallback" data-has-sites="<?php echo empty($sites_snapshot) ? '0' : '1'; ?>">
+                    <?php if (!empty($sites_snapshot)): ?>
+                        <table class="widefat striped">
+                            <thead>
+                            <tr>
+                                <th><?php esc_html_e('Site', 'backup-jlg'); ?></th>
+                                <th><?php esc_html_e('Dernières activités', 'backup-jlg'); ?></th>
+                                <th><?php esc_html_e('Quotas utilisés', 'backup-jlg'); ?></th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <?php foreach ($sites_snapshot as $site): ?>
+                                <tr>
+                                    <td>
+                                        <strong><?php echo esc_html($site['name']); ?></strong><br>
+                                        <a href="<?php echo esc_url($site['admin_url']); ?>" class="button button-small"><?php esc_html_e('Ouvrir', 'backup-jlg'); ?></a>
+                                    </td>
+                                    <td>
+                                        <?php
+                                        $history = $site['history'];
+                                        printf(
+                                            /* translators: 1: total entries, 2: number of successful entries */
+                                            esc_html__('Total : %1$d · Réussites : %2$d', 'backup-jlg'),
+                                            (int) ($history['total_actions'] ?? 0),
+                                            (int) ($history['successful'] ?? 0)
+                                        );
+                                        ?>
+                                    </td>
+                                    <td>
+                                        <?php
+                                        $quota_used = isset($site['quota']['used']) ? (int) $site['quota']['used'] : 0;
+                                        echo esc_html(size_format($quota_used, 2));
+                                        ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php else: ?>
+                        <p><?php esc_html_e('Aucun site réseau disponible ou données indisponibles.', 'backup-jlg'); ?></p>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </div>
+        <?php
     }
 
     /**
@@ -956,6 +1033,9 @@ class BJLG_Admin {
             case 'settings':
                 $this->render_settings_section();
                 break;
+            case 'rbac':
+                $this->render_rbac_section();
+                break;
             case 'integrations':
                 $this->render_api_section();
                 break;
@@ -1181,6 +1261,19 @@ class BJLG_Admin {
                             $offline_destinations[] = $name;
                         }
 
+                        $replica_status = isset($destination['replica_status']) && is_array($destination['replica_status'])
+                            ? $destination['replica_status']
+                            : [];
+                        foreach ($replica_status as $replica_region => $replica) {
+                            if (!is_array($replica)) {
+                                continue;
+                            }
+                            $replica_state = isset($replica['status']) ? (string) $replica['status'] : '';
+                            if ($replica_state !== '' && $replica_state !== 'ok' && $replica_state !== 'skipped') {
+                                $offline_destinations[] = sprintf('%s (%s)', $name, sanitize_text_field((string) $replica_region));
+                            }
+                        }
+
                         $used_bytes = isset($destination['used_bytes']) ? (int) $destination['used_bytes'] : null;
                         $quota_bytes = isset($destination['quota_bytes']) ? (int) $destination['quota_bytes'] : null;
                         $ratio = isset($destination['utilization_ratio']) ? (float) $destination['utilization_ratio'] : null;
@@ -1265,6 +1358,31 @@ class BJLG_Admin {
                                         _n('%s archive stockée', '%s archives stockées', $backups_count, 'backup-jlg'),
                                         number_format_i18n($backups_count)
                                     );
+                                }
+
+                                $replica_status = isset($destination['replica_status']) && is_array($destination['replica_status'])
+                                    ? $destination['replica_status']
+                                    : [];
+                                if (!empty($replica_status)) {
+                                    $replica_parts = [];
+                                    foreach ($replica_status as $replica_region => $replica) {
+                                        if (!is_array($replica)) {
+                                            continue;
+                                        }
+                                        $replica_state = isset($replica['status']) ? (string) $replica['status'] : '';
+                                        if ($replica_state === '') {
+                                            continue;
+                                        }
+                                        $latency = isset($replica['latency_ms']) ? (int) $replica['latency_ms'] : null;
+                                        $label = sprintf('%s : %s', sanitize_text_field((string) $replica_region), ucfirst($replica_state));
+                                        if ($latency !== null && $latency > 0) {
+                                            $label .= sprintf(' (%s ms)', number_format_i18n($latency));
+                                        }
+                                        $replica_parts[] = $label;
+                                    }
+                                    if (!empty($replica_parts)) {
+                                        $detail_parts[] = sprintf(__('Réplicas : %s', 'backup-jlg'), implode(', ', $replica_parts));
+                                    }
                                 }
 
                                 $ratio = isset($destination['utilization_ratio']) ? (float) $destination['utilization_ratio'] : null;
@@ -4567,7 +4685,7 @@ class BJLG_Admin {
      * Section : Logs et outils
      */
     private function render_logs_section() {
-        $relative_backup_dir = str_replace(untrailingslashit(ABSPATH), '', BJLG_BACKUP_DIR);
+        $relative_backup_dir = str_replace(untrailingslashit(ABSPATH), '', bjlg_get_backup_directory());
         ?>
         <div class="bjlg-section">
             <h2>Journaux et Outils de Diagnostic</h2>
@@ -4975,68 +5093,71 @@ class BJLG_Admin {
         return $results;
     }
 
-    private function get_permission_choices() {
-        $roles = [];
-        $capabilities = [];
+    private function collect_network_site_snapshot(): array
+    {
+        $sites = $this->get_network_sites();
+        if (empty($sites)) {
+            return [];
+        }
 
-        $wp_roles = function_exists('wp_roles') ? wp_roles() : null;
+        $snapshot = [];
 
-        if ($wp_roles && class_exists('WP_Roles') && $wp_roles instanceof \WP_Roles) {
-            foreach ($wp_roles->roles as $role_key => $role_details) {
-                $label = isset($role_details['name']) ? (string) $role_details['name'] : $role_key;
-                if (function_exists('translate_user_role')) {
-                    $label = translate_user_role($label);
+        foreach ($sites as $site) {
+            $blog_id = isset($site['id']) ? (int) $site['id'] : 0;
+
+            if ($blog_id <= 0) {
+                continue;
+            }
+
+            $site_data = bjlg_with_site($blog_id, function () use ($site, $blog_id) {
+                $history_stats = ['total_actions' => 0, 'successful' => 0, 'failed' => 0];
+                if (class_exists(BJLG_History::class)) {
+                    $history_stats = BJLG_History::get_stats('month', $blog_id);
                 }
-                $roles[$role_key] = $label;
 
-                if (!empty($role_details['capabilities']) && is_array($role_details['capabilities'])) {
-                    foreach ($role_details['capabilities'] as $capability => $granted) {
-                        if ($granted) {
-                            $capabilities[$capability] = $capability;
+                $metrics = \bjlg_get_option('bjlg_remote_storage_metrics', []);
+                $quota_used = 0;
+
+                if (is_array($metrics)) {
+                    foreach ($metrics as $metric) {
+                        if (!is_array($metric)) {
+                            continue;
                         }
+
+                        $quota_used += isset($metric['used']) ? (int) $metric['used'] : 0;
                     }
                 }
+
+                $admin_url = function_exists('get_admin_url')
+                    ? get_admin_url($blog_id, 'admin.php?page=backup-jlg')
+                    : '';
+
+                return [
+                    'id' => $blog_id,
+                    'name' => $site['name'],
+                    'url' => $site['url'],
+                    'admin_url' => $admin_url,
+                    'history' => [
+                        'total_actions' => isset($history_stats['total_actions']) ? (int) $history_stats['total_actions'] : 0,
+                        'successful' => isset($history_stats['successful']) ? (int) $history_stats['successful'] : 0,
+                        'failed' => isset($history_stats['failed']) ? (int) $history_stats['failed'] : 0,
+                    ],
+                    'quota' => [
+                        'used' => $quota_used,
+                    ],
+                ];
+            });
+
+            if (is_array($site_data)) {
+                $snapshot[] = $site_data;
             }
         }
 
-        ksort($roles);
-        ksort($capabilities);
+        return $snapshot;
+    }
 
-        $sanitize = static function ($items) {
-            $result = [];
-            if (!is_array($items)) {
-                return $result;
-            }
-
-            foreach ($items as $key => $label) {
-                if (!is_string($key) || $key === '') {
-                    continue;
-                }
-
-                $result[$key] = is_string($label) && $label !== '' ? $label : $key;
-            }
-
-            return $result;
-        };
-
-        $choices = [
-            'roles' => $sanitize($roles),
-            'capabilities' => $sanitize($capabilities),
-        ];
-
-        /** @var array<string, array<string, string>>|null $filtered */
-        $filtered = apply_filters('bjlg_required_capability_choices', $choices);
-        if (is_array($filtered)) {
-            $roles_filtered = $sanitize($filtered['roles'] ?? $choices['roles']);
-            $caps_filtered = $sanitize($filtered['capabilities'] ?? $choices['capabilities']);
-
-            return [
-                'roles' => $roles_filtered,
-                'capabilities' => $caps_filtered,
-            ];
-        }
-
-        return $choices;
+    private function get_permission_choices() {
+        return BJLG_RBAC::get_permission_choices();
     }
 
     private function get_destination_choices() {
@@ -5061,6 +5182,7 @@ class BJLG_Admin {
                 'pcloud' => 'pCloud',
                 'sftp' => 'Serveur SFTP',
                 'wasabi' => 'Wasabi',
+                'managed_replication' => __('Stockage managé multi-régions', 'backup-jlg'),
             ];
         }
 
@@ -5724,6 +5846,46 @@ class BJLG_Admin {
         </div>
         <?php
         return ob_get_clean();
+    }
+
+    private function render_rbac_section() {
+        $contexts = BJLG_RBAC::get_context_definitions();
+        $templates = BJLG_RBAC::get_templates();
+        $choices = BJLG_RBAC::get_permission_choices();
+        $initial_map = bjlg_get_capability_map();
+        $scope = $this->is_network_screen ? 'network' : 'site';
+
+        $contexts_json = esc_attr(wp_json_encode($contexts));
+        $templates_json = esc_attr(wp_json_encode($templates));
+        $choices_json = esc_attr(wp_json_encode($choices));
+        $map_json = esc_attr(wp_json_encode($initial_map));
+        $rest_namespace = class_exists(BJLG_REST_API::class) ? BJLG_REST_API::API_NAMESPACE : 'backup-jlg/v1';
+        $endpoint = esc_url(rest_url(trailingslashit($rest_namespace) . 'rbac'));
+
+        ?>
+        <div class="bjlg-section bjlg-rbac-section">
+            <h2><?php esc_html_e('Contrôles d’accès', 'backup-jlg'); ?></h2>
+            <p class="description">
+                <?php esc_html_e('Affectez des rôles ou des capacités distincts aux principales fonctionnalités du plugin.', 'backup-jlg'); ?>
+            </p>
+            <div
+                id="bjlg-rbac-app"
+                class="bjlg-rbac-app"
+                data-section-key="rbac"
+                data-rbac-contexts="<?php echo $contexts_json; ?>"
+                data-rbac-templates="<?php echo $templates_json; ?>"
+                data-rbac-choices="<?php echo $choices_json; ?>"
+                data-rbac-map="<?php echo $map_json; ?>"
+                data-rbac-endpoint="<?php echo esc_attr($endpoint); ?>"
+                data-rbac-scope="<?php echo esc_attr($scope); ?>"
+                tabindex="-1"
+            >
+                <div class="notice notice-info bjlg-rbac-fallback" aria-live="polite">
+                    <p><?php esc_html_e('Activez JavaScript pour personnaliser les droits d’accès.', 'backup-jlg'); ?></p>
+                </div>
+            </div>
+        </div>
+        <?php
     }
 
     private function wrap_schedule_badge_group($title, array $badges) {

@@ -58,7 +58,7 @@ class BJLG_Admin_Advanced {
                 'overdue' => false,
             ],
             'storage' => [
-                'directory' => defined('BJLG_BACKUP_DIR') ? BJLG_BACKUP_DIR : '',
+                'directory' => defined('BJLG_BACKUP_DIR') ? bjlg_get_backup_directory() : '',
                 'total_size_bytes' => 0,
                 'total_size_human' => size_format(0),
                 'backup_count' => 0,
@@ -192,9 +192,13 @@ class BJLG_Admin_Advanced {
         $metrics['storage']['remote_warning_threshold'] = $remote_snapshot['threshold_percent'];
         $metrics['storage']['remote_warning_threshold_ratio'] = $remote_snapshot['threshold_ratio'];
 
+        $metrics['resilience'] = $this->collect_resilience_metrics();
+
         $metrics['queues'] = $this->build_queue_metrics($now);
 
         $metrics['encryption'] = $this->get_encryption_metrics();
+
+        $metrics['sla_validation'] = $this->build_sla_validation_panel();
 
         $metrics['summary'] = $this->build_summary($metrics);
         $metrics['alerts'] = $this->build_alerts($metrics);
@@ -202,6 +206,66 @@ class BJLG_Admin_Advanced {
         $metrics['reliability'] = $this->build_reliability($metrics);
 
         return $metrics;
+    }
+
+    private function build_sla_validation_panel(): array {
+        $entry = BJLG_History::get_last_event_metadata('sandbox_restore_validation');
+
+        if (!is_array($entry)) {
+            return [
+                'available' => false,
+                'status' => 'unknown',
+                'message' => __('Aucune validation sandbox enregistrée.', 'backup-jlg'),
+                'actions' => [
+                    __('Planifiez une restauration sandbox automatisée pour valider votre SLA.', 'backup-jlg'),
+                ],
+            ];
+        }
+
+        $metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+        $report = isset($metadata['report']) && is_array($metadata['report']) ? $metadata['report'] : [];
+        $objectives = isset($report['objectives']) && is_array($report['objectives']) ? $report['objectives'] : [];
+        $timings = isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [];
+        $sandbox = isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [];
+        $status = isset($entry['status']) ? (string) $entry['status'] : 'info';
+        $timestamp = isset($entry['timestamp']) ? strtotime($entry['timestamp']) : false;
+        $relative = ($timestamp && function_exists('human_time_diff')) ? human_time_diff($timestamp, time()) : '';
+        $backup_filename = isset($report['backup_file']) && is_string($report['backup_file']) ? basename($report['backup_file']) : '';
+        $cleanup = isset($sandbox['cleanup']) && is_array($sandbox['cleanup']) ? $sandbox['cleanup'] : [];
+
+        $actions = [];
+        if ($status === 'success') {
+            $actions[] = __('Consignez cette validation dans votre registre SLA.', 'backup-jlg');
+            $actions[] = __('Planifiez un contrôle manuel après les mises à jour critiques.', 'backup-jlg');
+        } else {
+            $actions[] = __('Relancez une restauration sandbox depuis l’onglet Restauration pour diagnostiquer l’incident.', 'backup-jlg');
+            $actions[] = __('Vérifiez l’espace disque local et la connectivité des destinations distantes.', 'backup-jlg');
+            $actions[] = __('Inspectez l’historique détaillé et les notifications associées.', 'backup-jlg');
+        }
+
+        return [
+            'available' => true,
+            'status' => $status,
+            'validated_at' => $entry['timestamp'],
+            'validated_relative' => $relative,
+            'message' => $entry['details'],
+            'report' => $report,
+            'actions' => $actions,
+            'objectives' => [
+                'rto_seconds' => isset($objectives['rto_seconds']) ? (float) $objectives['rto_seconds'] : null,
+                'rto_human' => isset($objectives['rto_human']) ? (string) $objectives['rto_human'] : ($timings['duration_human'] ?? ''),
+                'rpo_seconds' => isset($objectives['rpo_seconds']) ? (float) $objectives['rpo_seconds'] : null,
+                'rpo_human' => isset($objectives['rpo_human']) ? (string) $objectives['rpo_human'] : '',
+            ],
+            'backup' => [
+                'filename' => $backup_filename,
+                'path' => isset($report['backup_file']) ? (string) $report['backup_file'] : '',
+            ],
+            'sandbox' => [
+                'path' => isset($sandbox['base_path']) ? (string) $sandbox['base_path'] : '',
+                'cleanup' => $cleanup,
+            ],
+        ];
     }
 
     private function build_queue_metrics(int $now): array {
@@ -1048,6 +1112,7 @@ class BJLG_Admin_Advanced {
         $history_stats = $metrics['history']['stats'] ?? [];
         $scheduler_stats = $metrics['scheduler']['stats'] ?? [];
         $storage = $metrics['storage'] ?? [];
+        $resilience = isset($metrics['resilience']) && is_array($metrics['resilience']) ? $metrics['resilience'] : [];
 
         $success_rate = isset($scheduler_stats['success_rate']) ? (float) $scheduler_stats['success_rate'] : 0.0;
         $formatted_rate = sprintf('%s%%', number_format_i18n($success_rate, $success_rate >= 1 ? 0 : 2));
@@ -1063,6 +1128,9 @@ class BJLG_Admin_Advanced {
             'scheduler_success_rate' => $formatted_rate,
             'storage_total_size_human' => $storage['total_size_human'] ?? size_format(0),
             'storage_backup_count' => intval($storage['backup_count'] ?? 0),
+            'resilience_status' => $resilience['status'] ?? 'inactive',
+            'resilience_summary' => $this->format_resilience_summary($resilience),
+            'resilience_updated_relative' => $resilience['updated_relative'] ?? '',
         ];
 
         if (!empty($metrics['history']['last_backup'])) {
@@ -1075,7 +1143,97 @@ class BJLG_Admin_Advanced {
             $summary['scheduler_next_run_relative'] = $metrics['scheduler']['next_runs'][0]['next_run_relative'];
         }
 
+        if (!empty($metrics['sla_validation']['available'])) {
+            $sla = $metrics['sla_validation'];
+            $summary['sla_status'] = $sla['status'];
+            $summary['sla_validated_at'] = $sla['validated_at'];
+            $summary['sla_validated_relative'] = $sla['validated_relative'];
+            $summary['sla_rto_human'] = $sla['objectives']['rto_human'] ?? '';
+            $summary['sla_rpo_human'] = $sla['objectives']['rpo_human'] ?? '';
+        }
+
         return $summary;
+    }
+
+    private function collect_resilience_metrics(): array {
+        $now = current_time('timestamp');
+        $settings = \bjlg_get_option('bjlg_managed_replication_settings', []);
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+
+        $enabled = !empty($settings['enabled']);
+        $expected = isset($settings['expected_copies']) ? (int) $settings['expected_copies'] : 0;
+
+        if (!class_exists(__NAMESPACE__ . '\\BJLG_Managed_Replication')) {
+            return [
+                'enabled' => $enabled,
+                'status' => $enabled ? 'inactive' : 'disabled',
+                'available_copies' => 0,
+                'expected_copies' => $expected,
+                'latency_ms' => null,
+                'replicas' => [],
+                'errors' => [],
+                'updated_at' => 0,
+                'updated_relative' => '',
+            ];
+        }
+
+        $status = BJLG_Managed_Replication::get_status_snapshot();
+        $available = isset($status['available_copies']) ? max(0, (int) $status['available_copies']) : 0;
+        $expected_copies = isset($status['expected_copies']) ? max(0, (int) $status['expected_copies']) : $expected;
+        $latency = isset($status['latency_ms']) && $status['latency_ms'] !== null ? (int) $status['latency_ms'] : null;
+        $updated_at = isset($status['updated_at']) ? (int) $status['updated_at'] : 0;
+        $updated_relative = $updated_at > 0 ? sprintf(__('il y a %s', 'backup-jlg'), human_time_diff($updated_at, $now)) : '';
+        $status_code = isset($status['status']) ? (string) $status['status'] : ($enabled ? 'inactive' : 'disabled');
+        $errors = isset($status['errors']) && is_array($status['errors']) ? array_map('strval', $status['errors']) : [];
+        $replicas = isset($status['replicas']) && is_array($status['replicas']) ? $status['replicas'] : [];
+
+        return [
+            'enabled' => $enabled,
+            'status' => $status_code,
+            'available_copies' => $available,
+            'expected_copies' => $expected_copies,
+            'latency_ms' => $latency,
+            'replicas' => $replicas,
+            'errors' => $errors,
+            'updated_at' => $updated_at,
+            'updated_relative' => $updated_relative,
+        ];
+    }
+
+    private function format_resilience_summary(array $resilience): string {
+        $enabled = !empty($resilience['enabled']);
+        $available = isset($resilience['available_copies']) ? max(0, (int) $resilience['available_copies']) : 0;
+        $expected = isset($resilience['expected_copies']) ? max(0, (int) $resilience['expected_copies']) : ($enabled ? 1 : 0);
+        $status = isset($resilience['status']) ? (string) $resilience['status'] : ($enabled ? 'inactive' : 'disabled');
+        $latency = isset($resilience['latency_ms']) && $resilience['latency_ms'] !== null
+            ? sprintf(__('Latence moyenne : %sms', 'backup-jlg'), number_format_i18n(max(0, (int) $resilience['latency_ms'])))
+            : __('Latence non mesurée', 'backup-jlg');
+
+        if (!$enabled && $expected === 0) {
+            return __('Destination managée inactive.', 'backup-jlg');
+        }
+
+        $base = sprintf(
+            __('Copies disponibles : %1$s / %2$s', 'backup-jlg'),
+            number_format_i18n($available),
+            number_format_i18n(max(1, $expected))
+        );
+
+        if ($status === 'healthy') {
+            return $base . ' • ' . $latency;
+        }
+
+        if ($status === 'degraded') {
+            return $base . ' • ' . $latency . ' — ' . __('Réplication partielle détectée.', 'backup-jlg');
+        }
+
+        if ($status === 'failed') {
+            return $base . ' • ' . __('Aucune copie valide', 'backup-jlg');
+        }
+
+        return $base . ' • ' . $latency;
     }
 
     private function collect_remote_storage_metrics(): array {
@@ -1527,6 +1685,13 @@ class BJLG_Admin_Advanced {
             } elseif (!empty($storage['total_size_human'])) {
                 $storage_message .= ' • ' . sprintf(__('Stockage local : %s', 'backup-jlg'), $storage['total_size_human']);
             }
+
+            if (!empty($resilience) && !empty($resilience['enabled'])) {
+                $replication_summary = $this->format_resilience_summary($resilience);
+                if ($replication_summary !== '') {
+                    $storage_message .= ' • ' . $replication_summary;
+                }
+            }
         }
 
         $pillars[] = [
@@ -1734,6 +1899,32 @@ class BJLG_Admin_Advanced {
             }
         }
 
+        $sla_panel = $metrics['sla_validation'] ?? [];
+        if (!empty($sla_panel['available'])) {
+            $sla_status = isset($sla_panel['status']) ? sanitize_key((string) $sla_panel['status']) : 'info';
+            if ($sla_status === 'failure') {
+                $alerts[] = $this->make_alert(
+                    'error',
+                    __('Validation SLA en échec', 'backup-jlg'),
+                    __('La dernière restauration sandbox automatisée a échoué. Consultez le rapport pour appliquer les actions de remédiation.', 'backup-jlg'),
+                    [
+                        'label' => __('Ouvrir le rapport SLA', 'backup-jlg'),
+                        'url' => add_query_arg(['page' => 'backup-jlg', 'section' => 'monitoring'], admin_url('admin.php')) . '#bjlg-sla-panel',
+                    ]
+                );
+            }
+        } else {
+            $alerts[] = $this->make_alert(
+                'warning',
+                __('Validation SLA non réalisée', 'backup-jlg'),
+                __('Aucune restauration sandbox planifiée n’a encore été exécutée. Programmez une validation pour mesurer votre RTO/RPO.', 'backup-jlg'),
+                [
+                    'label' => __('Programmer la sandbox', 'backup-jlg'),
+                    'url' => add_query_arg(['page' => 'backup-jlg', 'section' => 'monitoring'], admin_url('admin.php')),
+                ]
+            );
+        }
+
         if (!empty($metrics['scheduler']['overdue'])) {
             $alerts[] = $this->make_alert(
                 'error',
@@ -1745,6 +1936,33 @@ class BJLG_Admin_Advanced {
                         ['page' => 'backup-jlg', 'section' => 'backup'],
                         admin_url('admin.php')
                     ) . '#bjlg-schedule',
+                ]
+            );
+        }
+
+        $resilience = isset($metrics['resilience']) && is_array($metrics['resilience']) ? $metrics['resilience'] : [];
+        $resilience_status = isset($resilience['status']) ? (string) $resilience['status'] : 'inactive';
+        if (in_array($resilience_status, ['degraded', 'failed'], true)) {
+            $available = isset($resilience['available_copies']) ? max(0, (int) $resilience['available_copies']) : 0;
+            $expected = isset($resilience['expected_copies']) ? max(1, (int) $resilience['expected_copies']) : 1;
+            $errors = isset($resilience['errors']) && is_array($resilience['errors']) ? $resilience['errors'] : [];
+            $description = sprintf(
+                __('Copies disponibles : %1$s / %2$s. Vérifiez les régions configurées et l’état des destinations secondaires.', 'backup-jlg'),
+                number_format_i18n($available),
+                number_format_i18n($expected)
+            );
+
+            if (!empty($errors)) {
+                $description .= ' ' . implode(' | ', array_map('sanitize_text_field', $errors));
+            }
+
+            $alerts[] = $this->make_alert(
+                $resilience_status === 'failed' ? 'error' : 'warning',
+                $resilience_status === 'failed' ? __('Réplication managée indisponible', 'backup-jlg') : __('Réplication managée dégradée', 'backup-jlg'),
+                $description,
+                [
+                    'label' => __('Ouvrir les destinations', 'backup-jlg'),
+                    'url' => add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php')) . '#bjlg-destinations',
                 ]
             );
         }

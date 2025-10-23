@@ -37,8 +37,8 @@ final class BJLG_RestoreUploadTest extends TestCase
         $_POST = [];
         $_FILES = [];
 
-        if (!is_dir(BJLG_BACKUP_DIR)) {
-            mkdir(BJLG_BACKUP_DIR, 0777, true);
+        if (!is_dir(bjlg_get_backup_directory())) {
+            mkdir(bjlg_get_backup_directory(), 0777, true);
         }
     }
 

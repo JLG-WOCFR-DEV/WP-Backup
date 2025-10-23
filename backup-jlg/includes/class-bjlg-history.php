@@ -29,6 +29,7 @@ class BJLG_History {
             action_type varchar(50) NOT NULL,
             status varchar(20) NOT NULL,
             details text NOT NULL,
+            metadata longtext NULL,
             user_id bigint(20) DEFAULT NULL,
             ip_address varchar(45) DEFAULT NULL,
             PRIMARY KEY  (id),
@@ -63,7 +64,7 @@ class BJLG_History {
      * @param int|null $user_id ID de l'utilisateur (null pour utilisateur actuel).
      * @param int|null $blog_id Identifiant du site cible pour enregistrer l'entrée.
      */
-    public static function log($action, $status, $details = '', $user_id = null, $blog_id = null) {
+    public static function log($action, $status, $details = '', $user_id = null, $blog_id = null, array $metadata = []) {
         global $wpdb;
         $table_name = self::get_table_name($blog_id);
         
@@ -89,6 +90,12 @@ class BJLG_History {
         ];
 
         $formats = ['%s', '%s', '%s', '%s'];
+
+        $encoded_metadata = self::encode_metadata($metadata);
+        if ($encoded_metadata !== null) {
+            $data['metadata'] = $encoded_metadata;
+            $formats[] = '%s';
+        }
 
         if ($user_id !== null) {
             $data['user_id'] = $user_id;
@@ -179,7 +186,11 @@ class BJLG_History {
         }
 
         $results = $wpdb->get_results($query, ARRAY_A);
-        
+
+        foreach ($results as &$entry) {
+            $entry['metadata'] = self::decode_metadata($entry['metadata'] ?? null);
+        }
+
         // Enrichir les résultats avec les noms d'utilisateur
         foreach ($results as &$entry) {
             if (!empty($entry['user_id'])) {
@@ -414,45 +425,30 @@ class BJLG_History {
         global $wpdb;
 
         $table_suffix = 'bjlg_history';
-        $context = BJLG_Site_Context::HISTORY_SCOPE_SITE;
-        $scope = BJLG_Site_Context::HISTORY_SCOPE_SITE;
-        $is_multisite = function_exists('is_multisite') && is_multisite();
-        $is_network_context = false;
-        $is_network_admin = false;
-
-        if ($is_multisite) {
-            $scope = BJLG_Site_Context::get_history_scope();
-            $is_network_context = BJLG_Site_Context::is_network_context();
-            $is_network_admin = function_exists('is_network_admin') && is_network_admin();
-
-            if ($scope === BJLG_Site_Context::HISTORY_SCOPE_NETWORK && ($is_network_context || $is_network_admin)) {
-                $context = BJLG_Site_Context::HISTORY_SCOPE_NETWORK;
-            }
-        }
 
         if (!is_object($wpdb)) {
-            return $prefix . 'bjlg_history';
+            return 'wp_' . $table_suffix;
         }
 
+        $is_multisite = function_exists('is_multisite') && is_multisite();
+        $desired_scope = BJLG_Site_Context::HISTORY_SCOPE_SITE;
         $resolved_blog_id = null;
-        if ($blog_id !== null) {
-            $resolved_blog_id = (int) $blog_id;
+
+        if ($blog_id === 0) {
+            $desired_scope = BJLG_Site_Context::HISTORY_SCOPE_NETWORK;
+        } elseif ($blog_id !== null) {
+            $resolved_blog_id = max(0, (int) $blog_id);
+        } elseif (BJLG_Site_Context::history_uses_network_storage() && BJLG_Site_Context::is_network_context()) {
+            $desired_scope = BJLG_Site_Context::HISTORY_SCOPE_NETWORK;
         } elseif (function_exists('get_current_blog_id')) {
-            $resolved_blog_id = (int) get_current_blog_id();
+            $resolved_blog_id = max(0, (int) get_current_blog_id());
         }
 
-        if (method_exists($wpdb, 'get_blog_prefix')) {
-            $prefix = $wpdb->get_blog_prefix($resolved_blog_id ?? 0);
-        } elseif (property_exists($wpdb, 'prefix')) {
-            $raw_prefix = $wpdb->prefix;
-            if (is_string($raw_prefix) && $raw_prefix !== '') {
-                $prefix = $raw_prefix;
-            }
+        if ($desired_scope === BJLG_Site_Context::HISTORY_SCOPE_NETWORK && $is_multisite) {
+            return BJLG_Site_Context::get_table_prefix(BJLG_Site_Context::HISTORY_SCOPE_NETWORK) . 'bjlg_history_network';
         }
 
-        $prefix = BJLG_Site_Context::get_table_prefix(BJLG_Site_Context::HISTORY_SCOPE_SITE);
-
-        return $prefix . $table_suffix;
+        return BJLG_Site_Context::get_table_prefix(BJLG_Site_Context::HISTORY_SCOPE_SITE, $resolved_blog_id) . $table_suffix;
     }
 
     /**
@@ -506,5 +502,84 @@ class BJLG_History {
             'event_trigger' => 'Sauvegarde événementielle',
             'event_trigger_settings' => 'Réglages des déclencheurs événementiels'
         ];
+    }
+
+    /**
+     * Retourne la dernière entrée correspondant à une action donnée.
+     *
+     * @param string      $action
+     * @param string|null $status
+     * @param int|null    $blog_id
+     * @return array<string,mixed>|null
+     */
+    public static function get_last_event_metadata($action, $status = null, $blog_id = null) {
+        global $wpdb;
+
+        if (!self::wpdb_supports(['prepare', 'get_row'])) {
+            return null;
+        }
+
+        $table_name = self::get_table_name($blog_id);
+        $where = ['action_type = %s'];
+        $params = [$action];
+
+        if ($status !== null) {
+            $where[] = 'status = %s';
+            $params[] = $status;
+        }
+
+        $sql = "SELECT * FROM $table_name WHERE " . implode(' AND ', $where) . " ORDER BY timestamp DESC, id DESC LIMIT 1";
+        $query = $wpdb->prepare($sql, ...$params);
+        $row = $wpdb->get_row($query, ARRAY_A);
+
+        if (!is_array($row)) {
+            return null;
+        }
+
+        $row['metadata'] = self::decode_metadata($row['metadata'] ?? null);
+
+        return $row;
+    }
+
+    /**
+     * Sérialise les métadonnées pour la base de données.
+     *
+     * @param array<string,mixed> $metadata
+     * @return string|null
+     */
+    private static function encode_metadata(array $metadata) {
+        if (empty($metadata)) {
+            return null;
+        }
+
+        $encoded = function_exists('wp_json_encode')
+            ? wp_json_encode($metadata)
+            : json_encode($metadata);
+
+        if (!is_string($encoded) || $encoded === '') {
+            return null;
+        }
+
+        return $encoded;
+    }
+
+    /**
+     * Désérialise une colonne de métadonnées.
+     *
+     * @param mixed $metadata
+     * @return array<string,mixed>
+     */
+    private static function decode_metadata($metadata) {
+        if (is_array($metadata)) {
+            return $metadata;
+        }
+
+        if (!is_string($metadata) || $metadata === '') {
+            return [];
+        }
+
+        $decoded = json_decode($metadata, true);
+
+        return is_array($decoded) ? $decoded : [];
     }
 }

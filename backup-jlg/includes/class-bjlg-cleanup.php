@@ -216,7 +216,7 @@ class BJLG_Cleanup {
             return 0;
         }
 
-        $backups = glob(BJLG_BACKUP_DIR . '*.zip*');
+        $backups = glob(bjlg_get_backup_directory() . '*.zip*');
         if (empty($backups)) {
             BJLG_Debug::log("Nettoyage : Aucun fichier de sauvegarde à vérifier.");
             return 0;
@@ -365,6 +365,7 @@ class BJLG_Cleanup {
             'errors' => [],
             'inspected' => 0,
             'deleted_items' => [],
+            'immutable_protected' => [],
         ];
 
         if (!is_array($result)) {
@@ -381,6 +382,10 @@ class BJLG_Cleanup {
 
         if (!is_array($normalized['deleted_items'])) {
             $normalized['deleted_items'] = $normalized['deleted_items'] === null ? [] : (array) $normalized['deleted_items'];
+        }
+
+        if (!isset($normalized['immutable_protected']) || !is_array($normalized['immutable_protected'])) {
+            $normalized['immutable_protected'] = [];
         }
 
         return $normalized;
@@ -415,6 +420,13 @@ class BJLG_Cleanup {
                     BJLG_History::log('cleanup_remote', 'failure', $error_message);
                 }
             }
+
+            if (!empty($result['immutable_protected']) && is_array($result['immutable_protected'])) {
+                $protected_list = implode(', ', array_map('sanitize_text_field', $result['immutable_protected']));
+                $message = sprintf('Nettoyage distant %s : éléments conservés (immutables) : %s.', $name, $protected_list);
+                BJLG_Debug::log($message);
+                BJLG_History::log('cleanup_remote', 'info', $message);
+            }
         }
     }
 
@@ -435,11 +447,11 @@ class BJLG_Cleanup {
         
         // Patterns de fichiers temporaires à nettoyer
         $temp_patterns = [
-            BJLG_BACKUP_DIR . 'temp_*',
-            BJLG_BACKUP_DIR . 'worker_*',
-            BJLG_BACKUP_DIR . 'database_temp_*',
-            BJLG_BACKUP_DIR . 'benchmark_*',
-            BJLG_BACKUP_DIR . '*.tmp'
+            bjlg_get_backup_directory() . 'temp_*',
+            bjlg_get_backup_directory() . 'worker_*',
+            bjlg_get_backup_directory() . 'database_temp_*',
+            bjlg_get_backup_directory() . 'benchmark_*',
+            bjlg_get_backup_directory() . '*.tmp'
         ];
         
         foreach ($temp_patterns as $pattern) {
@@ -574,8 +586,8 @@ class BJLG_Cleanup {
     }
 
     private static function calculate_storage_stats() {
-        $disk_free = @disk_free_space(BJLG_BACKUP_DIR);
-        $disk_total = @disk_total_space(BJLG_BACKUP_DIR);
+        $disk_free = @disk_free_space(bjlg_get_backup_directory());
+        $disk_total = @disk_total_space(bjlg_get_backup_directory());
 
         $stats = [
             'total_backups' => 0,
@@ -588,7 +600,7 @@ class BJLG_Cleanup {
             'disk_space_error' => $disk_free === false || $disk_total === false
         ];
 
-        $backups = glob(BJLG_BACKUP_DIR . '*.zip*');
+        $backups = glob(bjlg_get_backup_directory() . '*.zip*');
 
         if (!empty($backups)) {
             $sizes = [];

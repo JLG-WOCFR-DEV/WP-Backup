@@ -15,6 +15,10 @@ class BJLG_Site_Context {
     public const HISTORY_SCOPE_SITE = 'site';
     public const HISTORY_SCOPE_NETWORK = 'network';
 
+    public const NETWORK_MODE_OPTION = 'bjlg_network_mode';
+    public const NETWORK_MODE_SITE = 'site';
+    public const NETWORK_MODE_NETWORK = 'network';
+
     private const NETWORK_SYNCED_OPTIONS = [
         'bjlg_api_keys',
         'bjlg_notification_settings',
@@ -73,6 +77,11 @@ class BJLG_Site_Context {
             'bjlg_settings',
             'bjlg_sftp_settings',
             'bjlg_supervised_sites',
+            'bjlg_managed_vault_settings',
+            'bjlg_managed_vault_status',
+            'bjlg_managed_vault_metrics',
+            'bjlg_managed_vault_versions',
+            'bjlg_managed_vault_resume',
             'bjlg_wasabi_settings',
             'bjlg_webhook_key',
             'bjlg_webhook_settings',
@@ -148,6 +157,7 @@ class BJLG_Site_Context {
     public static function history_uses_network_storage(): bool {
         return function_exists('is_multisite')
             && is_multisite()
+            && self::is_network_mode_enabled()
             && self::get_history_scope() === self::HISTORY_SCOPE_NETWORK;
     }
 
@@ -167,7 +177,7 @@ class BJLG_Site_Context {
     /**
      * Returns the table prefix for the requested context.
      */
-    public static function get_table_prefix(string $context = self::HISTORY_SCOPE_SITE): string {
+    public static function get_table_prefix(string $context = self::HISTORY_SCOPE_SITE, ?int $site_id = null): string {
         global $wpdb;
 
         $default = 'wp_';
@@ -176,24 +186,39 @@ class BJLG_Site_Context {
             return $default;
         }
 
-        if ($context === self::HISTORY_SCOPE_NETWORK
-            && property_exists($wpdb, 'base_prefix')
-            && is_string($wpdb->base_prefix)
-            && $wpdb->base_prefix !== ''
-        ) {
-            return $wpdb->base_prefix;
+        if ($context === self::HISTORY_SCOPE_NETWORK) {
+            if (property_exists($wpdb, 'base_prefix') && is_string($wpdb->base_prefix) && $wpdb->base_prefix !== '') {
+                return $wpdb->base_prefix;
+            }
+
+            if (property_exists($wpdb, 'prefix') && is_string($wpdb->prefix) && $wpdb->prefix !== '') {
+                return $wpdb->prefix;
+            }
+
+            return $default;
+        }
+
+        $target_blog_id = null;
+
+        if ($site_id !== null) {
+            $target_blog_id = max(0, (int) $site_id);
+        } elseif (function_exists('get_current_blog_id')) {
+            $target_blog_id = max(0, (int) get_current_blog_id());
+        }
+
+        if ($target_blog_id !== null && method_exists($wpdb, 'get_blog_prefix')) {
+            $blog_prefix = $wpdb->get_blog_prefix($target_blog_id);
+            if (is_string($blog_prefix) && $blog_prefix !== '') {
+                return $blog_prefix;
+            }
         }
 
         if (property_exists($wpdb, 'prefix') && is_string($wpdb->prefix) && $wpdb->prefix !== '') {
             return $wpdb->prefix;
         }
 
-        if ($context === self::HISTORY_SCOPE_NETWORK && property_exists($wpdb, 'base_prefix')) {
-            $base_prefix = $wpdb->base_prefix;
-
-            if (is_string($base_prefix) && $base_prefix !== '') {
-                return $base_prefix;
-            }
+        if (property_exists($wpdb, 'base_prefix') && is_string($wpdb->base_prefix) && $wpdb->base_prefix !== '') {
+            return $wpdb->base_prefix;
         }
 
         return $default;
@@ -206,6 +231,46 @@ class BJLG_Site_Context {
         $suffix = ltrim($table_suffix, '_');
 
         return self::get_table_prefix(self::HISTORY_SCOPE_NETWORK) . $suffix;
+    }
+
+    /**
+     * Returns the canonical backup directory for the requested context.
+     */
+    public static function get_backup_directory(?int $site_id = null, string $context = self::HISTORY_SCOPE_SITE): string
+    {
+        $resolver = static function () use ($context) {
+            $uploads = function_exists('wp_get_upload_dir') ? wp_get_upload_dir() : null;
+            $basedir = is_array($uploads) && isset($uploads['basedir']) && is_string($uploads['basedir'])
+                ? (string) $uploads['basedir']
+                : trailingslashit(WP_CONTENT_DIR) . 'uploads';
+
+            $blog_id = function_exists('get_current_blog_id') ? (int) get_current_blog_id() : 0;
+
+            if ($context === self::HISTORY_SCOPE_NETWORK) {
+                $subdir = 'network';
+            } else {
+                $subdir = 'site-' . max(0, $blog_id);
+            }
+
+            return trailingslashit(trailingslashit($basedir) . 'bjlg-backups/' . $subdir);
+        };
+
+        if ($context === self::HISTORY_SCOPE_NETWORK) {
+            return (string) self::with_network(static function () use ($resolver) {
+                return $resolver();
+            });
+        }
+
+        if ($site_id !== null && function_exists('is_multisite') && is_multisite()) {
+            $site_id = (int) $site_id;
+            if ($site_id > 0) {
+                return (string) self::with_site($site_id, static function () use ($resolver) {
+                    return $resolver();
+                });
+            }
+        }
+
+        return $resolver();
     }
 
     /**
@@ -428,6 +493,10 @@ class BJLG_Site_Context {
             return (bool) $args['network'];
         }
 
+        if (!self::is_network_mode_enabled()) {
+            return false;
+        }
+
         if (self::is_network_synced_option($option_name)) {
             return true;
         }
@@ -475,6 +544,10 @@ class BJLG_Site_Context {
             return;
         }
 
+        if (!self::is_network_mode_enabled()) {
+            return;
+        }
+
         if (!self::is_network_context() && !self::is_network_synced_option($option_name)) {
             return;
         }
@@ -506,6 +579,53 @@ class BJLG_Site_Context {
 
     private static function is_network_synced_option(string $option_name): bool
     {
-        return in_array($option_name, self::NETWORK_SYNCED_OPTIONS, true);
+        return self::is_network_mode_enabled() && in_array($option_name, self::NETWORK_SYNCED_OPTIONS, true);
+    }
+
+    /**
+     * Retrieves the configured network mode.
+     */
+    public static function get_network_mode(): string
+    {
+        $default = self::NETWORK_MODE_SITE;
+
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return $default;
+        }
+
+        $raw = get_site_option(self::NETWORK_MODE_OPTION, $default);
+
+        return self::sanitize_network_mode($raw);
+    }
+
+    /**
+     * Persists the desired network mode.
+     */
+    public static function set_network_mode(string $mode): void
+    {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return;
+        }
+
+        $mode = self::sanitize_network_mode($mode);
+
+        update_site_option(self::NETWORK_MODE_OPTION, $mode);
+    }
+
+    /**
+     * Determines whether network mode is enabled.
+     */
+    public static function is_network_mode_enabled(): bool
+    {
+        return self::get_network_mode() === self::NETWORK_MODE_NETWORK;
+    }
+
+    private static function sanitize_network_mode($value): string
+    {
+        $normalized = sanitize_key((string) $value);
+
+        return $normalized === self::NETWORK_MODE_NETWORK
+            ? self::NETWORK_MODE_NETWORK
+            : self::NETWORK_MODE_SITE;
     }
 }

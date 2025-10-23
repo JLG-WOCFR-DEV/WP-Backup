@@ -14,7 +14,7 @@ final class BJLG_IncrementalQueueActionsTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->manifestPath = BJLG_BACKUP_DIR . '.incremental-manifest.json';
+        $this->manifestPath = bjlg_get_backup_directory() . '.incremental-manifest.json';
         if (file_exists($this->manifestPath)) {
             @unlink($this->manifestPath);
         }

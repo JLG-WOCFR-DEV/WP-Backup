@@ -34,7 +34,7 @@ final class BJLG_DiagnosticsSupportPackageTest extends \PHPUnit\Framework\TestCa
         \BJLG\BJLG_Debug::$logs = [];
         $_POST = [];
 
-        foreach (glob(BJLG_BACKUP_DIR . 'support-package-*.zip') ?: [] as $existing) {
+        foreach (glob(bjlg_get_backup_directory() . 'support-package-*.zip') ?: [] as $existing) {
             @unlink($existing);
         }
     }

@@ -35,6 +35,8 @@ class BJLG_Notifications {
             'remote_purge_delayed' => true,
             'restore_self_test_passed' => false,
             'restore_self_test_failed' => true,
+            'sandbox_restore_validation_passed' => false,
+            'sandbox_restore_validation_failed' => true,
         ],
         'channels' => [
             'email' => ['enabled' => false],
@@ -141,7 +143,11 @@ class BJLG_Notifications {
         'remote_purge_delayed' => 'critical',
         'restore_self_test_passed' => 'info',
         'restore_self_test_failed' => 'critical',
+        'sandbox_restore_validation_passed' => 'info',
+        'sandbox_restore_validation_failed' => 'critical',
         'test_notification' => 'info',
+        'managed_vault_latency' => 'warning',
+        'managed_vault_replica_degraded' => 'critical',
     ];
 
     /**
@@ -221,6 +227,8 @@ class BJLG_Notifications {
         add_action('bjlg_remote_purge_delayed', [$this, 'handle_remote_purge_delayed'], 15, 2);
         add_action('bjlg_restore_self_test_passed', [$this, 'handle_restore_self_test_passed'], 15, 1);
         add_action('bjlg_restore_self_test_failed', [$this, 'handle_restore_self_test_failed'], 15, 1);
+        add_action('bjlg_sandbox_restore_validation_passed', [$this, 'handle_sandbox_validation_passed'], 15, 1);
+        add_action('bjlg_sandbox_restore_validation_failed', [$this, 'handle_sandbox_validation_failed'], 15, 1);
     }
 
     /**
@@ -468,6 +476,45 @@ class BJLG_Notifications {
     }
 
     /**
+     * Gère les alertes spécialisées Managed Vault (latence / réplication).
+     *
+     * @param array<string,mixed> $payload
+     */
+    public function handle_managed_vault_alert($payload) {
+        if (!is_array($payload)) {
+            return;
+        }
+
+        $type = isset($payload['type']) ? (string) $payload['type'] : '';
+        $message = isset($payload['message']) ? (string) $payload['message'] : '';
+        $destination_id = isset($payload['destination']) ? (string) $payload['destination'] : 'managed_vault';
+        $context = isset($payload['context']) && is_array($payload['context']) ? $payload['context'] : [];
+
+        if (isset($context['regions']) && is_array($context['regions'])) {
+            $context['regions'] = implode(', ', array_map('sanitize_text_field', $context['regions']));
+        }
+        if (isset($context['region']) && is_scalar($context['region'])) {
+            $context['region'] = sanitize_text_field((string) $context['region']);
+        }
+
+        $context['message'] = $message;
+        $context['type'] = $type;
+        $context['destination'] = $this->resolve_destination_label($destination_id) ?: ucfirst(str_replace('_', ' ', $destination_id));
+
+        switch ($type) {
+            case 'replica_degraded':
+                $event = 'managed_vault_replica_degraded';
+                break;
+            case 'latency_budget_exceeded':
+            default:
+                $event = 'managed_vault_latency';
+                break;
+        }
+
+        $this->notify($event, $context);
+    }
+
+    /**
      * Prépare le contexte d'un échec définitif de purge distante.
      *
      * @param string               $file
@@ -562,6 +609,28 @@ class BJLG_Notifications {
         ];
 
         $this->notify('restore_self_test_failed', $context);
+    }
+
+    /**
+     * Contexte d'une validation sandbox réussie.
+     *
+     * @param array<string,mixed> $report
+     */
+    public function handle_sandbox_validation_passed($report) {
+        $context = $this->normalize_sla_validation_report($report, 'success');
+
+        $this->notify('sandbox_restore_validation_passed', $context);
+    }
+
+    /**
+     * Contexte d'une validation sandbox en échec.
+     *
+     * @param array<string,mixed> $report
+     */
+    public function handle_sandbox_validation_failed($report) {
+        $context = $this->normalize_sla_validation_report($report, 'failure');
+
+        $this->notify('sandbox_restore_validation_failed', $context);
     }
 
     /**
@@ -887,6 +956,46 @@ class BJLG_Notifications {
     }
 
     /**
+     * Normalise les données d'un rapport de validation sandbox.
+     *
+     * @param array<string,mixed>|null $report
+     * @param string                   $status
+     * @return array<string,mixed>
+     */
+    private function normalize_sla_validation_report($report, $status) {
+        $report = is_array($report) ? $report : [];
+        $objectives = isset($report['objectives']) && is_array($report['objectives']) ? $report['objectives'] : [];
+        $timings = isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [];
+        $sandbox = isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [];
+        $cleanup = isset($sandbox['cleanup']) && is_array($sandbox['cleanup']) ? $sandbox['cleanup'] : [];
+
+        $components = [];
+        if (isset($report['components']) && is_array($report['components'])) {
+            $components = array_map('strval', $report['components']);
+        }
+
+        return [
+            'status' => $status,
+            'message' => isset($report['message']) ? (string) $report['message'] : '',
+            'backup_file' => isset($report['backup_file']) ? (string) $report['backup_file'] : '',
+            'backup_filename' => isset($report['backup_file']) && is_string($report['backup_file'])
+                ? basename($report['backup_file'])
+                : '',
+            'components' => $components,
+            'rto_seconds' => isset($objectives['rto_seconds']) ? (float) $objectives['rto_seconds'] : null,
+            'rpo_seconds' => isset($objectives['rpo_seconds']) ? (float) $objectives['rpo_seconds'] : null,
+            'rto_human' => isset($objectives['rto_human']) ? (string) $objectives['rto_human'] : ($timings['duration_human'] ?? ''),
+            'rpo_human' => isset($objectives['rpo_human']) ? (string) $objectives['rpo_human'] : '',
+            'started_at' => isset($report['started_at']) ? (int) $report['started_at'] : null,
+            'completed_at' => isset($report['completed_at']) ? (int) $report['completed_at'] : null,
+            'sandbox_path' => isset($sandbox['base_path']) ? (string) $sandbox['base_path'] : '',
+            'cleanup_performed' => !empty($cleanup['performed']),
+            'cleanup_error' => isset($cleanup['error']) && $cleanup['error'] !== null ? (string) $cleanup['error'] : null,
+            'raw' => $report,
+        ];
+    }
+
+    /**
      * Envoie la notification sur les canaux configurés.
      *
      * @param string              $event
@@ -1023,6 +1132,10 @@ class BJLG_Notifications {
                 return __('Test de restauration réussi', 'backup-jlg');
             case 'restore_self_test_failed':
                 return __('Test de restauration échoué', 'backup-jlg');
+            case 'sandbox_restore_validation_passed':
+                return __('Validation SLA réussie', 'backup-jlg');
+            case 'sandbox_restore_validation_failed':
+                return __('Validation SLA échouée', 'backup-jlg');
             default:
                 return ucfirst(str_replace('_', ' ', $event));
         }
@@ -1269,6 +1382,39 @@ class BJLG_Notifications {
                 }
                 if (!empty($context['completed_at'])) {
                     $lines[] = __('Horodatage : ', 'backup-jlg') . $this->format_timestamp($context['completed_at']);
+                }
+                break;
+            case 'sandbox_restore_validation_passed':
+            case 'sandbox_restore_validation_failed':
+                $is_failure = $event === 'sandbox_restore_validation_failed';
+                $lines[] = $is_failure
+                    ? __('La validation sandbox n’a pas respecté les objectifs SLA.', 'backup-jlg')
+                    : __('La validation sandbox confirme que les objectifs SLA sont respectés.', 'backup-jlg');
+
+                if (!empty($context['backup_filename'])) {
+                    $lines[] = __('Archive utilisée : ', 'backup-jlg') . $context['backup_filename'];
+                } elseif (!empty($context['backup_file'])) {
+                    $lines[] = __('Archive utilisée : ', 'backup-jlg') . basename($context['backup_file']);
+                }
+
+                if (!empty($context['rto_human'])) {
+                    $lines[] = __('RTO observé : ', 'backup-jlg') . $context['rto_human'];
+                }
+
+                if (!empty($context['rpo_human'])) {
+                    $lines[] = __('RPO estimé : ', 'backup-jlg') . $context['rpo_human'];
+                }
+
+                if (!empty($context['message'])) {
+                    $lines[] = __('Détails : ', 'backup-jlg') . $context['message'];
+                }
+
+                if (!empty($context['sandbox_path'])) {
+                    $lines[] = __('Sandbox : ', 'backup-jlg') . $context['sandbox_path'];
+                }
+
+                if (!empty($context['cleanup_error'])) {
+                    $lines[] = __('Nettoyage sandbox : ', 'backup-jlg') . $context['cleanup_error'];
                 }
                 break;
             default:

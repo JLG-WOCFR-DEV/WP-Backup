@@ -243,6 +243,8 @@ class BJLG_Remote_Storage_Metrics {
             'days_to_threshold' => null,
             'days_to_threshold_label' => '',
             'projection_intent' => 'neutral',
+            'replica_status' => [],
+            'latency_breakdown' => [],
         ];
 
         if (!$entry['connected']) {
@@ -285,10 +287,20 @@ class BJLG_Remote_Storage_Metrics {
                     }
                 }
             }
+            if (isset($usage['replica_status']) && is_array($usage['replica_status'])) {
+                $entry['replica_status'] = $usage['replica_status'];
+            }
+            if (isset($usage['latency_breakdown']) && is_array($usage['latency_breakdown'])) {
+                $entry['latency_breakdown'] = $usage['latency_breakdown'];
+            }
         }
 
         if (is_array($usage) && isset($usage['latency_ms']) && $usage['latency_ms'] !== null) {
             $entry['latency_ms'] = (int) max(0, $usage['latency_ms']);
+        }
+
+        if (empty($entry['latency_breakdown']) && isset($usage['latency_breakdown']) && is_array($usage['latency_breakdown'])) {
+            $entry['latency_breakdown'] = $usage['latency_breakdown'];
         }
 
         $entry['quota_samples'] = self::get_quota_sample_for_destination($destination_id);
@@ -338,14 +350,13 @@ class BJLG_Remote_Storage_Metrics {
             } elseif (is_array($backups)) {
                 $entry['backups_count'] = count($backups);
 
-                if ($entry['used_bytes'] === null) {
-                    $total = 0;
-                    foreach ($backups as $backup) {
-                        $total += isset($backup['size']) ? (int) $backup['size'] : 0;
-                    }
-                    $entry['used_bytes'] = $total;
-                    $entry['used_human'] = size_format($total);
+            if ($entry['used_bytes'] === null) {
+                $total = 0;
+                foreach ($backups as $backup) {
+                    $total += isset($backup['size']) ? (int) $backup['size'] : 0;
                 }
+                $entry['used_bytes'] = $total;
+                $entry['used_human'] = size_format($total);
             }
         }
 
