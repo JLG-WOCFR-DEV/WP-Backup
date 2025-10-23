@@ -11,7 +11,8 @@
   },
   "jest": {
     "testMatch": [
-      "**/assets/js/__tests__/**/*.test.js"
+      "**/assets/js/__tests__/**/*.test.js",
+      "**/tests/js/**/*.test.js"
     ],
     "testEnvironment": "jsdom",
     "setupFiles": [
