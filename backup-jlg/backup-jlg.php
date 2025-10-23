@@ -237,7 +237,13 @@ if (!function_exists('bjlg_get_capability_map')) {
      * @return array<string,string>
      */
     function bjlg_get_capability_map() {
-        $is_network_context = function_exists('is_multisite') && is_multisite() && function_exists('is_network_admin') && is_network_admin();
+        $is_multisite = function_exists('is_multisite') && is_multisite();
+        $is_network_admin = $is_multisite && function_exists('is_network_admin') && is_network_admin();
+        $is_network_context = $is_multisite
+            && (
+                $is_network_admin
+                || (class_exists('BJLG\\BJLG_Site_Context') && \BJLG\BJLG_Site_Context::is_network_context())
+            );
         $default_capability = $is_network_context ? 'manage_network_options' : BJLG_DEFAULT_CAPABILITY;
 
         $defaults = [
@@ -555,7 +561,7 @@ final class BJLG_Plugin {
             'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php',
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
-            'class-bjlg-notification-transport.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-storage-metrics.php', 'class-bjlg-remote-purge-worker.php',
+            'class-bjlg-notification-transport.php', 'class-bjlg-notification-receipts.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-storage-metrics.php', 'class-bjlg-remote-purge-worker.php',
             'class-bjlg-restore-self-test.php',
             'class-bjlg-update-guard.php',
             'class-bjlg-performance.php', 'class-bjlg-rate-limiter.php', 'class-bjlg-rest-api.php',
@@ -747,16 +753,22 @@ final class BJLG_Plugin {
     public function activate() {
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-debug.php';
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-history.php';
+
+        $default_history_scope = \BJLG\BJLG_Site_Context::sanitize_history_scope(
+            apply_filters('bjlg_default_history_scope', \BJLG\BJLG_Site_Context::HISTORY_SCOPE_SITE)
+        );
+
         if (function_exists('is_multisite') && is_multisite()) {
             $site_ids = get_sites(['fields' => 'ids']);
 
             foreach ((array) $site_ids as $site_id) {
-                bjlg_with_site((int) $site_id, function () {
-                    $this->activate_single_site();
+                bjlg_with_site((int) $site_id, function () use ($site_id) {
+                    $this->activate_single_site((int) $site_id);
                 });
             }
 
             bjlg_with_network(function () {
+                BJLG\BJLG_History::create_table(0);
                 if (bjlg_get_option('bjlg_required_capability', null, ['network' => true]) === null) {
                     bjlg_update_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY, ['network' => true]);
                 }
@@ -764,12 +776,24 @@ final class BJLG_Plugin {
                 if (bjlg_get_option('bjlg_capability_map', null, ['network' => true]) === null) {
                     bjlg_update_option('bjlg_capability_map', [], ['network' => true]);
                 }
+
+                if (get_site_option(\BJLG\BJLG_Site_Context::HISTORY_SCOPE_OPTION, null) === null) {
+                    \BJLG\BJLG_Site_Context::set_history_scope($default_history_scope);
+                }
+
+                if (\BJLG\BJLG_Site_Context::history_uses_network_storage()) {
+                    \BJLG\BJLG_History::create_table();
+                }
             });
 
             return;
         }
 
         $this->activate_single_site();
+
+        if (get_option(\BJLG\BJLG_Site_Context::HISTORY_SCOPE_OPTION, null) === null) {
+            \BJLG\BJLG_Site_Context::set_history_scope($default_history_scope);
+        }
     }
 
     public function deactivate() {
@@ -777,8 +801,8 @@ final class BJLG_Plugin {
         wp_clear_scheduled_hook('bjlg_daily_cleanup_hook');
     }
 
-    private function activate_single_site(): void {
-        BJLG\BJLG_History::create_table();
+    private function activate_single_site(?int $blog_id = null): void {
+        BJLG\BJLG_History::create_table($blog_id);
 
         if (bjlg_get_option('bjlg_required_capability', null) === null) {
             bjlg_update_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY);

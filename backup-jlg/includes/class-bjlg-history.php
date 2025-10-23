@@ -13,10 +13,12 @@ class BJLG_History {
     /**
      * Crée la table de base de données personnalisée à l'activation du plugin.
      * Utilise dbDelta pour être sûre et non destructive.
+     *
+     * @param int|null $blog_id Identifiant du site cible (multisite) ou null pour le site courant.
      */
-    public static function create_table() {
+    public static function create_table($blog_id = null) {
         global $wpdb;
-        $table_name = self::get_table_name();
+        $table_name = self::get_table_name($blog_id);
         $charset_collate = method_exists($wpdb, 'get_charset_collate')
             ? $wpdb->get_charset_collate()
             : 'DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci';
@@ -59,10 +61,11 @@ class BJLG_History {
      * @param string $status Le statut de l'action ('success', 'failure', 'info').
      * @param string $details Détails supplémentaires (nom de fichier, message d'erreur, etc.).
      * @param int|null $user_id ID de l'utilisateur (null pour utilisateur actuel).
+     * @param int|null $blog_id Identifiant du site cible pour enregistrer l'entrée.
      */
-    public static function log($action, $status, $details = '', $user_id = null) {
+    public static function log($action, $status, $details = '', $user_id = null, $blog_id = null) {
         global $wpdb;
-        $table_name = self::get_table_name();
+        $table_name = self::get_table_name($blog_id);
         
         // Obtenir l'ID de l'utilisateur actuel si non spécifié
         if ($user_id === null) {
@@ -114,7 +117,7 @@ class BJLG_History {
         }
         
         // Déclencher une action pour permettre des extensions
-        do_action('bjlg_history_logged', $action, $status, $details, $user_id);
+        do_action('bjlg_history_logged', $action, $status, $details, $user_id, $blog_id);
     }
 
     /**
@@ -122,11 +125,13 @@ class BJLG_History {
      *
      * @param int $limit Le nombre d'entrées à récupérer.
      * @param array $filters Filtres optionnels (action_type, status, date_from, date_to).
+     * @param int|null $blog_id Identifiant du site cible lorsque l'on interroge un autre blog.
+     *
      * @return array
      */
-    public static function get_history($limit = 50, $filters = []) {
+    public static function get_history($limit = 50, $filters = [], $blog_id = null) {
         global $wpdb;
-        $table_name = self::get_table_name();
+        $table_name = self::get_table_name($blog_id);
         
         $where_clauses = ['1=1'];
         $values = [];
@@ -190,10 +195,13 @@ class BJLG_History {
     
     /**
      * Obtient des statistiques sur l'historique
+     *
+     * @param string   $period  Période d'analyse.
+     * @param int|null $blog_id Identifiant du site cible.
      */
-    public static function get_stats($period = 'week') {
+    public static function get_stats($period = 'week', $blog_id = null) {
         global $wpdb;
-        $table_name = self::get_table_name();
+        $table_name = self::get_table_name($blog_id);
         
         $date_limit = date('Y-m-d H:i:s', strtotime('-1 ' . $period));
         
@@ -310,10 +318,14 @@ class BJLG_History {
     
     /**
      * Recherche dans l'historique
+     *
+     * @param string   $search_term Terme recherché.
+     * @param int      $limit       Nombre maximum de résultats.
+     * @param int|null $blog_id     Identifiant du site cible.
      */
-    public static function search($search_term, $limit = 50) {
+    public static function search($search_term, $limit = 50, $blog_id = null) {
         global $wpdb;
-        $table_name = self::get_table_name();
+        $table_name = self::get_table_name($blog_id);
 
         if (method_exists($wpdb, 'esc_like')) {
             $search_term = '%' . $wpdb->esc_like($search_term) . '%';
@@ -342,8 +354,8 @@ class BJLG_History {
     /**
      * Exporte l'historique en CSV
      */
-    public static function export_csv($filters = []) {
-        $history = self::get_history(9999, $filters);
+    public static function export_csv($filters = [], $blog_id = null) {
+        $history = self::get_history(9999, $filters, $blog_id);
         
         $csv_data = [];
         $csv_data[] = ['Date', 'Action', 'Statut', 'Détails', 'Utilisateur', 'IP'];
@@ -365,9 +377,15 @@ class BJLG_History {
     /**
      * Nettoie les anciennes entrées
      */
-    public static function cleanup($days_to_keep = 30) {
+    /**
+     * Nettoie les anciennes entrées
+     *
+     * @param int      $days_to_keep Nombre de jours conservés.
+     * @param int|null $blog_id      Identifiant du site cible.
+     */
+    public static function cleanup($days_to_keep = 30, $blog_id = null) {
         global $wpdb;
-        $table_name = self::get_table_name();
+        $table_name = self::get_table_name($blog_id);
 
         $cutoff_date = date('Y-m-d H:i:s', strtotime('-' . $days_to_keep . ' days'));
 
@@ -392,20 +410,49 @@ class BJLG_History {
     /**
      * Retourne le nom complet de la table d'historique selon le préfixe actif.
      */
-    private static function get_table_name() {
+    private static function get_table_name($blog_id = null) {
         global $wpdb;
 
-        $prefix = 'wp_';
+        $table_suffix = 'bjlg_history';
+        $context = BJLG_Site_Context::HISTORY_SCOPE_SITE;
+        $scope = BJLG_Site_Context::HISTORY_SCOPE_SITE;
+        $is_multisite = function_exists('is_multisite') && is_multisite();
+        $is_network_context = false;
+        $is_network_admin = false;
 
-        if (is_object($wpdb) && property_exists($wpdb, 'prefix')) {
+        if ($is_multisite) {
+            $scope = BJLG_Site_Context::get_history_scope();
+            $is_network_context = BJLG_Site_Context::is_network_context();
+            $is_network_admin = function_exists('is_network_admin') && is_network_admin();
+
+            if ($scope === BJLG_Site_Context::HISTORY_SCOPE_NETWORK && ($is_network_context || $is_network_admin)) {
+                $context = BJLG_Site_Context::HISTORY_SCOPE_NETWORK;
+            }
+        }
+
+        if (!is_object($wpdb)) {
+            return $prefix . 'bjlg_history';
+        }
+
+        $resolved_blog_id = null;
+        if ($blog_id !== null) {
+            $resolved_blog_id = (int) $blog_id;
+        } elseif (function_exists('get_current_blog_id')) {
+            $resolved_blog_id = (int) get_current_blog_id();
+        }
+
+        if (method_exists($wpdb, 'get_blog_prefix')) {
+            $prefix = $wpdb->get_blog_prefix($resolved_blog_id ?? 0);
+        } elseif (property_exists($wpdb, 'prefix')) {
             $raw_prefix = $wpdb->prefix;
-
             if (is_string($raw_prefix) && $raw_prefix !== '') {
                 $prefix = $raw_prefix;
             }
         }
 
-        return $prefix . 'bjlg_history';
+        $prefix = BJLG_Site_Context::get_table_prefix(BJLG_Site_Context::HISTORY_SCOPE_SITE);
+
+        return $prefix . $table_suffix;
     }
 
     /**

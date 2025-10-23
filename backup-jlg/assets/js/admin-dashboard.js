@@ -39,14 +39,26 @@ jQuery(function($) {
         return number === 1 ? singular : plural;
     };
 
-    const ajaxData = window.bjlg_ajax || {};
+    window.bjlg_ajax = window.bjlg_ajax || {};
+    const ajaxData = window.bjlg_ajax;
 
     const queueActionMap = {
+        'acknowledge-notification': { action: 'bjlg_notification_ack', param: 'entry_id' },
+        'resolve-notification': {
+            action: 'bjlg_notification_resolve',
+            param: 'entry_id',
+            promptField: 'notes',
+            prompt: __('Ajoutez des notes de résolution (optionnel)', 'backup-jlg')
+        },
         'retry-notification': { action: 'bjlg_notification_queue_retry', param: 'entry_id' },
         'clear-notification': { action: 'bjlg_notification_queue_delete', param: 'entry_id' },
+        'acknowledge-notification': { action: 'bjlg_notification_acknowledge', param: 'entry_id', summary: { required: false, prompt: __('Ajouter une note pour l’accusé ?', 'backup-jlg') } },
+        'resolve-notification': { action: 'bjlg_notification_resolve', param: 'entry_id', summary: { required: true, prompt: __('Consigner la résolution :', 'backup-jlg') } },
         'retry-remote-purge': { action: 'bjlg_remote_purge_retry', param: 'file' },
         'clear-remote-purge': { action: 'bjlg_remote_purge_delete', param: 'file' }
     };
+
+    window.bjlgDashboardQueueActions = queueActionMap;
 
     const announce = function(message, priority) {
         if (!message) {
@@ -247,7 +259,8 @@ jQuery(function($) {
         const refreshInfo = typeof storage.remote_refresh === 'object' && storage.remote_refresh !== null
             ? storage.remote_refresh
             : {};
-        const threshold = Number(storage.remote_threshold || 0.85);
+        const thresholdRatioConfig = Number(storage.remote_threshold || storage.threshold_ratio || 0.85);
+        const threshold = Number.isFinite(thresholdRatioConfig) ? thresholdRatioConfig : 0.85;
         const $list = $card.find('[data-field="remote_storage_list"]');
         const thresholdPercentRaw = Number(storage.remote_warning_threshold || storage.threshold_percent || 85);
         const thresholdPercent = Number.isFinite(thresholdPercentRaw) ? Math.max(1, Math.min(100, thresholdPercentRaw)) : 85;
@@ -305,6 +318,7 @@ jQuery(function($) {
 
         const watchList = [];
         const offlineList = [];
+        const criticalForecasts = [];
         const rendered = [];
         const captionParts = [];
 
@@ -336,6 +350,10 @@ jQuery(function($) {
             const refreshState = dest.refresh_state && refreshStateLabels[dest.refresh_state]
                 ? dest.refresh_state
                 : 'unknown';
+            const forecastLabel = dest.forecast_label || dest.daily_delta_label || '';
+            const daysToThreshold = Number(dest.days_to_threshold);
+            const daysLabel = dest.days_to_threshold_label || '';
+            const projectionIntent = (dest.projection_intent || '').toString().toLowerCase();
 
             let ratio = null;
             const ratioFromSnapshot = Number(dest.utilization_ratio);
@@ -388,24 +406,12 @@ jQuery(function($) {
                 details.push(sprintf(__('Relevé en %s ms', 'backup-jlg'), formatNumber(Math.round(latency))));
             }
 
-            const latency = Number(dest.latency_ms);
-            if (Number.isFinite(latency) && latency > 0) {
-                details.push(sprintf(__('Relevé en %s ms', 'backup-jlg'), formatNumber(Math.round(latency))));
+            if (forecastLabel) {
+                details.push(forecastLabel);
             }
 
-            const latency = Number(dest.latency_ms);
-            if (Number.isFinite(latency) && latency > 0) {
-                details.push(sprintf(__('Relevé en %s ms', 'backup-jlg'), formatNumber(Math.round(latency))));
-            }
-
-            const latency = Number(dest.latency_ms);
-            if (Number.isFinite(latency) && latency > 0) {
-                details.push(sprintf(__('Relevé en %s ms', 'backup-jlg'), formatNumber(Math.round(latency))));
-            }
-
-            const latency = Number(dest.latency_ms);
-            if (Number.isFinite(latency) && latency > 0) {
-                details.push(sprintf(__('Relevé en %s ms', 'backup-jlg'), formatNumber(Math.round(latency))));
+            if (daysLabel) {
+                details.push(daysLabel);
             }
 
             let intent = 'info';
@@ -413,6 +419,20 @@ jQuery(function($) {
                 intent = 'error';
             } else if (ratio !== null && ratio >= thresholdRatio) {
                 intent = 'warning';
+            }
+
+            if (Number.isFinite(daysToThreshold)) {
+                if (daysToThreshold <= 1) {
+                    intent = 'error';
+                    criticalForecasts.push({ name: name, label: daysLabel || forecastLabel });
+                } else if (daysToThreshold <= 3 && intent !== 'error') {
+                    intent = 'warning';
+                    watchList.push(name);
+                }
+            }
+
+            if (projectionIntent === 'success' && intent === 'info') {
+                intent = 'success';
             }
 
             rendered.push({
@@ -433,13 +453,15 @@ jQuery(function($) {
 
         if (uniqueOffline.length) {
             captionParts.push(sprintf(__('Attention : vérifier %s', 'backup-jlg'), uniqueOffline.join(', ')));
+        }
+
+        if (criticalForecasts.length) {
+            const labels = criticalForecasts.map(function(item) {
+                return item.name;
+            });
+            captionParts.push(sprintf(__('Saturation estimée très bientôt pour %s', 'backup-jlg'), labels.join(', ')));
         } else if (uniqueWatch.length) {
-            setField(
-                'remote_storage_caption',
-                sprintf(__('Capacité > %s%% pour %s', 'backup-jlg'), formatNumber(Math.round(thresholdPercent)), uniqueWatch.join(', '))
-            );
-        } else {
-            setField('remote_storage_caption', __('Capacité hors-site nominale.', 'backup-jlg'));
+            captionParts.push(sprintf(__('Capacité > %s%% pour %s', 'backup-jlg'), formatNumber(Math.round(thresholdPercent)), uniqueWatch.join(', ')));
         }
 
         if (!captionParts.length) {
@@ -678,6 +700,14 @@ jQuery(function($) {
                             $('<li/>', { text: sprintf(__('Durée moyenne de purge : %s', 'backup-jlg'), sla.throughput_average) }).appendTo($list);
                         }
 
+                        if (sla.duration_peak) {
+                            $('<li/>', { text: sprintf(__('Durée maximale récente : %s', 'backup-jlg'), sla.duration_peak) }).appendTo($list);
+                        }
+
+                        if (sla.duration_last) {
+                            $('<li/>', { text: sprintf(__('Dernière purge traitée en %s', 'backup-jlg'), sla.duration_last) }).appendTo($list);
+                        }
+
                         if (sla.throughput_last_completion_relative) {
                             $('<li/>', { text: sprintf(__('Dernière purge réussie %s', 'backup-jlg'), sla.throughput_last_completion_relative) }).appendTo($list);
                         }
@@ -691,10 +721,42 @@ jQuery(function($) {
                         } else if (sla.last_failure_relative) {
                             $('<li/>', { text: sprintf(__('Dernier échec %s', 'backup-jlg'), sla.last_failure_relative) }).appendTo($list);
                         }
+
+                        if (sla.forecast_label) {
+                            $('<li/>', { text: sla.forecast_label }).appendTo($list);
+                        }
+
+                        if (sla.forecast_projected_relative) {
+                            $('<li/>', { text: sprintf(__('Projection de vidage %s', 'backup-jlg'), sla.forecast_projected_relative) }).appendTo($list);
+                        }
+
+                        if (Array.isArray(sla.forecast_destinations) && sla.forecast_destinations.length) {
+                            sla.forecast_destinations.forEach(function(destination) {
+                                if (!destination || typeof destination !== 'object') {
+                                    return;
+                                }
+
+                                const parts = [destination.label || destination.id || ''];
+                                if (destination.forecast_label) {
+                                    parts.push(destination.forecast_label);
+                                }
+                                if (destination.projected_relative) {
+                                    parts.push(sprintf(__('vidage %s', 'backup-jlg'), destination.projected_relative));
+                                }
+
+                                $('<li/>', { text: parts.filter(Boolean).join(' • ') }).appendTo($list);
+                            });
+                        }
                     }
                 } else {
                     $sla.remove();
                 }
+            }
+
+            if (sla && sla.saturation_warning) {
+                $card.attr('data-saturation-warning', 'true');
+            } else {
+                $card.removeAttr('data-saturation-warning');
             }
 
             const $entries = $card.find('[data-role="entries"]');
@@ -773,6 +835,22 @@ jQuery(function($) {
                     }).appendTo($entry);
                 }
 
+                if (entry.details && entry.details.acknowledged_label) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-meta',
+                        'data-field': 'acknowledged',
+                        text: entry.details.acknowledged_label
+                    }).appendTo($entry);
+                }
+
+                if (entry.details && entry.details.resolved_label) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-meta',
+                        'data-field': 'resolved',
+                        text: entry.details.resolved_label
+                    }).appendTo($entry);
+                }
+
                 if (entry.details && (entry.details.escalation_channels || entry.details.escalation_scenario)) {
                     const escalationParts = [];
 
@@ -805,8 +883,40 @@ jQuery(function($) {
                     $('<p/>', { 'class': 'bjlg-queue-card__entry-message', text: entry.message }).appendTo($entry);
                 }
 
+                if (entry.details && entry.details.resolution_notes) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-message',
+                        'data-field': 'resolution-notes',
+                        text: entry.details.resolution_notes
+                    }).appendTo($entry);
+                }
+
                 const $actions = $('<div/>', { 'class': 'bjlg-queue-card__entry-actions' }).appendTo($entry);
                 if (key === 'notifications' && entry.id) {
+                    const $ackButton = $('<button/>', {
+                        type: 'button',
+                        'class': 'button button-secondary button-small',
+                        'data-queue-action': 'acknowledge-notification',
+                        'data-entry-id': entry.id,
+                        text: __('Accuser réception', 'backup-jlg')
+                    }).appendTo($actions);
+
+                    if (entry.acknowledged) {
+                        $ackButton.prop('disabled', true).attr('aria-disabled', 'true');
+                    }
+
+                    const $resolveButton = $('<button/>', {
+                        type: 'button',
+                        'class': 'button button-secondary button-small',
+                        'data-queue-action': 'resolve-notification',
+                        'data-entry-id': entry.id,
+                        text: __('Clore', 'backup-jlg')
+                    }).appendTo($actions);
+
+                    if (entry.resolved) {
+                        $resolveButton.prop('disabled', true).attr('aria-disabled', 'true');
+                    }
+
                     $('<button/>', {
                         type: 'button',
                         'class': 'button button-secondary button-small',
@@ -1183,7 +1293,9 @@ jQuery(function($) {
             });
     };
 
-    $overview.on('click', '[data-queue-action]', function(event) {
+    const $queueDelegateRoot = $overview.length ? $overview : $(document);
+
+    $queueDelegateRoot.on('click', '[data-queue-action]', function(event) {
         event.preventDefault();
 
         const $button = $(this);
@@ -1194,7 +1306,9 @@ jQuery(function($) {
             return;
         }
 
-        if (!$overview.length || !ajaxData.ajax_url || !ajaxData.nonce) {
+        const $container = $overview.length ? $overview : $button.closest('.bjlg-dashboard-overview');
+
+        if (!$container.length || !ajaxData.ajax_url || !ajaxData.nonce) {
             announce(__('Impossible de contacter le serveur. Rechargez la page.', 'backup-jlg'), 'assertive');
             return;
         }
@@ -1214,6 +1328,27 @@ jQuery(function($) {
             nonce: ajaxData.nonce
         };
         payload[config.param] = value;
+
+        if (config.channelParam) {
+            const channelValue = $button.data(config.channelParam) || $button.data('channel');
+            if (channelValue) {
+                payload[config.channelParam] = channelValue;
+            }
+        }
+
+        if (config.promptField) {
+            const promptMessage = typeof config.prompt === 'string'
+                ? config.prompt
+                : __('Ajoutez des notes (optionnel)', 'backup-jlg');
+            const defaultValue = $button.data('defaultNotes') || '';
+            const userNotes = window.prompt(promptMessage, defaultValue);
+
+            if (userNotes === null) {
+                return;
+            }
+
+            payload[config.promptField] = userNotes;
+        }
 
         $button.prop('disabled', true).attr('aria-busy', 'true');
 
