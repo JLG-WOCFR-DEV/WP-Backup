@@ -31,6 +31,11 @@ class BJLG_Destination_Factory {
         }
 
         switch ($destination_id) {
+            case 'managed_vault':
+                if (class_exists(BJLG_Managed_Vault::class)) {
+                    return new BJLG_Managed_Vault();
+                }
+                break;
             case 'google_drive':
                 if (class_exists(BJLG_Google_Drive::class)) {
                     return new BJLG_Google_Drive();
