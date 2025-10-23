@@ -15,6 +15,15 @@ class BJLG_Site_Context {
     public const HISTORY_SCOPE_SITE = 'site';
     public const HISTORY_SCOPE_NETWORK = 'network';
 
+    private const NETWORK_SYNCED_OPTIONS = [
+        'bjlg_api_keys',
+        'bjlg_notification_settings',
+        'bjlg_notification_queue',
+        'bjlg_monitoring_settings',
+        'bjlg_remote_storage_metrics',
+        'bjlg_supervised_sites',
+    ];
+
     /**
      * Liste des options gérées par le plugin. Sert à brancher les hooks de synchronisation multisite.
      *
@@ -63,6 +72,7 @@ class BJLG_Site_Context {
             'bjlg_schedule_settings',
             'bjlg_settings',
             'bjlg_sftp_settings',
+            'bjlg_supervised_sites',
             'bjlg_wasabi_settings',
             'bjlg_webhook_key',
             'bjlg_webhook_settings',
@@ -72,6 +82,9 @@ class BJLG_Site_Context {
 
     /** @var int */
     private static $network_stack = 0;
+
+    /** @var array<string, bool> */
+    private static $network_sync_stack = [];
 
     /**
      * Sanitize a history scope value.
@@ -279,7 +292,7 @@ class BJLG_Site_Context {
             }
         }
 
-        if (self::should_use_network($args)) {
+        if (self::should_use_network($args, $option_name)) {
             return get_site_option($option_name, $default);
         }
 
@@ -308,7 +321,7 @@ class BJLG_Site_Context {
             }
         }
 
-        if (self::should_use_network($args)) {
+        if (self::should_use_network($args, $option_name)) {
             return update_site_option($option_name, $value);
         }
 
@@ -331,7 +344,7 @@ class BJLG_Site_Context {
             }
         }
 
-        if (self::should_use_network($args)) {
+        if (self::should_use_network($args, $option_name)) {
             return delete_site_option($option_name);
         }
 
@@ -406,13 +419,17 @@ class BJLG_Site_Context {
         return false;
     }
 
-    private static function should_use_network(array $args): bool {
+    private static function should_use_network(array $args, string $option_name): bool {
         if (!function_exists('is_multisite') || !is_multisite()) {
             return false;
         }
 
         if (array_key_exists('network', $args)) {
             return (bool) $args['network'];
+        }
+
+        if (self::is_network_synced_option($option_name)) {
+            return true;
         }
 
         return self::is_network_context();
@@ -425,6 +442,10 @@ class BJLG_Site_Context {
         }
 
         $network_value = get_site_option($option_name, self::NO_VALUE);
+
+        if (self::is_network_synced_option($option_name)) {
+            return $network_value !== self::NO_VALUE ? $network_value : $value;
+        }
 
         if (self::is_network_context()) {
             if ($network_value !== self::NO_VALUE) {
@@ -454,11 +475,21 @@ class BJLG_Site_Context {
             return;
         }
 
-        if (!self::is_network_context()) {
+        if (!self::is_network_context() && !self::is_network_synced_option($option_name)) {
             return;
         }
 
-        update_site_option($option_name, $value);
+        if (isset(self::$network_sync_stack[$option_name])) {
+            return;
+        }
+
+        self::$network_sync_stack[$option_name] = true;
+
+        try {
+            update_site_option($option_name, $value);
+        } finally {
+            unset(self::$network_sync_stack[$option_name]);
+        }
     }
 
     private static function maybe_delete_network_option(string $option_name): void {
@@ -471,5 +502,10 @@ class BJLG_Site_Context {
         }
 
         delete_site_option($option_name);
+    }
+
+    private static function is_network_synced_option(string $option_name): bool
+    {
+        return in_array($option_name, self::NETWORK_SYNCED_OPTIONS, true);
     }
 }
