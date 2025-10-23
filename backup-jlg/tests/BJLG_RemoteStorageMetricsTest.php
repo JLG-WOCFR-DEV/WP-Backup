@@ -185,29 +185,36 @@ final class BJLG_RemoteStorageMetricsTest extends TestCase
         $this->assertSame(2, $entry['backups_count']);
     }
 
-    public function test_refresh_snapshot_includes_quota_samples_from_remote_purge_metrics(): void
+    public function test_refresh_snapshot_includes_growth_projection(): void
     {
-        $timestamp = time() - 120;
-        bjlg_update_option('bjlg_remote_purge_sla_metrics', [
-            'quotas' => [
-                'samples' => 1,
-                'last_sample_at' => $timestamp,
-                'destinations' => [
-                    'stub' => [
-                        'samples' => 1,
-                        'last_seen_at' => $timestamp,
-                        'used_bytes' => 1024,
-                        'quota_bytes' => 2048,
-                        'free_bytes' => 1024,
-                        'usage_ratio' => 0.5,
-                    ],
+        bjlg_update_option('bjlg_monitoring_settings', [
+            'storage_quota_warning_threshold' => 80,
+            'remote_metrics_ttl_minutes' => 30,
+        ]);
+
+        $previous_time = time() - DAY_IN_SECONDS;
+        bjlg_update_option(BJLG_Remote_Storage_Metrics::OPTION_KEY, [
+            'generated_at' => $previous_time,
+            'destinations' => [
+                [
+                    'id' => 'stub',
+                    'used_bytes' => 1000,
+                    'quota_bytes' => 5000,
+                    'refreshed_at' => $previous_time,
                 ],
             ],
+            'threshold_percent' => 80.0,
         ]);
 
         add_filter('bjlg_known_destination_ids', static fn() => ['stub']);
 
-        $destination = $this->createDestination([], [], true);
+        $destination = $this->createDestination([
+            'used_bytes' => 2000,
+            'quota_bytes' => 5000,
+        ], [
+            ['size' => 1000],
+        ]);
+
         add_filter(
             'bjlg_destination_factory',
             static function ($provided, $destination_id) use ($destination) {
@@ -222,16 +229,15 @@ final class BJLG_RemoteStorageMetricsTest extends TestCase
         );
 
         $snapshot = BJLG_Remote_Storage_Metrics::refresh_snapshot();
-        $this->assertArrayHasKey('destinations', $snapshot);
-        $this->assertCount(1, $snapshot['destinations']);
+        $this->assertNotEmpty($snapshot['destinations']);
         $entry = $snapshot['destinations'][0];
 
-        $this->assertArrayHasKey('quota_samples', $entry);
-        $this->assertSame(1024, $entry['used_bytes']);
-        $this->assertSame(2048, $entry['quota_bytes']);
-        $this->assertSame(1024, $entry['free_bytes']);
-        $this->assertSame(0.5, $entry['quota_samples']['usage_ratio']);
-        $this->assertSame('remote_purge', $entry['quota_samples']['source']);
+        $this->assertArrayHasKey('daily_delta_bytes', $entry);
+        $this->assertNotNull($entry['daily_delta_bytes']);
+        $this->assertNotEmpty($entry['forecast_label']);
+        $this->assertNotNull($entry['days_to_threshold']);
+        $this->assertNotSame('', $entry['days_to_threshold_label']);
+        $this->assertArrayHasKey('projection_intent', $entry);
     }
 
     /**

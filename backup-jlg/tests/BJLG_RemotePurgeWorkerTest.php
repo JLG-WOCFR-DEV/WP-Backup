@@ -128,51 +128,64 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
         $this->assertSame($entry['errors'], $failures[0][2]);
     }
 
-    public function test_process_queue_updates_metrics_with_durations_and_quotas(): void
+    public function test_update_metrics_computes_forecast_projections(): void
     {
         $worker = new BJLG_Remote_Purge_Worker();
-        $destinationId = 'quota-dest';
-        $this->prepareManifestWithDestinations([$destinationId]);
+        $queue = [
+            [
+                'status' => 'pending',
+                'registered_at' => time() - 200,
+                'destinations' => ['alpha'],
+            ],
+            [
+                'status' => 'pending',
+                'registered_at' => time() - 120,
+                'destinations' => ['alpha'],
+            ],
+        ];
 
-        $incremental = new BJLG_Incremental();
-        $queue = $incremental->get_remote_purge_queue();
-        $this->assertNotEmpty($queue);
-        $file = $queue[0]['file'];
+        $results = [
+            [
+                'processed' => true,
+                'outcome' => 'completed',
+                'timestamp' => time() - 60,
+                'destinations' => ['alpha'],
+                'duration' => 100,
+                'registered_at' => time() - 160,
+            ],
+            [
+                'processed' => true,
+                'outcome' => 'completed',
+                'timestamp' => time() - 10,
+                'destinations' => ['alpha'],
+                'duration' => 50,
+                'registered_at' => time() - 90,
+            ],
+        ];
 
-        $registeredAt = time() - 300;
-        $incremental->update_remote_purge_entry($file, [
-            'registered_at' => $registeredAt,
-            'next_attempt_at' => time(),
-        ]);
+        bjlg_update_option('bjlg_remote_purge_sla_metrics', []);
 
-        $this->registerStubDestination(0, [
-            'used_bytes' => 1500,
-            'quota_bytes' => 3000,
-        ], $destinationId);
-
-        $worker->process_queue();
+        $method = (new ReflectionClass(BJLG_Remote_Purge_Worker::class))->getMethod('update_metrics');
+        $method->setAccessible(true);
+        $method->invoke($worker, $queue, $results, time());
 
         $metrics = bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
-        $this->assertIsArray($metrics);
+        $this->assertArrayHasKey('forecast', $metrics);
+        $this->assertNotEmpty($metrics['forecast']);
 
-        $this->assertArrayHasKey('durations', $metrics);
-        $this->assertArrayHasKey('average_seconds', $metrics['durations']);
-        $this->assertGreaterThan(0, $metrics['durations']['average_seconds']);
+        $forecast = $metrics['forecast'];
+        $this->assertArrayHasKey('overall', $forecast);
+        $overall = $forecast['overall'];
+        $this->assertGreaterThan(0, $overall['forecast_seconds']);
+        $this->assertNotEmpty($overall['forecast_label']);
 
-        $this->assertArrayHasKey('projections', $metrics);
-        $this->assertArrayHasKey('queue_in_15m', $metrics['projections']);
-        $this->assertArrayHasKey('clearance_seconds', $metrics['projections']);
-
-        $this->assertArrayHasKey('quotas', $metrics);
-        $this->assertSame(1, $metrics['quotas']['samples']);
-        $this->assertArrayHasKey('destinations', $metrics['quotas']);
-        $this->assertArrayHasKey($destinationId, $metrics['quotas']['destinations']);
-
-        $destinationMetrics = $metrics['quotas']['destinations'][$destinationId];
-        $this->assertSame(1500, $destinationMetrics['used_bytes']);
-        $this->assertSame(3000, $destinationMetrics['quota_bytes']);
-        $this->assertNotNull($destinationMetrics['usage_ratio']);
-        $this->assertGreaterThan(0, $destinationMetrics['usage_ratio']);
+        $destinations = $forecast['destinations'];
+        $this->assertArrayHasKey('alpha', $destinations);
+        $alpha = $destinations['alpha'];
+        $this->assertSame(2, $alpha['pending']);
+        $this->assertNotNull($alpha['forecast_seconds']);
+        $this->assertNotEmpty($alpha['forecast_label']);
+        $this->assertNotEmpty($alpha['history']);
     }
 
     /**

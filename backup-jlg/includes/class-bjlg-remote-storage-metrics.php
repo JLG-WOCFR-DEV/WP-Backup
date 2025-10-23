@@ -157,10 +157,27 @@ class BJLG_Remote_Storage_Metrics {
 
         set_transient(self::LOCK_TRANSIENT, 1, 5 * MINUTE_IN_SECONDS);
 
+        $previous_snapshot = \bjlg_get_option(self::OPTION_KEY, []);
+        $previous_destinations = [];
+        if (is_array($previous_snapshot) && !empty($previous_snapshot['destinations']) && is_array($previous_snapshot['destinations'])) {
+            foreach ($previous_snapshot['destinations'] as $previous_entry) {
+                if (!is_array($previous_entry) || empty($previous_entry['id'])) {
+                    continue;
+                }
+
+                $previous_destinations[(string) $previous_entry['id']] = $previous_entry;
+            }
+        }
+
+        $threshold_percent = class_exists(BJLG_Settings::class) ? (float) BJLG_Settings::get_storage_warning_threshold() : 85.0;
+        $threshold_percent = max(1.0, min(100.0, $threshold_percent));
+        $threshold_ratio = $threshold_percent / 100;
+
         $results = [
             'generated_at' => self::now(),
             'destinations' => [],
             'errors' => [],
+            'threshold_percent' => $threshold_percent,
         ];
 
         if (!class_exists(BJLG_Destination_Factory::class) || !class_exists(BJLG_Settings::class)) {
@@ -177,7 +194,13 @@ class BJLG_Remote_Storage_Metrics {
                 continue;
             }
 
-            $results['destinations'][] = self::collect_destination_snapshot($destination_id, $destination);
+            $previous_entry = $previous_destinations[$destination_id] ?? null;
+            $results['destinations'][] = self::collect_destination_snapshot(
+                $destination_id,
+                $destination,
+                is_array($previous_entry) ? $previous_entry : null,
+                $threshold_ratio
+            );
         }
 
         \bjlg_update_option(self::OPTION_KEY, $results);
@@ -198,7 +221,7 @@ class BJLG_Remote_Storage_Metrics {
      *
      * @return array<string, mixed>
      */
-    private static function collect_destination_snapshot(string $destination_id, BJLG_Destination_Interface $destination): array {
+    private static function collect_destination_snapshot(string $destination_id, BJLG_Destination_Interface $destination, ?array $previous_entry = null, float $threshold_ratio = 0.85): array {
         $now = self::now();
         $entry = [
             'id' => $destination_id,
@@ -214,13 +237,12 @@ class BJLG_Remote_Storage_Metrics {
             'errors' => [],
             'refreshed_at' => $now,
             'latency_ms' => null,
-            'normalized_payload' => [
-                'type' => 'remote',
-                'destination_id' => $destination_id,
-                'ratio' => null,
-                'quota_bytes' => null,
-                'free_bytes' => null,
-            ],
+            'daily_delta_bytes' => null,
+            'daily_delta_label' => '',
+            'forecast_label' => '',
+            'days_to_threshold' => null,
+            'days_to_threshold_label' => '',
+            'projection_intent' => 'neutral',
         ];
 
         if (!$entry['connected']) {
@@ -303,24 +325,51 @@ class BJLG_Remote_Storage_Metrics {
             }
         }
 
-        $quota_bytes = $entry['quota_bytes'];
-        $free_bytes = $entry['free_bytes'];
-        if ($quota_bytes !== null) {
-            $quota_bytes = (int) $quota_bytes;
-        }
-        if ($free_bytes !== null) {
-            $free_bytes = (int) $free_bytes;
-        }
+        if ($entry['used_bytes'] !== null && is_array($previous_entry)) {
+            $previous_used = isset($previous_entry['used_bytes']) ? self::sanitize_bytes($previous_entry['used_bytes']) : null;
+            $previous_refreshed = isset($previous_entry['refreshed_at']) ? (int) $previous_entry['refreshed_at'] : 0;
 
-        $ratio = null;
-        if ($entry['quota_bytes'] !== null && $entry['quota_bytes'] > 0 && $entry['used_bytes'] !== null) {
-            $ratio = max(0.0, min(1.0, (int) $entry['used_bytes'] / max(1, (int) $entry['quota_bytes'])));
-        }
+            if ($previous_used !== null && $previous_refreshed > 0 && $previous_refreshed < $now) {
+                $delta_bytes = (int) $entry['used_bytes'] - (int) $previous_used;
+                $elapsed = max(1, $now - $previous_refreshed);
+                $daily_delta = $delta_bytes / ($elapsed / DAY_IN_SECONDS);
+                $entry['daily_delta_bytes'] = $daily_delta;
+                $entry['daily_delta_label'] = self::format_daily_delta_label($daily_delta);
+                $entry['forecast_label'] = $entry['daily_delta_label'];
 
-        $entry['utilization_ratio'] = $ratio;
-        $entry['normalized_payload']['ratio'] = $ratio;
-        $entry['normalized_payload']['quota_bytes'] = $quota_bytes;
-        $entry['normalized_payload']['free_bytes'] = $free_bytes;
+                if ($entry['quota_bytes'] !== null && $entry['quota_bytes'] > 0) {
+                    $threshold_bytes = (int) floor($entry['quota_bytes'] * $threshold_ratio);
+                    if ($entry['used_bytes'] >= $threshold_bytes) {
+                        $entry['days_to_threshold'] = 0.0;
+                        $entry['days_to_threshold_label'] = __('Seuil de saturation atteint', 'backup-jlg');
+                        $entry['projection_intent'] = 'critical';
+                    } elseif ($daily_delta > 0) {
+                        $remaining = max(0, $threshold_bytes - (int) $entry['used_bytes']);
+                        $days = $remaining / $daily_delta;
+                        if ($days < 0) {
+                            $days = 0.0;
+                        }
+                        $entry['days_to_threshold'] = $days;
+                        $entry['days_to_threshold_label'] = sprintf(
+                            __('Saturation estimée dans %s', 'backup-jlg'),
+                            self::format_days_label($days)
+                        );
+                        if ($days <= 1) {
+                            $entry['projection_intent'] = 'critical';
+                        } elseif ($days <= 3) {
+                            $entry['projection_intent'] = 'warning';
+                        } else {
+                            $entry['projection_intent'] = 'watch';
+                        }
+                    } elseif ($daily_delta < 0) {
+                        $entry['projection_intent'] = 'success';
+                        $entry['days_to_threshold_label'] = __('Consommation en baisse', 'backup-jlg');
+                    } else {
+                        $entry['days_to_threshold_label'] = __('Consommation stable', 'backup-jlg');
+                    }
+                }
+            }
+        }
 
         return $entry;
     }
@@ -343,56 +392,37 @@ class BJLG_Remote_Storage_Metrics {
         return null;
     }
 
-    /**
-     * Retourne la dernière mesure de quota collectée via la purge distante.
-     */
-    private static function get_quota_sample_for_destination(string $destination_id): array
-    {
-        if (!function_exists('bjlg_get_option')) {
-            return [];
+    private static function format_daily_delta_label(?float $bytes_per_day): string {
+        if ($bytes_per_day === null) {
+            return '';
         }
 
-        $metrics = \bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
-        if (!is_array($metrics) || empty($metrics['quotas']) || !is_array($metrics['quotas'])) {
-            return [];
+        if (abs($bytes_per_day) < 1) {
+            return __('Variation négligeable', 'backup-jlg');
         }
 
-        $quotas = $metrics['quotas'];
-        if (empty($quotas['destinations']) || !is_array($quotas['destinations'])) {
-            return [];
+        $label = size_format((int) max(1, round(abs($bytes_per_day))));
+
+        if ($bytes_per_day > 0) {
+            return sprintf(__('Croissance de %s par jour', 'backup-jlg'), $label);
         }
 
-        $destination_metrics = $quotas['destinations'][$destination_id] ?? null;
-        if (!is_array($destination_metrics)) {
-            return [];
+        return sprintf(__('Réduction de %s par jour', 'backup-jlg'), $label);
+    }
+
+    private static function format_days_label(float $days): string {
+        if ($days <= 0) {
+            return __('moins d\'un jour', 'backup-jlg');
         }
 
-        $used = isset($destination_metrics['used_bytes']) ? self::sanitize_bytes($destination_metrics['used_bytes']) : null;
-        $quota = isset($destination_metrics['quota_bytes']) ? self::sanitize_bytes($destination_metrics['quota_bytes']) : null;
-        $free = isset($destination_metrics['free_bytes']) ? self::sanitize_bytes($destination_metrics['free_bytes']) : null;
+        if ($days < 1) {
+            $hours = (int) max(1, ceil($days * 24));
 
-        if ($free === null && $used !== null && $quota !== null) {
-            $free = max(0, $quota - $used);
+            return sprintf(_n('%s heure', '%s heures', $hours, 'backup-jlg'), number_format_i18n($hours));
         }
 
-        if ($used === null && $quota === null && $free === null) {
-            return [];
-        }
+        $rounded = (int) ceil($days);
 
-        $ratio = isset($destination_metrics['usage_ratio']) ? (float) $destination_metrics['usage_ratio'] : null;
-        if ($ratio !== null) {
-            $ratio = max(0.0, min(1.0, $ratio));
-        }
-
-        return [
-            'used_bytes' => $used,
-            'quota_bytes' => $quota,
-            'free_bytes' => $free,
-            'usage_ratio' => $ratio,
-            'average_usage_ratio' => isset($destination_metrics['average_usage_ratio']) ? (float) $destination_metrics['average_usage_ratio'] : null,
-            'last_seen_at' => isset($destination_metrics['last_seen_at']) ? (int) $destination_metrics['last_seen_at'] : 0,
-            'samples' => isset($destination_metrics['samples']) ? (int) $destination_metrics['samples'] : 0,
-            'source' => 'remote_purge',
-        ];
+        return sprintf(_n('%s jour', '%s jours', $rounded, 'backup-jlg'), number_format_i18n($rounded));
     }
 }
