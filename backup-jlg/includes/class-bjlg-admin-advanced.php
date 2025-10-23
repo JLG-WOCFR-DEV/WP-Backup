@@ -189,6 +189,7 @@ class BJLG_Admin_Advanced {
         $metrics['storage']['remote_last_refreshed_relative'] = $remote_snapshot['generated_at_relative'];
         $metrics['storage']['remote_refresh_stale'] = $remote_snapshot['stale'];
         $metrics['storage']['remote_warning_threshold'] = $remote_snapshot['threshold_percent'];
+        $metrics['storage']['remote_warning_threshold_ratio'] = $remote_snapshot['threshold_ratio'];
 
         $metrics['queues'] = $this->build_queue_metrics($now);
 
@@ -898,7 +899,7 @@ class BJLG_Admin_Advanced {
 
     private function collect_remote_storage_metrics(): array {
         $threshold_percent = $this->get_storage_warning_threshold_percent();
-        $threshold_ratio = $threshold_percent / 100;
+        $threshold_ratio = max(0.01, min(1.0, $threshold_percent / 100));
         $now = current_time('timestamp');
 
         if (!class_exists(BJLG_Remote_Storage_Metrics::class)) {
@@ -909,6 +910,7 @@ class BJLG_Admin_Advanced {
                 'generated_at_relative' => '',
                 'stale' => false,
                 'threshold_percent' => $threshold_percent,
+                'threshold_ratio' => $threshold_ratio,
             ];
         }
 
@@ -982,8 +984,9 @@ class BJLG_Admin_Advanced {
             }
 
             $destination['utilization_ratio'] = $ratio;
-            $destination['last_refreshed_at'] = $generated_at;
             $destination['threshold_percent'] = $threshold_percent;
+            $destination['threshold_ratio'] = $threshold_ratio;
+            $destination['last_refreshed_at'] = $generated_at;
 
             if ($ratio !== null && $ratio >= $threshold_ratio && !$stale && $destination_id !== '') {
                 $last_notified = isset($digest[$destination_id]) ? (int) $digest[$destination_id] : 0;
@@ -1020,6 +1023,7 @@ class BJLG_Admin_Advanced {
             'generated_at_relative' => $relative,
             'stale' => $stale,
             'threshold_percent' => $threshold_percent,
+            'threshold_ratio' => $threshold_ratio,
         ];
     }
 
@@ -1376,6 +1380,81 @@ class BJLG_Admin_Advanced {
                     ) . '#bjlg-schedule',
                 ]
             );
+        }
+
+        $remote_destinations = isset($metrics['storage']['remote_destinations']) && is_array($metrics['storage']['remote_destinations'])
+            ? $metrics['storage']['remote_destinations']
+            : [];
+        if (!empty($remote_destinations)) {
+            $remote_threshold_percent = isset($metrics['storage']['remote_warning_threshold'])
+                ? max(1.0, min(100.0, (float) $metrics['storage']['remote_warning_threshold']))
+                : 85.0;
+            $remote_threshold_ratio = isset($metrics['storage']['remote_warning_threshold_ratio'])
+                ? max(0.01, min(1.0, (float) $metrics['storage']['remote_warning_threshold_ratio']))
+                : max(0.01, min(1.0, $remote_threshold_percent / 100));
+
+            $over_threshold = [];
+            $max_ratio = 0.0;
+
+            foreach ($remote_destinations as $destination) {
+                if (!is_array($destination)) {
+                    continue;
+                }
+
+                $ratio = null;
+                if (isset($destination['utilization_ratio']) && is_numeric($destination['utilization_ratio'])) {
+                    $ratio = max(0.0, min(1.0, (float) $destination['utilization_ratio']));
+                } elseif (isset($destination['ratio']) && is_numeric($destination['ratio'])) {
+                    $ratio = max(0.0, min(1.0, (float) $destination['ratio']));
+                }
+
+                if ($ratio === null) {
+                    continue;
+                }
+
+                $name = isset($destination['name']) && is_string($destination['name']) && $destination['name'] !== ''
+                    ? sanitize_text_field($destination['name'])
+                    : (isset($destination['id']) ? sanitize_key((string) $destination['id']) : '');
+
+                if ($ratio >= $remote_threshold_ratio) {
+                    if ($name !== '') {
+                        $over_threshold[] = $name;
+                    }
+                    $max_ratio = max($max_ratio, $ratio);
+                }
+            }
+
+            if (!empty($over_threshold)) {
+                $names_label = function_exists('wp_sprintf_l')
+                    ? wp_sprintf_l('%l', $over_threshold)
+                    : implode(', ', $over_threshold);
+                $max_ratio_percent = max(0, min(100, round($max_ratio * 100)));
+                $threshold_percent_label = number_format_i18n($remote_threshold_percent, $remote_threshold_percent >= 10 ? 0 : 1);
+                $message = sprintf(
+                    _n(
+                        'La destination %1$s dépasse le seuil de %2$s%% configuré pour le stockage distant (pic mesuré : %3$s%%).',
+                        'Les destinations %1$s dépassent le seuil de %2$s%% configuré pour le stockage distant (pic mesuré : %3$s%%).',
+                        count($over_threshold),
+                        'backup-jlg'
+                    ),
+                    $names_label,
+                    $threshold_percent_label,
+                    number_format_i18n($max_ratio_percent)
+                );
+
+                $alerts[] = $this->make_alert(
+                    $max_ratio_percent >= 95 ? 'error' : 'warning',
+                    __('Capacité distante proche du seuil', 'backup-jlg'),
+                    esc_html($message),
+                    [
+                        'label' => __('Ouvrir le monitoring', 'backup-jlg'),
+                        'url' => add_query_arg(
+                            ['page' => 'backup-jlg', 'section' => 'monitoring'],
+                            admin_url('admin.php')
+                        ),
+                    ]
+                );
+            }
         }
 
         return $alerts;
