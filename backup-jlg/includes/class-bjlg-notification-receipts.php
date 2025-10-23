@@ -239,7 +239,12 @@ class BJLG_Notification_Receipts {
 
         $receipts = self::load();
         if (!isset($receipts[$entry_id])) {
-            return [];
+            $seeded = self::seed_from_queue($entry_id);
+            if (empty($seeded)) {
+                return [];
+            }
+
+            $receipts = self::load();
         }
 
         $record = self::normalize_record($receipts[$entry_id]);
@@ -280,6 +285,71 @@ class BJLG_Notification_Receipts {
         $receipts[$entry_id] = $record;
         self::save($receipts);
         self::update_queue_resolution($entry_id, $record);
+
+        return $record;
+    }
+
+    /**
+     * Attempts to lazily create a receipt from the queue entry when missing.
+     *
+     * @param string $entry_id
+     *
+     * @return array<string,mixed>
+     */
+    private static function seed_from_queue($entry_id) {
+        if (!class_exists(__NAMESPACE__ . '\\BJLG_Notification_Queue')) {
+            return [];
+        }
+
+        $entry = BJLG_Notification_Queue::find_entry($entry_id);
+        if (empty($entry) || !is_array($entry)) {
+            return [];
+        }
+
+        self::record_creation($entry);
+
+        $receipts = self::load();
+        if (!isset($receipts[$entry_id])) {
+            return [];
+        }
+
+        $record = self::normalize_record($receipts[$entry_id]);
+        $resolution = isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : [];
+        $updated = false;
+
+        if (!empty($resolution['acknowledged_at']) && empty($record['acknowledged_at'])) {
+            $record['acknowledged_at'] = (int) $resolution['acknowledged_at'];
+            $updated = true;
+        }
+
+        if (!empty($resolution['resolved_at']) && empty($record['resolved_at'])) {
+            $record['resolved_at'] = (int) $resolution['resolved_at'];
+            if (empty($record['acknowledged_at'])) {
+                $record['acknowledged_at'] = (int) $resolution['resolved_at'];
+            }
+            $updated = true;
+        }
+
+        if (!empty($resolution['steps']) && is_array($resolution['steps'])) {
+            foreach ($resolution['steps'] as $step) {
+                if (!is_array($step)) {
+                    continue;
+                }
+                $record['steps'][] = self::sanitize_step($step);
+                $updated = true;
+            }
+        }
+
+        if ($updated) {
+            $last_step = end($record['steps']);
+            if (is_array($last_step) && !empty($last_step['timestamp'])) {
+                $record['last_updated_at'] = (int) $last_step['timestamp'];
+            }
+
+            $receipts[$entry_id] = $record;
+            self::save($receipts);
+            self::update_queue_resolution($entry_id, $record);
+        }
 
         return $record;
     }
