@@ -539,6 +539,7 @@ class BJLG_Notification_Queue {
 
                 $channel['resolved_at'] = $now;
                 $channel['acknowledged_at'] = $channel['acknowledged_at'] ?? $now;
+                $channel['status'] = 'completed';
 
                 if ($actor_label !== '') {
                     $channel['acknowledged_by'] = $actor_label;
@@ -565,6 +566,7 @@ class BJLG_Notification_Queue {
                 }
 
                 $entry['updated_at'] = $now;
+                $entry['next_attempt_at'] = $now;
                 $updated = true;
                 break;
             }
@@ -647,6 +649,7 @@ class BJLG_Notification_Queue {
 
                     $channel['acknowledged_at'] = $channel['acknowledged_at'] ?? $now;
                     $channel['resolved_at'] = $now;
+                    $channel['status'] = 'completed';
                     if ($actor_label !== '') {
                         $channel['acknowledged_by'] = $actor_label;
                     }
@@ -659,6 +662,7 @@ class BJLG_Notification_Queue {
             }
 
             $entry['updated_at'] = $now;
+            $entry['next_attempt_at'] = $now;
             $entry_reference = $entry;
             $updated = true;
             break;
