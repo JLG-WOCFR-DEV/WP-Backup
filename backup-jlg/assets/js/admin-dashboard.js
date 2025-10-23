@@ -39,14 +39,24 @@ jQuery(function($) {
         return number === 1 ? singular : plural;
     };
 
-    const ajaxData = window.bjlg_ajax || {};
+    window.bjlg_ajax = window.bjlg_ajax || {};
+    const ajaxData = window.bjlg_ajax;
 
     const queueActionMap = {
+        'acknowledge-notification': { action: 'bjlg_notification_ack', param: 'entry_id' },
+        'resolve-notification': {
+            action: 'bjlg_notification_resolve',
+            param: 'entry_id',
+            promptField: 'notes',
+            prompt: __('Ajoutez des notes de résolution (optionnel)', 'backup-jlg')
+        },
         'retry-notification': { action: 'bjlg_notification_queue_retry', param: 'entry_id' },
         'clear-notification': { action: 'bjlg_notification_queue_delete', param: 'entry_id' },
         'retry-remote-purge': { action: 'bjlg_remote_purge_retry', param: 'file' },
         'clear-remote-purge': { action: 'bjlg_remote_purge_delete', param: 'file' }
     };
+
+    window.bjlgDashboardQueueActions = queueActionMap;
 
     const announce = function(message, priority) {
         if (!message) {
@@ -773,6 +783,22 @@ jQuery(function($) {
                     }).appendTo($entry);
                 }
 
+                if (entry.details && entry.details.acknowledged_label) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-meta',
+                        'data-field': 'acknowledged',
+                        text: entry.details.acknowledged_label
+                    }).appendTo($entry);
+                }
+
+                if (entry.details && entry.details.resolved_label) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-meta',
+                        'data-field': 'resolved',
+                        text: entry.details.resolved_label
+                    }).appendTo($entry);
+                }
+
                 if (entry.details && (entry.details.escalation_channels || entry.details.escalation_scenario)) {
                     const escalationParts = [];
 
@@ -805,8 +831,40 @@ jQuery(function($) {
                     $('<p/>', { 'class': 'bjlg-queue-card__entry-message', text: entry.message }).appendTo($entry);
                 }
 
+                if (entry.details && entry.details.resolution_notes) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-message',
+                        'data-field': 'resolution-notes',
+                        text: entry.details.resolution_notes
+                    }).appendTo($entry);
+                }
+
                 const $actions = $('<div/>', { 'class': 'bjlg-queue-card__entry-actions' }).appendTo($entry);
                 if (key === 'notifications' && entry.id) {
+                    const $ackButton = $('<button/>', {
+                        type: 'button',
+                        'class': 'button button-secondary button-small',
+                        'data-queue-action': 'acknowledge-notification',
+                        'data-entry-id': entry.id,
+                        text: __('Accuser réception', 'backup-jlg')
+                    }).appendTo($actions);
+
+                    if (entry.acknowledged) {
+                        $ackButton.prop('disabled', true).attr('aria-disabled', 'true');
+                    }
+
+                    const $resolveButton = $('<button/>', {
+                        type: 'button',
+                        'class': 'button button-secondary button-small',
+                        'data-queue-action': 'resolve-notification',
+                        'data-entry-id': entry.id,
+                        text: __('Clore', 'backup-jlg')
+                    }).appendTo($actions);
+
+                    if (entry.resolved) {
+                        $resolveButton.prop('disabled', true).attr('aria-disabled', 'true');
+                    }
+
                     $('<button/>', {
                         type: 'button',
                         'class': 'button button-secondary button-small',
@@ -1183,7 +1241,9 @@ jQuery(function($) {
             });
     };
 
-    $overview.on('click', '[data-queue-action]', function(event) {
+    const $queueDelegateRoot = $overview.length ? $overview : $(document);
+
+    $queueDelegateRoot.on('click', '[data-queue-action]', function(event) {
         event.preventDefault();
 
         const $button = $(this);
@@ -1194,7 +1254,9 @@ jQuery(function($) {
             return;
         }
 
-        if (!$overview.length || !ajaxData.ajax_url || !ajaxData.nonce) {
+        const $container = $overview.length ? $overview : $button.closest('.bjlg-dashboard-overview');
+
+        if (!$container.length || !ajaxData.ajax_url || !ajaxData.nonce) {
             announce(__('Impossible de contacter le serveur. Rechargez la page.', 'backup-jlg'), 'assertive');
             return;
         }
@@ -1214,6 +1276,27 @@ jQuery(function($) {
             nonce: ajaxData.nonce
         };
         payload[config.param] = value;
+
+        if (config.channelParam) {
+            const channelValue = $button.data(config.channelParam) || $button.data('channel');
+            if (channelValue) {
+                payload[config.channelParam] = channelValue;
+            }
+        }
+
+        if (config.promptField) {
+            const promptMessage = typeof config.prompt === 'string'
+                ? config.prompt
+                : __('Ajoutez des notes (optionnel)', 'backup-jlg');
+            const defaultValue = $button.data('defaultNotes') || '';
+            const userNotes = window.prompt(promptMessage, defaultValue);
+
+            if (userNotes === null) {
+                return;
+            }
+
+            payload[config.promptField] = userNotes;
+        }
 
         $button.prop('disabled', true).attr('aria-busy', 'true');
 
