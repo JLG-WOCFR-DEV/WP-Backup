@@ -407,9 +407,13 @@ class BJLG_History {
             $is_network_context = BJLG_Site_Context::is_network_context();
             $is_network_admin = function_exists('is_network_admin') && is_network_admin();
 
-            if ($scope === BJLG_Site_Context::HISTORY_SCOPE_NETWORK && ($is_network_context || $is_network_admin)) {
+            if ($scope === BJLG_Site_Context::HISTORY_SCOPE_NETWORK) {
                 $context = BJLG_Site_Context::HISTORY_SCOPE_NETWORK;
             }
+        }
+
+        if ($scope !== BJLG_Site_Context::HISTORY_SCOPE_NETWORK) {
+            $context = BJLG_Site_Context::HISTORY_SCOPE_SITE;
         }
 
         $context = apply_filters('bjlg_history_table_context', $context, [
