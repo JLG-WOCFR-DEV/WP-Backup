@@ -15,6 +15,9 @@ class BJLG_Update_Guard {
     /** @var BJLG_Backup|null */
     private $backup_service = null;
 
+    /** @var array<string,mixed>|null */
+    private $settings = null;
+
     public function __construct($backup_service = null) {
         if ($backup_service instanceof BJLG_Backup) {
             $this->backup_service = $backup_service;
@@ -55,8 +58,13 @@ class BJLG_Update_Guard {
             return null;
         }
 
-        $enabled = \apply_filters('bjlg_pre_update_backup_enabled', true, $context, $hook_extra);
+        $settings = $this->get_settings();
+
+        $enabled = \apply_filters('bjlg_pre_update_backup_enabled', !empty($settings['enabled']), $context, $hook_extra);
         if (!$enabled) {
+            if (empty($settings['enabled'])) {
+                $this->maybe_trigger_reminder($settings, $context, $hook_extra, 'disabled');
+            }
             return null;
         }
 
@@ -71,7 +79,10 @@ class BJLG_Update_Guard {
         }
 
         $blueprint = $this->resolve_blueprint($context, $hook_extra);
+        $blueprint['components'] = $this->filter_components($blueprint['components'], $settings);
+
         if (empty($blueprint['components'])) {
+            $this->maybe_trigger_reminder($settings, $context, $hook_extra, 'no_components');
             BJLG_Debug::log('Sauvegarde pré-update ignorée : aucun composant à sauvegarder.');
             return null;
         }
@@ -205,6 +216,120 @@ class BJLG_Update_Guard {
         ];
 
         return \apply_filters('bjlg_pre_update_backup_blueprint', $blueprint, $context, $hook_extra);
+    }
+
+    /**
+     * Retourne les réglages du snapshot pré-mise à jour.
+     */
+    private function get_settings(): array {
+        if ($this->settings !== null) {
+            return $this->settings;
+        }
+
+        $defaults = [
+            'enabled' => true,
+            'components' => BJLG_Settings::get_default_backup_components(),
+            'reminder' => [
+                'enabled' => false,
+                'message' => 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.',
+            ],
+        ];
+
+        $stored = \bjlg_get_option('bjlg_update_guard_settings', []);
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+
+        $settings = BJLG_Settings::merge_settings_with_defaults($stored, $defaults);
+        $components = [];
+
+        if (array_key_exists('components', $stored) && is_array($stored['components'])) {
+            $allowed = BJLG_Settings::get_default_backup_components();
+            foreach ($stored['components'] as $component) {
+                $key = sanitize_key((string) $component);
+                if ($key !== '' && in_array($key, $allowed, true) && !in_array($key, $components, true)) {
+                    $components[] = $key;
+                }
+            }
+        } else {
+            $components = $settings['components'];
+        }
+
+        $settings['components'] = $components;
+        $settings['enabled'] = !empty($settings['enabled']);
+
+        if (!isset($settings['reminder']) || !is_array($settings['reminder'])) {
+            $settings['reminder'] = $defaults['reminder'];
+        }
+
+        $settings['reminder']['enabled'] = !empty($settings['reminder']['enabled']);
+        $settings['reminder']['message'] = isset($settings['reminder']['message'])
+            ? (string) $settings['reminder']['message']
+            : $defaults['reminder']['message'];
+
+        $this->settings = $settings;
+
+        return $this->settings;
+    }
+
+    /**
+     * Filtre les composants en fonction des réglages utilisateur.
+     *
+     * @param array<int,string> $components
+     * @param array<string,mixed> $settings
+     *
+     * @return array<int,string>
+     */
+    private function filter_components(array $components, array $settings): array {
+        $allowed = isset($settings['components']) && is_array($settings['components'])
+            ? $settings['components']
+            : [];
+
+        if (empty($allowed)) {
+            return [];
+        }
+
+        $filtered = [];
+        foreach ($components as $component) {
+            $component = sanitize_key((string) $component);
+            if ($component === '' || !in_array($component, $allowed, true) || in_array($component, $filtered, true)) {
+                continue;
+            }
+
+            $filtered[] = $component;
+        }
+
+        return $filtered;
+    }
+
+    /**
+     * Déclenche un rappel si configuré.
+     *
+     * @param array<string,mixed> $settings
+     * @param array<string,mixed> $context
+     * @param mixed               $hook_extra
+     * @param string              $reason
+     */
+    private function maybe_trigger_reminder(array $settings, array $context, $hook_extra, $reason) {
+        if (empty($settings['reminder']['enabled'])) {
+            return;
+        }
+
+        $message = isset($settings['reminder']['message']) && $settings['reminder']['message'] !== ''
+            ? (string) $settings['reminder']['message']
+            : 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.';
+
+        BJLG_Debug::log('Rappel pré-update déclenché : ' . $message . ' (raison : ' . $reason . ')');
+
+        if (class_exists(BJLG_History::class)) {
+            BJLG_History::log(
+                'pre_update_backup_reminder',
+                'info',
+                sprintf('%s (%s)', $message, $context['items_label'] ?? 'mise à jour')
+            );
+        }
+
+        \do_action('bjlg_pre_update_backup_reminder', $context, $reason, $settings['reminder'], $hook_extra);
     }
 
     /**
