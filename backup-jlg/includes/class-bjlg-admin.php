@@ -83,6 +83,9 @@ class BJLG_Admin {
         if (class_exists(BJLG_Wasabi::class)) {
             $this->destinations['wasabi'] = new BJLG_Wasabi();
         }
+        if (class_exists(BJLG_Managed_Vault::class)) {
+            $this->destinations['managed_vault'] = new BJLG_Managed_Vault();
+        }
         if (class_exists(BJLG_Dropbox::class)) {
             $this->destinations['dropbox'] = new BJLG_Dropbox();
         }
@@ -1181,6 +1184,19 @@ class BJLG_Admin {
                             $offline_destinations[] = $name;
                         }
 
+                        $replica_status = isset($destination['replica_status']) && is_array($destination['replica_status'])
+                            ? $destination['replica_status']
+                            : [];
+                        foreach ($replica_status as $replica_region => $replica) {
+                            if (!is_array($replica)) {
+                                continue;
+                            }
+                            $replica_state = isset($replica['status']) ? (string) $replica['status'] : '';
+                            if ($replica_state !== '' && $replica_state !== 'ok' && $replica_state !== 'skipped') {
+                                $offline_destinations[] = sprintf('%s (%s)', $name, sanitize_text_field((string) $replica_region));
+                            }
+                        }
+
                         $used_bytes = isset($destination['used_bytes']) ? (int) $destination['used_bytes'] : null;
                         $quota_bytes = isset($destination['quota_bytes']) ? (int) $destination['quota_bytes'] : null;
                         $ratio = isset($destination['utilization_ratio']) ? (float) $destination['utilization_ratio'] : null;
@@ -1265,6 +1281,31 @@ class BJLG_Admin {
                                         _n('%s archive stockée', '%s archives stockées', $backups_count, 'backup-jlg'),
                                         number_format_i18n($backups_count)
                                     );
+                                }
+
+                                $replica_status = isset($destination['replica_status']) && is_array($destination['replica_status'])
+                                    ? $destination['replica_status']
+                                    : [];
+                                if (!empty($replica_status)) {
+                                    $replica_parts = [];
+                                    foreach ($replica_status as $replica_region => $replica) {
+                                        if (!is_array($replica)) {
+                                            continue;
+                                        }
+                                        $replica_state = isset($replica['status']) ? (string) $replica['status'] : '';
+                                        if ($replica_state === '') {
+                                            continue;
+                                        }
+                                        $latency = isset($replica['latency_ms']) ? (int) $replica['latency_ms'] : null;
+                                        $label = sprintf('%s : %s', sanitize_text_field((string) $replica_region), ucfirst($replica_state));
+                                        if ($latency !== null && $latency > 0) {
+                                            $label .= sprintf(' (%s ms)', number_format_i18n($latency));
+                                        }
+                                        $replica_parts[] = $label;
+                                    }
+                                    if (!empty($replica_parts)) {
+                                        $detail_parts[] = sprintf(__('Réplicas : %s', 'backup-jlg'), implode(', ', $replica_parts));
+                                    }
                                 }
 
                                 $ratio = isset($destination['utilization_ratio']) ? (float) $destination['utilization_ratio'] : null;

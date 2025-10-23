@@ -247,6 +247,13 @@ class BJLG_REST_API {
                 ]
             ])
         ]);
+
+        register_rest_route(self::API_NAMESPACE, '/managed-vault/report', [
+            'methods' => 'GET',
+            'callback' => [$this, 'get_managed_vault_report'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args(),
+        ]);
         
         // Routes : Historique
         register_rest_route(self::API_NAMESPACE, '/history', [
@@ -2515,7 +2522,55 @@ class BJLG_REST_API {
             ]);
         });
     }
-    
+
+    public function get_managed_vault_report($request) {
+        if (!\bjlg_can_manage_backups()) {
+            return new WP_Error('rest_forbidden', __('Accès refusé.', 'backup-jlg'), ['status' => 403]);
+        }
+
+        $destination = BJLG_Destination_Factory::create('managed_vault');
+        if (!$destination instanceof BJLG_Destination_Interface) {
+            return rest_ensure_response([
+                'status' => 'unavailable',
+                'message' => __('Destination Managed Vault non disponible.', 'backup-jlg'),
+            ]);
+        }
+
+        $snapshot = method_exists($destination, 'get_remote_quota_snapshot')
+            ? $destination->get_remote_quota_snapshot()
+            : [];
+
+        $metrics = \bjlg_get_option('bjlg_managed_vault_metrics', []);
+        if (!is_array($metrics)) {
+            $metrics = [];
+        }
+
+        $versions = \bjlg_get_option('bjlg_managed_vault_versions', []);
+        if (!is_array($versions)) {
+            $versions = [];
+        }
+
+        $resume = \bjlg_get_option('bjlg_managed_vault_resume', []);
+        if (!is_array($resume)) {
+            $resume = [];
+        }
+
+        $latest_versions = array_slice(array_values($versions), -5);
+
+        return rest_ensure_response([
+            'status' => 'ok',
+            'destination' => [
+                'id' => 'managed_vault',
+                'name' => $destination->get_name(),
+                'connected' => $destination->is_connected(),
+            ],
+            'quota_snapshot' => $snapshot,
+            'metrics' => $metrics,
+            'resume_state' => $resume,
+            'versions' => $latest_versions,
+        ]);
+    }
+
     /**
      * Endpoint : Historique
      */

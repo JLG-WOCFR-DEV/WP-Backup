@@ -35,6 +35,8 @@ class BJLG_Notifications {
             'remote_purge_delayed' => true,
             'restore_self_test_passed' => false,
             'restore_self_test_failed' => true,
+            'managed_vault_latency' => true,
+            'managed_vault_replica_degraded' => true,
         ],
         'channels' => [
             'email' => ['enabled' => false],
@@ -142,6 +144,8 @@ class BJLG_Notifications {
         'restore_self_test_passed' => 'info',
         'restore_self_test_failed' => 'critical',
         'test_notification' => 'info',
+        'managed_vault_latency' => 'warning',
+        'managed_vault_replica_degraded' => 'critical',
     ];
 
     /**
@@ -221,6 +225,7 @@ class BJLG_Notifications {
         add_action('bjlg_remote_purge_delayed', [$this, 'handle_remote_purge_delayed'], 15, 2);
         add_action('bjlg_restore_self_test_passed', [$this, 'handle_restore_self_test_passed'], 15, 1);
         add_action('bjlg_restore_self_test_failed', [$this, 'handle_restore_self_test_failed'], 15, 1);
+        add_action('bjlg_managed_vault_alert', [$this, 'handle_managed_vault_alert'], 15, 1);
     }
 
     /**
@@ -465,6 +470,45 @@ class BJLG_Notifications {
         }
 
         $this->notify('storage_warning', $context);
+    }
+
+    /**
+     * Gère les alertes spécialisées Managed Vault (latence / réplication).
+     *
+     * @param array<string,mixed> $payload
+     */
+    public function handle_managed_vault_alert($payload) {
+        if (!is_array($payload)) {
+            return;
+        }
+
+        $type = isset($payload['type']) ? (string) $payload['type'] : '';
+        $message = isset($payload['message']) ? (string) $payload['message'] : '';
+        $destination_id = isset($payload['destination']) ? (string) $payload['destination'] : 'managed_vault';
+        $context = isset($payload['context']) && is_array($payload['context']) ? $payload['context'] : [];
+
+        if (isset($context['regions']) && is_array($context['regions'])) {
+            $context['regions'] = implode(', ', array_map('sanitize_text_field', $context['regions']));
+        }
+        if (isset($context['region']) && is_scalar($context['region'])) {
+            $context['region'] = sanitize_text_field((string) $context['region']);
+        }
+
+        $context['message'] = $message;
+        $context['type'] = $type;
+        $context['destination'] = $this->resolve_destination_label($destination_id) ?: ucfirst(str_replace('_', ' ', $destination_id));
+
+        switch ($type) {
+            case 'replica_degraded':
+                $event = 'managed_vault_replica_degraded';
+                break;
+            case 'latency_budget_exceeded':
+            default:
+                $event = 'managed_vault_latency';
+                break;
+        }
+
+        $this->notify($event, $context);
     }
 
     /**
