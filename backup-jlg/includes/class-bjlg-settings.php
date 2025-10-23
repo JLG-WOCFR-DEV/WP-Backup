@@ -30,6 +30,49 @@ class BJLG_Settings {
 
     private const DEFAULT_REMOTE_STORAGE_THRESHOLD = 0.85;
 
+    private const DEFAULT_MANAGED_REPLICATION_SETTINGS = [
+        'enabled' => false,
+        'primary' => [
+            'provider' => 'aws_glacier',
+            'region' => '',
+        ],
+        'replica' => [
+            'provider' => 'azure_ra_grs',
+            'region' => '',
+            'secondary_region' => '',
+        ],
+        'retention' => [
+            'retain_by_number' => 3,
+            'retain_by_age_days' => 0,
+        ],
+        'expected_copies' => 2,
+    ];
+
+    private const MANAGED_REPLICATION_PROVIDER_BLUEPRINT = [
+        'aws_glacier' => [
+            'label' => 'Amazon S3 Glacier',
+            'destination_id' => 'aws_s3',
+            'regions' => [
+                'us-east-1' => 'USA Est (Virginie du Nord)',
+                'us-west-2' => 'USA Ouest (Oregon)',
+                'eu-west-1' => 'Europe (Irlande)',
+                'eu-west-3' => 'Europe (Paris)',
+                'ap-south-1' => 'Asie Pacifique (Mumbai)',
+            ],
+        ],
+        'azure_ra_grs' => [
+            'label' => 'Azure Blob RA-GRS',
+            'destination_id' => 'azure_blob',
+            'regions' => [
+                'francecentral' => 'France Central',
+                'northeurope' => 'Europe Nord',
+                'westeurope' => 'Europe Ouest',
+                'uksouth' => 'UK South',
+                'centralus' => 'Centre des États-Unis',
+            ],
+        ],
+    ];
+
     private $default_settings = [
         'cleanup' => [
             'by_number' => 3,
@@ -223,7 +266,8 @@ class BJLG_Settings {
             'exclude_patterns' => [],
             'custom_backup_dir' => '',
             'remote_storage_threshold' => self::DEFAULT_REMOTE_STORAGE_THRESHOLD,
-        ]
+        ],
+        'managed_replication' => self::DEFAULT_MANAGED_REPLICATION_SETTINGS,
     ];
 
     private $default_backup_preferences = [
@@ -739,6 +783,13 @@ class BJLG_Settings {
                 $this->update_option_value('bjlg_s3_settings', $s3_settings);
                 $saved_settings['s3'] = $s3_settings;
                 BJLG_Debug::log('Réglages Amazon S3 sauvegardés.');
+            }
+
+            if (!empty($_POST['managed_replication_submitted'])) {
+                $managed_settings = $this->sanitize_managed_replication_from_request($_POST);
+                $this->update_option_value('bjlg_managed_replication_settings', $managed_settings);
+                $saved_settings['managed_replication'] = $managed_settings;
+                BJLG_Debug::log('Réglages de réplication managée sauvegardés.');
             }
 
             // --- Réglages Wasabi ---
@@ -2057,6 +2108,74 @@ class BJLG_Settings {
         return $permission;
     }
 
+    private function sanitize_managed_replication_from_request(array $source): array {
+        $defaults = self::get_default_managed_replication_settings();
+        $providers = self::get_managed_replication_providers();
+
+        $enabled = !empty($source['managed_replication_enabled'])
+            ? $this->to_bool(wp_unslash($source['managed_replication_enabled']))
+            : false;
+
+        $primary_provider = isset($source['managed_replication_primary_provider'])
+            ? sanitize_key((string) wp_unslash($source['managed_replication_primary_provider']))
+            : $defaults['primary']['provider'];
+        if (!isset($providers[$primary_provider])) {
+            $primary_provider = $defaults['primary']['provider'];
+        }
+
+        $primary_region = isset($source['managed_replication_primary_region'])
+            ? self::sanitize_managed_replication_region($primary_provider, (string) wp_unslash($source['managed_replication_primary_region']))
+            : $defaults['primary']['region'];
+
+        $replica_provider = isset($source['managed_replication_replica_provider'])
+            ? sanitize_key((string) wp_unslash($source['managed_replication_replica_provider']))
+            : $defaults['replica']['provider'];
+        if (!isset($providers[$replica_provider])) {
+            $replica_provider = $defaults['replica']['provider'];
+        }
+
+        $replica_region = isset($source['managed_replication_replica_region'])
+            ? self::sanitize_managed_replication_region($replica_provider, (string) wp_unslash($source['managed_replication_replica_region']))
+            : $defaults['replica']['region'];
+
+        $secondary_region = isset($source['managed_replication_replica_secondary'])
+            ? sanitize_text_field(wp_unslash($source['managed_replication_replica_secondary']))
+            : $defaults['replica']['secondary_region'];
+
+        $retain_number = isset($source['managed_replication_retain_number'])
+            ? (int) wp_unslash($source['managed_replication_retain_number'])
+            : $defaults['retention']['retain_by_number'];
+        $retain_number = max(1, min(50, $retain_number));
+
+        $retain_days = isset($source['managed_replication_retain_days'])
+            ? (int) wp_unslash($source['managed_replication_retain_days'])
+            : $defaults['retention']['retain_by_age_days'];
+        $retain_days = max(0, min(3650, $retain_days));
+
+        $expected_copies = isset($source['managed_replication_expected_copies'])
+            ? (int) wp_unslash($source['managed_replication_expected_copies'])
+            : $defaults['expected_copies'];
+        $expected_copies = max(1, min(5, $expected_copies));
+
+        return [
+            'enabled' => $enabled,
+            'primary' => [
+                'provider' => $primary_provider,
+                'region' => $primary_region,
+            ],
+            'replica' => [
+                'provider' => $replica_provider,
+                'region' => $replica_region,
+                'secondary_region' => $secondary_region,
+            ],
+            'retention' => [
+                'retain_by_number' => $retain_number,
+                'retain_by_age_days' => $retain_days,
+            ],
+            'expected_copies' => $expected_copies,
+        ];
+    }
+
     /**
      * Nettoie une liste de régions (string ou array).
      *
@@ -2787,6 +2906,100 @@ class BJLG_Settings {
         return self::merge_settings_with_defaults($stored, $defaults);
     }
 
+    public static function get_managed_replication_providers(): array {
+        $providers = self::MANAGED_REPLICATION_PROVIDER_BLUEPRINT;
+        $normalized = [];
+
+        foreach ($providers as $key => $definition) {
+            $slug = sanitize_key((string) $key);
+            if ($slug === '') {
+                continue;
+            }
+
+            $label = isset($definition['label']) ? (string) $definition['label'] : ucwords(str_replace('_', ' ', $slug));
+            $destination_id = isset($definition['destination_id']) ? sanitize_key((string) $definition['destination_id']) : '';
+            $regions = isset($definition['regions']) && is_array($definition['regions']) ? $definition['regions'] : [];
+
+            $normalized[$slug] = [
+                'label' => __($label, 'backup-jlg'),
+                'destination_id' => $destination_id !== '' ? $destination_id : $slug,
+                'regions' => array_map('strval', $regions),
+            ];
+        }
+
+        /** @var array<string, array<string, mixed>>|null $filtered */
+        $filtered = apply_filters('bjlg_managed_replication_providers', $normalized);
+        if (is_array($filtered) && !empty($filtered)) {
+            $normalized = [];
+            foreach ($filtered as $key => $definition) {
+                $slug = sanitize_key((string) $key);
+                if ($slug === '') {
+                    continue;
+                }
+
+                $normalized[$slug] = [
+                    'label' => isset($definition['label']) ? (string) $definition['label'] : ucwords(str_replace('_', ' ', $slug)),
+                    'destination_id' => isset($definition['destination_id']) ? sanitize_key((string) $definition['destination_id']) : $slug,
+                    'regions' => isset($definition['regions']) && is_array($definition['regions']) ? array_map('strval', $definition['regions']) : [],
+                ];
+            }
+        }
+
+        return $normalized;
+    }
+
+    public static function get_managed_replication_region_choices(?string $provider = null): array {
+        $providers = self::get_managed_replication_providers();
+
+        if ($provider !== null) {
+            $slug = sanitize_key($provider);
+            if (isset($providers[$slug]['regions']) && is_array($providers[$slug]['regions'])) {
+                return $providers[$slug]['regions'];
+            }
+
+            return [];
+        }
+
+        $regions = [];
+        foreach ($providers as $definition) {
+            if (empty($definition['regions']) || !is_array($definition['regions'])) {
+                continue;
+            }
+
+            foreach ($definition['regions'] as $region_key => $region_label) {
+                $regions[(string) $region_key] = (string) $region_label;
+            }
+        }
+
+        return $regions;
+    }
+
+    public static function get_default_managed_replication_settings(): array {
+        $defaults = self::DEFAULT_MANAGED_REPLICATION_SETTINGS;
+        $providers = self::get_managed_replication_providers();
+
+        if (!isset($providers[$defaults['primary']['provider']])) {
+            $defaults['primary']['provider'] = (string) array_key_first($providers);
+        }
+
+        if (!isset($providers[$defaults['replica']['provider']])) {
+            $defaults['replica']['provider'] = $defaults['primary']['provider'];
+        }
+
+        return apply_filters('bjlg_default_managed_replication_settings', $defaults);
+    }
+
+    private static function sanitize_managed_replication_region(string $provider, string $region): string {
+        $regions = self::get_managed_replication_region_choices($provider);
+        $region_key = sanitize_key($region);
+
+        if ($region_key !== '' && isset($regions[$region_key])) {
+            return $region_key;
+        }
+
+        return '';
+    }
+
     public static function get_storage_warning_threshold(): float {
         $settings = self::get_monitoring_settings();
         $threshold = isset($settings['storage_quota_warning_threshold'])
@@ -2846,6 +3059,7 @@ class BJLG_Settings {
             'managed_vault' => 'Managed Vault',
             'azure_blob' => 'Azure Blob Storage',
             'backblaze_b2' => 'Backblaze B2',
+            'managed_replication' => __('Stockage managé multi-régions', 'backup-jlg'),
         ];
 
         $label = isset($default_labels[$slug]) ? $default_labels[$slug] : '';

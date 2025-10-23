@@ -8,6 +8,7 @@ namespace BJLG;
 
 use Exception;
 use WP_Error;
+use WP_REST_Server;
 use ZipArchive;
 
 if (!defined('ABSPATH')) {
@@ -19,6 +20,7 @@ require_once __DIR__ . '/class-bjlg-restore.php';
 require_once __DIR__ . '/class-bjlg-settings.php';
 require_once __DIR__ . '/class-bjlg-history.php';
 require_once __DIR__ . '/class-bjlg-scheduler.php';
+require_once __DIR__ . '/class-bjlg-rbac.php';
 
 class BJLG_REST_API {
     
@@ -79,7 +81,38 @@ class BJLG_REST_API {
                 ]
             ])
         ]);
-        
+
+        register_rest_route(self::API_NAMESPACE, '/rbac', [
+            [
+                'methods' => WP_REST_Server::READABLE,
+                'callback' => [$this, 'get_rbac_settings'],
+                'permission_callback' => [$this, 'check_rbac_permissions'],
+                'args' => $this->merge_site_args([
+                    'scope' => [
+                        'required' => false,
+                        'type' => 'string',
+                        'enum' => ['site', 'network'],
+                    ],
+                ]),
+            ],
+            [
+                'methods' => WP_REST_Server::CREATABLE,
+                'callback' => [$this, 'update_rbac_settings'],
+                'permission_callback' => [$this, 'check_rbac_permissions'],
+                'args' => $this->merge_site_args([
+                    'scope' => [
+                        'required' => false,
+                        'type' => 'string',
+                        'enum' => ['site', 'network'],
+                    ],
+                    'map' => [
+                        'required' => true,
+                        'type' => 'object',
+                    ],
+                ]),
+            ],
+        ]);
+
         // Routes : Gestion des sauvegardes
         register_rest_route(self::API_NAMESPACE, '/backups', [
             [
@@ -437,6 +470,102 @@ class BJLG_REST_API {
 
         return $this->with_request_site($request, function () {
             return \bjlg_can_manage_settings();
+        });
+    }
+
+    public function check_rbac_permissions($request) {
+        if ($this->rate_limiter && !$this->rate_limiter->check($request)) {
+            return new WP_Error(
+                'rate_limit_exceeded',
+                __('Trop de requêtes. Veuillez patienter.', 'backup-jlg'),
+                ['status' => 429]
+            );
+        }
+
+        return $this->with_request_site($request, function () use ($request) {
+            $scope = BJLG_RBAC::normalize_scope($request ? $request->get_param('scope') : '');
+
+            if ($scope === 'network') {
+                if (function_exists('bjlg_can_manage_plugin')) {
+                    return bjlg_can_manage_plugin(null, 'manage_network');
+                }
+
+                return function_exists('current_user_can') ? current_user_can('manage_network_options') : false;
+            }
+
+            if (function_exists('bjlg_can_manage_settings')) {
+                return bjlg_can_manage_settings();
+            }
+
+            return function_exists('current_user_can') ? current_user_can('manage_options') : false;
+        });
+    }
+
+    public function get_rbac_settings($request) {
+        return $this->with_request_site($request, function () use ($request) {
+            $scope = BJLG_RBAC::normalize_scope($request ? $request->get_param('scope') : '');
+
+            if ($scope === 'network' && function_exists('bjlg_with_network')) {
+                $map = bjlg_with_network(function () {
+                    return bjlg_get_capability_map();
+                });
+            } else {
+                $map = bjlg_get_capability_map();
+            }
+
+            if (!is_array($map)) {
+                $map = [];
+            }
+
+            return rest_ensure_response([
+                'scope' => $scope,
+                'map' => $map,
+                'contexts' => BJLG_RBAC::get_context_definitions(),
+                'templates' => BJLG_RBAC::get_templates(),
+                'choices' => BJLG_RBAC::get_permission_choices(),
+            ]);
+        });
+    }
+
+    public function update_rbac_settings($request) {
+        return $this->with_request_site($request, function () use ($request) {
+            $scope = BJLG_RBAC::normalize_scope($request ? $request->get_param('scope') : '');
+            $params = method_exists($request, 'get_json_params') ? $request->get_json_params() : [];
+            $map_param = $request->get_param('map');
+
+            if (!is_array($map_param) && is_array($params) && isset($params['map'])) {
+                $map_param = $params['map'];
+            }
+
+            if (!is_array($map_param)) {
+                return new WP_Error(
+                    'bjlg_invalid_rbac_map',
+                    __('Le format des permissions est invalide.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+
+            $sanitized = BJLG_RBAC::sanitize_map($map_param);
+            $option_args = $scope === 'network' ? ['network' => true] : [];
+
+            bjlg_update_option('bjlg_capability_map', $sanitized, $option_args);
+
+            if ($scope === 'network' && function_exists('bjlg_with_network')) {
+                $map = bjlg_with_network(function () {
+                    return bjlg_get_capability_map();
+                });
+            } else {
+                $map = bjlg_get_capability_map();
+            }
+
+            if (!is_array($map)) {
+                $map = [];
+            }
+
+            return rest_ensure_response([
+                'scope' => $scope,
+                'map' => $map,
+            ]);
         });
     }
 

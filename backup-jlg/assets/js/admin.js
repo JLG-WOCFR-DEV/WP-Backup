@@ -350,6 +350,29 @@ jQuery(function($) {
 
         loadModulesForSection(sectionKey);
 
+        if (typeof window.bjlgRenderRBAC === 'function') {
+            try {
+                window.bjlgRenderRBAC();
+            } catch (error) {
+                // Ignore rendering errors to avoid blocking navigation.
+            }
+        }
+
+        let sectionEvent = null;
+        const eventDetail = { section: sectionKey, panel: activePanel };
+        if (typeof window.CustomEvent === 'function') {
+            sectionEvent = new window.CustomEvent('bjlg:section-activated', { detail: eventDetail });
+        } else if (document.createEvent) {
+            sectionEvent = document.createEvent('CustomEvent');
+            if (sectionEvent && typeof sectionEvent.initCustomEvent === 'function') {
+                sectionEvent.initCustomEvent('bjlg:section-activated', false, false, eventDetail);
+            }
+        }
+
+        if (sectionEvent) {
+            document.dispatchEvent(sectionEvent);
+        }
+
         if (!fromTab && typeof updateTabSelection === 'function') {
             updateTabSelection(sectionKey);
         }
@@ -397,6 +420,33 @@ jQuery(function($) {
                 speak(sprintf(__('Section activée : %s', 'backup-jlg'), activeLabel));
             }
         }
+    };
+
+    window.bjlgAdmin = window.bjlgAdmin || {};
+    window.bjlgAdmin.setActiveSection = function(sectionKey, updateHistory) {
+        setActiveSection(sectionKey, !!updateHistory, false);
+    };
+    window.bjlgAdmin.getActiveSection = function() {
+        return currentSection;
+    };
+    window.bjlgAdmin.onSectionChange = function(callback) {
+        if (typeof callback !== 'function') {
+            return function noop() {};
+        }
+
+        const handler = function(event) {
+            if (!event || !event.detail) {
+                callback({});
+                return;
+            }
+            callback(event.detail);
+        };
+
+        document.addEventListener('bjlg:section-activated', handler);
+
+        return function unsubscribe() {
+            document.removeEventListener('bjlg:section-activated', handler);
+        };
     };
 
     window.bjlgSetActiveSection = function(sectionKey) {

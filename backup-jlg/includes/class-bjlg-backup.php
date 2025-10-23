@@ -3183,6 +3183,10 @@ class BJLG_Backup {
                     }
                 }
             }
+
+            if (class_exists(BJLG_Managed_Replication::class) && $destination instanceof BJLG_Managed_Replication) {
+                $this->log_managed_replication_report($destination);
+            }
         }
 
         if (!empty($resume_state)) {
@@ -3201,6 +3205,60 @@ class BJLG_Backup {
         }
 
         return BJLG_Destination_Factory::create($destination_id);
+    }
+
+    private function log_managed_replication_report($destination): void {
+        if (!class_exists(BJLG_Managed_Replication::class) || !$destination instanceof BJLG_Managed_Replication) {
+            return;
+        }
+
+        if (!method_exists($destination, 'get_last_report')) {
+            return;
+        }
+
+        $report = $destination->get_last_report();
+        if (empty($report) || empty($report['replicas']) || !is_array($report['replicas'])) {
+            return;
+        }
+
+        $available = isset($report['available_copies']) ? (int) $report['available_copies'] : 0;
+        $expected = isset($report['expected_copies']) ? (int) $report['expected_copies'] : 0;
+
+        $parts = [];
+        foreach ($report['replicas'] as $replica) {
+            if (!is_array($replica)) {
+                continue;
+            }
+
+            $label = isset($replica['label']) ? (string) $replica['label'] : (isset($replica['provider']) ? (string) $replica['provider'] : '');
+            $region = isset($replica['region']) && $replica['region'] !== '' ? sprintf(' (%s)', $replica['region']) : '';
+            $status = isset($replica['status']) ? (string) $replica['status'] : 'unknown';
+            $latency_value = isset($replica['latency_ms']) && $replica['latency_ms'] !== null
+                ? (int) $replica['latency_ms']
+                : null;
+            $latency = $latency_value !== null
+                ? sprintf('%sms', number_format_i18n(max(0, $latency_value)))
+                : __('n/a', 'backup-jlg');
+            $message = isset($replica['message']) && $replica['message'] !== '' ? ' — ' . $replica['message'] : '';
+
+            $parts[] = trim(sprintf('%1$s%2$s : %3$s (%4$s)%5$s', $label, $region, $status, $latency, $message));
+        }
+
+        if (empty($parts)) {
+            return;
+        }
+
+        $summary = sprintf(
+            __('Réplication gérée : %1$s/%2$s copies • %3$s', 'backup-jlg'),
+            number_format_i18n($available),
+            number_format_i18n(max(1, $expected)),
+            implode(' | ', $parts)
+        );
+
+        BJLG_Debug::log($summary);
+
+        $history_status = (isset($report['status']) && $report['status'] === 'failed') ? 'failure' : 'success';
+        BJLG_History::log('backup_replication', $history_status, $summary);
     }
 
     /**

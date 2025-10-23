@@ -81,6 +81,11 @@ class BJLG_Destination_Factory {
                     return new BJLG_Backblaze_B2();
                 }
                 break;
+            case 'managed_replication':
+                if (class_exists(BJLG_Managed_Replication::class)) {
+                    return new BJLG_Managed_Replication();
+                }
+                break;
         }
 
         return null;
