@@ -410,26 +410,11 @@ class BJLG_Notifications {
         }
 
         $context = [
-            'type' => $type,
-            'path' => $path,
-            'name' => $name,
-            'free_space' => $free_space,
-            'free_bytes' => $free_bytes,
-            'free_human' => $free_human,
-            'threshold' => $threshold_bytes,
-            'threshold_human' => $threshold_human,
-            'threshold_percent' => $threshold_percent,
-            'threshold_label' => $threshold_ratio_label,
-            'quota_bytes' => $quota_bytes,
-            'quota_human' => $quota_human,
-            'ratio' => $ratio,
-            'ratio_percent' => $ratio_percent,
-            'ratio_label' => $ratio_label,
-            'destination_id' => $destination_id,
-            'destination_label' => $destination_label,
-            'destination_link' => $destination_link,
-            'generated_at' => $generated_at,
-            'template_variant' => $type === 'remote' ? 'storage_remote' : 'storage_local',
+            'free_space' => isset($data['free_space']) ? (int) $data['free_space'] : null,
+            'threshold' => isset($data['threshold'])
+                ? (int) $data['threshold']
+                : (isset($data['threshold_percent']) ? (int) round((float) $data['threshold_percent']) : null),
+            'path' => isset($data['path']) ? (string) $data['path'] : '',
         ];
 
         $this->notify('storage_warning', $context);

@@ -3121,6 +3121,11 @@ class BJLG_Admin {
             $incremental_settings = [];
         }
         $incremental_settings = wp_parse_args($incremental_settings, $incremental_defaults);
+        $monitoring_settings = BJLG_Settings::get_monitoring_settings();
+        $storage_threshold = isset($monitoring_settings['storage_quota_warning_threshold'])
+            ? (float) $monitoring_settings['storage_quota_warning_threshold']
+            : 85.0;
+        $storage_threshold = max(1.0, min(100.0, $storage_threshold));
         $schedule_collection = $this->get_schedule_settings_for_display();
         $schedules = isset($schedule_collection['schedules']) && is_array($schedule_collection['schedules'])
             ? array_values($schedule_collection['schedules'])
@@ -3628,57 +3633,33 @@ class BJLG_Admin {
                     </tr>
                 </table>
 
-                <h3><span class="dashicons dashicons-shield" aria-hidden="true"></span> Snapshot pré-mise à jour</h3>
-                <table class="form-table bjlg-update-guard-settings" data-bjlg-reminder-message-default="<?php echo esc_attr($update_guard_defaults['reminder']['message']); ?>">
+                <h3><span class="dashicons dashicons-chart-area" aria-hidden="true"></span> <?php esc_html_e('Surveillance du stockage', 'backup-jlg'); ?></h3>
+                <table class="form-table">
                     <tr>
-                        <th scope="row">Activation</th>
+                        <th scope="row"><label for="bjlg-storage-warning-threshold"><?php esc_html_e("Seuil d'alerte quota", 'backup-jlg'); ?></label></th>
                         <td>
                             <div class="bjlg-field-control">
-                                <label>
-                                    <input type="checkbox" name="update_guard_enabled" value="1" <?php checked(!empty($update_guard_settings['enabled'])); ?>>
-                                    Lancer automatiquement une sauvegarde avant les mises à jour WordPress
-                                </label>
-                                <p class="description">Empêche l'installation d'une mise à jour sans snapshot récent.</p>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Composants inclus</th>
-                        <td>
-                            <div class="bjlg-field-control">
-                                <fieldset class="bjlg-update-guard-components" aria-describedby="bjlg-update-guard-components-description">
-                                    <legend class="screen-reader-text">Composants couverts par le snapshot</legend>
-                                    <ul class="bjlg-checkbox-list" role="list">
-                                        <?php foreach ($components_labels as $component_key => $component_label): ?>
-                                            <li>
-                                                <label>
-                                                    <input type="checkbox" name="update_guard_components[]" value="<?php echo esc_attr($component_key); ?>" <?php checked(in_array($component_key, $update_guard_settings['components'], true)); ?>>
-                                                    <span><?php echo esc_html($component_label); ?></span>
-                                                </label>
-                                            </li>
-                                        <?php endforeach; ?>
-                                    </ul>
-                                </fieldset>
-                                <p id="bjlg-update-guard-components-description" class="description">Sélectionnez les éléments à inclure dans le snapshot préventif.</p>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Rappel</th>
-                        <td>
-                            <div class="bjlg-field-control bjlg-update-guard-reminder">
-                                <label class="bjlg-mb-10">
-                                    <input type="checkbox" name="update_guard_reminder_enabled" value="1" <?php checked(!empty($update_guard_settings['reminder']['enabled'])); ?> data-bjlg-toggle="reminder-message">
-                                    Afficher un rappel si aucun snapshot n'est déclenché
-                                </label>
-                                <textarea
-                                    name="update_guard_reminder_message"
-                                    class="large-text"
-                                    rows="3"
-                                    data-bjlg-reminder-message
-                                    <?php disabled(empty($update_guard_settings['reminder']['enabled'])); ?>
-                                ><?php echo esc_textarea($update_guard_settings['reminder']['message']); ?></textarea>
-                                <p class="description">Personnalisez le message affiché (par exemple dans vos notifications ou journaux).</p>
+                                <div class="bjlg-form-field-group">
+                                    <div class="bjlg-form-field-control">
+                                        <input
+                                            id="bjlg-storage-warning-threshold"
+                                            name="storage_quota_warning_threshold"
+                                            type="number"
+                                            class="small-text"
+                                            value="<?php echo esc_attr($storage_threshold); ?>"
+                                            min="1"
+                                            max="100"
+                                            step="0.1"
+                                            aria-describedby="bjlg-storage-warning-threshold-description"
+                                        >
+                                    </div>
+                                    <div class="bjlg-form-field-actions">
+                                        <span class="bjlg-form-field-unit">%</span>
+                                    </div>
+                                </div>
+                                <p id="bjlg-storage-warning-threshold-description" class="description">
+                                    <?php esc_html_e("Déclenche les alertes et notifications lorsque l'utilisation d'une destination distante dépasse ce seuil.", 'backup-jlg'); ?>
+                                </p>
                             </div>
                         </td>
                     </tr>

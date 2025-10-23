@@ -1,6 +1,59 @@
 jQuery(function($) {
     'use strict';
 
+    const STORAGE_THRESHOLD_SELECTOR = 'input[name="storage_quota_warning_threshold"]';
+
+    function sanitizeStorageThreshold($input, clampValue) {
+        if (!$input || !$input.length) {
+            return;
+        }
+
+        const element = $input.get(0);
+        const raw = ($input.val() || '').toString().trim();
+
+        if (raw === '') {
+            if (element && typeof element.setCustomValidity === 'function') {
+                element.setCustomValidity('');
+            }
+            return;
+        }
+
+        let value = Number(raw.replace(',', '.'));
+        if (!Number.isFinite(value)) {
+            if (element && typeof element.setCustomValidity === 'function') {
+                element.setCustomValidity('Veuillez saisir un pourcentage valide.');
+            }
+            return;
+        }
+
+        value = Math.round(value * 10) / 10;
+        if (clampValue) {
+            if (value < 1) {
+                value = 1;
+            } else if (value > 100) {
+                value = 100;
+            }
+            $input.val(value.toString());
+        }
+
+        if (element && typeof element.setCustomValidity === 'function') {
+            if (value < 1 || value > 100) {
+                element.setCustomValidity('Le seuil doit être compris entre 1 % et 100 %.');
+            } else {
+                element.setCustomValidity('');
+            }
+        }
+    }
+
+    $(document).on('input change blur', STORAGE_THRESHOLD_SELECTOR, function(event) {
+        const clampValue = event.type === 'change' || event.type === 'blur';
+        sanitizeStorageThreshold($(this), clampValue);
+    });
+
+    $(STORAGE_THRESHOLD_SELECTOR).each(function() {
+        sanitizeStorageThreshold($(this), true);
+    });
+
 // --- TEST DE CONNEXION GOOGLE DRIVE ---
 $(document).on('click', '.bjlg-gdrive-test-connection', function(e) {
     e.preventDefault();
