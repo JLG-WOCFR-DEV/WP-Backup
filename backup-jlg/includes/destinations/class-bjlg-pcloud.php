@@ -322,6 +322,11 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
             return $defaults;
         }
 
+        $snapshot = $this->get_remote_quota_snapshot();
+        if (($snapshot['status'] ?? '') === 'ok') {
+            return array_merge($defaults, array_intersect_key($snapshot, $defaults));
+        }
+
         try {
             $backups = $this->list_remote_backups();
         } catch (Exception $exception) {
@@ -342,6 +347,68 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
             'quota_bytes' => null,
             'free_bytes' => null,
         ];
+    }
+
+    public function get_remote_quota_snapshot() {
+        $snapshot = [
+            'status' => 'unavailable',
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+            'fetched_at' => $this->get_time(),
+            'error' => null,
+            'source' => 'provider',
+        ];
+
+        if (!$this->is_connected()) {
+            $snapshot['error'] = __('pCloud n\'est pas configuré.', 'backup-jlg');
+
+            return $snapshot;
+        }
+
+        try {
+            $settings = $this->get_settings();
+            $info = $this->api_json('https://api.pcloud.com/userinfo', [], $settings);
+
+            $used = null;
+            if (isset($info['usedquota'])) {
+                $used = (int) $info['usedquota'];
+            } elseif (isset($info['usedspace'])) {
+                $used = (int) $info['usedspace'];
+            }
+
+            $quota = isset($info['quota']) ? (int) $info['quota'] : null;
+            if ($quota === 0) {
+                $quota = null;
+            }
+
+            $free = null;
+            if (isset($info['freequota'])) {
+                $free = (int) $info['freequota'];
+            }
+
+            if ($free === null && $quota !== null && $used !== null) {
+                $free = max(0, $quota - $used);
+            }
+            if ($quota === null && $used !== null && $free !== null) {
+                $quota = max(0, $used + $free);
+            }
+
+            $snapshot['status'] = 'ok';
+            $snapshot['used_bytes'] = $used;
+            $snapshot['quota_bytes'] = $quota;
+            $snapshot['free_bytes'] = $free;
+            $snapshot['error'] = null;
+
+            return $snapshot;
+        } catch (Exception $exception) {
+            $snapshot['error'] = $exception->getMessage();
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('Impossible de récupérer les quotas pCloud : ' . $exception->getMessage());
+            }
+        }
+
+        return $snapshot;
     }
 
     public function handle_test_connection() {

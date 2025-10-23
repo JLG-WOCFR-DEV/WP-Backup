@@ -1149,6 +1149,24 @@ if (!function_exists('switch_to_blog')) {
     }
 }
 
+if (!function_exists('get_sites')) {
+    function get_sites($args = []) {
+        $sites = $GLOBALS['bjlg_tests_sites'] ?? [];
+
+        if (isset($args['fields']) && $args['fields'] === 'ids') {
+            return array_map(static function ($site) {
+                if (is_object($site) && isset($site->blog_id)) {
+                    return (int) $site->blog_id;
+                }
+
+                return (int) $site;
+            }, array_values($sites));
+        }
+
+        return array_values($sites);
+    }
+}
+
 if (!function_exists('restore_current_blog')) {
     function restore_current_blog() {
         if (empty($GLOBALS['bjlg_test_blog_stack'])) {
@@ -1246,6 +1264,18 @@ if (!function_exists('update_option')) {
 if (!function_exists('bjlg_update_option')) {
     function bjlg_update_option($option, $value) {
         return update_option($option, $value);
+    }
+}
+
+if (!function_exists('dbDelta')) {
+    function dbDelta($sql) {
+        if (!isset($GLOBALS['bjlg_test_dbdelta_calls'])) {
+            $GLOBALS['bjlg_test_dbdelta_calls'] = [];
+        }
+
+        $GLOBALS['bjlg_test_dbdelta_calls'][] = (string) $sql;
+
+        return true;
     }
 }
 

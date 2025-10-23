@@ -428,6 +428,31 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
             return $defaults;
         }
 
+        $snapshot = $this->get_remote_quota_snapshot();
+        if (($snapshot['status'] ?? '') === 'ok') {
+            return array_merge($defaults, array_intersect_key($snapshot, $defaults));
+        }
+
+        return $defaults;
+    }
+
+    public function get_remote_quota_snapshot() {
+        $snapshot = [
+            'status' => 'unavailable',
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+            'fetched_at' => $this->get_time(),
+            'error' => null,
+            'source' => 'provider',
+        ];
+
+        if (!$this->is_connected()) {
+            $snapshot['error'] = __('Dropbox n\'est pas configuré.', 'backup-jlg');
+
+            return $snapshot;
+        }
+
         try {
             $settings = $this->get_settings();
             $usage = $this->api_json('https://api.dropboxapi.com/2/users/get_space_usage', [], $settings);
@@ -449,18 +474,21 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
                 $free = max(0, $quota - $used);
             }
 
-            return [
-                'used_bytes' => $used,
-                'quota_bytes' => $quota,
-                'free_bytes' => $free,
-            ];
+            $snapshot['status'] = 'ok';
+            $snapshot['used_bytes'] = $used;
+            $snapshot['quota_bytes'] = $quota;
+            $snapshot['free_bytes'] = $free;
+            $snapshot['error'] = null;
+
+            return $snapshot;
         } catch (Exception $exception) {
+            $snapshot['error'] = $exception->getMessage();
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log('Impossible de récupérer le quota Dropbox : ' . $exception->getMessage());
             }
-
-            return $defaults;
         }
+
+        return $snapshot;
     }
 
     private function get_settings() {

@@ -128,6 +128,66 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
         $this->assertSame($entry['errors'], $failures[0][2]);
     }
 
+    public function test_update_metrics_computes_forecast_projections(): void
+    {
+        $worker = new BJLG_Remote_Purge_Worker();
+        $queue = [
+            [
+                'status' => 'pending',
+                'registered_at' => time() - 200,
+                'destinations' => ['alpha'],
+            ],
+            [
+                'status' => 'pending',
+                'registered_at' => time() - 120,
+                'destinations' => ['alpha'],
+            ],
+        ];
+
+        $results = [
+            [
+                'processed' => true,
+                'outcome' => 'completed',
+                'timestamp' => time() - 60,
+                'destinations' => ['alpha'],
+                'duration' => 100,
+                'registered_at' => time() - 160,
+            ],
+            [
+                'processed' => true,
+                'outcome' => 'completed',
+                'timestamp' => time() - 10,
+                'destinations' => ['alpha'],
+                'duration' => 50,
+                'registered_at' => time() - 90,
+            ],
+        ];
+
+        bjlg_update_option('bjlg_remote_purge_sla_metrics', []);
+
+        $method = (new ReflectionClass(BJLG_Remote_Purge_Worker::class))->getMethod('update_metrics');
+        $method->setAccessible(true);
+        $method->invoke($worker, $queue, $results, time());
+
+        $metrics = bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
+        $this->assertArrayHasKey('forecast', $metrics);
+        $this->assertNotEmpty($metrics['forecast']);
+
+        $forecast = $metrics['forecast'];
+        $this->assertArrayHasKey('overall', $forecast);
+        $overall = $forecast['overall'];
+        $this->assertGreaterThan(0, $overall['forecast_seconds']);
+        $this->assertNotEmpty($overall['forecast_label']);
+
+        $destinations = $forecast['destinations'];
+        $this->assertArrayHasKey('alpha', $destinations);
+        $alpha = $destinations['alpha'];
+        $this->assertSame(2, $alpha['pending']);
+        $this->assertNotNull($alpha['forecast_seconds']);
+        $this->assertNotEmpty($alpha['forecast_label']);
+        $this->assertNotEmpty($alpha['history']);
+    }
+
     /**
      * @param array<int,string> $destinations
      */
@@ -186,21 +246,26 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
         return $path;
     }
 
-    private function registerStubDestination(int $failuresBeforeSuccess)
+    private function registerStubDestination(int $failuresBeforeSuccess, ?array $quotaPayload = null, string $destinationId = 'fake')
     {
-        $destination = new class($failuresBeforeSuccess) implements BJLG_Destination_Interface {
+        $destination = new class($failuresBeforeSuccess, $quotaPayload, $destinationId) implements BJLG_Destination_Interface {
             public int $remainingFailures;
             /** @var array<int,string> */
             public array $deleteCalls = [];
+            /** @var array<string,mixed>|null */
+            private $quotaPayload;
+            private string $identifier;
 
-            public function __construct(int $remainingFailures)
+            public function __construct(int $remainingFailures, ?array $quotaPayload, string $identifier)
             {
                 $this->remainingFailures = $remainingFailures;
+                $this->quotaPayload = $quotaPayload;
+                $this->identifier = $identifier;
             }
 
             public function get_id()
             {
-                return 'fake';
+                return $this->identifier;
             }
 
             public function get_name()
@@ -238,7 +303,12 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
                     return ['success' => false, 'message' => 'fail'];
                 }
 
-                return ['success' => true];
+                $result = ['success' => true];
+                if (is_array($this->quotaPayload)) {
+                    $result['quota'] = $this->quotaPayload;
+                }
+
+                return $result;
             }
 
             public function get_storage_usage()
@@ -247,8 +317,9 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
             }
         };
 
-        add_filter('bjlg_destination_factory', static function ($provided, $destinationId) use ($destination) {
-            if ($destinationId === 'fake') {
+        $registeredId = $destination->get_id();
+        add_filter('bjlg_destination_factory', static function ($provided, $destinationId) use ($destination, $registeredId) {
+            if ($destinationId === $registeredId) {
                 return $destination;
             }
 

@@ -423,6 +423,31 @@ class BJLG_OneDrive implements BJLG_Destination_Interface {
             return $defaults;
         }
 
+        $snapshot = $this->get_remote_quota_snapshot();
+        if (($snapshot['status'] ?? '') === 'ok') {
+            return array_merge($defaults, array_intersect_key($snapshot, $defaults));
+        }
+
+        return $defaults;
+    }
+
+    public function get_remote_quota_snapshot() {
+        $snapshot = [
+            'status' => 'unavailable',
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+            'fetched_at' => $this->get_time(),
+            'error' => null,
+            'source' => 'provider',
+        ];
+
+        if (!$this->is_connected()) {
+            $snapshot['error'] = __('OneDrive n\'est pas configuré.', 'backup-jlg');
+
+            return $snapshot;
+        }
+
         try {
             $settings = $this->get_settings();
             $drive = $this->api_request('https://graph.microsoft.com/v1.0/me/drive', $settings, 'GET');
@@ -440,18 +465,21 @@ class BJLG_OneDrive implements BJLG_Destination_Interface {
                 $remaining = max(0, $total - $used);
             }
 
-            return [
-                'used_bytes' => $used,
-                'quota_bytes' => $total,
-                'free_bytes' => $remaining,
-            ];
+            $snapshot['status'] = 'ok';
+            $snapshot['used_bytes'] = $used;
+            $snapshot['quota_bytes'] = $total;
+            $snapshot['free_bytes'] = $remaining;
+            $snapshot['error'] = null;
+
+            return $snapshot;
         } catch (Exception $exception) {
+            $snapshot['error'] = $exception->getMessage();
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log('Impossible de récupérer le quota OneDrive : ' . $exception->getMessage());
             }
-
-            return $defaults;
         }
+
+        return $snapshot;
     }
 
     private function get_settings() {

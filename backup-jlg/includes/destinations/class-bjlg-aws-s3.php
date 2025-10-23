@@ -321,47 +321,85 @@ class BJLG_AWS_S3 implements BJLG_Destination_Interface {
             return $defaults;
         }
 
+        $snapshot = $this->get_remote_quota_snapshot();
+        if (($snapshot['status'] ?? '') === 'ok') {
+            return array_merge($defaults, array_intersect_key($snapshot, $defaults));
+        }
+
+        return array_merge($defaults, $this->estimate_usage_from_listing($this->get_settings()));
+    }
+
+    public function get_remote_quota_snapshot() {
+        $snapshot = [
+            'status' => 'unavailable',
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+            'fetched_at' => $this->get_time(),
+            'error' => null,
+            'source' => 'provider',
+        ];
+
+        if (!$this->is_connected()) {
+            $snapshot['error'] = __('Amazon S3 n\'est pas configuré.', 'backup-jlg');
+
+            return $snapshot;
+        }
+
         $settings = $this->get_settings();
 
         try {
             $usage_snapshot = $this->query_bucket_usage($settings);
             if (is_array($usage_snapshot)) {
-                return array_merge($defaults, $usage_snapshot);
+                $snapshot['status'] = 'ok';
+                $snapshot['used_bytes'] = $usage_snapshot['used_bytes'] ?? null;
+                $snapshot['quota_bytes'] = $usage_snapshot['quota_bytes'] ?? null;
+                $snapshot['free_bytes'] = $usage_snapshot['free_bytes'] ?? null;
+                if ($snapshot['free_bytes'] === null && $snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null) {
+                    $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
+                }
+                $snapshot['error'] = null;
+
+                return $snapshot;
             }
         } catch (Exception $exception) {
+            $snapshot['error'] = $exception->getMessage();
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log(sprintf('API quota Amazon S3 indisponible : %s', $exception->getMessage()));
             }
         }
 
         try {
-            $backups = $this->fetch_remote_backups($settings);
-        } catch (Exception $exception) {
-            if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log(sprintf('Impossible de récupérer les métriques distantes Amazon S3 : %s', $exception->getMessage()));
-            }
+            $response = $this->perform_request('GET', '', '', [], $settings, ['metrics' => 'usage']);
+            $body = isset($response['body']) ? (string) $response['body'] : '';
+            $usage = $this->parse_usage_snapshot($body);
 
             if (!empty($usage)) {
-                $usage['source'] = $usage['source'] ?? 'provider';
-                $usage['refreshed_at'] = $this->get_time();
+                $snapshot['status'] = 'ok';
+                $snapshot['used_bytes'] = $usage['used_bytes'] ?? null;
+                $snapshot['quota_bytes'] = $usage['quota_bytes'] ?? null;
+                $snapshot['free_bytes'] = $usage['free_bytes'] ?? null;
+                if ($snapshot['free_bytes'] === null && $snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null) {
+                    $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
+                }
+                $snapshot['error'] = null;
 
-                if ($usage['free_bytes'] === null && $usage['quota_bytes'] !== null && $usage['used_bytes'] !== null) {
-                    $usage['free_bytes'] = max(0, (int) $usage['quota_bytes'] - (int) $usage['used_bytes']);
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log(sprintf(
+                        'Métriques distantes S3 récupérées : utilisé=%s quota=%s.',
+                        $snapshot['used_bytes'] !== null ? (string) $snapshot['used_bytes'] : 'n/a',
+                        $snapshot['quota_bytes'] !== null ? (string) $snapshot['quota_bytes'] : 'n/a'
+                    ));
                 }
 
-                $this->log(sprintf(
-                    'Métriques distantes S3 récupérées : utilisé=%s quota=%s.',
-                    $usage['used_bytes'] !== null ? (string) $usage['used_bytes'] : 'n/a',
-                    $usage['quota_bytes'] !== null ? (string) $usage['quota_bytes'] : 'n/a'
-                ));
-
-                return array_merge($defaults, $usage);
+                return $snapshot;
             }
         } catch (Exception $exception) {
+            $snapshot['error'] = $exception->getMessage();
             $this->log('Impossible de récupérer le snapshot Amazon S3 : ' . $exception->getMessage());
         }
 
-        return array_merge($defaults, $this->estimate_usage_from_listing($settings));
+        return $snapshot;
     }
 
     private function query_bucket_usage(array $settings): ?array {

@@ -11,6 +11,18 @@ if (!defined('ABSPATH')) {
 class BJLG_Site_Context {
 
     private const NO_VALUE = '__bjlg__no_value__';
+    public const HISTORY_SCOPE_OPTION = 'bjlg_history_scope';
+    public const HISTORY_SCOPE_SITE = 'site';
+    public const HISTORY_SCOPE_NETWORK = 'network';
+
+    private const NETWORK_SYNCED_OPTIONS = [
+        'bjlg_api_keys',
+        'bjlg_notification_settings',
+        'bjlg_notification_queue',
+        'bjlg_monitoring_settings',
+        'bjlg_remote_storage_metrics',
+        'bjlg_supervised_sites',
+    ];
 
     /**
      * Liste des options gérées par le plugin. Sert à brancher les hooks de synchronisation multisite.
@@ -60,6 +72,7 @@ class BJLG_Site_Context {
             'bjlg_schedule_settings',
             'bjlg_settings',
             'bjlg_sftp_settings',
+            'bjlg_supervised_sites',
             'bjlg_wasabi_settings',
             'bjlg_webhook_key',
             'bjlg_webhook_settings',
@@ -69,6 +82,131 @@ class BJLG_Site_Context {
 
     /** @var int */
     private static $network_stack = 0;
+
+    /** @var array<string, bool> */
+    private static $network_sync_stack = [];
+
+    /**
+     * Sanitize a history scope value.
+     */
+    public static function sanitize_history_scope($scope): string {
+        $sanitized = sanitize_key((string) $scope);
+
+        if ($sanitized === self::HISTORY_SCOPE_NETWORK) {
+            return self::HISTORY_SCOPE_NETWORK;
+        }
+
+        return self::HISTORY_SCOPE_SITE;
+    }
+
+    /**
+     * Returns the configured history storage scope.
+     */
+    public static function get_history_scope(): string {
+        $default = apply_filters('bjlg_default_history_scope', self::HISTORY_SCOPE_SITE);
+        $default = self::sanitize_history_scope($default);
+
+        $stored = $default;
+
+        if (function_exists('is_multisite') && is_multisite() && function_exists('get_site_option')) {
+            $value = get_site_option(self::HISTORY_SCOPE_OPTION, $default);
+        } else {
+            $value = get_option(self::HISTORY_SCOPE_OPTION, $default);
+        }
+
+        if (is_string($value)) {
+            $stored = self::sanitize_history_scope($value);
+        }
+
+        if ($stored === '') {
+            $stored = self::HISTORY_SCOPE_SITE;
+        }
+
+        return apply_filters('bjlg_history_scope', $stored);
+    }
+
+    /**
+     * Updates the history scope option.
+     */
+    public static function set_history_scope(string $scope): void {
+        $scope = self::sanitize_history_scope($scope);
+
+        if (function_exists('is_multisite') && is_multisite() && function_exists('update_site_option')) {
+            update_site_option(self::HISTORY_SCOPE_OPTION, $scope);
+
+            return;
+        }
+
+        if (function_exists('update_option')) {
+            update_option(self::HISTORY_SCOPE_OPTION, $scope);
+        }
+    }
+
+    /**
+     * Returns whether the network scope is enabled for history/API keys.
+     */
+    public static function history_uses_network_storage(): bool {
+        return function_exists('is_multisite')
+            && is_multisite()
+            && self::get_history_scope() === self::HISTORY_SCOPE_NETWORK;
+    }
+
+    /**
+     * Helper exposing option arguments for history-aware storage.
+     *
+     * @return array<string, bool>
+     */
+    public static function get_history_option_args(): array {
+        if (self::history_uses_network_storage()) {
+            return ['network' => true];
+        }
+
+        return [];
+    }
+
+    /**
+     * Returns the table prefix for the requested context.
+     */
+    public static function get_table_prefix(string $context = self::HISTORY_SCOPE_SITE): string {
+        global $wpdb;
+
+        $default = 'wp_';
+
+        if (!is_object($wpdb)) {
+            return $default;
+        }
+
+        if ($context === self::HISTORY_SCOPE_NETWORK
+            && property_exists($wpdb, 'base_prefix')
+            && is_string($wpdb->base_prefix)
+            && $wpdb->base_prefix !== ''
+        ) {
+            return $wpdb->base_prefix;
+        }
+
+        if (property_exists($wpdb, 'prefix') && is_string($wpdb->prefix) && $wpdb->prefix !== '') {
+            return $wpdb->prefix;
+        }
+
+        if ($context === self::HISTORY_SCOPE_NETWORK && property_exists($wpdb, 'base_prefix')) {
+            $base_prefix = $wpdb->base_prefix;
+
+            if (is_string($base_prefix) && $base_prefix !== '') {
+                return $base_prefix;
+            }
+        }
+
+        return $default;
+    }
+
+    /**
+     * Builds the full table name for the network context.
+     */
+    public static function get_network_table_name(string $table_suffix): string {
+        $suffix = ltrim($table_suffix, '_');
+
+        return self::get_table_prefix(self::HISTORY_SCOPE_NETWORK) . $suffix;
+    }
 
     /**
      * Initialise les hooks pour synchroniser les options site/réseau.
@@ -154,7 +292,7 @@ class BJLG_Site_Context {
             }
         }
 
-        if (self::should_use_network($args)) {
+        if (self::should_use_network($args, $option_name)) {
             return get_site_option($option_name, $default);
         }
 
@@ -183,7 +321,7 @@ class BJLG_Site_Context {
             }
         }
 
-        if (self::should_use_network($args)) {
+        if (self::should_use_network($args, $option_name)) {
             return update_site_option($option_name, $value);
         }
 
@@ -206,7 +344,7 @@ class BJLG_Site_Context {
             }
         }
 
-        if (self::should_use_network($args)) {
+        if (self::should_use_network($args, $option_name)) {
             return delete_site_option($option_name);
         }
 
@@ -281,13 +419,17 @@ class BJLG_Site_Context {
         return false;
     }
 
-    private static function should_use_network(array $args): bool {
+    private static function should_use_network(array $args, string $option_name): bool {
         if (!function_exists('is_multisite') || !is_multisite()) {
             return false;
         }
 
         if (array_key_exists('network', $args)) {
             return (bool) $args['network'];
+        }
+
+        if (self::is_network_synced_option($option_name)) {
+            return true;
         }
 
         return self::is_network_context();
@@ -300,6 +442,10 @@ class BJLG_Site_Context {
         }
 
         $network_value = get_site_option($option_name, self::NO_VALUE);
+
+        if (self::is_network_synced_option($option_name)) {
+            return $network_value !== self::NO_VALUE ? $network_value : $value;
+        }
 
         if (self::is_network_context()) {
             if ($network_value !== self::NO_VALUE) {
@@ -329,11 +475,21 @@ class BJLG_Site_Context {
             return;
         }
 
-        if (!self::is_network_context()) {
+        if (!self::is_network_context() && !self::is_network_synced_option($option_name)) {
             return;
         }
 
-        update_site_option($option_name, $value);
+        if (isset(self::$network_sync_stack[$option_name])) {
+            return;
+        }
+
+        self::$network_sync_stack[$option_name] = true;
+
+        try {
+            update_site_option($option_name, $value);
+        } finally {
+            unset(self::$network_sync_stack[$option_name]);
+        }
     }
 
     private static function maybe_delete_network_option(string $option_name): void {
@@ -346,5 +502,10 @@ class BJLG_Site_Context {
         }
 
         delete_site_option($option_name);
+    }
+
+    private static function is_network_synced_option(string $option_name): bool
+    {
+        return in_array($option_name, self::NETWORK_SYNCED_OPTIONS, true);
     }
 }

@@ -184,6 +184,7 @@ class BJLG_Remote_Purge_Worker {
         $errors = [];
 
         $destination_names = [];
+        $quota_samples = [];
 
         foreach ($destinations as $destination_id) {
             $destination = BJLG_Destination_Factory::create($destination_id);
@@ -196,6 +197,13 @@ class BJLG_Remote_Purge_Worker {
 
             $result = $destination->delete_remote_backup_by_name($file);
             $was_successful = is_array($result) ? !empty($result['success']) : false;
+
+            if (is_array($result)) {
+                $quota_sample = $this->extract_quota_sample($destination_id, $result, $now);
+                if ($quota_sample !== null) {
+                    $quota_samples[$destination_id] = $quota_sample;
+                }
+            }
 
             if ($was_successful) {
                 $success[] = $destination_id;
@@ -261,6 +269,7 @@ class BJLG_Remote_Purge_Worker {
                 'attempts' => $current_attempt,
                 'destinations' => $success,
                 'duration' => max(0, $now - $registered_at),
+                'quota_samples' => $quota_samples,
             ];
         }
 
@@ -322,6 +331,7 @@ class BJLG_Remote_Purge_Worker {
                     'attempts' => $current_attempt,
                     'errors' => $errors,
                     'max_delay' => $max_delay,
+                    'quota_samples' => $quota_samples,
                 ];
             } else {
                 $delay = $this->compute_backoff($current_attempt);
@@ -376,6 +386,7 @@ class BJLG_Remote_Purge_Worker {
             'attempts' => $current_attempt,
             'remaining_destinations' => $remaining,
             'max_delay' => $max_delay,
+            'quota_samples' => $quota_samples,
         ];
     }
 
@@ -425,7 +436,7 @@ class BJLG_Remote_Purge_Worker {
         $pending_sum_age = 0;
         $pending_oldest = 0;
         $pending_over_threshold = 0;
-        $destinations = [];
+        $pending_by_destination = [];
 
         foreach ($queue as $entry) {
             if (!is_array($entry)) {
@@ -458,10 +469,10 @@ class BJLG_Remote_Purge_Worker {
                     }
 
                     $key = (string) $destination_id;
-                    if (!isset($destinations[$key])) {
-                        $destinations[$key] = 0;
+                    if (!isset($pending_by_destination[$key])) {
+                        $pending_by_destination[$key] = 0;
                     }
-                    $destinations[$key]++;
+                    $pending_by_destination[$key]++;
                 }
             }
         }
@@ -489,6 +500,11 @@ class BJLG_Remote_Purge_Worker {
         $last_failure_at = isset($failures['last_failure_at']) ? (int) $failures['last_failure_at'] : 0;
         $last_failure_message = isset($failures['last_message']) ? (string) $failures['last_message'] : '';
 
+        $existing_forecast = isset($existing['forecast']) && is_array($existing['forecast']) ? $existing['forecast'] : [];
+        $forecast_destinations = isset($existing_forecast['destinations']) && is_array($existing_forecast['destinations'])
+            ? $existing_forecast['destinations']
+            : [];
+
         foreach ($results as $result) {
             if (!is_array($result) || empty($result['processed'])) {
                 continue;
@@ -511,6 +527,52 @@ class BJLG_Remote_Purge_Worker {
 
                 $last_completed_at = isset($result['timestamp']) ? (int) $result['timestamp'] : $now;
                 $last_completion_seconds = $duration;
+
+                if (!empty($result['destinations']) && is_array($result['destinations'])) {
+                    foreach ($result['destinations'] as $destination_id) {
+                        if (!is_scalar($destination_id)) {
+                            continue;
+                        }
+
+                        $key = (string) $destination_id;
+                        if (!isset($forecast_destinations[$key]) || !is_array($forecast_destinations[$key])) {
+                            $forecast_destinations[$key] = [
+                                'history' => [],
+                                'total_completed' => 0,
+                            ];
+                        }
+
+                        $history = isset($forecast_destinations[$key]['history']) && is_array($forecast_destinations[$key]['history'])
+                            ? $forecast_destinations[$key]['history']
+                            : [];
+                        $total_completed = isset($forecast_destinations[$key]['total_completed'])
+                            ? (int) $forecast_destinations[$key]['total_completed']
+                            : 0;
+
+                        $timestamp = isset($result['timestamp']) ? (int) $result['timestamp'] : $now;
+                        if (!empty($history)) {
+                            $last_point = end($history);
+                            $last_timestamp = isset($last_point['timestamp']) ? (int) $last_point['timestamp'] : 0;
+                            if ($timestamp <= $last_timestamp) {
+                                $timestamp = $last_timestamp + 1;
+                            }
+                        }
+
+                        $total_completed++;
+                        $history[] = [
+                            'timestamp' => $timestamp,
+                            'total' => $total_completed,
+                        ];
+
+                        if (count($history) > 20) {
+                            $history = array_slice($history, -20);
+                        }
+
+                        $forecast_destinations[$key]['history'] = $history;
+                        $forecast_destinations[$key]['total_completed'] = $total_completed;
+                        $forecast_destinations[$key]['updated_at'] = $now;
+                    }
+                }
             }
 
             if ($outcome === 'failed') {
@@ -526,6 +588,13 @@ class BJLG_Remote_Purge_Worker {
             }
         }
 
+        $forecast = $this->build_forecast_metrics(
+            $now,
+            $pending_total,
+            $pending_by_destination,
+            $forecast_destinations
+        );
+
         $metrics = [
             'updated_at' => $now,
             'pending' => [
@@ -533,7 +602,7 @@ class BJLG_Remote_Purge_Worker {
                 'average_seconds' => $average_age,
                 'oldest_seconds' => $pending_oldest,
                 'over_threshold' => $pending_over_threshold,
-                'destinations' => $destinations,
+                'destinations' => $pending_by_destination,
             ],
             'throughput' => [
                 'average_completion_seconds' => $completion_samples > 0 ? $avg_completion : 0,
@@ -547,11 +616,165 @@ class BJLG_Remote_Purge_Worker {
                 'last_failure_at' => $last_failure_at,
                 'last_message' => $last_failure_message,
             ],
+            'forecast' => $forecast,
         ];
 
         if (function_exists('update_option')) {
             \bjlg_update_option('bjlg_remote_purge_sla_metrics', $metrics);
         }
+    }
+
+    /**
+     * @param array<string,int> $pending_by_destination
+     * @param array<string,mixed> $forecast_destinations
+     */
+    private function build_forecast_metrics(int $now, int $pending_total, array $pending_by_destination, array $forecast_destinations): array {
+        $destinations_output = [];
+        $total_throughput = 0.0;
+
+        foreach ($forecast_destinations as $destination_id => $data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $history = isset($data['history']) && is_array($data['history']) ? $data['history'] : [];
+            $history = array_values(array_filter($history, static function ($point) {
+                return isset($point['timestamp'], $point['total']);
+            }));
+
+            [$slope, $intercept] = $this->compute_regression($history);
+
+            $pending = isset($pending_by_destination[$destination_id]) ? (int) $pending_by_destination[$destination_id] : 0;
+            $seconds_per_item = null;
+            $forecast_seconds = null;
+            $projected_clearance = null;
+            $forecast_label = '';
+            $trend_direction = 'flat';
+
+            if ($slope !== null) {
+                if ($slope > 0) {
+                    $seconds_per_item = 1 / $slope;
+                    $total_throughput += $slope;
+
+                    if ($pending > 0) {
+                        $forecast_seconds = (int) ceil($pending / $slope);
+                        $projected_clearance = $now + $forecast_seconds;
+                        $forecast_label = sprintf(
+                            __('File vidée dans %s', 'backup-jlg'),
+                            $this->format_delay_label($forecast_seconds)
+                        );
+                    } else {
+                        $forecast_label = __('File vidée', 'backup-jlg');
+                    }
+
+                    $trend_direction = 'positive';
+                } elseif ($slope < 0) {
+                    $trend_direction = 'negative';
+                    $forecast_label = __('Débit négatif détecté', 'backup-jlg');
+                }
+            }
+
+            if ($forecast_label === '' && $pending > 0) {
+                $forecast_label = __('Projection indisponible (historique insuffisant)', 'backup-jlg');
+            }
+
+            $destinations_output[$destination_id] = [
+                'history' => $history,
+                'total_completed' => isset($data['total_completed']) ? (int) $data['total_completed'] : count($history),
+                'slope' => $slope,
+                'intercept' => $intercept,
+                'pending' => $pending,
+                'seconds_per_item' => $seconds_per_item,
+                'forecast_seconds' => $forecast_seconds,
+                'projected_clearance' => $projected_clearance,
+                'forecast_label' => $forecast_label,
+                'trend_direction' => $trend_direction,
+                'samples' => count($history),
+            ];
+        }
+
+        foreach ($pending_by_destination as $destination_id => $count) {
+            if (isset($destinations_output[$destination_id])) {
+                continue;
+            }
+
+            $destinations_output[$destination_id] = [
+                'history' => [],
+                'total_completed' => 0,
+                'slope' => null,
+                'intercept' => null,
+                'pending' => (int) $count,
+                'seconds_per_item' => null,
+                'forecast_seconds' => null,
+                'projected_clearance' => null,
+                'forecast_label' => __('Projection indisponible (historique insuffisant)', 'backup-jlg'),
+                'trend_direction' => 'flat',
+                'samples' => 0,
+            ];
+        }
+
+        $overall_forecast_seconds = null;
+        $overall_projected = null;
+        $overall_label = '';
+
+        if ($pending_total > 0 && $total_throughput > 0) {
+            $overall_forecast_seconds = (int) ceil($pending_total / $total_throughput);
+            $overall_projected = $now + $overall_forecast_seconds;
+            $overall_label = sprintf(
+                __('Projection globale : file vidée dans %s', 'backup-jlg'),
+                $this->format_delay_label($overall_forecast_seconds)
+            );
+        } elseif ($pending_total === 0) {
+            $overall_label = __('Aucune entrée en attente.', 'backup-jlg');
+        }
+
+        return [
+            'generated_at' => $now,
+            'destinations' => $destinations_output,
+            'overall' => [
+                'pending' => $pending_total,
+                'throughput_per_second' => $total_throughput,
+                'forecast_seconds' => $overall_forecast_seconds,
+                'projected_clearance' => $overall_projected,
+                'forecast_label' => $overall_label,
+            ],
+        ];
+    }
+
+    /**
+     * @param array<int,array<string,int>> $points
+     *
+     * @return array{0: float|null, 1: float|null}
+     */
+    private function compute_regression(array $points): array {
+        $count = count($points);
+        if ($count < 2) {
+            return [null, null];
+        }
+
+        $sum_x = 0.0;
+        $sum_y = 0.0;
+        $sum_xy = 0.0;
+        $sum_x2 = 0.0;
+
+        foreach ($points as $point) {
+            $x = isset($point['timestamp']) ? (float) $point['timestamp'] : 0.0;
+            $y = isset($point['total']) ? (float) $point['total'] : 0.0;
+            $sum_x += $x;
+            $sum_y += $y;
+            $sum_xy += ($x * $y);
+            $sum_x2 += ($x * $x);
+        }
+
+        $denominator = ($count * $sum_x2) - ($sum_x ** 2);
+        if (abs($denominator) < 0.000001) {
+            return [null, null];
+        }
+
+        $slope = (($count * $sum_xy) - ($sum_x * $sum_y)) / $denominator;
+        $intercept = ($sum_y - ($slope * $sum_x)) / $count;
+
+        return [$slope, $intercept];
     }
 
     private function format_delay_label(int $seconds): string {

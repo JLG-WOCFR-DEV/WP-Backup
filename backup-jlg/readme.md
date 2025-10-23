@@ -111,6 +111,14 @@ falsifiée et contourner le limiteur de taux.
 
 Une fois l'autorisation OAuth terminée, rendez-vous dans **Backup JLG → Réglages → Google Drive** et cliquez sur le bouton **Tester la connexion**. Le plugin enverra une requête légère pour valider le Client ID, le Client Secret et le dossier cible, affichera immédiatement le résultat et mémorisera la date du dernier test. Utilisez ce bouton après chaque changement d'identifiants pour confirmer que l'accès Drive est fonctionnel.
 
+### 6. Ajuster les alertes de quota distant
+
+1. Ouvrez **Backup JLG → Réglages** puis l'encart **Surveillance du stockage**.
+2. Renseignez le pourcentage à partir duquel une destination distante doit être considérée comme saturée.
+3. Enregistrez les réglages pour que le nouveau seuil soit pris en compte par le tableau de bord, les alertes et les notifications.
+
+> ℹ️ Le seuil s'applique à toutes les destinations distantes configurées et doit rester compris entre **1 %** et **100 %**. Le tableau de bord indiquera automatiquement les destinations qui dépassent ce seuil et enverra un événement `bjlg_storage_warning` exploitable pour vos intégrations.
+
 ## 🎯 Utilisation
 
 ### Interface Web
