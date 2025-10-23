@@ -365,6 +365,7 @@ class BJLG_Cleanup {
             'errors' => [],
             'inspected' => 0,
             'deleted_items' => [],
+            'immutable_protected' => [],
         ];
 
         if (!is_array($result)) {
@@ -381,6 +382,10 @@ class BJLG_Cleanup {
 
         if (!is_array($normalized['deleted_items'])) {
             $normalized['deleted_items'] = $normalized['deleted_items'] === null ? [] : (array) $normalized['deleted_items'];
+        }
+
+        if (!isset($normalized['immutable_protected']) || !is_array($normalized['immutable_protected'])) {
+            $normalized['immutable_protected'] = [];
         }
 
         return $normalized;
@@ -414,6 +419,13 @@ class BJLG_Cleanup {
                     BJLG_Debug::log($error_message);
                     BJLG_History::log('cleanup_remote', 'failure', $error_message);
                 }
+            }
+
+            if (!empty($result['immutable_protected']) && is_array($result['immutable_protected'])) {
+                $protected_list = implode(', ', array_map('sanitize_text_field', $result['immutable_protected']));
+                $message = sprintf('Nettoyage distant %s : éléments conservés (immutables) : %s.', $name, $protected_list);
+                BJLG_Debug::log($message);
+                BJLG_History::log('cleanup_remote', 'info', $message);
             }
         }
     }

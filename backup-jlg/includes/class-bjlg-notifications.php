@@ -146,6 +146,8 @@ class BJLG_Notifications {
         'sandbox_restore_validation_passed' => 'info',
         'sandbox_restore_validation_failed' => 'critical',
         'test_notification' => 'info',
+        'managed_vault_latency' => 'warning',
+        'managed_vault_replica_degraded' => 'critical',
     ];
 
     /**
@@ -471,6 +473,45 @@ class BJLG_Notifications {
         }
 
         $this->notify('storage_warning', $context);
+    }
+
+    /**
+     * Gère les alertes spécialisées Managed Vault (latence / réplication).
+     *
+     * @param array<string,mixed> $payload
+     */
+    public function handle_managed_vault_alert($payload) {
+        if (!is_array($payload)) {
+            return;
+        }
+
+        $type = isset($payload['type']) ? (string) $payload['type'] : '';
+        $message = isset($payload['message']) ? (string) $payload['message'] : '';
+        $destination_id = isset($payload['destination']) ? (string) $payload['destination'] : 'managed_vault';
+        $context = isset($payload['context']) && is_array($payload['context']) ? $payload['context'] : [];
+
+        if (isset($context['regions']) && is_array($context['regions'])) {
+            $context['regions'] = implode(', ', array_map('sanitize_text_field', $context['regions']));
+        }
+        if (isset($context['region']) && is_scalar($context['region'])) {
+            $context['region'] = sanitize_text_field((string) $context['region']);
+        }
+
+        $context['message'] = $message;
+        $context['type'] = $type;
+        $context['destination'] = $this->resolve_destination_label($destination_id) ?: ucfirst(str_replace('_', ' ', $destination_id));
+
+        switch ($type) {
+            case 'replica_degraded':
+                $event = 'managed_vault_replica_degraded';
+                break;
+            case 'latency_budget_exceeded':
+            default:
+                $event = 'managed_vault_latency';
+                break;
+        }
+
+        $this->notify($event, $context);
     }
 
     /**

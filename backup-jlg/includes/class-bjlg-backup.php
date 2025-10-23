@@ -1099,8 +1099,22 @@ class BJLG_Backup {
                 $backup_filepath,
                 $destination_queue,
                 $task_id,
-                $task_data['secondary_destination_batches'] ?? []
+                $task_data['secondary_destination_batches'] ?? [],
+                $task_data
             );
+
+            if (isset($destination_results['resume_state']['managed_vault'])) {
+                $managed_resume = $destination_results['resume_state']['managed_vault'];
+                if (empty($managed_resume)) {
+                    if (isset($task_data['managed_vault_resume'])) {
+                        unset($task_data['managed_vault_resume']);
+                        self::save_task_state($task_id, $task_data);
+                    }
+                } elseif (is_array($managed_resume)) {
+                    $task_data['managed_vault_resume'] = $managed_resume;
+                    self::save_task_state($task_id, $task_data);
+                }
+            }
 
             $destination_failure_notice = '';
             if (!empty($destination_results['failures'])) {
@@ -3128,14 +3142,20 @@ class BJLG_Backup {
         return $label;
     }
 
-    private function dispatch_to_destinations($filepath, array $destinations, $task_id, array $batches = []) {
+    private function dispatch_to_destinations($filepath, array $destinations, $task_id, array $batches = [], array $task_state = []) {
         $results = [
             'success' => [],
             'failures' => [],
+            'details' => [],
         ];
 
         if (empty($destinations)) {
             return $results;
+        }
+
+        $resume_state = [];
+        if (isset($task_state['managed_vault_resume']) && is_array($task_state['managed_vault_resume'])) {
+            $resume_state = $task_state['managed_vault_resume'];
         }
 
         if (!empty($batches)) {
@@ -3163,16 +3183,57 @@ class BJLG_Backup {
             }
 
             try {
-                $destination->upload_file($filepath, $task_id);
-                $results['success'][] = $destination_id;
-                BJLG_Debug::log(sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
-                BJLG_History::log('backup_upload', 'success', sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
+                if (method_exists($destination, 'upload_with_resilience')) {
+                    $context = [];
+                    if (isset($resume_state[$destination_id]) && is_array($resume_state[$destination_id])) {
+                        $context = $resume_state[$destination_id];
+                    }
+
+                    $destination->upload_with_resilience($filepath, $task_id, $context);
+                    $delivery = method_exists($destination, 'get_last_delivery_report')
+                        ? $destination->get_last_delivery_report()
+                        : [];
+
+                    if (is_array($delivery) && !empty($delivery)) {
+                        $results['details'][$destination_id] = $delivery;
+                    }
+
+                    unset($resume_state[$destination_id]);
+                    $results['success'][] = $destination_id;
+                    BJLG_Debug::log(sprintf('Sauvegarde envoyée vers %s (réplication multi-région).', $destination->get_name()));
+                    BJLG_History::log('backup_upload', 'success', sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
+                } else {
+                    $destination->upload_file($filepath, $task_id);
+                    $results['success'][] = $destination_id;
+                    BJLG_Debug::log(sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
+                    BJLG_History::log('backup_upload', 'success', sprintf('Sauvegarde envoyée vers %s.', $destination->get_name()));
+                }
             } catch (Exception $exception) {
                 $error_message = sprintf('Envoi vers %s échoué : %s', $destination->get_name(), $exception->getMessage());
                 BJLG_Debug::log('ERREUR : ' . $error_message);
                 BJLG_History::log('backup_upload', 'failure', $error_message);
                 $results['failures'][$destination_id] = $exception->getMessage();
+
+                if (method_exists($destination, 'get_last_delivery_report')) {
+                    $delivery = $destination->get_last_delivery_report();
+                    if (is_array($delivery) && !empty($delivery)) {
+                        $results['details'][$destination_id] = $delivery;
+                        if (!empty($delivery['resume']) && is_array($delivery['resume'])) {
+                            $resume_state[$destination_id] = $delivery['resume'];
+                        }
+                    }
+                }
             }
+
+            if (class_exists(BJLG_Managed_Replication::class) && $destination instanceof BJLG_Managed_Replication) {
+                $this->log_managed_replication_report($destination);
+            }
+        }
+
+        if (!empty($resume_state)) {
+            $results['resume_state']['managed_vault'] = $resume_state;
+        } elseif (!empty($task_state['managed_vault_resume'])) {
+            $results['resume_state']['managed_vault'] = [];
         }
 
         return $results;
@@ -3185,6 +3246,60 @@ class BJLG_Backup {
         }
 
         return BJLG_Destination_Factory::create($destination_id);
+    }
+
+    private function log_managed_replication_report($destination): void {
+        if (!class_exists(BJLG_Managed_Replication::class) || !$destination instanceof BJLG_Managed_Replication) {
+            return;
+        }
+
+        if (!method_exists($destination, 'get_last_report')) {
+            return;
+        }
+
+        $report = $destination->get_last_report();
+        if (empty($report) || empty($report['replicas']) || !is_array($report['replicas'])) {
+            return;
+        }
+
+        $available = isset($report['available_copies']) ? (int) $report['available_copies'] : 0;
+        $expected = isset($report['expected_copies']) ? (int) $report['expected_copies'] : 0;
+
+        $parts = [];
+        foreach ($report['replicas'] as $replica) {
+            if (!is_array($replica)) {
+                continue;
+            }
+
+            $label = isset($replica['label']) ? (string) $replica['label'] : (isset($replica['provider']) ? (string) $replica['provider'] : '');
+            $region = isset($replica['region']) && $replica['region'] !== '' ? sprintf(' (%s)', $replica['region']) : '';
+            $status = isset($replica['status']) ? (string) $replica['status'] : 'unknown';
+            $latency_value = isset($replica['latency_ms']) && $replica['latency_ms'] !== null
+                ? (int) $replica['latency_ms']
+                : null;
+            $latency = $latency_value !== null
+                ? sprintf('%sms', number_format_i18n(max(0, $latency_value)))
+                : __('n/a', 'backup-jlg');
+            $message = isset($replica['message']) && $replica['message'] !== '' ? ' — ' . $replica['message'] : '';
+
+            $parts[] = trim(sprintf('%1$s%2$s : %3$s (%4$s)%5$s', $label, $region, $status, $latency, $message));
+        }
+
+        if (empty($parts)) {
+            return;
+        }
+
+        $summary = sprintf(
+            __('Réplication gérée : %1$s/%2$s copies • %3$s', 'backup-jlg'),
+            number_format_i18n($available),
+            number_format_i18n(max(1, $expected)),
+            implode(' | ', $parts)
+        );
+
+        BJLG_Debug::log($summary);
+
+        $history_status = (isset($report['status']) && $report['status'] === 'failed') ? 'failure' : 'success';
+        BJLG_History::log('backup_replication', $history_status, $summary);
     }
 
     /**

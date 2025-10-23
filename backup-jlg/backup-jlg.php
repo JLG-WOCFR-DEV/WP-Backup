@@ -569,7 +569,7 @@ final class BJLG_Plugin {
             'destinations/interface-bjlg-destination.php', 'destinations/class-bjlg-remote-storage-usage-exception.php', 'destinations/abstract-class-bjlg-s3-compatible.php',
             'destinations/class-bjlg-google-drive.php', 'destinations/class-bjlg-aws-s3.php', 'destinations/class-bjlg-sftp.php',
             'destinations/class-bjlg-wasabi.php', 'destinations/class-bjlg-dropbox.php', 'destinations/class-bjlg-onedrive.php',
-            'destinations/class-bjlg-pcloud.php',
+            'destinations/class-bjlg-pcloud.php', 'destinations/class-bjlg-managed-replication.php',
         ];
         foreach ($files_to_load as $file) {
             $path = BJLG_INCLUDES_DIR . $file;
@@ -667,6 +667,7 @@ final class BJLG_Plugin {
             'settings' => 'assets/js/admin-settings.js',
             'logs' => 'assets/js/admin-logs.js',
             'api' => 'assets/js/admin-api.js',
+            'rbac' => 'assets/js/admin-rbac.js',
         ];
 
         $module_urls = [];
@@ -683,6 +684,7 @@ final class BJLG_Plugin {
             'restore' => ['backup'],
             'settings' => ['settings'],
             'integrations' => ['api'],
+            'rbac' => ['rbac'],
         ];
 
         wp_enqueue_script(
