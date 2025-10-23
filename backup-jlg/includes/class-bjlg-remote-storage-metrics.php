@@ -243,6 +243,10 @@ class BJLG_Remote_Storage_Metrics {
             'days_to_threshold' => null,
             'days_to_threshold_label' => '',
             'projection_intent' => 'neutral',
+            'available_copies' => null,
+            'expected_copies' => null,
+            'resilience_status' => 'unknown',
+            'replicas' => [],
         ];
 
         if (!$entry['connected']) {
@@ -283,6 +287,37 @@ class BJLG_Remote_Storage_Metrics {
                     if ($normalized !== '') {
                         $entry['errors'][] = $normalized;
                     }
+                }
+            }
+            if (isset($usage['available_copies'])) {
+                $entry['available_copies'] = max(0, (int) $usage['available_copies']);
+            }
+            if (isset($usage['expected_copies'])) {
+                $entry['expected_copies'] = max(0, (int) $usage['expected_copies']);
+            }
+            if (isset($usage['status'])) {
+                $entry['resilience_status'] = (string) $usage['status'];
+            }
+            if (isset($usage['replicas']) && is_array($usage['replicas'])) {
+                $replicas = [];
+                foreach ($usage['replicas'] as $replica) {
+                    if (!is_array($replica)) {
+                        continue;
+                    }
+
+                    $replicas[] = [
+                        'provider' => isset($replica['provider']) ? sanitize_key((string) $replica['provider']) : '',
+                        'label' => isset($replica['label']) ? (string) $replica['label'] : '',
+                        'region' => isset($replica['region']) ? (string) $replica['region'] : '',
+                        'status' => isset($replica['status']) ? (string) $replica['status'] : '',
+                        'latency_ms' => isset($replica['latency_ms']) && $replica['latency_ms'] !== null ? (int) max(0, $replica['latency_ms']) : null,
+                        'message' => isset($replica['message']) ? (string) $replica['message'] : '',
+                        'role' => isset($replica['role']) ? (string) $replica['role'] : '',
+                    ];
+                }
+
+                if (!empty($replicas)) {
+                    $entry['replicas'] = $replicas;
                 }
             }
         }
@@ -328,17 +363,25 @@ class BJLG_Remote_Storage_Metrics {
             return $entry;
         }
 
-            if (is_array($backups)) {
-                $entry['backups_count'] = count($backups);
+        try {
+            $backups = $destination->list_remote_backups();
+        } catch (\Throwable $exception) {
+            $entry['errors'][] = $exception->getMessage();
+            self::maybe_dispatch_error_alert($destination_id, $entry);
 
-                if ($entry['used_bytes'] === null) {
-                    $total = 0;
-                    foreach ($backups as $backup) {
-                        $total += isset($backup['size']) ? (int) $backup['size'] : 0;
-                    }
-                    $entry['used_bytes'] = $total;
-                    $entry['used_human'] = size_format($total);
+            return $entry;
+        }
+
+        if (is_array($backups)) {
+            $entry['backups_count'] = count($backups);
+
+            if ($entry['used_bytes'] === null) {
+                $total = 0;
+                foreach ($backups as $backup) {
+                    $total += isset($backup['size']) ? (int) $backup['size'] : 0;
                 }
+                $entry['used_bytes'] = $total;
+                $entry['used_human'] = size_format($total);
             }
         }
 
