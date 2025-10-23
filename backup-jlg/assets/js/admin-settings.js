@@ -620,6 +620,85 @@ function restoreSubmitState($submit, state) {
     $submit.prop('disabled', false).removeClass('is-busy');
 }
 
+function syncUpdateGuardReminderState($container) {
+    if (!$container || !$container.length) {
+        return;
+    }
+
+    const $reminderToggle = $container.find('input[name="update_guard_reminder_enabled"]');
+    const $guardToggle = $container.find('input[name="update_guard_enabled"]');
+    const $message = $container.find('[data-bjlg-reminder-message]');
+
+    if (!$message.length) {
+        return;
+    }
+
+    const reminderEnabled = $reminderToggle.length ? $reminderToggle.is(':checked') : false;
+    const guardEnabled = $guardToggle.length ? $guardToggle.is(':checked') : true;
+    const shouldEnable = reminderEnabled && guardEnabled;
+
+    $message.prop('disabled', !shouldEnable);
+
+    if (shouldEnable) {
+        const currentValue = ($message.val() || '').toString().trim();
+        if (currentValue === '') {
+            const defaultMessage = ($container.data('bjlgReminderMessageDefault') || '').toString();
+            if (defaultMessage.length) {
+                $message.val(defaultMessage);
+            }
+        }
+    }
+}
+
+function ensureUpdateGuardComponentSelection($container, $changedCheckbox) {
+    if (!$container || !$container.length) {
+        return;
+    }
+
+    const $checkboxes = $container.find('.bjlg-update-guard-components input[type="checkbox"]');
+    if (!$checkboxes.length) {
+        return;
+    }
+
+    const $checked = $checkboxes.filter(':checked');
+    if ($checked.length === 0 && $changedCheckbox && $changedCheckbox.length) {
+        $changedCheckbox.prop('checked', true);
+    }
+}
+
+function initUpdateGuardSettings($containers) {
+    if (!$containers || !$containers.length) {
+        return;
+    }
+
+    $containers.each(function() {
+        const $container = $(this);
+        syncUpdateGuardReminderState($container);
+        ensureUpdateGuardComponentSelection($container);
+    });
+}
+
+const $updateGuardContainers = $('.bjlg-update-guard-settings');
+if ($updateGuardContainers.length) {
+    initUpdateGuardSettings($updateGuardContainers);
+}
+
+$(document).on('change', '.bjlg-update-guard-settings input[name="update_guard_enabled"]', function() {
+    const $container = $(this).closest('.bjlg-update-guard-settings');
+    syncUpdateGuardReminderState($container);
+});
+
+$(document).on('change', '.bjlg-update-guard-settings input[name="update_guard_reminder_enabled"]', function() {
+    const $container = $(this).closest('.bjlg-update-guard-settings');
+    syncUpdateGuardReminderState($container);
+});
+
+$(document).on('change', '.bjlg-update-guard-components input[type="checkbox"]', function() {
+    const $checkbox = $(this);
+    const $container = $checkbox.closest('.bjlg-update-guard-settings');
+    ensureUpdateGuardComponentSelection($container, $checkbox);
+});
+
 // --- AFFICHER / MASQUER LES SECRETS ---
 $('body').on('click', '.bjlg-toggle-secret', function(e) {
     e.preventDefault();

@@ -1,8 +1,13 @@
 <?php
 
+use BJLG\BJLG_API_Keys;
+use BJLG\BJLG_History;
+use BJLG\BJLG_Plugin;
 use BJLG\BJLG_REST_API;
 use BJLG\BJLG_Settings;
+use BJLG\BJLG_Site_Context;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 
 final class BJLG_MultisiteTest extends TestCase {
     private $previous_options = [];
@@ -10,6 +15,10 @@ final class BJLG_MultisiteTest extends TestCase {
     private $previous_stack = [];
     private $previous_multisite = false;
     private $previous_network_admin = false;
+    private $previous_site_options = [];
+    private $previous_is_multisite_flag = false;
+    private $previous_is_network_admin_flag = false;
+    private $previous_dbdelta_calls = [];
 
     protected function setUp(): void {
         parent::setUp();
@@ -18,10 +27,15 @@ final class BJLG_MultisiteTest extends TestCase {
         $this->previous_stack = $GLOBALS['bjlg_tests_blog_stack'] ?? [1];
         $this->previous_multisite = $GLOBALS['bjlg_tests_multisite'] ?? false;
         $this->previous_network_admin = $GLOBALS['bjlg_tests_network_admin'] ?? false;
+        $this->previous_site_options = $GLOBALS['bjlg_test_site_options'] ?? [];
+        $this->previous_is_multisite_flag = $GLOBALS['bjlg_test_is_multisite'] ?? false;
+        $this->previous_is_network_admin_flag = $GLOBALS['bjlg_test_is_network_admin'] ?? false;
+        $this->previous_dbdelta_calls = $GLOBALS['bjlg_test_dbdelta_calls'] ?? [];
 
         $GLOBALS['bjlg_test_options'] = [];
         $GLOBALS['bjlg_tests_multisite'] = false;
         $GLOBALS['bjlg_tests_network_admin'] = false;
+        $GLOBALS['bjlg_test_is_multisite'] = false;
         $GLOBALS['bjlg_tests_blog_stack'] = [1];
         $GLOBALS['bjlg_tests_sites'] = [
             1 => (object) [
@@ -50,6 +64,7 @@ final class BJLG_MultisiteTest extends TestCase {
         $GLOBALS['bjlg_tests_blog_stack'] = $this->previous_stack ?: [1];
         $GLOBALS['bjlg_tests_multisite'] = $this->previous_multisite;
         $GLOBALS['bjlg_tests_network_admin'] = $this->previous_network_admin;
+        $GLOBALS['bjlg_test_is_multisite'] = false;
         $GLOBALS['bjlg_test_current_user_can'] = false;
 
         parent::tearDown();
@@ -135,5 +150,61 @@ final class BJLG_MultisiteTest extends TestCase {
 
         $api->restore_site_after_request(null, null, $request);
         $this->assertSame(1, get_current_blog_id());
+    }
+
+    public function test_rest_request_supports_network_context() {
+        $GLOBALS['bjlg_test_is_multisite'] = true;
+        $GLOBALS['bjlg_tests_multisite'] = true;
+        $GLOBALS['bjlg_tests_network_admin'] = true;
+        $GLOBALS['bjlg_test_current_user_can'] = true;
+
+        $api = new BJLG_REST_API();
+        $reflection = new ReflectionMethod(BJLG_REST_API::class, 'with_request_site');
+        $reflection->setAccessible(true);
+
+        $request = new class {
+            public function get_param($key) {
+                return $key === 'context' ? 'network' : null;
+            }
+
+            public function get_header($key) {
+                return null;
+            }
+        };
+
+        $is_network = false;
+        $result = $reflection->invoke($api, $request, function () use (&$is_network) {
+            $is_network = BJLG\BJLG_Site_Context::is_network_context();
+
+            return 'ok';
+        });
+
+        $this->assertSame('ok', $result);
+        $this->assertTrue($is_network);
+    }
+
+    public function test_rest_request_network_context_requires_multisite() {
+        $GLOBALS['bjlg_test_is_multisite'] = false;
+
+        $api = new BJLG_REST_API();
+        $reflection = new ReflectionMethod(BJLG_REST_API::class, 'with_request_site');
+        $reflection->setAccessible(true);
+
+        $request = new class {
+            public function get_param($key) {
+                return $key === 'context' ? 'network' : null;
+            }
+
+            public function get_header($key) {
+                return null;
+            }
+        };
+
+        $result = $reflection->invoke($api, $request, static function () {
+            return 'should-not-run';
+        });
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('bjlg_network_context_unavailable', $result->get_error_code());
     }
 }

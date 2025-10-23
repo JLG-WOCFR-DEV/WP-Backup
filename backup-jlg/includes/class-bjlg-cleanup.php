@@ -470,7 +470,7 @@ class BJLG_Cleanup {
      */
     private function cleanup_old_history() {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'bjlg_history';
+        $table_name = BJLG_History::get_table_name();
         
         // Garder seulement les 30 derniers jours
         $cutoff_date = date('Y-m-d H:i:s', strtotime('-30 days'));

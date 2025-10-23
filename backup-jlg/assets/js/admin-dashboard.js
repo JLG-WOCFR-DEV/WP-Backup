@@ -678,6 +678,14 @@ jQuery(function($) {
                             $('<li/>', { text: sprintf(__('Durée moyenne de purge : %s', 'backup-jlg'), sla.throughput_average) }).appendTo($list);
                         }
 
+                        if (sla.duration_peak) {
+                            $('<li/>', { text: sprintf(__('Durée maximale récente : %s', 'backup-jlg'), sla.duration_peak) }).appendTo($list);
+                        }
+
+                        if (sla.duration_last) {
+                            $('<li/>', { text: sprintf(__('Dernière purge traitée en %s', 'backup-jlg'), sla.duration_last) }).appendTo($list);
+                        }
+
                         if (sla.throughput_last_completion_relative) {
                             $('<li/>', { text: sprintf(__('Dernière purge réussie %s', 'backup-jlg'), sla.throughput_last_completion_relative) }).appendTo($list);
                         }
@@ -691,10 +699,60 @@ jQuery(function($) {
                         } else if (sla.last_failure_relative) {
                             $('<li/>', { text: sprintf(__('Dernier échec %s', 'backup-jlg'), sla.last_failure_relative) }).appendTo($list);
                         }
+
+                        if (sla.backlog_trend) {
+                            $('<li/>', { text: sla.backlog_trend }).appendTo($list);
+                        }
+
+                        if (sla.projection_queue_15m) {
+                            $('<li/>', { text: sprintf(__('Projection 15 min : %s entrée(s)', 'backup-jlg'), sla.projection_queue_15m) }).appendTo($list);
+                        }
+
+                        if (sla.projection_queue_60m) {
+                            $('<li/>', { text: sprintf(__('Projection 60 min : %s entrée(s)', 'backup-jlg'), sla.projection_queue_60m) }).appendTo($list);
+                        }
+
+                        if (sla.projection_oldest_15m) {
+                            $('<li/>', { text: sprintf(__('Âge estimé à 15 min : %s', 'backup-jlg'), sla.projection_oldest_15m) }).appendTo($list);
+                        }
+
+                        if (sla.projection_oldest_60m) {
+                            $('<li/>', { text: sprintf(__('Âge estimé à 60 min : %s', 'backup-jlg'), sla.projection_oldest_60m) }).appendTo($list);
+                        }
+
+                        if (sla.projection_clearance) {
+                            $('<li/>', { text: sprintf(__('Délai estimé pour vider la file : %s', 'backup-jlg'), sla.projection_clearance) }).appendTo($list);
+                        }
+
+                        if (sla.quota_summary) {
+                            $('<li/>', { text: sprintf(__('Utilisation des quotas : %s', 'backup-jlg'), sla.quota_summary) }).appendTo($list);
+                        }
+
+                        if (sla.quota_average_ratio) {
+                            $('<li/>', { text: sprintf(__('Charge moyenne détectée : %s', 'backup-jlg'), sla.quota_average_ratio) }).appendTo($list);
+                        }
+
+                        if (sla.quota_updated_relative) {
+                            $('<li/>', { text: sprintf(__('Quotas mis à jour %s', 'backup-jlg'), sla.quota_updated_relative) }).appendTo($list);
+                        }
+
+                        if (sla.saturation_warning && sla.saturation_message) {
+                            $('<li/>', { 'class': 'bjlg-queue-card__metrics-alert', text: sla.saturation_message }).appendTo($list);
+                        }
+
+                        if (sla.quota_alert) {
+                            $('<li/>', { 'class': 'bjlg-queue-card__metrics-alert', text: sla.quota_alert }).appendTo($list);
+                        }
                     }
                 } else {
                     $sla.remove();
                 }
+            }
+
+            if (sla && sla.saturation_warning) {
+                $card.attr('data-saturation-warning', 'true');
+            } else {
+                $card.removeAttr('data-saturation-warning');
             }
 
             const $entries = $card.find('[data-role="entries"]');
