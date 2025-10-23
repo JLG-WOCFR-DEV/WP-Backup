@@ -1271,7 +1271,7 @@ class BJLG_Scheduler {
      */
     public function get_scheduled_history($limit = 10) {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'bjlg_history';
+        $table_name = BJLG_History::get_table_name();
         
         $results = $wpdb->get_results(
             $wpdb->prepare(
@@ -1331,7 +1331,7 @@ class BJLG_Scheduler {
             return $stats;
         }
 
-        $table_name = $wpdb->prefix . 'bjlg_history';
+        $table_name = BJLG_History::get_table_name();
 
         // Total des sauvegardes planifiées
         $stats['total_scheduled'] = $wpdb->get_var(
