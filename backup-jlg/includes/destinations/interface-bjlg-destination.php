@@ -87,4 +87,19 @@ interface BJLG_Destination_Interface {
      * }
      */
     public function get_storage_usage();
+
+    /**
+     * Retourne un instantané normalisé du quota rapporté par le fournisseur distant.
+     *
+     * @return array<string, mixed> {
+     *     @type string      $status      "ok" si les données proviennent de l'API distante, "unavailable" sinon.
+     *     @type int|null    $used_bytes  Espace utilisé en octets (si disponible).
+     *     @type int|null    $quota_bytes Quota total en octets (si disponible).
+     *     @type int|null    $free_bytes  Espace restant en octets (si disponible).
+     *     @type int|null    $fetched_at  Timestamp Unix auquel les données ont été récupérées.
+     *     @type string|null $error       Message d'erreur éventuel renvoyé par le fournisseur ou détecté localement.
+     *     @type string      $source      Toujours "provider" pour identifier la provenance de l'instantané.
+     * }
+     */
+    public function get_remote_quota_snapshot();
 }
