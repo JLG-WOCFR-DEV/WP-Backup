@@ -911,7 +911,7 @@ class BJLG_Encryption {
         try {
             // Créer un fichier test
             $test_content = "Test de chiffrement AES-256 - " . date('Y-m-d H:i:s');
-            $test_file = BJLG_BACKUP_DIR . 'test_encryption_' . uniqid() . '.txt';
+            $test_file = bjlg_get_backup_directory() . 'test_encryption_' . uniqid() . '.txt';
             
             file_put_contents($test_file, $test_content);
             
@@ -983,7 +983,7 @@ class BJLG_Encryption {
         }
 
         $file_param = sanitize_text_field($file_param);
-        $base_dir = wp_normalize_path(BJLG_BACKUP_DIR);
+        $base_dir = wp_normalize_path(bjlg_get_backup_directory());
         if (substr($base_dir, -1) !== '/') {
             $base_dir .= '/';
         }
@@ -1164,7 +1164,7 @@ class BJLG_Encryption {
      * Retourne les statistiques de chiffrement
      */
     public function get_encryption_stats() {
-        $backups = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
+        $backups = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
         $encrypted = 0;
         $unencrypted = 0;
         $total_encrypted_size = 0;

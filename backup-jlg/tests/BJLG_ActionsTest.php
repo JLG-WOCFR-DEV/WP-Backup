@@ -61,7 +61,7 @@ final class BJLG_ActionsTest extends TestCase
         $_POST = [];
         $_REQUEST = [];
         $_GET = [];
-        $this->manifestPath = BJLG_BACKUP_DIR . '.incremental-manifest.json';
+        $this->manifestPath = bjlg_get_backup_directory() . '.incremental-manifest.json';
         if (file_exists($this->manifestPath)) {
             @unlink($this->manifestPath);
         }
@@ -121,7 +121,7 @@ final class BJLG_ActionsTest extends TestCase
         $actions = new BJLG\BJLG_Actions();
 
         $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
-        $filepath = BJLG_BACKUP_DIR . $filename;
+        $filepath = bjlg_get_backup_directory() . $filename;
 
         file_put_contents($filepath, 'backup-data');
 
@@ -157,7 +157,7 @@ final class BJLG_ActionsTest extends TestCase
         $actions = new BJLG\BJLG_Actions();
 
         $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
-        $filepath = BJLG_BACKUP_DIR . $filename;
+        $filepath = bjlg_get_backup_directory() . $filename;
 
         file_put_contents($filepath, 'prepared-download');
 
@@ -309,7 +309,7 @@ final class BJLG_ActionsTest extends TestCase
         $_POST['filename'] = 'missing-backup.zip';
 
         $GLOBALS['bjlg_test_realpath_mock'] = static function (string $path) {
-            if ($path === BJLG_BACKUP_DIR) {
+            if ($path === bjlg_get_backup_directory()) {
                 return false;
             }
 
@@ -462,7 +462,7 @@ final class BJLG_ActionsTest extends TestCase
         $actions = new BJLG\BJLG_Actions();
 
         $token = 'bjlg-test-token';
-        $filepath = BJLG_BACKUP_DIR . 'token-download-' . uniqid('', true) . '.zip';
+        $filepath = bjlg_get_backup_directory() . 'token-download-' . uniqid('', true) . '.zip';
 
         file_put_contents($filepath, 'data');
 

@@ -58,7 +58,7 @@ class BJLG_Admin_Advanced {
                 'overdue' => false,
             ],
             'storage' => [
-                'directory' => defined('BJLG_BACKUP_DIR') ? BJLG_BACKUP_DIR : '',
+                'directory' => defined('BJLG_BACKUP_DIR') ? bjlg_get_backup_directory() : '',
                 'total_size_bytes' => 0,
                 'total_size_human' => size_format(0),
                 'backup_count' => 0,

@@ -286,11 +286,11 @@ class BJLG_Admin_Fallbacks {
             return new WP_Error('bjlg_restore_upload_invalid_type', __('Type de fichier de sauvegarde non autorisé.', 'backup-jlg'));
         }
 
-        if (!wp_mkdir_p(BJLG_BACKUP_DIR)) {
+        if (!wp_mkdir_p(bjlg_get_backup_directory())) {
             return new WP_Error('bjlg_restore_upload_unwritable', __('Répertoire de sauvegarde inaccessible.', 'backup-jlg'));
         }
 
-        $is_writable = function_exists('wp_is_writable') ? wp_is_writable(BJLG_BACKUP_DIR) : is_writable(BJLG_BACKUP_DIR);
+        $is_writable = function_exists('wp_is_writable') ? wp_is_writable(bjlg_get_backup_directory()) : is_writable(bjlg_get_backup_directory());
         if (!$is_writable) {
             return new WP_Error('bjlg_restore_upload_readonly', __('Le répertoire de sauvegarde n\'est pas accessible en écriture.', 'backup-jlg'));
         }
@@ -333,7 +333,7 @@ class BJLG_Admin_Fallbacks {
             return new WP_Error('bjlg_restore_upload_missing_file', __('Le fichier téléversé est introuvable après traitement.', 'backup-jlg'));
         }
 
-        $destination = BJLG_BACKUP_DIR . 'restore_' . uniqid('', true) . '_' . $sanitized_filename;
+        $destination = bjlg_get_backup_directory() . 'restore_' . uniqid('', true) . '_' . $sanitized_filename;
         $moved = @rename($handled_upload['file'], $destination);
 
         if (!$moved) {

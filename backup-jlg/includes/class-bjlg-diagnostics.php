@@ -32,7 +32,7 @@ class BJLG_Diagnostics {
             BJLG_Debug::log("Début de la génération du pack de support.");
 
             // Vérification des prérequis
-            if (!is_writable(BJLG_BACKUP_DIR)) {
+            if (!is_writable(bjlg_get_backup_directory())) {
                 throw new Exception("Le dossier de sauvegarde n'est pas accessible en écriture.");
             }
             if (!class_exists('ZipArchive')) {
@@ -40,7 +40,7 @@ class BJLG_Diagnostics {
             }
 
             $zip_filename = 'support-package-' . date('Y-m-d-H-i-s') . '.zip';
-            $zip_filepath = BJLG_BACKUP_DIR . $zip_filename;
+            $zip_filepath = bjlg_get_backup_directory() . $zip_filename;
             
             $zip = new ZipArchive();
             if ($zip->open($zip_filepath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== TRUE) {
@@ -337,7 +337,7 @@ private function get_php_info() {
     }
     
     private function test_file_permissions() {
-        $writable = is_writable(BJLG_BACKUP_DIR);
+        $writable = is_writable(bjlg_get_backup_directory());
         return [
             'status' => $writable ? 'success' : 'error',
             'message' => $writable ? 'Permissions OK' : 'Dossier non accessible en écriture'
@@ -345,7 +345,7 @@ private function get_php_info() {
     }
     
     private function test_backup_creation() {
-        $test_file = BJLG_BACKUP_DIR . 'test-' . time() . '.txt';
+        $test_file = bjlg_get_backup_directory() . 'test-' . time() . '.txt';
         $created = file_put_contents($test_file, 'test');
         if ($created) {
             unlink($test_file);
@@ -405,7 +405,7 @@ private function get_php_info() {
     private function get_plugin_array() {
         return [
             'version' => BJLG_VERSION,
-            'directory' => BJLG_BACKUP_DIR
+            'directory' => bjlg_get_backup_directory()
         ];
     }
 }

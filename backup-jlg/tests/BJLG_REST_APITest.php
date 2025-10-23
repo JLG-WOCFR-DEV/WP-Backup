@@ -112,7 +112,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
             return [
                 'filename' => 'test-pre-restore-' . $this->pre_backup_calls . '.zip',
-                'filepath' => BJLG_BACKUP_DIR . 'test-pre-restore-' . $this->pre_backup_calls . '.zip',
+                'filepath' => bjlg_get_backup_directory() . 'test-pre-restore-' . $this->pre_backup_calls . '.zip',
             ];
         }
     }
@@ -197,8 +197,8 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $lock_property->setAccessible(true);
             $lock_property->setValue(null, null);
 
-            if (!is_dir(BJLG_BACKUP_DIR)) {
-                mkdir(BJLG_BACKUP_DIR, 0777, true);
+            if (!is_dir(bjlg_get_backup_directory())) {
+                mkdir(bjlg_get_backup_directory(), 0777, true);
             }
 
             add_action('bjlg_history_logged', static function ($action, $status, $message, $user_id) {
@@ -245,7 +245,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
          */
         private function createBackupWithComponents(array $components): string
         {
-            $filename = BJLG_BACKUP_DIR . 'bjlg-test-' . uniqid('', true) . '.zip';
+            $filename = bjlg_get_backup_directory() . 'bjlg-test-' . uniqid('', true) . '.zip';
 
             $zip = new \ZipArchive();
             $openResult = $zip->open($filename, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
@@ -436,7 +436,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $files = [];
 
             for ($i = 0; $i < 2; $i++) {
-                $filename = BJLG_BACKUP_DIR . 'bjlg-test-' . uniqid('', true) . '.zip';
+                $filename = bjlg_get_backup_directory() . 'bjlg-test-' . uniqid('', true) . '.zip';
                 file_put_contents($filename, 'backup');
                 touch($filename, time() - $i);
                 $files[] = $filename;
@@ -1323,7 +1323,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $target = __DIR__ . '/../bjlg-outside-' . uniqid('', true) . '.zip';
         $symlinkName = 'bjlg-test-symlink-' . uniqid('', true) . '.zip';
-        $symlinkPath = BJLG_BACKUP_DIR . $symlinkName;
+        $symlinkPath = bjlg_get_backup_directory() . $symlinkName;
 
         file_put_contents($target, 'outside');
 
@@ -1380,7 +1380,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $api = new BJLG\BJLG_REST_API();
 
         $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
-        $filepath = BJLG_BACKUP_DIR . $filename;
+        $filepath = bjlg_get_backup_directory() . $filename;
 
         file_put_contents($filepath, 'backup-data');
 
@@ -1524,7 +1524,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $api = new BJLG\BJLG_REST_API();
 
-        $filepath = BJLG_BACKUP_DIR . uniqid('', true) . '.zip';
+        $filepath = bjlg_get_backup_directory() . uniqid('', true) . '.zip';
         $filename = basename($filepath);
 
         $handle = fopen($filepath, 'wb');
@@ -1629,7 +1629,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $api = new BJLG\BJLG_REST_API();
 
-        $filepath = BJLG_BACKUP_DIR . uniqid('', true) . '.zip';
+        $filepath = bjlg_get_backup_directory() . uniqid('', true) . '.zip';
         $filename = basename($filepath);
 
         $bytes_written = file_put_contents($filepath, 'backup-data');
@@ -1692,7 +1692,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $api = new BJLG\BJLG_REST_API();
 
         $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
-        $filepath = BJLG_BACKUP_DIR . $filename;
+        $filepath = bjlg_get_backup_directory() . $filename;
 
         file_put_contents($filepath, 'backup-data');
 
@@ -1749,7 +1749,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $api = new BJLG\BJLG_REST_API();
 
         $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
-        $filepath = BJLG_BACKUP_DIR . $filename;
+        $filepath = bjlg_get_backup_directory() . $filename;
 
         file_put_contents($filepath, 'backup-data');
 
@@ -1811,7 +1811,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $api = new BJLG\BJLG_REST_API();
 
         $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
-        $filepath = BJLG_BACKUP_DIR . $filename;
+        $filepath = bjlg_get_backup_directory() . $filename;
 
         file_put_contents($filepath, 'backup-data');
 
@@ -2139,7 +2139,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $api = new BJLG\BJLG_REST_API();
 
         $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
-        $filepath = BJLG_BACKUP_DIR . $filename;
+        $filepath = bjlg_get_backup_directory() . $filename;
 
         file_put_contents($filepath, 'backup-data');
 
@@ -2183,8 +2183,8 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $api = new BJLG\BJLG_REST_API();
 
         $filename = 'bjlg-test-backup-' . uniqid('', true) . '.zip';
-        $filepath = BJLG_BACKUP_DIR . $filename;
-        $other_file = BJLG_BACKUP_DIR . 'bjlg-test-backup-' . uniqid('', true) . '.zip';
+        $filepath = bjlg_get_backup_directory() . $filename;
+        $other_file = bjlg_get_backup_directory() . 'bjlg-test-backup-' . uniqid('', true) . '.zip';
 
         file_put_contents($filepath, 'primary-backup');
         file_put_contents($other_file, 'other-backup');
@@ -2260,7 +2260,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $api = new BJLG\BJLG_REST_API();
 
-        $archive_path = BJLG_BACKUP_DIR . 'bjlg-rest-restore-' . uniqid('', true) . '.zip';
+        $archive_path = bjlg_get_backup_directory() . 'bjlg-rest-restore-' . uniqid('', true) . '.zip';
 
         $zip = new \ZipArchive();
         $open_result = $zip->open($archive_path, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
@@ -2350,7 +2350,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $api = new BJLG\BJLG_REST_API();
 
-        $archive_path = BJLG_BACKUP_DIR . 'bjlg-rest-restore-' . uniqid('', true) . '.zip';
+        $archive_path = bjlg_get_backup_directory() . 'bjlg-rest-restore-' . uniqid('', true) . '.zip';
 
         $zip = new \ZipArchive();
         $open_result = $zip->open($archive_path, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
@@ -2445,7 +2445,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $plugin_file = $plugin_dir . '/deleteme.php';
         file_put_contents($plugin_file, "<?php\n// removable\n");
 
-        $archive_path = BJLG_BACKUP_DIR . 'bjlg-rest-incremental-' . uniqid('', true) . '.zip';
+        $archive_path = bjlg_get_backup_directory() . 'bjlg-rest-incremental-' . uniqid('', true) . '.zip';
         $zip = new \ZipArchive();
         $open_result = $zip->open($archive_path, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
         $this->assertTrue($open_result === true || $open_result === \ZipArchive::ER_OK);
@@ -2512,7 +2512,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $api = new BJLG\BJLG_REST_API();
 
-        $archive_path = BJLG_BACKUP_DIR . 'bjlg-rest-sandbox-' . uniqid('', true) . '.zip';
+        $archive_path = bjlg_get_backup_directory() . 'bjlg-rest-sandbox-' . uniqid('', true) . '.zip';
 
         $zip = new \ZipArchive();
         $open_result = $zip->open($archive_path, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
@@ -2527,7 +2527,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         $zip->addFromString('wp-content/plugins/sample/plugin.php', '<?php echo "sandbox";');
         $zip->close();
 
-        $sandbox_target = BJLG_BACKUP_DIR . 'rest-sandbox-target-' . uniqid('', true);
+        $sandbox_target = bjlg_get_backup_directory() . 'rest-sandbox-target-' . uniqid('', true);
 
         $request = new class($archive_path, $sandbox_target) {
             /** @var array<string, mixed> */
@@ -3274,7 +3274,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
     {
         $api = new BJLG\BJLG_REST_API();
 
-        $original_directory = rtrim(BJLG_BACKUP_DIR, '/\\');
+        $original_directory = rtrim(bjlg_get_backup_directory(), '/\\');
         $temporary_directory = $original_directory . '-missing-' . uniqid('', true);
 
         if (!is_dir($original_directory)) {
@@ -3463,7 +3463,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $api = new BJLG\BJLG_REST_API();
 
-        $tempFile = tempnam(BJLG_BACKUP_DIR, 'bjlg-test-backup-');
+        $tempFile = tempnam(bjlg_get_backup_directory(), 'bjlg-test-backup-');
         file_put_contents($tempFile, 'backup-content');
 
         $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
@@ -3488,7 +3488,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $api = new BJLG\BJLG_REST_API();
 
-        $tempFile = tempnam(BJLG_BACKUP_DIR, 'bjlg-test-backup-');
+        $tempFile = tempnam(bjlg_get_backup_directory(), 'bjlg-test-backup-');
         file_put_contents($tempFile, 'backup-content');
 
         $reflection = new ReflectionClass(BJLG\BJLG_REST_API::class);
@@ -3526,7 +3526,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $api = new BJLG\BJLG_REST_API();
 
-        $tempFile = tempnam(BJLG_BACKUP_DIR, 'bjlg-test-backup-');
+        $tempFile = tempnam(bjlg_get_backup_directory(), 'bjlg-test-backup-');
         file_put_contents($tempFile, 'backup-content');
 
         $GLOBALS['bjlg_test_filesize_callback'] = function (string $path) use ($tempFile) {
@@ -3571,7 +3571,7 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $api = new BJLG\BJLG_REST_API();
 
-        $tempFile = tempnam(BJLG_BACKUP_DIR, 'bjlg-test-backup-');
+        $tempFile = tempnam(bjlg_get_backup_directory(), 'bjlg-test-backup-');
         file_put_contents($tempFile, 'backup-content');
 
         $GLOBALS['bjlg_test_filesize_callback'] = function (string $path) use ($tempFile) {

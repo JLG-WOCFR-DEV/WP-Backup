@@ -146,7 +146,7 @@ final class BJLG_ActionsDownloadTest extends TestCase
         $actions = new \BJLG\BJLG_Actions();
 
         $filename = 'bjlg-test-download-' . uniqid('', true) . '.zip';
-        $filepath = BJLG_BACKUP_DIR . $filename;
+        $filepath = bjlg_get_backup_directory() . $filename;
         file_put_contents($filepath, 'backup');
 
         $realpath = realpath($filepath);
