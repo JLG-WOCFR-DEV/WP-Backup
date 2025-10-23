@@ -214,6 +214,13 @@ class BJLG_Remote_Storage_Metrics {
             'errors' => [],
             'refreshed_at' => $now,
             'latency_ms' => null,
+            'normalized_payload' => [
+                'type' => 'remote',
+                'destination_id' => $destination_id,
+                'ratio' => null,
+                'quota_bytes' => null,
+                'free_bytes' => null,
+            ],
         ];
 
         if (!$entry['connected']) {
@@ -258,29 +265,46 @@ class BJLG_Remote_Storage_Metrics {
             $entry['free_human'] = size_format((int) $entry['free_bytes']);
         }
 
-        if (!method_exists($destination, 'list_remote_backups')) {
-            return $entry;
-        }
+        if (method_exists($destination, 'list_remote_backups')) {
+            try {
+                $backups = $destination->list_remote_backups();
+            } catch (\Throwable $exception) {
+                $entry['errors'][] = $exception->getMessage();
+                $backups = [];
+            }
 
-        try {
-            $backups = $destination->list_remote_backups();
-        } catch (\Throwable $exception) {
-            $entry['errors'][] = $exception->getMessage();
-            $backups = [];
-        }
+            if (is_array($backups)) {
+                $entry['backups_count'] = count($backups);
 
-        if (is_array($backups)) {
-            $entry['backups_count'] = count($backups);
-
-            if ($entry['used_bytes'] === null) {
-                $total = 0;
-                foreach ($backups as $backup) {
-                    $total += isset($backup['size']) ? (int) $backup['size'] : 0;
+                if ($entry['used_bytes'] === null) {
+                    $total = 0;
+                    foreach ($backups as $backup) {
+                        $total += isset($backup['size']) ? (int) $backup['size'] : 0;
+                    }
+                    $entry['used_bytes'] = $total;
+                    $entry['used_human'] = size_format($total);
                 }
-                $entry['used_bytes'] = $total;
-                $entry['used_human'] = size_format($total);
             }
         }
+
+        $quota_bytes = $entry['quota_bytes'];
+        $free_bytes = $entry['free_bytes'];
+        if ($quota_bytes !== null) {
+            $quota_bytes = (int) $quota_bytes;
+        }
+        if ($free_bytes !== null) {
+            $free_bytes = (int) $free_bytes;
+        }
+
+        $ratio = null;
+        if ($entry['quota_bytes'] !== null && $entry['quota_bytes'] > 0 && $entry['used_bytes'] !== null) {
+            $ratio = max(0.0, min(1.0, (int) $entry['used_bytes'] / max(1, (int) $entry['quota_bytes'])));
+        }
+
+        $entry['utilization_ratio'] = $ratio;
+        $entry['normalized_payload']['ratio'] = $ratio;
+        $entry['normalized_payload']['quota_bytes'] = $quota_bytes;
+        $entry['normalized_payload']['free_bytes'] = $free_bytes;
 
         return $entry;
     }
