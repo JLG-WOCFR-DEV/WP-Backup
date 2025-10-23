@@ -246,6 +246,8 @@ class BJLG_Remote_Storage_Metrics {
         ];
 
         if (!$entry['connected']) {
+            $entry['quota_samples'] = self::get_quota_sample_for_destination($destination_id);
+
             return $entry;
         }
 
@@ -270,6 +272,20 @@ class BJLG_Remote_Storage_Metrics {
             }
         }
 
+        $entry['quota_samples'] = self::get_quota_sample_for_destination($destination_id);
+
+        if (!empty($entry['quota_samples'])) {
+            if ($entry['used_bytes'] === null && $entry['quota_samples']['used_bytes'] !== null) {
+                $entry['used_bytes'] = $entry['quota_samples']['used_bytes'];
+            }
+            if ($entry['quota_bytes'] === null && $entry['quota_samples']['quota_bytes'] !== null) {
+                $entry['quota_bytes'] = $entry['quota_samples']['quota_bytes'];
+            }
+            if ($entry['free_bytes'] === null && $entry['quota_samples']['free_bytes'] !== null) {
+                $entry['free_bytes'] = $entry['quota_samples']['free_bytes'];
+            }
+        }
+
         if ($entry['used_bytes'] !== null) {
             $entry['used_human'] = size_format((int) $entry['used_bytes']);
         }
@@ -287,27 +303,25 @@ class BJLG_Remote_Storage_Metrics {
             $entry['free_human'] = size_format((int) $entry['free_bytes']);
         }
 
-        if (!method_exists($destination, 'list_remote_backups')) {
-            return $entry;
-        }
+        if (method_exists($destination, 'list_remote_backups')) {
+            try {
+                $backups = $destination->list_remote_backups();
+            } catch (\Throwable $exception) {
+                $entry['errors'][] = $exception->getMessage();
+                $backups = [];
+            }
 
-        try {
-            $backups = $destination->list_remote_backups();
-        } catch (\Throwable $exception) {
-            $entry['errors'][] = $exception->getMessage();
-            $backups = [];
-        }
+            if (is_array($backups)) {
+                $entry['backups_count'] = count($backups);
 
-        if (is_array($backups)) {
-            $entry['backups_count'] = count($backups);
-
-            if ($entry['used_bytes'] === null) {
-                $total = 0;
-                foreach ($backups as $backup) {
-                    $total += isset($backup['size']) ? (int) $backup['size'] : 0;
+                if ($entry['used_bytes'] === null) {
+                    $total = 0;
+                    foreach ($backups as $backup) {
+                        $total += isset($backup['size']) ? (int) $backup['size'] : 0;
+                    }
+                    $entry['used_bytes'] = $total;
+                    $entry['used_human'] = size_format($total);
                 }
-                $entry['used_bytes'] = $total;
-                $entry['used_human'] = size_format($total);
             }
         }
 

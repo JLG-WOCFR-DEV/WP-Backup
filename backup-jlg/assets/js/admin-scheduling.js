@@ -3,6 +3,26 @@ jQuery(function($) {
 
 // --- GESTIONNAIRE DE PLANIFICATION ---
 (function setupScheduleManager() {
+    const wpI18n = window.wp && window.wp.i18n ? window.wp.i18n : null;
+    const __ = wpI18n && typeof wpI18n.__ === 'function' ? wpI18n.__ : function(text) { return text; };
+
+    function debounce(fn, wait) {
+        let timer = null;
+        const delay = typeof wait === 'number' && wait >= 0 ? wait : 200;
+
+        return function debounced() {
+            const context = this;
+            const args = arguments;
+            if (timer) {
+                clearTimeout(timer);
+            }
+            timer = setTimeout(function() {
+                timer = null;
+                fn.apply(context, args);
+            }, delay);
+        };
+    }
+
     const $scheduleForm = $('#bjlg-schedule-form');
     if (!$scheduleForm.length || typeof bjlg_ajax !== 'object') {
         return;
@@ -34,7 +54,7 @@ jQuery(function($) {
         { expression: '0 22 * * sun', label: 'Dimanche 22:00', description: 'Chaque dimanche soir' }
     ];
 
-    const cronScenarios = [
+    const defaultCronScenarios = [
         {
             id: 'pre_deploy',
             label: 'Snapshot pré-déploiement',
@@ -75,6 +95,57 @@ jQuery(function($) {
             }
         }
     ];
+
+    const schedulingData = typeof window !== 'undefined' && window.bjlgSchedulingData && typeof window.bjlgSchedulingData === 'object'
+        ? window.bjlgSchedulingData
+        : {};
+    const schedulingAssistant = schedulingData.cron_assistant && typeof schedulingData.cron_assistant === 'object'
+        ? schedulingData.cron_assistant
+        : {};
+
+    function mergeCronExamples(overrides, defaults) {
+        const map = new Map();
+        (Array.isArray(overrides) ? overrides : []).forEach(function(entry) {
+            if (!entry || typeof entry !== 'object') {
+                return;
+            }
+            const expression = (entry.expression || '').toString();
+            if (!expression) {
+                return;
+            }
+            map.set(expression, entry);
+        });
+        (Array.isArray(defaults) ? defaults : []).forEach(function(entry) {
+            if (!entry || typeof entry !== 'object') {
+                return;
+            }
+            const expression = (entry.expression || '').toString();
+            if (!expression || map.has(expression)) {
+                return;
+            }
+            map.set(expression, entry);
+        });
+        return Array.from(map.values());
+    }
+
+    function mergeCronScenarios(overrides, defaults) {
+        const map = new Map();
+        const pushScenario = function(entry) {
+            if (!entry || typeof entry !== 'object') {
+                return;
+            }
+            const key = (entry.id || entry.expression || entry.label || '').toString() || ('scenario_' + map.size);
+            if (map.has(key)) {
+                return;
+            }
+            map.set(key, entry);
+        };
+
+        (Array.isArray(overrides) ? overrides : []).forEach(pushScenario);
+        (Array.isArray(defaults) ? defaults : []).forEach(pushScenario);
+
+        return Array.from(map.values());
+    }
 
     const cronMonthTokens = [
         { value: 'jan', label: 'Janvier (jan)' },
@@ -342,8 +413,36 @@ jQuery(function($) {
     const cronAssistant = typeof bjlg_ajax.cron_assistant === 'object' && bjlg_ajax.cron_assistant
         ? bjlg_ajax.cron_assistant
         : {};
-    const cronExamples = Array.isArray(cronAssistant.examples) ? cronAssistant.examples : [];
-    const cronLabels = cronAssistant.labels && typeof cronAssistant.labels === 'object' ? cronAssistant.labels : {};
+    const assistantExamples = Array.isArray(cronAssistant.examples) ? cronAssistant.examples : [];
+    const schedulingExamples = Array.isArray(schedulingAssistant.examples) ? schedulingAssistant.examples : [];
+    const cronExamples = mergeCronExamples(schedulingExamples, assistantExamples);
+    const cronLabels = $.extend({},
+        cronAssistant.labels && typeof cronAssistant.labels === 'object' ? cronAssistant.labels : {},
+        schedulingAssistant.labels && typeof schedulingAssistant.labels === 'object' ? schedulingAssistant.labels : {}
+    );
+    const cronScenarios = mergeCronScenarios(schedulingAssistant.scenarios, defaultCronScenarios);
+    const cronRiskThresholds = schedulingAssistant.risk_thresholds && typeof schedulingAssistant.risk_thresholds === 'object'
+        ? schedulingAssistant.risk_thresholds
+        : {};
+    const riskLevelLabels = {
+        low: cronLabels.risk_low || 'Risque faible',
+        medium: cronLabels.risk_medium || 'Risque modéré',
+        high: cronLabels.risk_high || 'Risque élevé',
+        unknown: cronLabels.risk_unknown || 'Risque indéterminé'
+    };
+    const suggestionsTitle = cronLabels.suggestions_title || 'Suggestions recommandées';
+    const suggestionsEmptyLabel = cronLabels.suggestions_empty || 'Sélectionnez des composants pour obtenir des suggestions.';
+    const suggestionsMissingTemplate = cronLabels.suggestions_missing || 'Ajoute %s';
+    const cronScenarioMap = new Map();
+    cronScenarios.forEach(function(entry) {
+        if (!entry || typeof entry !== 'object') {
+            return;
+        }
+        const key = (entry.id || entry.expression || entry.label || '').toString();
+        if (key) {
+            cronScenarioMap.set(key, entry);
+        }
+    });
     const cronPreviewCache = new Map();
     let cronPreviewTimer = null;
     let cronPreviewRequest = null;
@@ -1432,6 +1531,35 @@ jQuery(function($) {
         });
     }
 
+    function markRecommendedScenario(helper, scenarioId) {
+        if (!helper || !helper.scenarios || !helper.scenarios.length) {
+            return;
+        }
+
+        const suffix = ' ' + __('(recommandé)', 'backup-jlg');
+
+        helper.scenarios.find('[data-cron-scenario]').each(function() {
+            const $button = $(this);
+            const identifier = ($button.attr('data-cron-scenario') || '').toString();
+            const isMatch = scenarioId && identifier === scenarioId;
+            const $title = $button.find('.bjlg-cron-scenario__title');
+            if ($title.length && typeof $title.data('original-text') === 'undefined') {
+                $title.data('original-text', $title.text());
+            }
+            const baseText = $title.length ? ($title.data('original-text') || $title.text()) : '';
+
+            $button.toggleClass('is-recommended', !!isMatch);
+
+            if ($title.length) {
+                if (isMatch) {
+                    $title.text(baseText + suffix);
+                } else {
+                    $title.text(baseText);
+                }
+            }
+        });
+    }
+
     function applyCronScenario($item, scenario) {
         if (!$item || !scenario || typeof scenario !== 'object') {
             return;
@@ -1707,6 +1835,10 @@ jQuery(function($) {
             tokens: $assistant.find('[data-cron-tokens]'),
             guidance: $assistant.find('[data-cron-guidance]'),
             scenarios: $assistant.find('[data-cron-scenarios]'),
+            suggestionsTitle: $assistant.find('[data-cron-suggestions-title]'),
+            suggestionsPanel: $assistant.find('[data-cron-suggestions]'),
+            suggestionsList: $assistant.find('[data-cron-suggestions-list]'),
+            suggestionsEmpty: $assistant.find('[data-cron-suggestions-empty]'),
             history: $assistant.find('[data-cron-history]'),
             historyList: $assistant.find('[data-cron-history-list]'),
             historyEmpty: $assistant.find('[data-cron-history-empty]'),
@@ -1716,6 +1848,9 @@ jQuery(function($) {
             list: $assistant.find('[data-cron-preview-list]'),
             status: $assistant.find('[data-cron-status]'),
             empty: $assistant.find('[data-cron-empty]'),
+            risk: $assistant.find('[data-cron-risk]'),
+            riskLabel: $assistant.find('[data-cron-risk-label]'),
+            riskMessage: $assistant.find('[data-cron-risk-message]'),
         };
     }
 
@@ -1775,6 +1910,259 @@ jQuery(function($) {
             helper.historyClear.prop('disabled', false);
         }
         helper.history.show();
+    }
+
+    function collectSelectedComponents($item) {
+        if (!$item || !$item.length) {
+            return [];
+        }
+        const values = [];
+        $item.find('[data-field="components"]:checked').each(function() {
+            const value = ($(this).val() || '').toString();
+            if (value && values.indexOf(value) === -1) {
+                values.push(value);
+            }
+        });
+        return values;
+    }
+
+    function formatComponentLabel(component) {
+        const info = componentLabels[component];
+        return info && info.label ? info.label : component;
+    }
+
+    function buildScenarioSuggestionsForComponents(components) {
+        const normalized = Array.isArray(components)
+            ? components.map(function(entry) { return entry.toString(); })
+            : [];
+
+        if (!normalized.length || !Array.isArray(cronScenarios) || !cronScenarios.length) {
+            return [];
+        }
+
+        const selectedSet = new Set(normalized);
+        const suggestions = [];
+
+        cronScenarios.forEach(function(scenario) {
+            if (!scenario || typeof scenario !== 'object') {
+                return;
+            }
+            const adjustments = scenario.adjustments && typeof scenario.adjustments === 'object'
+                ? scenario.adjustments
+                : {};
+            const rawComponents = Array.isArray(adjustments.components)
+                ? adjustments.components
+                : [];
+            if (!rawComponents.length) {
+                return;
+            }
+
+            const scenarioComponents = rawComponents.map(function(entry) { return entry.toString(); });
+            const desiredSet = new Set(scenarioComponents);
+            let matchCount = 0;
+            const missing = [];
+
+            desiredSet.forEach(function(component) {
+                if (selectedSet.has(component)) {
+                    matchCount += 1;
+                } else {
+                    missing.push(component);
+                }
+            });
+
+            if (matchCount === 0) {
+                return;
+            }
+
+            const coverage = matchCount / desiredSet.size;
+            const extraCount = normalized.filter(function(component) { return !desiredSet.has(component); }).length;
+            const score = (coverage * scenarioComponents.length) - (extraCount * 0.1);
+
+            suggestions.push({
+                scenario: scenario,
+                score: score,
+                coverage: coverage,
+                missing: missing
+            });
+        });
+
+        suggestions.sort(function(a, b) {
+            if (b.score !== a.score) {
+                return b.score - a.score;
+            }
+            const labelA = (a.scenario.label || a.scenario.expression || '').toString();
+            const labelB = (b.scenario.label || b.scenario.expression || '').toString();
+            return labelA.localeCompare(labelB);
+        });
+
+        return suggestions.slice(0, 3);
+    }
+
+    function formatDurationLabel(seconds) {
+        const total = Number(seconds);
+        if (!Number.isFinite(total) || total <= 0) {
+            return '0 s';
+        }
+        if (total < 60) {
+            return Math.round(total) + ' s';
+        }
+        const minutes = Math.floor(total / 60);
+        const remainingSeconds = Math.round(total % 60);
+        if (minutes < 60) {
+            return remainingSeconds > 0
+                ? minutes + ' min ' + remainingSeconds + ' s'
+                : minutes + ' min';
+        }
+        const hours = Math.floor(minutes / 60);
+        const remainingMinutes = minutes % 60;
+        let label = hours + ' h';
+        if (remainingMinutes > 0) {
+            label += ' ' + remainingMinutes + ' min';
+        }
+        return label;
+    }
+
+    function updateCronRiskDisplay(helper, impact) {
+        if (!helper || !helper.risk || !helper.risk.length) {
+            return;
+        }
+
+        const $container = helper.risk;
+        const $label = helper.riskLabel;
+        const $message = helper.riskMessage;
+
+        if (!impact || !impact.risk || !impact.risk.level) {
+            if ($message && $message.length) {
+                $message.text('');
+            }
+            if ($label && $label.length) {
+                $label.text('').removeClass('is-low is-medium is-high is-unknown');
+            }
+            $container.attr('hidden', 'hidden').hide();
+            return;
+        }
+
+        const level = (impact.risk.level || '').toString();
+        const labelText = riskLevelLabels[level] || riskLevelLabels.unknown;
+
+        if ($label && $label.length) {
+            $label.text(labelText)
+                .removeClass('is-low is-medium is-high is-unknown')
+                .addClass('is-' + (level || 'unknown'));
+        }
+
+        const details = [];
+        if (typeof impact.runs_per_day === 'number' && impact.runs_per_day > 0) {
+            details.push(impact.runs_per_day + ' exécutions / 24h');
+        }
+        if (typeof impact.average_duration === 'number' && impact.average_duration > 0) {
+            details.push('durée moyenne ' + formatDurationLabel(impact.average_duration));
+        }
+        if (impact.risk && Array.isArray(impact.risk.reasons)) {
+            impact.risk.reasons.forEach(function(reason) {
+                if (typeof reason === 'string') {
+                    const trimmed = reason.trim();
+                    if (trimmed) {
+                        details.push(trimmed);
+                    }
+                }
+            });
+        }
+
+        if ($message && $message.length) {
+            $message.text(details.length ? details.join(' · ') : '');
+        }
+
+        $container.removeAttr('hidden').show();
+    }
+
+    function renderCronSuggestions($item) {
+        const helper = getCronAssistantHelper($item);
+        if (!helper || !helper.suggestionsPanel || !helper.suggestionsPanel.length) {
+            return;
+        }
+
+        if (helper.suggestionsTitle && helper.suggestionsTitle.length) {
+            helper.suggestionsTitle.text(suggestionsTitle);
+        }
+
+        const $panel = helper.suggestionsPanel;
+        const $list = helper.suggestionsList;
+        const $empty = helper.suggestionsEmpty;
+
+        if (!$list || !$list.length) {
+            return;
+        }
+
+        const components = collectSelectedComponents($item);
+        const suggestions = buildScenarioSuggestionsForComponents(components);
+
+        $list.empty();
+
+        if (!suggestions.length) {
+            if ($empty && $empty.length) {
+                $empty.text(suggestionsEmptyLabel).removeAttr('hidden').show();
+            }
+            $panel.attr('hidden', 'hidden').hide();
+            return;
+        }
+
+        if ($empty && $empty.length) {
+            $empty.attr('hidden', 'hidden').hide();
+        }
+
+        suggestions.forEach(function(entry) {
+            const scenario = entry.scenario;
+            const key = (scenario.id || scenario.expression || scenario.label || '').toString();
+            const label = (scenario.label || scenario.expression || key).toString();
+            const $button = $('<button/>', {
+                type: 'button',
+                class: 'bjlg-cron-suggestion',
+                'data-cron-suggestion': key || label,
+            });
+            $('<span/>', { class: 'bjlg-cron-suggestion__title', text: label }).appendTo($button);
+            const descriptionParts = [];
+            if (scenario.description) {
+                descriptionParts.push(scenario.description.toString());
+            }
+            if (entry.missing && entry.missing.length) {
+                const missingLabel = entry.missing.map(formatComponentLabel).join(', ');
+                descriptionParts.push(suggestionsMissingTemplate.replace('%s', missingLabel));
+            }
+            if (descriptionParts.length) {
+                $('<span/>', { class: 'bjlg-cron-suggestion__description', text: descriptionParts.join(' • ') }).appendTo($button);
+            }
+            $button.data('cronScenario', scenario);
+            $list.append($button);
+        });
+
+        if (!$list.data('listeners')) {
+            $list.on('click', '[data-cron-suggestion]', function(event) {
+                event.preventDefault();
+                const $button = $(this);
+                const scenarioData = $button.data('cronScenario');
+                const key = ($button.attr('data-cron-suggestion') || '').toString();
+                const scenario = scenarioData || cronScenarioMap.get(key);
+                if (scenario) {
+                    applyCronScenario($item, scenario);
+                }
+            });
+            $list.data('listeners', '1');
+        }
+
+        $panel.removeAttr('hidden').show();
+    }
+
+    function refreshCronInsights($item, impact) {
+        ensureCronAssistant($item);
+        renderCronSuggestions($item);
+        const helper = getCronAssistantHelper($item);
+        if (!helper) {
+            return;
+        }
+        const storedImpact = $item && typeof $item.data === 'function' ? $item.data('cronImpact') : null;
+        const resolvedImpact = typeof impact !== 'undefined' ? impact : storedImpact;
+        updateCronRiskDisplay(helper, resolvedImpact || null);
     }
 
     function initializeCronHistory(helper, $item) {
@@ -1863,7 +2251,21 @@ jQuery(function($) {
 
         buildCronTokenPanel(helper.tokens, $item);
         buildCronScenarioPanel(helper.scenarios, $item);
+        const suggestedScenario = ($item.data('bjlgSuggestedScenario') || '').toString();
+        if (suggestedScenario) {
+            markRecommendedScenario(helper, suggestedScenario);
+        }
         initializeCronHistory(helper, $item);
+
+        if (helper.suggestionsTitle && helper.suggestionsTitle.length && !helper.suggestionsTitle.data('initialized')) {
+            helper.suggestionsTitle.text(suggestionsTitle);
+            helper.suggestionsTitle.data('initialized', '1');
+        }
+
+        if (helper.suggestionsEmpty && helper.suggestionsEmpty.length && typeof helper.suggestionsEmpty.data('default') === 'undefined') {
+            helper.suggestionsEmpty.text(suggestionsEmptyLabel);
+            helper.suggestionsEmpty.data('default', suggestionsEmptyLabel);
+        }
 
         return helper;
     }
@@ -1881,10 +2283,17 @@ jQuery(function($) {
         const $empty = helper.empty;
 
         const expression = payload && payload.expression ? payload.expression : '';
+        const impactData = payload && payload.impact ? payload.impact : null;
+
+        if ($item && typeof $item.data === 'function') {
+            $item.data('cronImpact', impactData);
+        }
+
         if ($input.length) {
             updateCronAssistantContext($input);
         }
         const localSeverity = renderCronLocalWarnings($item, expression);
+        updateCronRiskDisplay(helper, impactData);
 
         if (!payload || !payload.expression) {
             if ($preview.length) {
@@ -2710,6 +3119,326 @@ jQuery(function($) {
         ];
     }
 
+    const recommendationState = typeof WeakMap === 'function' ? new WeakMap() : null;
+    const recommendationBadgeClasses = {
+        success: 'bjlg-badge-bg-emerald',
+        warning: 'bjlg-badge-bg-amber',
+        danger: 'bjlg-badge-bg-rose',
+        info: 'bjlg-badge-bg-sky',
+        neutral: 'bjlg-badge-bg-slate'
+    };
+
+    function summarizeForecastForDisplay(forecast) {
+        const summary = { badges: [], tips: [], loadLevel: 'low', scenario: null };
+        if (!forecast || typeof forecast !== 'object') {
+            return summary;
+        }
+
+        const estimated = forecast.estimated_load || {};
+        const loadLevel = (estimated.load_level || 'low').toString();
+        summary.loadLevel = loadLevel;
+
+        const peak = Number(estimated.peak_concurrent || 0);
+        const totalSeconds = Number(estimated.total_seconds || 0);
+        const density = Number(estimated.density_percent || 0);
+
+        const durationLabel = totalSeconds >= 3600
+            ? (Number(estimated.total_hours || 0).toFixed(1) + 'h')
+            : Math.max(1, Math.round(totalSeconds / 60)) + ' min';
+
+        const loadLabels = {
+            low: __('Charge faible', 'backup-jlg'),
+            medium: __('Charge modérée', 'backup-jlg'),
+            high: __('Charge élevée', 'backup-jlg')
+        };
+        const loadVariants = { low: 'success', medium: 'warning', high: 'danger' };
+
+        summary.badges.push({
+            text: loadLabels[loadLevel] || __('Charge', 'backup-jlg'),
+            variant: loadVariants[loadLevel] || 'info',
+            meta: peak > 1
+                ? __('Pics simultanés : ', 'backup-jlg') + peak
+                : __('Durée totale : ', 'backup-jlg') + durationLabel
+        });
+
+        if (Array.isArray(forecast.conflicts) && forecast.conflicts.length) {
+            summary.badges.push({
+                text: __('Conflits détectés', 'backup-jlg'),
+                variant: 'danger',
+                meta: forecast.conflicts.length.toString()
+            });
+        }
+
+        if (density > 0) {
+            summary.badges.push({
+                text: __('Occupation', 'backup-jlg'),
+                variant: density > 70 ? 'warning' : 'info',
+                meta: density + '%'
+            });
+        }
+
+        if (Array.isArray(forecast.advice)) {
+            forecast.advice.forEach(function(entry) {
+                if (!entry || typeof entry !== 'object' || !entry.message) {
+                    return;
+                }
+                summary.tips.push({
+                    text: entry.message,
+                    variant: entry.severity || 'info'
+                });
+            });
+        }
+
+        if (Array.isArray(forecast.ideal_windows) && forecast.ideal_windows.length) {
+            const windowInfo = forecast.ideal_windows[0];
+            if (windowInfo && windowInfo.label) {
+                summary.tips.push({
+                    text: __('Fenêtre libre : ', 'backup-jlg') + windowInfo.label,
+                    variant: 'info'
+                });
+            }
+        }
+
+        if (!summary.tips.length) {
+            summary.tips.push({
+                text: __('Analyse disponible : ajustez vos sauvegardes selon vos objectifs.', 'backup-jlg'),
+                variant: 'info'
+            });
+        }
+
+        if (forecast.suggested_adjustments && typeof forecast.suggested_adjustments === 'object') {
+            summary.scenario = forecast.suggested_adjustments;
+            if (forecast.suggested_adjustments.label) {
+                summary.tips.unshift({
+                    text: __('Scénario suggéré : ', 'backup-jlg') + forecast.suggested_adjustments.label,
+                    variant: 'success'
+                });
+            }
+        }
+
+        return summary;
+    }
+
+    function ensureRecommendationPanel($item) {
+        if (!$item || !$item.length) {
+            return $();
+        }
+        return $item.find('[data-field="recommendations"]');
+    }
+
+    function setRecommendationLoading($panel, isLoading) {
+        if (!$panel || !$panel.length) {
+            return;
+        }
+        const $status = $panel.find('[data-role="recommendation-status"]');
+        if (isLoading) {
+            $panel.attr('data-loading', '1');
+            if ($status.length) {
+                $status.text(__('Analyse en cours…', 'backup-jlg')).show();
+            }
+        } else {
+            $panel.removeAttr('data-loading');
+            if ($status.length) {
+                $status.text('').hide();
+            }
+        }
+    }
+
+    function renderScheduleRecommendations($item, summary) {
+        const $panel = ensureRecommendationPanel($item);
+        if (!$panel.length) {
+            return;
+        }
+        const $badges = $panel.find('[data-role="recommendation-badges"]');
+        const $tips = $panel.find('[data-role="recommendation-tips"]');
+        const $empty = $panel.find('[data-role="recommendation-empty"]');
+
+        if ($badges.length) {
+            $badges.empty();
+        }
+        if ($tips.length) {
+            $tips.empty();
+        }
+
+        const hasBadges = summary && Array.isArray(summary.badges) && summary.badges.length;
+        const hasTips = summary && Array.isArray(summary.tips) && summary.tips.length;
+
+        if (!hasBadges && !hasTips) {
+            if ($empty.length) {
+                $empty.text(__('Modifiez la planification pour obtenir des recommandations.', 'backup-jlg')).show();
+            }
+            return;
+        }
+
+        if ($empty.length) {
+            $empty.hide().text('');
+        }
+
+        if (hasBadges && $badges.length) {
+            summary.badges.forEach(function(badge) {
+                if (!badge || !badge.text) {
+                    return;
+                }
+                const variant = badge.variant || 'neutral';
+                const className = recommendationBadgeClasses[variant] || recommendationBadgeClasses.neutral;
+                const $badge = $('<span/>', {
+                    class: 'bjlg-badge bjlg-schedule-recommendations__badge ' + className,
+                    text: badge.text
+                });
+                if (badge.meta) {
+                    $('<small/>', { text: ' ' + badge.meta }).appendTo($badge);
+                }
+                $badges.append($badge);
+            });
+        }
+
+        if (hasTips && $tips.length) {
+            summary.tips.forEach(function(tip) {
+                if (!tip || !tip.text) {
+                    return;
+                }
+                const variant = tip.variant || 'info';
+                $('<p/>', {
+                    class: 'bjlg-schedule-recommendations__tip bjlg-schedule-recommendations__tip--' + variant,
+                    text: tip.text
+                }).appendTo($tips);
+            });
+        }
+    }
+
+    const triggerRecommendationUpdate = debounce(function(element) {
+        const $item = $(element);
+        requestScheduleRecommendations($item);
+    }, 450);
+
+    function scheduleRecommendationRefresh($item, immediate) {
+        if (!$item || !$item.length || $item.hasClass('bjlg-schedule-item--template')) {
+            return;
+        }
+
+        if (immediate) {
+            requestScheduleRecommendations($item);
+            return;
+        }
+
+        triggerRecommendationUpdate($item[0]);
+    }
+
+    function recommendationKeyFromData(data) {
+        try {
+            return JSON.stringify({
+                id: data.id || '',
+                recurrence: data.recurrence || '',
+                components: Array.isArray(data.components) ? data.components.slice().sort() : [],
+                incremental: !!data.incremental,
+                custom_cron: data.custom_cron || '',
+                time: data.time || '',
+                day: data.day || '',
+            });
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function requestScheduleRecommendations($item) {
+        if (!$item || !$item.length) {
+            return;
+        }
+
+        const $panel = ensureRecommendationPanel($item);
+        if (!$panel.length) {
+            return;
+        }
+
+        const data = collectScheduleData($item, false);
+        const requestKey = recommendationKeyFromData(data);
+        let state = recommendationState && recommendationState.get ? recommendationState.get($item[0]) : null;
+
+        if (state && state.key === requestKey && state.summary) {
+            renderScheduleRecommendations($item, state.summary);
+            applySuggestedScenarioHighlight($item, state.forecast || null);
+            return;
+        }
+
+        setRecommendationLoading($panel, true);
+
+        if (state && state.request && typeof state.request.abort === 'function') {
+            state.request.abort();
+        }
+
+        const payload = {
+            action: 'bjlg_scheduler_recommendations',
+            nonce: bjlg_ajax.nonce,
+            current_schedule: JSON.stringify(data)
+        };
+
+        const jqXHR = $.ajax({
+            url: bjlg_ajax.ajax_url,
+            method: 'POST',
+            dataType: 'json',
+            data: payload
+        }).done(function(response) {
+            if (!response || !response.success || !response.data || !response.data.forecast) {
+                renderScheduleRecommendations($item, null);
+                return;
+            }
+
+            const forecast = response.data.forecast;
+            const summary = summarizeForecastForDisplay(forecast);
+
+            renderScheduleRecommendations($item, summary);
+            applySuggestedScenarioHighlight($item, forecast);
+
+            if (recommendationState && recommendationState.set) {
+                recommendationState.set($item[0], {
+                    key: requestKey,
+                    summary: summary,
+                    forecast: forecast,
+                    request: null
+                });
+            }
+        }).fail(function() {
+            renderScheduleRecommendations($item, {
+                badges: [],
+                tips: [{ text: __('Erreur lors du calcul des recommandations.', 'backup-jlg'), variant: 'danger' }]
+            });
+        }).always(function() {
+            setRecommendationLoading($panel, false);
+        });
+
+        if (recommendationState && recommendationState.set) {
+            recommendationState.set($item[0], {
+                key: requestKey,
+                summary: null,
+                forecast: null,
+                request: jqXHR
+            });
+        }
+    }
+
+    function applySuggestedScenarioHighlight($item, forecast) {
+        if (!$item || !$item.length || !forecast || typeof forecast !== 'object') {
+            return;
+        }
+
+        const adjustments = forecast.suggested_adjustments || null;
+        if (!adjustments || typeof adjustments !== 'object') {
+            return;
+        }
+
+        if (typeof adjustments.scenario_id === 'string') {
+            $item.data('bjlgSuggestedScenario', adjustments.scenario_id);
+        }
+        if (typeof adjustments.label === 'string') {
+            $item.data('bjlgSuggestedLabel', adjustments.label);
+        }
+
+        const helper = ensureCronAssistant($item);
+        if (helper) {
+            markRecommendedScenario(helper, adjustments.scenario_id || '');
+        }
+    }
+
     function collectScheduleData($item, forSummary) {
         const id = ($item.find('[data-field="id"]').val() || '').toString();
         const label = ($item.find('[data-field="label"]').val() || '').toString();
@@ -2855,8 +3584,10 @@ jQuery(function($) {
         initCronAssistant($item);
         toggleScheduleRows($item);
         ensureCronAssistant($item);
+        refreshCronInsights($item);
         updateScheduleSummaryForItem($item);
         updateRunButtonState($item);
+        scheduleRecommendationRefresh($item, true);
     }
 
     function rebuildScheduleItems(schedules, nextRuns) {
@@ -3242,26 +3973,36 @@ jQuery(function($) {
     $scheduleForm.on('change', '.bjlg-schedule-item [data-field="recurrence"]', function() {
         const $item = $(this).closest('.bjlg-schedule-item');
         toggleScheduleRows($item);
+        refreshCronInsights($item);
         updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
+        scheduleRecommendationRefresh($item, false);
     });
 
     $scheduleForm.on('change', '.bjlg-schedule-item [data-field="components"], .bjlg-schedule-item [data-field="encrypt"], .bjlg-schedule-item [data-field="incremental"], .bjlg-schedule-item [data-field="day"], .bjlg-schedule-item [data-field="day_of_month"], .bjlg-schedule-item [data-field="time"], .bjlg-schedule-item [data-field="custom_cron"], .bjlg-schedule-item [data-field="post_checks"], .bjlg-schedule-item [data-field="secondary_destinations"]', function() {
         const $item = $(this).closest('.bjlg-schedule-item');
         if ($(this).is('[data-field="custom_cron"]')) {
             refreshCronAssistant($item, true);
+            refreshCronInsights($item, null);
+        } else {
+            refreshCronInsights($item);
         }
         updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
+        scheduleRecommendationRefresh($item, false);
     });
 
     $scheduleForm.on('input', '.bjlg-schedule-item [data-field="label"], .bjlg-schedule-item textarea[data-field], .bjlg-schedule-item [data-field="custom_cron"]', function() {
         const $item = $(this).closest('.bjlg-schedule-item');
         if ($(this).is('[data-field="custom_cron"]')) {
             refreshCronAssistant($item, false);
+            refreshCronInsights($item, null);
+        } else {
+            refreshCronInsights($item);
         }
         updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
+        scheduleRecommendationRefresh($item, false);
     });
 
     scheduleItems().each(function() {
@@ -3416,6 +4157,11 @@ jQuery(function($) {
             state.timelineView = view;
             renderTimeline();
         });
+    }
+
+    if (typeof window !== 'undefined') {
+        window.__BJLG_SCHEDULING_TEST__ = window.__BJLG_SCHEDULING_TEST__ || {};
+        window.__BJLG_SCHEDULING_TEST__.summarizeForecast = summarizeForecastForDisplay;
     }
 })();
 });

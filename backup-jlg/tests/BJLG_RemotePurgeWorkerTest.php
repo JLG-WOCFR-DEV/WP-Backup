@@ -246,21 +246,26 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
         return $path;
     }
 
-    private function registerStubDestination(int $failuresBeforeSuccess)
+    private function registerStubDestination(int $failuresBeforeSuccess, ?array $quotaPayload = null, string $destinationId = 'fake')
     {
-        $destination = new class($failuresBeforeSuccess) implements BJLG_Destination_Interface {
+        $destination = new class($failuresBeforeSuccess, $quotaPayload, $destinationId) implements BJLG_Destination_Interface {
             public int $remainingFailures;
             /** @var array<int,string> */
             public array $deleteCalls = [];
+            /** @var array<string,mixed>|null */
+            private $quotaPayload;
+            private string $identifier;
 
-            public function __construct(int $remainingFailures)
+            public function __construct(int $remainingFailures, ?array $quotaPayload, string $identifier)
             {
                 $this->remainingFailures = $remainingFailures;
+                $this->quotaPayload = $quotaPayload;
+                $this->identifier = $identifier;
             }
 
             public function get_id()
             {
-                return 'fake';
+                return $this->identifier;
             }
 
             public function get_name()
@@ -298,7 +303,12 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
                     return ['success' => false, 'message' => 'fail'];
                 }
 
-                return ['success' => true];
+                $result = ['success' => true];
+                if (is_array($this->quotaPayload)) {
+                    $result['quota'] = $this->quotaPayload;
+                }
+
+                return $result;
             }
 
             public function get_storage_usage()
@@ -307,8 +317,9 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
             }
         };
 
-        add_filter('bjlg_destination_factory', static function ($provided, $destinationId) use ($destination) {
-            if ($destinationId === 'fake') {
+        $registeredId = $destination->get_id();
+        add_filter('bjlg_destination_factory', static function ($provided, $destinationId) use ($destination, $registeredId) {
+            if ($destinationId === $registeredId) {
                 return $destination;
             }
 

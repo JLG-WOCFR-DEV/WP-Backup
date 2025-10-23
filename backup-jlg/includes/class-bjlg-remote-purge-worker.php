@@ -184,6 +184,7 @@ class BJLG_Remote_Purge_Worker {
         $errors = [];
 
         $destination_names = [];
+        $quota_samples = [];
 
         foreach ($destinations as $destination_id) {
             $destination = BJLG_Destination_Factory::create($destination_id);
@@ -196,6 +197,13 @@ class BJLG_Remote_Purge_Worker {
 
             $result = $destination->delete_remote_backup_by_name($file);
             $was_successful = is_array($result) ? !empty($result['success']) : false;
+
+            if (is_array($result)) {
+                $quota_sample = $this->extract_quota_sample($destination_id, $result, $now);
+                if ($quota_sample !== null) {
+                    $quota_samples[$destination_id] = $quota_sample;
+                }
+            }
 
             if ($was_successful) {
                 $success[] = $destination_id;
@@ -261,6 +269,7 @@ class BJLG_Remote_Purge_Worker {
                 'attempts' => $current_attempt,
                 'destinations' => $success,
                 'duration' => max(0, $now - $registered_at),
+                'quota_samples' => $quota_samples,
             ];
         }
 
@@ -322,6 +331,7 @@ class BJLG_Remote_Purge_Worker {
                     'attempts' => $current_attempt,
                     'errors' => $errors,
                     'max_delay' => $max_delay,
+                    'quota_samples' => $quota_samples,
                 ];
             } else {
                 $delay = $this->compute_backoff($current_attempt);
@@ -376,6 +386,7 @@ class BJLG_Remote_Purge_Worker {
             'attempts' => $current_attempt,
             'remaining_destinations' => $remaining,
             'max_delay' => $max_delay,
+            'quota_samples' => $quota_samples,
         ];
     }
 

@@ -68,6 +68,7 @@ class BJLG_Admin_Advanced {
             'alerts' => [],
             'onboarding' => $this->get_onboarding_resources(),
             'summary' => [],
+            'restore_self_test' => [],
             'generated_at' => $this->format_datetime($now),
         ];
 
@@ -197,6 +198,7 @@ class BJLG_Admin_Advanced {
 
         $metrics['summary'] = $this->build_summary($metrics);
         $metrics['alerts'] = $this->build_alerts($metrics);
+        $metrics['restore_self_test'] = $this->get_restore_self_test_snapshot($now);
         $metrics['reliability'] = $this->build_reliability($metrics);
 
         return $metrics;
@@ -401,6 +403,14 @@ class BJLG_Admin_Advanced {
 
             $details = [];
 
+            $resolution_payload = null;
+            if (class_exists(__NAMESPACE__ . '\\BJLG_Notification_Receipts') && !empty($entry['id'])) {
+                $receipt = BJLG_Notification_Receipts::get($entry['id']);
+                if (is_array($receipt)) {
+                    $resolution_payload = BJLG_Notification_Receipts::prepare_for_display($receipt);
+                }
+            }
+
             if (!empty($entry['quiet_until'])) {
                 [$quiet_formatted, $quiet_relative] = $this->format_timestamp_pair($entry['quiet_until'], $now);
                 if ($quiet_relative !== '') {
@@ -494,6 +504,38 @@ class BJLG_Admin_Advanced {
                 $details['severity_label'] = $severity_label;
             }
 
+            $resolution_status = isset($entry['resolution_status']) ? (string) $entry['resolution_status'] : 'pending';
+            $details['resolution_status'] = $resolution_status;
+            $details['resolution_status_label'] = $this->get_resolution_status_label($resolution_status);
+
+            if ($resolution_payload) {
+                $details['acknowledged_relative'] = $resolution_payload['acknowledged_relative'] ?? '';
+                $details['acknowledged_formatted'] = $resolution_payload['acknowledged_formatted'] ?? '';
+                $details['resolved_relative'] = $resolution_payload['resolved_relative'] ?? '';
+                $details['resolved_formatted'] = $resolution_payload['resolved_formatted'] ?? '';
+                $details['resolution_steps'] = $resolution_payload['steps'] ?? [];
+            } elseif (!empty($entry['resolution']) && is_array($entry['resolution'])) {
+                $acknowledged = isset($entry['resolution']['acknowledged_at']) ? (int) $entry['resolution']['acknowledged_at'] : 0;
+                $resolved = isset($entry['resolution']['resolved_at']) ? (int) $entry['resolution']['resolved_at'] : 0;
+                [$ack_formatted, $ack_relative] = $this->format_timestamp_pair($acknowledged ?: null, $now);
+                [$res_formatted, $res_relative] = $this->format_timestamp_pair($resolved ?: null, $now);
+                if ($ack_relative !== '') {
+                    $details['acknowledged_relative'] = $ack_relative;
+                }
+                if ($ack_formatted !== '') {
+                    $details['acknowledged_formatted'] = $ack_formatted;
+                }
+                if ($res_relative !== '') {
+                    $details['resolved_relative'] = $res_relative;
+                }
+                if ($res_formatted !== '') {
+                    $details['resolved_formatted'] = $res_formatted;
+                }
+                if (!empty($entry['resolution']['steps']) && is_array($entry['resolution']['steps'])) {
+                    $details['resolution_steps'] = $entry['resolution']['steps'];
+                }
+            }
+
             $formatted[] = [
                 'id' => isset($entry['id']) ? sanitize_text_field((string) $entry['id']) : '',
                 'title' => sanitize_text_field($title),
@@ -532,6 +574,10 @@ class BJLG_Admin_Advanced {
         $pending = isset($raw['pending']) && is_array($raw['pending']) ? $raw['pending'] : [];
         $throughput = isset($raw['throughput']) && is_array($raw['throughput']) ? $raw['throughput'] : [];
         $failures = isset($raw['failures']) && is_array($raw['failures']) ? $raw['failures'] : [];
+        $durations = isset($raw['durations']) && is_array($raw['durations']) ? $raw['durations'] : [];
+        $backlog = isset($raw['backlog']) && is_array($raw['backlog']) ? $raw['backlog'] : [];
+        $projections = isset($raw['projections']) && is_array($raw['projections']) ? $raw['projections'] : [];
+        $quotas = isset($raw['quotas']) && is_array($raw['quotas']) ? $raw['quotas'] : [];
 
         $forecast = isset($raw['forecast']) && is_array($raw['forecast']) ? $raw['forecast'] : [];
         $overall_forecast = isset($forecast['overall']) && is_array($forecast['overall']) ? $forecast['overall'] : [];
@@ -805,6 +851,18 @@ class BJLG_Admin_Advanced {
         }
     }
 
+    private function get_resolution_status_label(string $status): string {
+        switch ($status) {
+            case 'resolved':
+                return __('Résolu', 'backup-jlg');
+            case 'acknowledged':
+                return __('Accusé', 'backup-jlg');
+            case 'pending':
+            default:
+                return __('En attente', 'backup-jlg');
+        }
+    }
+
     private function get_queue_status_label(string $status): string {
         switch ($status) {
             case 'completed':
@@ -958,6 +1016,7 @@ class BJLG_Admin_Advanced {
 
     private function collect_remote_storage_metrics(): array {
         $threshold_percent = $this->get_storage_warning_threshold_percent();
+        $threshold_percent = max(1.0, min(100.0, (float) $threshold_percent));
         $threshold_ratio = $threshold_percent / 100;
         $now = current_time('timestamp');
 
@@ -969,6 +1028,7 @@ class BJLG_Admin_Advanced {
                 'generated_at_relative' => '',
                 'stale' => false,
                 'threshold_percent' => $threshold_percent,
+                'threshold_ratio' => $threshold_ratio,
             ];
         }
 
@@ -1043,7 +1103,11 @@ class BJLG_Admin_Advanced {
 
             $destination['utilization_ratio'] = $ratio;
             $destination['last_refreshed_at'] = $generated_at;
+            $warning = $ratio !== null && $ratio >= $threshold_ratio;
             $destination['threshold_percent'] = $threshold_percent;
+            $destination['threshold_ratio'] = $threshold_ratio;
+            $destination['warning'] = $warning;
+            $destination['warning_active'] = $warning && !$stale;
 
             $daily_delta = isset($destination['daily_delta_bytes']) ? (float) $destination['daily_delta_bytes'] : null;
             $destination['daily_delta_bytes'] = $daily_delta;
@@ -1072,6 +1136,8 @@ class BJLG_Admin_Advanced {
                         'name' => $name,
                         'ratio' => $ratio,
                         'threshold_percent' => $threshold_percent,
+                        'threshold' => (int) round($threshold_percent),
+                        'threshold_ratio' => $threshold_ratio,
                         'used_bytes' => $used_bytes,
                         'quota_bytes' => $quota_bytes,
                         'free_bytes' => $destination['free_bytes'],
@@ -1160,6 +1226,40 @@ class BJLG_Admin_Advanced {
         }
     }
 
+    private function get_restore_self_test_snapshot(int $now): array {
+        $snapshot = get_option('bjlg_restore_self_test_report', []);
+        if (!is_array($snapshot) || empty($snapshot)) {
+            return [];
+        }
+
+        $status = isset($snapshot['status']) ? sanitize_key((string) $snapshot['status']) : '';
+        $message = isset($snapshot['message']) ? (string) $snapshot['message'] : '';
+        $archive = isset($snapshot['archive']) ? (string) $snapshot['archive'] : '';
+        $generated_at = isset($snapshot['generated_at']) ? (int) $snapshot['generated_at'] : 0;
+        $metrics = isset($snapshot['metrics']) && is_array($snapshot['metrics']) ? $snapshot['metrics'] : [];
+
+        $result = [
+            'status' => $status,
+            'message' => $message,
+            'archive' => $archive,
+            'generated_at' => $generated_at,
+            'generated_at_formatted' => $generated_at > 0 ? $this->format_datetime($generated_at) : '',
+            'generated_at_relative' => $generated_at > 0
+                ? sprintf(__('il y a %s', 'backup-jlg'), human_time_diff($generated_at, $now))
+                : '',
+            'rto_seconds' => isset($metrics['rto_seconds']) ? (float) $metrics['rto_seconds'] : null,
+            'rpo_seconds' => isset($metrics['rpo_seconds']) ? (int) $metrics['rpo_seconds'] : null,
+            'rto_human' => isset($metrics['rto_human']) ? (string) $metrics['rto_human'] : '',
+            'rpo_human' => isset($metrics['rpo_human']) ? (string) $metrics['rpo_human'] : '',
+            'files' => isset($snapshot['files']) && is_array($snapshot['files'])
+                ? $this->sanitize_report_files($snapshot['files'])
+                : [],
+            'summary_markdown' => isset($snapshot['summary_markdown']) ? (string) $snapshot['summary_markdown'] : '',
+        ];
+
+        return $result;
+    }
+
     private function build_reliability(array $metrics): array {
         $score = 100.0;
         $pillars = [];
@@ -1215,6 +1315,77 @@ class BJLG_Admin_Advanced {
             'message' => $scheduler_message,
             'intent' => $scheduler_intent,
             'icon' => 'dashicons-clock',
+        ];
+
+        $self_test = isset($metrics['restore_self_test']) && is_array($metrics['restore_self_test'])
+            ? $metrics['restore_self_test']
+            : [];
+        $self_test_status = isset($self_test['status']) ? sanitize_key((string) $self_test['status']) : '';
+        $self_test_intent = 'warning';
+        $self_test_message = __('Aucun test de restauration enregistré.', 'backup-jlg');
+        $history_url = add_query_arg(['page' => 'backup-jlg', 'section' => 'history'], admin_url('admin.php')) . '#bjlg-history';
+
+        if (empty($self_test)) {
+            $score -= 10;
+            $insights[] = __('Planifier un test de restauration automatique', 'backup-jlg');
+            $this->add_recommendation($recommendations, __('Lancer un test de restauration', 'backup-jlg'), $history_url, 'primary');
+        } else {
+            $message_parts = [];
+            $rto_human = isset($self_test['rto_human']) ? (string) $self_test['rto_human'] : '';
+            $rpo_human = isset($self_test['rpo_human']) ? (string) $self_test['rpo_human'] : '';
+            $generated_relative = isset($self_test['generated_at_relative']) ? (string) $self_test['generated_at_relative'] : '';
+
+            if ($rto_human !== '') {
+                $message_parts[] = sprintf(__('RTO %s', 'backup-jlg'), $rto_human);
+            }
+
+            if ($rpo_human !== '') {
+                $message_parts[] = sprintf(__('RPO %s', 'backup-jlg'), $rpo_human);
+            }
+
+            if ($generated_relative !== '') {
+                $message_parts[] = sprintf(__('mis à jour %s', 'backup-jlg'), $generated_relative);
+            }
+
+            $self_test_message = !empty($message_parts)
+                ? implode(' • ', $message_parts)
+                : __('Tests de restauration en cours de suivi.', 'backup-jlg');
+
+            if ($self_test_status === 'failure') {
+                $self_test_intent = 'danger';
+                $score -= 18;
+                $self_test_message = __('Dernier test de restauration en échec.', 'backup-jlg');
+                $insights[] = __('Corriger le test de restauration automatique', 'backup-jlg');
+                $this->add_recommendation($recommendations, __('Consulter le rapport de test', 'backup-jlg'), $history_url, 'primary');
+            } elseif ($self_test_status === 'success') {
+                $self_test_intent = 'success';
+                $rpo_seconds = isset($self_test['rpo_seconds']) ? (int) $self_test['rpo_seconds'] : null;
+                if ($rpo_seconds !== null && $rpo_seconds > 2 * DAY_IN_SECONDS) {
+                    $self_test_intent = 'warning';
+                    $score -= 6;
+                    $self_test_message .= ' — ' . __('Archive testée trop ancienne.', 'backup-jlg');
+                    $insights[] = __('Réduire l’âge des archives testées', 'backup-jlg');
+                    $this->add_recommendation(
+                        $recommendations,
+                        __('Planifier une sauvegarde complète', 'backup-jlg'),
+                        add_query_arg(['page' => 'backup-jlg', 'section' => 'backup'], admin_url('admin.php')),
+                        'primary'
+                    );
+                }
+            } else {
+                $self_test_intent = 'warning';
+                $score -= 6;
+                $insights[] = __('Exécuter un test de restauration', 'backup-jlg');
+                $this->add_recommendation($recommendations, __('Lancer un test de restauration', 'backup-jlg'), $history_url, 'primary');
+            }
+        }
+
+        $pillars[] = [
+            'key' => 'restore_self_test',
+            'label' => __('Tests de restauration', 'backup-jlg'),
+            'message' => $self_test_message,
+            'intent' => $self_test_intent,
+            'icon' => 'dashicons-backup',
         ];
 
         $encryption = isset($metrics['encryption']) && is_array($metrics['encryption']) ? $metrics['encryption'] : [];
@@ -1416,6 +1587,31 @@ class BJLG_Admin_Advanced {
         return null;
     }
 
+    private function sanitize_report_files(array $files): array {
+        $sanitized = [];
+        foreach (['json', 'html', 'markdown'] as $type) {
+            if (isset($files[$type]) && is_array($files[$type])) {
+                $entry = $files[$type];
+                $sanitized[$type] = [
+                    'filename' => isset($entry['filename']) ? (string) $entry['filename'] : '',
+                    'path' => isset($entry['path']) ? (string) $entry['path'] : '',
+                    'url' => isset($entry['url']) ? (string) $entry['url'] : '',
+                    'mime_type' => isset($entry['mime_type']) ? (string) $entry['mime_type'] : '',
+                ];
+            }
+        }
+
+        if (isset($files['base_path'])) {
+            $sanitized['base_path'] = (string) $files['base_path'];
+        }
+
+        if (isset($files['base_url'])) {
+            $sanitized['base_url'] = (string) $files['base_url'];
+        }
+
+        return $sanitized;
+    }
+
     /**
      * Génère la liste d'alertes à partir des métriques agrégées.
      */
@@ -1455,6 +1651,48 @@ class BJLG_Admin_Advanced {
             );
         }
 
+        $restore = isset($metrics['restore_self_test']) && is_array($metrics['restore_self_test'])
+            ? $metrics['restore_self_test']
+            : [];
+        $history_url = add_query_arg(['page' => 'backup-jlg', 'section' => 'history'], admin_url('admin.php')) . '#bjlg-history';
+        if (empty($restore)) {
+            $alerts[] = $this->make_alert(
+                'warning',
+                __('Test de restauration automatique non exécuté', 'backup-jlg'),
+                __('Lancez un test de restauration pour valider vos procédures de reprise.', 'backup-jlg'),
+                [
+                    'label' => __('Ouvrir l’historique', 'backup-jlg'),
+                    'url' => $history_url,
+                ]
+            );
+        } else {
+            $status = isset($restore['status']) ? sanitize_key((string) $restore['status']) : '';
+            if ($status === 'failure') {
+                $alerts[] = $this->make_alert(
+                    'error',
+                    __('Dernier test de restauration en échec', 'backup-jlg'),
+                    __('Consultez le rapport détaillé et corrigez l’incident avant la prochaine sauvegarde.', 'backup-jlg'),
+                    [
+                        'label' => __('Voir le rapport', 'backup-jlg'),
+                        'url' => $history_url,
+                    ]
+                );
+            } elseif (!empty($restore['rpo_seconds']) && (int) $restore['rpo_seconds'] > 2 * DAY_IN_SECONDS) {
+                $rpo_label = isset($restore['rpo_human']) && $restore['rpo_human'] !== ''
+                    ? (string) $restore['rpo_human']
+                    : sprintf(__('il y a %s', 'backup-jlg'), human_time_diff(time() - (int) $restore['rpo_seconds'], time()));
+                $alerts[] = $this->make_alert(
+                    'warning',
+                    __('RPO dégradé sur le test de restauration', 'backup-jlg'),
+                    sprintf(__('L’archive testée datait de %s. Planifiez une nouvelle sauvegarde complète.', 'backup-jlg'), $rpo_label),
+                    [
+                        'label' => __('Planifier une sauvegarde', 'backup-jlg'),
+                        'url' => add_query_arg(['page' => 'backup-jlg', 'section' => 'backup'], admin_url('admin.php')),
+                    ]
+                );
+            }
+        }
+
         if (!empty($metrics['scheduler']['overdue'])) {
             $alerts[] = $this->make_alert(
                 'error',
@@ -1466,6 +1704,60 @@ class BJLG_Admin_Advanced {
                         ['page' => 'backup-jlg', 'section' => 'backup'],
                         admin_url('admin.php')
                     ) . '#bjlg-schedule',
+                ]
+            );
+        }
+
+        $remote_destinations = isset($metrics['storage']['remote_destinations']) && is_array($metrics['storage']['remote_destinations'])
+            ? $metrics['storage']['remote_destinations']
+            : [];
+        $warning_destinations = [];
+
+        foreach ($remote_destinations as $destination) {
+            if (!is_array($destination) || empty($destination['warning'])) {
+                continue;
+            }
+
+            if (isset($destination['warning_active']) && !$destination['warning_active']) {
+                continue;
+            }
+
+            $label = '';
+            if (!empty($destination['name'])) {
+                $label = sanitize_text_field((string) $destination['name']);
+            } elseif (!empty($destination['id'])) {
+                $label = sanitize_text_field((string) $destination['id']);
+            }
+
+            if ($label !== '') {
+                $warning_destinations[] = $label;
+            }
+        }
+
+        if (!empty($warning_destinations)) {
+            $threshold = isset($metrics['storage']['remote_warning_threshold'])
+                ? (float) $metrics['storage']['remote_warning_threshold']
+                : $this->get_storage_warning_threshold_percent();
+            $threshold = max(1.0, min(100.0, $threshold));
+            $formatted_threshold = number_format_i18n($threshold, $threshold >= 10 ? 0 : 1);
+            $list = function_exists('wp_sprintf_l')
+                ? wp_sprintf_l('%l', $warning_destinations)
+                : implode(', ', $warning_destinations);
+
+            $alerts[] = $this->make_alert(
+                count($warning_destinations) >= count($remote_destinations) ? 'error' : 'warning',
+                __('Quota distant sous tension', 'backup-jlg'),
+                sprintf(
+                    __('Les destinations suivantes dépassent %1$s%% de leur quota : %2$s.', 'backup-jlg'),
+                    $formatted_threshold,
+                    $list
+                ),
+                [
+                    'label' => __('Ouvrir le monitoring', 'backup-jlg'),
+                    'url' => add_query_arg(
+                        ['page' => 'backup-jlg', 'section' => 'monitoring'],
+                        admin_url('admin.php')
+                    ) . '#bjlg-section-monitoring',
                 ]
             );
         }

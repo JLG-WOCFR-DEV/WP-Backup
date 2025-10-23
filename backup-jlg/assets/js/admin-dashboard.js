@@ -44,6 +44,8 @@ jQuery(function($) {
     const queueActionMap = {
         'retry-notification': { action: 'bjlg_notification_queue_retry', param: 'entry_id' },
         'clear-notification': { action: 'bjlg_notification_queue_delete', param: 'entry_id' },
+        'acknowledge-notification': { action: 'bjlg_notification_acknowledge', param: 'entry_id', summary: { required: false, prompt: __('Ajouter une note pour l’accusé ?', 'backup-jlg') } },
+        'resolve-notification': { action: 'bjlg_notification_resolve', param: 'entry_id', summary: { required: true, prompt: __('Consigner la résolution :', 'backup-jlg') } },
         'retry-remote-purge': { action: 'bjlg_remote_purge_retry', param: 'file' },
         'clear-remote-purge': { action: 'bjlg_remote_purge_delete', param: 'file' }
     };
@@ -688,6 +690,14 @@ jQuery(function($) {
                             $('<li/>', { text: sprintf(__('Durée moyenne de purge : %s', 'backup-jlg'), sla.throughput_average) }).appendTo($list);
                         }
 
+                        if (sla.duration_peak) {
+                            $('<li/>', { text: sprintf(__('Durée maximale récente : %s', 'backup-jlg'), sla.duration_peak) }).appendTo($list);
+                        }
+
+                        if (sla.duration_last) {
+                            $('<li/>', { text: sprintf(__('Dernière purge traitée en %s', 'backup-jlg'), sla.duration_last) }).appendTo($list);
+                        }
+
                         if (sla.throughput_last_completion_relative) {
                             $('<li/>', { text: sprintf(__('Dernière purge réussie %s', 'backup-jlg'), sla.throughput_last_completion_relative) }).appendTo($list);
                         }
@@ -731,6 +741,12 @@ jQuery(function($) {
                 } else {
                     $sla.remove();
                 }
+            }
+
+            if (sla && sla.saturation_warning) {
+                $card.attr('data-saturation-warning', 'true');
+            } else {
+                $card.removeAttr('data-saturation-warning');
             }
 
             const $entries = $card.find('[data-role="entries"]');
@@ -809,6 +825,22 @@ jQuery(function($) {
                     }).appendTo($entry);
                 }
 
+                if (entry.details && entry.details.resolution_status_label) {
+                    const resolutionParts = [sprintf(__('Statut : %s', 'backup-jlg'), entry.details.resolution_status_label)];
+                    if (entry.details.acknowledged_relative) {
+                        resolutionParts.push(sprintf(__('accusé %s', 'backup-jlg'), entry.details.acknowledged_relative));
+                    }
+                    if (entry.details.resolved_relative) {
+                        resolutionParts.push(sprintf(__('résolu %s', 'backup-jlg'), entry.details.resolved_relative));
+                    }
+
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-flag',
+                        'data-field': 'resolution',
+                        text: resolutionParts.join(' • ')
+                    }).appendTo($entry);
+                }
+
                 if (entry.details && (entry.details.escalation_channels || entry.details.escalation_scenario)) {
                     const escalationParts = [];
 
@@ -843,6 +875,26 @@ jQuery(function($) {
 
                 const $actions = $('<div/>', { 'class': 'bjlg-queue-card__entry-actions' }).appendTo($entry);
                 if (key === 'notifications' && entry.id) {
+                    if (entry.details && entry.details.resolution_status === 'pending') {
+                        $('<button/>', {
+                            type: 'button',
+                            'class': 'button button-secondary button-small',
+                            'data-queue-action': 'acknowledge-notification',
+                            'data-entry-id': entry.id,
+                            'data-entry-title': entry.title || entry.event || entry.id,
+                            text: __('Accusé', 'backup-jlg')
+                        }).appendTo($actions);
+                    }
+                    if (!entry.details || entry.details.resolution_status !== 'resolved') {
+                        $('<button/>', {
+                            type: 'button',
+                            'class': 'button button-secondary button-small',
+                            'data-queue-action': 'resolve-notification',
+                            'data-entry-id': entry.id,
+                            'data-entry-title': entry.title || entry.event || entry.id,
+                            text: __('Résolution', 'backup-jlg')
+                        }).appendTo($actions);
+                    }
                     $('<button/>', {
                         type: 'button',
                         'class': 'button button-secondary button-small',
@@ -1250,6 +1302,23 @@ jQuery(function($) {
             nonce: ajaxData.nonce
         };
         payload[config.param] = value;
+
+        if (config.summary) {
+            const entryTitle = $button.data('entryTitle') ? String($button.data('entryTitle')) : '';
+            let promptMessage = config.summary.prompt || '';
+            if (entryTitle) {
+                promptMessage = promptMessage ? promptMessage + '\n' + entryTitle : entryTitle;
+            }
+            const input = window.prompt(promptMessage, '');
+            if (input === null) {
+                return;
+            }
+            if (config.summary.required && !input.trim()) {
+                announce(__('Veuillez indiquer un résumé avant de continuer.', 'backup-jlg'), 'assertive');
+                return;
+            }
+            payload.summary = input;
+        }
 
         $button.prop('disabled', true).attr('aria-busy', 'true');
 
