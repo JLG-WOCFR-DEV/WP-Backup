@@ -1137,7 +1137,9 @@ class BJLG_Admin {
                 $remote_threshold = isset($metrics['storage']['remote_warning_threshold'])
                     ? max(1.0, min(100.0, (float) $metrics['storage']['remote_warning_threshold']))
                     : 85.0;
-                $remote_threshold_ratio = $remote_threshold / 100;
+                $remote_threshold_ratio = isset($metrics['storage']['remote_warning_threshold_ratio'])
+                    ? max(0.01, min(1.0, (float) $metrics['storage']['remote_warning_threshold_ratio']))
+                    : ($remote_threshold / 100);
                 $remote_last_refresh_formatted = isset($metrics['storage']['remote_last_refreshed_formatted'])
                     ? (string) $metrics['storage']['remote_last_refreshed_formatted']
                     : '';
@@ -3219,6 +3221,14 @@ class BJLG_Admin {
         $schedules_json = esc_attr(wp_json_encode($schedules));
         $next_runs_json = esc_attr(wp_json_encode($next_runs));
 
+        $monitoring_settings = BJLG_Settings::get_monitoring_settings();
+        $storage_warning_threshold = isset($monitoring_settings['storage_quota_warning_threshold'])
+            ? max(1.0, min(100.0, (float) $monitoring_settings['storage_quota_warning_threshold']))
+            : 85.0;
+        $remote_metrics_ttl = isset($monitoring_settings['remote_metrics_ttl_minutes'])
+            ? max(5, min(1440, (int) $monitoring_settings['remote_metrics_ttl_minutes']))
+            : 15;
+
         $components_labels = [
             'db' => 'Base de données',
             'plugins' => 'Extensions',
@@ -3618,6 +3628,71 @@ class BJLG_Admin {
 
             <form class="bjlg-settings-form">
                 <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
+                <h3><span class="dashicons dashicons-chart-area" aria-hidden="true"></span> Monitoring du stockage distant</h3>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><label for="bjlg-storage-warning-threshold"><?php esc_html_e("Seuil d'alerte de capacité", 'backup-jlg'); ?></label></th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <div class="bjlg-form-field-group">
+                                    <div class="bjlg-form-field-control">
+                                        <input
+                                            type="number"
+                                            id="bjlg-storage-warning-threshold"
+                                            name="storage_quota_warning_threshold"
+                                            class="small-text"
+                                            value="<?php echo esc_attr($storage_warning_threshold); ?>"
+                                            min="1"
+                                            max="100"
+                                            step="0.1"
+                                            required
+                                            aria-describedby="bjlg-storage-warning-threshold-description"
+                                        >
+                                    </div>
+                                    <div class="bjlg-form-field-actions">
+                                        <span class="bjlg-form-field-unit">%</span>
+                                    </div>
+                                </div>
+                                <p id="bjlg-storage-warning-threshold-description" class="description">
+                                    <?php
+                                    printf(
+                                        esc_html__("Déclenche une alerte lorsque l'utilisation dépasse ce seuil sur les destinations distantes. Par défaut : %s%%.", 'backup-jlg'),
+                                        esc_html(number_format_i18n(85))
+                                    );
+                                    ?>
+                                </p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="bjlg-remote-metrics-ttl"><?php esc_html_e('Rafraîchissement des métriques distantes', 'backup-jlg'); ?></label></th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <div class="bjlg-form-field-group">
+                                    <div class="bjlg-form-field-control">
+                                        <input
+                                            type="number"
+                                            id="bjlg-remote-metrics-ttl"
+                                            name="remote_metrics_ttl_minutes"
+                                            class="small-text"
+                                            value="<?php echo esc_attr($remote_metrics_ttl); ?>"
+                                            min="5"
+                                            max="1440"
+                                            step="5"
+                                            required
+                                            aria-describedby="bjlg-remote-metrics-ttl-description"
+                                        >
+                                    </div>
+                                    <div class="bjlg-form-field-actions">
+                                        <span class="bjlg-form-field-unit"><?php esc_html_e('minutes', 'backup-jlg'); ?></span>
+                                    </div>
+                                </div>
+                                <p id="bjlg-remote-metrics-ttl-description" class="description"><?php esc_html_e('Détermine la durée maximale pendant laquelle un relevé distant est considéré comme à jour.', 'backup-jlg'); ?></p>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+
                 <h3><span class="dashicons dashicons-trash" aria-hidden="true"></span> Rétention des Sauvegardes</h3>
                 <table class="form-table">
                     <tr>

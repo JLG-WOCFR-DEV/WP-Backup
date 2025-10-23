@@ -190,7 +190,7 @@ class BJLG_Admin_Advanced {
         $metrics['storage']['remote_last_refreshed_relative'] = $remote_snapshot['generated_at_relative'];
         $metrics['storage']['remote_refresh_stale'] = $remote_snapshot['stale'];
         $metrics['storage']['remote_warning_threshold'] = $remote_snapshot['threshold_percent'];
-        $metrics['storage']['remote_threshold'] = isset($remote_snapshot['threshold_ratio']) ? (float) $remote_snapshot['threshold_ratio'] : $threshold_ratio;
+        $metrics['storage']['remote_warning_threshold_ratio'] = $remote_snapshot['threshold_ratio'];
 
         $metrics['queues'] = $this->build_queue_metrics($now);
 
@@ -1080,8 +1080,7 @@ class BJLG_Admin_Advanced {
 
     private function collect_remote_storage_metrics(): array {
         $threshold_percent = $this->get_storage_warning_threshold_percent();
-        $threshold_percent = max(1.0, min(100.0, (float) $threshold_percent));
-        $threshold_ratio = $threshold_percent / 100;
+        $threshold_ratio = max(0.01, min(1.0, $threshold_percent / 100));
         $now = current_time('timestamp');
 
         if (!class_exists(BJLG_Remote_Storage_Metrics::class)) {
@@ -1166,31 +1165,9 @@ class BJLG_Admin_Advanced {
             }
 
             $destination['utilization_ratio'] = $ratio;
-            $destination['last_refreshed_at'] = $generated_at;
-            $warning = $ratio !== null && $ratio >= $threshold_ratio;
             $destination['threshold_percent'] = $threshold_percent;
             $destination['threshold_ratio'] = $threshold_ratio;
-            $destination['warning'] = $warning;
-            $destination['warning_active'] = $warning && !$stale;
-
-            $daily_delta = isset($destination['daily_delta_bytes']) ? (float) $destination['daily_delta_bytes'] : null;
-            $destination['daily_delta_bytes'] = $daily_delta;
-            $destination['daily_delta_label'] = isset($destination['daily_delta_label'])
-                ? sanitize_text_field((string) $destination['daily_delta_label'])
-                : '';
-            $forecast_label = isset($destination['forecast_label']) ? (string) $destination['forecast_label'] : '';
-            $destination['forecast_label'] = sanitize_text_field($forecast_label);
-
-            $days_to_threshold = isset($destination['days_to_threshold']) && is_numeric($destination['days_to_threshold'])
-                ? (float) $destination['days_to_threshold']
-                : null;
-            $destination['days_to_threshold'] = $days_to_threshold;
-            $destination['days_to_threshold_label'] = isset($destination['days_to_threshold_label'])
-                ? sanitize_text_field((string) $destination['days_to_threshold_label'])
-                : '';
-
-            $projection_intent = isset($destination['projection_intent']) ? (string) $destination['projection_intent'] : '';
-            $destination['projection_intent'] = $projection_intent !== '' ? sanitize_key($projection_intent) : '';
+            $destination['last_refreshed_at'] = $generated_at;
 
             if ($ratio !== null && $ratio >= $threshold_ratio && !$stale && $destination_id !== '') {
                 $last_notified = isset($digest[$destination_id]) ? (int) $digest[$destination_id] : 0;
@@ -1775,55 +1752,76 @@ class BJLG_Admin_Advanced {
         $remote_destinations = isset($metrics['storage']['remote_destinations']) && is_array($metrics['storage']['remote_destinations'])
             ? $metrics['storage']['remote_destinations']
             : [];
-        $warning_destinations = [];
+        if (!empty($remote_destinations)) {
+            $remote_threshold_percent = isset($metrics['storage']['remote_warning_threshold'])
+                ? max(1.0, min(100.0, (float) $metrics['storage']['remote_warning_threshold']))
+                : 85.0;
+            $remote_threshold_ratio = isset($metrics['storage']['remote_warning_threshold_ratio'])
+                ? max(0.01, min(1.0, (float) $metrics['storage']['remote_warning_threshold_ratio']))
+                : max(0.01, min(1.0, $remote_threshold_percent / 100));
 
-        foreach ($remote_destinations as $destination) {
-            if (!is_array($destination) || empty($destination['warning'])) {
-                continue;
+            $over_threshold = [];
+            $max_ratio = 0.0;
+
+            foreach ($remote_destinations as $destination) {
+                if (!is_array($destination)) {
+                    continue;
+                }
+
+                $ratio = null;
+                if (isset($destination['utilization_ratio']) && is_numeric($destination['utilization_ratio'])) {
+                    $ratio = max(0.0, min(1.0, (float) $destination['utilization_ratio']));
+                } elseif (isset($destination['ratio']) && is_numeric($destination['ratio'])) {
+                    $ratio = max(0.0, min(1.0, (float) $destination['ratio']));
+                }
+
+                if ($ratio === null) {
+                    continue;
+                }
+
+                $name = isset($destination['name']) && is_string($destination['name']) && $destination['name'] !== ''
+                    ? sanitize_text_field($destination['name'])
+                    : (isset($destination['id']) ? sanitize_key((string) $destination['id']) : '');
+
+                if ($ratio >= $remote_threshold_ratio) {
+                    if ($name !== '') {
+                        $over_threshold[] = $name;
+                    }
+                    $max_ratio = max($max_ratio, $ratio);
+                }
             }
 
-            if (isset($destination['warning_active']) && !$destination['warning_active']) {
-                continue;
+            if (!empty($over_threshold)) {
+                $names_label = function_exists('wp_sprintf_l')
+                    ? wp_sprintf_l('%l', $over_threshold)
+                    : implode(', ', $over_threshold);
+                $max_ratio_percent = max(0, min(100, round($max_ratio * 100)));
+                $threshold_percent_label = number_format_i18n($remote_threshold_percent, $remote_threshold_percent >= 10 ? 0 : 1);
+                $message = sprintf(
+                    _n(
+                        'La destination %1$s dépasse le seuil de %2$s%% configuré pour le stockage distant (pic mesuré : %3$s%%).',
+                        'Les destinations %1$s dépassent le seuil de %2$s%% configuré pour le stockage distant (pic mesuré : %3$s%%).',
+                        count($over_threshold),
+                        'backup-jlg'
+                    ),
+                    $names_label,
+                    $threshold_percent_label,
+                    number_format_i18n($max_ratio_percent)
+                );
+
+                $alerts[] = $this->make_alert(
+                    $max_ratio_percent >= 95 ? 'error' : 'warning',
+                    __('Capacité distante proche du seuil', 'backup-jlg'),
+                    esc_html($message),
+                    [
+                        'label' => __('Ouvrir le monitoring', 'backup-jlg'),
+                        'url' => add_query_arg(
+                            ['page' => 'backup-jlg', 'section' => 'monitoring'],
+                            admin_url('admin.php')
+                        ),
+                    ]
+                );
             }
-
-            $label = '';
-            if (!empty($destination['name'])) {
-                $label = sanitize_text_field((string) $destination['name']);
-            } elseif (!empty($destination['id'])) {
-                $label = sanitize_text_field((string) $destination['id']);
-            }
-
-            if ($label !== '') {
-                $warning_destinations[] = $label;
-            }
-        }
-
-        if (!empty($warning_destinations)) {
-            $threshold = isset($metrics['storage']['remote_warning_threshold'])
-                ? (float) $metrics['storage']['remote_warning_threshold']
-                : $this->get_storage_warning_threshold_percent();
-            $threshold = max(1.0, min(100.0, $threshold));
-            $formatted_threshold = number_format_i18n($threshold, $threshold >= 10 ? 0 : 1);
-            $list = function_exists('wp_sprintf_l')
-                ? wp_sprintf_l('%l', $warning_destinations)
-                : implode(', ', $warning_destinations);
-
-            $alerts[] = $this->make_alert(
-                count($warning_destinations) >= count($remote_destinations) ? 'error' : 'warning',
-                __('Quota distant sous tension', 'backup-jlg'),
-                sprintf(
-                    __('Les destinations suivantes dépassent %1$s%% de leur quota : %2$s.', 'backup-jlg'),
-                    $formatted_threshold,
-                    $list
-                ),
-                [
-                    'label' => __('Ouvrir le monitoring', 'backup-jlg'),
-                    'url' => add_query_arg(
-                        ['page' => 'backup-jlg', 'section' => 'monitoring'],
-                        admin_url('admin.php')
-                    ) . '#bjlg-section-monitoring',
-                ]
-            );
         }
 
         return $alerts;

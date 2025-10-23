@@ -72,6 +72,7 @@ Les dépendances sont installées dans `vendor-bjlg/` afin de ne pas entrer en c
 3. **API & intégrations** : générer une clé API via *Backup JLG → API & Intégrations* pour l’usage CI/CD ou les webhooks externes. Conserver la clé dans un gestionnaire sécurisé.
 4. **Planification** : configurer la fréquence des sauvegardes dans *Backup JLG → Réglages*. Vérifier que `wp-cron.php` est autorisé à s’exécuter (ou configurer une tâche Cron système).
 5. **Stockage distant (optionnel)** : après `composer install`, renseigner les identifiants Google Drive (ou autre service supporté) dans l’écran d’intégrations.
+6. **Monitoring du stockage distant** : ajustez le seuil d’alerte (en %) et la fréquence de rafraîchissement dans *Backup JLG → Réglages* pour être averti lorsque vos destinations dépassent la capacité définie.
 
 ## 🚀 Exemples d’utilisation
 ### Interface WordPress
