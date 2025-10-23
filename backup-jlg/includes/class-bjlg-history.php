@@ -395,17 +395,38 @@ class BJLG_History {
     private static function get_table_name() {
         global $wpdb;
 
-        $prefix = 'wp_';
+        $table_suffix = 'bjlg_history';
+        $context = BJLG_Site_Context::HISTORY_SCOPE_SITE;
+        $scope = BJLG_Site_Context::HISTORY_SCOPE_SITE;
+        $is_multisite = function_exists('is_multisite') && is_multisite();
+        $is_network_context = false;
+        $is_network_admin = false;
 
-        if (is_object($wpdb) && property_exists($wpdb, 'prefix')) {
-            $raw_prefix = $wpdb->prefix;
+        if ($is_multisite) {
+            $scope = BJLG_Site_Context::get_history_scope();
+            $is_network_context = BJLG_Site_Context::is_network_context();
+            $is_network_admin = function_exists('is_network_admin') && is_network_admin();
 
-            if (is_string($raw_prefix) && $raw_prefix !== '') {
-                $prefix = $raw_prefix;
+            if ($scope === BJLG_Site_Context::HISTORY_SCOPE_NETWORK && ($is_network_context || $is_network_admin)) {
+                $context = BJLG_Site_Context::HISTORY_SCOPE_NETWORK;
             }
         }
 
-        return $prefix . 'bjlg_history';
+        $context = apply_filters('bjlg_history_table_context', $context, [
+            'scope' => $scope,
+            'is_multisite' => $is_multisite,
+            'is_network_context' => $is_network_context,
+            'is_network_admin' => $is_network_admin,
+            'wpdb' => $wpdb,
+        ]);
+
+        if ($context === BJLG_Site_Context::HISTORY_SCOPE_NETWORK && $is_multisite) {
+            return BJLG_Site_Context::get_network_table_name($table_suffix);
+        }
+
+        $prefix = BJLG_Site_Context::get_table_prefix(BJLG_Site_Context::HISTORY_SCOPE_SITE);
+
+        return $prefix . $table_suffix;
     }
 
     /**

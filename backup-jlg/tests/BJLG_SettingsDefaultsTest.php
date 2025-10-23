@@ -118,4 +118,20 @@ final class BJLG_SettingsDefaultsTest extends TestCase
             $stored['channels']['sms']
         );
     }
+
+    public function test_init_default_settings_adds_update_guard_defaults(): void
+    {
+        $settings = new BJLG_Settings();
+        $settings->init_default_settings();
+
+        $stored = bjlg_get_option('bjlg_update_guard_settings');
+        $this->assertIsArray($stored);
+        $this->assertArrayHasKey('enabled', $stored);
+        $this->assertTrue($stored['enabled']);
+        $this->assertArrayHasKey('components', $stored);
+        $this->assertSame(['db', 'plugins', 'themes', 'uploads'], $stored['components']);
+        $this->assertArrayHasKey('reminder', $stored);
+        $this->assertFalse($stored['reminder']['enabled']);
+        $this->assertNotSame('', $stored['reminder']['message']);
+    }
 }
