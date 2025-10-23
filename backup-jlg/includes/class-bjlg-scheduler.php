@@ -622,6 +622,8 @@ class BJLG_Scheduler {
             ]);
         }
 
+        $impact = $this->generate_cron_impact_summary($sanitized, [], $analysis);
+
         $runs = isset($analysis['runs']) ? $analysis['runs'] : [];
         $current_time = $this->get_current_time();
         $current_timestamp = $current_time->getTimestamp();
@@ -679,7 +681,230 @@ class BJLG_Scheduler {
                 'min_human' => $min_interval ? $this->format_interval_label($min_interval) : '',
             ],
             'timezone' => $timezone,
+            'impact' => $impact,
         ]);
+    }
+
+    public static function get_cron_risk_thresholds() {
+        $defaults = [
+            'warning_frequency' => 12.0,
+            'danger_frequency' => 48.0,
+            'warning_load' => 3600.0,
+            'danger_load' => 14400.0,
+        ];
+
+        if (function_exists('apply_filters')) {
+            $filtered = apply_filters('bjlg_cron_risk_thresholds', $defaults);
+            if (is_array($filtered)) {
+                $thresholds = $defaults;
+                foreach ($filtered as $key => $value) {
+                    if (!array_key_exists($key, $defaults)) {
+                        continue;
+                    }
+                    $numeric = is_numeric($value) ? (float) $value : null;
+                    if ($numeric !== null && $numeric >= 0) {
+                        $thresholds[$key] = $numeric;
+                    }
+                }
+                return $thresholds;
+            }
+        }
+
+        return $defaults;
+    }
+
+    public function generate_cron_impact_summary($expression, array $components = [], $analysis = null) {
+        if (!is_array($analysis)) {
+            $analysis = $this->analyze_custom_cron_expression_internal($expression);
+        }
+
+        if (is_wp_error($analysis)) {
+            $details = $analysis->get_error_data();
+            return [
+                'expression' => '',
+                'runs_per_day' => 0.0,
+                'average_duration' => null,
+                'estimated_load' => null,
+                'history_samples' => 0,
+                'risk' => [
+                    'level' => 'unknown',
+                    'reasons' => [],
+                    'thresholds' => self::get_cron_risk_thresholds(),
+                    'details' => isset($details['details']) ? (array) $details['details'] : [],
+                ],
+                'errors' => [$analysis->get_error_message()],
+            ];
+        }
+
+        $runs = isset($analysis['runs']) && is_array($analysis['runs']) ? $analysis['runs'] : [];
+        $min_interval = isset($analysis['min_interval']) ? (int) $analysis['min_interval'] : null;
+
+        $interval_seconds = $min_interval && $min_interval > 0 ? $min_interval : null;
+        if (!$interval_seconds && count($runs) >= 2) {
+            $first = $runs[0];
+            $second = $runs[1];
+            if ($first instanceof \DateTimeImmutable && $second instanceof \DateTimeImmutable) {
+                $diff = $second->getTimestamp() - $first->getTimestamp();
+                if ($diff > 0) {
+                    $interval_seconds = (int) $diff;
+                }
+            }
+        }
+
+        if (!$interval_seconds || $interval_seconds <= 0) {
+            $interval_seconds = defined('DAY_IN_SECONDS') ? (int) DAY_IN_SECONDS : 86400;
+        }
+
+        $day_seconds = defined('DAY_IN_SECONDS') ? (int) DAY_IN_SECONDS : 86400;
+        $runs_per_day = $interval_seconds > 0 ? $day_seconds / $interval_seconds : 0.0;
+        $runs_per_day = round($runs_per_day, 2);
+
+        $durations = null;
+        if (function_exists('apply_filters')) {
+            $filtered = apply_filters('bjlg_scheduler_recent_durations', null, $analysis['expression'], $components);
+            if (is_array($filtered)) {
+                $durations = $filtered;
+            }
+        }
+
+        if ($durations === null) {
+            $durations = $this->fetch_recent_backup_durations();
+        }
+
+        $normalized_durations = [];
+        foreach ($durations as $value) {
+            if (is_numeric($value)) {
+                $float_value = (float) $value;
+                if ($float_value >= 0) {
+                    $normalized_durations[] = $float_value;
+                }
+            }
+        }
+
+        $average_duration = null;
+        if (!empty($normalized_durations)) {
+            $average_duration = array_sum($normalized_durations) / count($normalized_durations);
+            $average_duration = round($average_duration, 2);
+        }
+
+        $estimated_load = null;
+        if ($average_duration !== null) {
+            $estimated_load = round($average_duration * $runs_per_day, 2);
+        }
+
+        $thresholds = self::get_cron_risk_thresholds();
+        $level_score = 0;
+        $reasons = [];
+
+        if ($runs_per_day >= $thresholds['danger_frequency']) {
+            $level_score = 2;
+            $reasons[] = sprintf(
+                /* translators: %s: number of executions per day. */
+                __('Fréquence très élevée : %s exécutions estimées sur 24h.', 'backup-jlg'),
+                $runs_per_day
+            );
+        } elseif ($runs_per_day >= $thresholds['warning_frequency']) {
+            $level_score = max($level_score, 1);
+            $reasons[] = sprintf(
+                /* translators: %s: number of executions per day. */
+                __('Fréquence soutenue : %s exécutions estimées sur 24h.', 'backup-jlg'),
+                $runs_per_day
+            );
+        }
+
+        if ($estimated_load !== null) {
+            if ($estimated_load >= $thresholds['danger_load']) {
+                $level_score = 2;
+                $reasons[] = sprintf(
+                    /* translators: %s: estimated processing time label. */
+                    __('Charge quotidienne estimée : %s de traitement.', 'backup-jlg'),
+                    $this->format_interval_label($estimated_load)
+                );
+            } elseif ($estimated_load >= $thresholds['warning_load']) {
+                $level_score = max($level_score, 1);
+                $reasons[] = sprintf(
+                    /* translators: %s: estimated processing time label. */
+                    __('Charge notable : %s de traitement par jour.', 'backup-jlg'),
+                    $this->format_interval_label($estimated_load)
+                );
+            }
+        }
+
+        $levels = ['low', 'medium', 'high'];
+        $risk_level = $levels[min($level_score, count($levels) - 1)];
+
+        $summary = [
+            'expression' => $analysis['expression'],
+            'runs_per_day' => $runs_per_day,
+            'average_duration' => $average_duration,
+            'estimated_load' => $estimated_load,
+            'history_samples' => count($normalized_durations),
+            'risk' => [
+                'level' => $risk_level,
+                'reasons' => $reasons,
+                'thresholds' => $thresholds,
+            ],
+        ];
+
+        if (!empty($analysis['warnings'])) {
+            $summary['warnings'] = $analysis['warnings'];
+        }
+
+        return $summary;
+    }
+
+    private function fetch_recent_backup_durations($limit = 20) {
+        if (!class_exists(BJLG_History::class)) {
+            return [];
+        }
+
+        $entries = BJLG_History::get_history(
+            max(1, (int) $limit),
+            [
+                'action_type' => 'backup_created',
+                'status' => 'success',
+            ]
+        );
+
+        if (!is_array($entries)) {
+            return [];
+        }
+
+        $durations = [];
+        foreach ($entries as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $value = $this->extract_duration_from_history_details($entry['details'] ?? '');
+            if ($value !== null) {
+                $durations[] = $value;
+            }
+        }
+
+        return $durations;
+    }
+
+    private function extract_duration_from_history_details($details) {
+        if (!is_string($details) || $details === '') {
+            return null;
+        }
+
+        $patterns = [
+            '/Dur(?:é|e)e?\s*:\s*(\d+(?:[.,]\d+)?)/iu',
+            '/Duration\s*:\s*(\d+(?:[.,]\d+)?)/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $details, $matches) === 1) {
+                $raw = str_replace(',', '.', $matches[1]);
+                $value = (float) $raw;
+                if ($value >= 0) {
+                    return $value;
+                }
+            }
+        }
+
+        return null;
     }
 
     private function analyze_custom_cron_expression_internal($expression) {

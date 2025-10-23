@@ -8,6 +8,8 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+require_once __DIR__ . '/class-bjlg-scheduler.php';
+
 /**
  * Gère la création et l'affichage de l'interface d'administration du plugin.
  */
@@ -22,6 +24,7 @@ class BJLG_Admin {
     private $google_drive_notice;
     private $onboarding_progress = [];
     private $is_network_screen = false;
+    private static $schedule_data_injected = false;
 
     public function __construct() {
         $this->load_destinations();
@@ -2335,7 +2338,107 @@ class BJLG_Admin {
     /**
      * Section : Planification
      */
+    private function ensure_schedule_js_data() {
+        if (self::$schedule_data_injected) {
+            return;
+        }
+
+        if (!function_exists('wp_add_inline_script')) {
+            return;
+        }
+
+        $data = [
+            'cron_assistant' => [
+                'examples' => $this->get_cron_assistant_examples(),
+                'scenarios' => $this->get_cron_assistant_scenarios(),
+                'risk_thresholds' => BJLG_Scheduler::get_cron_risk_thresholds(),
+                'labels' => [
+                    'suggestions_title' => __('Suggestions recommandées', 'backup-jlg'),
+                    'suggestions_empty' => __('Sélectionnez des composants pour obtenir des suggestions adaptées.', 'backup-jlg'),
+                    'suggestions_missing' => __('Ajoute %s', 'backup-jlg'),
+                    'risk_low' => __('Risque faible', 'backup-jlg'),
+                    'risk_medium' => __('Risque modéré', 'backup-jlg'),
+                    'risk_high' => __('Risque élevé', 'backup-jlg'),
+                    'risk_unknown' => __('Risque indéterminé', 'backup-jlg'),
+                ],
+            ],
+        ];
+
+        wp_add_inline_script('bjlg-admin', 'window.bjlgSchedulingData = ' . wp_json_encode($data) . ';', 'before');
+        self::$schedule_data_injected = true;
+    }
+
+    private function get_cron_assistant_examples(): array {
+        return [
+            [
+                'label' => __('Tous les jours à 03h00', 'backup-jlg'),
+                'expression' => '0 3 * * *',
+            ],
+            [
+                'label' => __('Chaque lundi à 01h30', 'backup-jlg'),
+                'expression' => '30 1 * * 1',
+            ],
+            [
+                'label' => __('Du lundi au vendredi à 22h00', 'backup-jlg'),
+                'expression' => '0 22 * * 1-5',
+            ],
+            [
+                'label' => __('Le premier jour du mois à 04h15', 'backup-jlg'),
+                'expression' => '15 4 1 * *',
+            ],
+            [
+                'label' => __('Toutes les deux heures', 'backup-jlg'),
+                'expression' => '0 */2 * * *',
+            ],
+        ];
+    }
+
+    private function get_cron_assistant_scenarios(): array {
+        return [
+            [
+                'id' => 'pre_deploy',
+                'label' => __('Snapshot pré-déploiement', 'backup-jlg'),
+                'description' => __('Rafraîchit la base, les extensions et les thèmes toutes les 10 minutes pendant une fenêtre de changement.', 'backup-jlg'),
+                'expression' => '*/10 * * * *',
+                'adjustments' => [
+                    'label' => __('Snapshot pré-déploiement', 'backup-jlg'),
+                    'components' => ['db', 'plugins', 'themes'],
+                    'incremental' => false,
+                    'encrypt' => true,
+                    'post_checks' => ['checksum', 'dry_run'],
+                ],
+            ],
+            [
+                'id' => 'nightly_full',
+                'label' => __('Archive complète nocturne', 'backup-jlg'),
+                'description' => __('Capture intégrale chaque nuit à 02:30 avec chiffrement et vérification.', 'backup-jlg'),
+                'expression' => '30 2 * * *',
+                'adjustments' => [
+                    'label' => __('Archive nocturne', 'backup-jlg'),
+                    'components' => ['db', 'plugins', 'themes', 'uploads'],
+                    'incremental' => false,
+                    'encrypt' => true,
+                    'post_checks' => ['checksum'],
+                ],
+            ],
+            [
+                'id' => 'weekly_media',
+                'label' => __('Médias hebdomadaires', 'backup-jlg'),
+                'description' => __('Synchronise spécifiquement les médias chaque dimanche à 04:00 en incrémental.', 'backup-jlg'),
+                'expression' => '0 4 * * sun',
+                'adjustments' => [
+                    'label' => __('Médias hebdomadaires', 'backup-jlg'),
+                    'components' => ['uploads'],
+                    'incremental' => true,
+                    'encrypt' => false,
+                    'post_checks' => [],
+                ],
+            ],
+        ];
+    }
+
     private function render_schedule_section() {
+        $this->ensure_schedule_js_data();
         $schedule_collection = $this->get_schedule_settings_for_display();
         $schedules = is_array($schedule_collection['schedules']) ? $schedule_collection['schedules'] : [];
         $next_runs = is_array($schedule_collection['next_runs']) ? $schedule_collection['next_runs'] : [];
@@ -4526,6 +4629,15 @@ class BJLG_Admin {
                                         <div class="bjlg-cron-assistant__fields" data-cron-guidance></div>
                                         <div class="bjlg-cron-assistant__tokens" data-cron-tokens></div>
                                         <div class="bjlg-cron-assistant__scenarios" data-cron-scenarios role="list"></div>
+                                        <section class="bjlg-cron-assistant__suggestions" data-cron-suggestions hidden>
+                                            <strong class="bjlg-cron-assistant__title" data-cron-suggestions-title><?php esc_html_e('Suggestions recommandées', 'backup-jlg'); ?></strong>
+                                            <p class="bjlg-cron-assistant__empty" data-cron-suggestions-empty hidden><?php esc_html_e('Sélectionnez des composants pour obtenir des suggestions adaptées.', 'backup-jlg'); ?></p>
+                                            <div class="bjlg-cron-assistant__chips" data-cron-suggestions-list role="list"></div>
+                                        </section>
+                                        <section class="bjlg-cron-assistant__risk" data-cron-risk hidden aria-live="polite">
+                                            <span class="bjlg-cron-risk__badge" data-cron-risk-label></span>
+                                            <p class="bjlg-cron-risk__message" data-cron-risk-message></p>
+                                        </section>
                                         <div class="bjlg-cron-assistant__history" data-cron-history>
                                             <div class="bjlg-cron-history__header">
                                                 <strong class="bjlg-cron-assistant__title"><?php esc_html_e('Expressions récentes', 'backup-jlg'); ?></strong>

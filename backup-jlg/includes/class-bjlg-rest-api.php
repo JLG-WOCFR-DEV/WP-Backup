@@ -17,6 +17,8 @@ if (!defined('ABSPATH')) {
 require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
 require_once __DIR__ . '/class-bjlg-restore.php';
 require_once __DIR__ . '/class-bjlg-settings.php';
+require_once __DIR__ . '/class-bjlg-history.php';
+require_once __DIR__ . '/class-bjlg-scheduler.php';
 
 class BJLG_REST_API {
     
@@ -300,6 +302,22 @@ class BJLG_REST_API {
                 'permission_callback' => [$this, 'check_admin_permissions'],
                 'args' => $this->merge_site_args(),
             ]
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/cron/preview', [
+            'methods' => 'POST',
+            'callback' => [$this, 'preview_cron_expression'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args([
+                'expression' => [
+                    'required' => true,
+                    'type' => 'string',
+                ],
+                'components' => [
+                    'required' => false,
+                    'type' => 'array',
+                ],
+            ]),
         ]);
 
         // Routes : Planification
@@ -2573,6 +2591,130 @@ class BJLG_REST_API {
                 'success' => true,
                 'message' => 'Schedule created successfully',
                 'schedules' => $final_collection['schedules'],
+            ]);
+        });
+    }
+
+    public function preview_cron_expression($request) {
+        return $this->with_request_site($request, function () use ($request) {
+            $raw_expression = (string) $request->get_param('expression');
+            $sanitized = BJLG_Settings::sanitize_cron_expression($raw_expression);
+
+            if ($sanitized === '') {
+                return new WP_Error(
+                    'invalid_schedule_cron',
+                    __('L’expression Cron doit contenir cinq champs valides.', 'backup-jlg'),
+                    ['status' => 400]
+                );
+            }
+
+            $components = [];
+            $components_param = $request->get_param('components');
+            if (is_array($components_param)) {
+                foreach ($components_param as $component) {
+                    if (is_scalar($component)) {
+                        $components[] = sanitize_key((string) $component);
+                    }
+                }
+            }
+
+            $scheduler = BJLG_Scheduler::instance();
+            if (!$scheduler) {
+                return new WP_Error(
+                    'scheduler_unavailable',
+                    __('Le planificateur est indisponible.', 'backup-jlg'),
+                    ['status' => 500]
+                );
+            }
+
+            $analysis = BJLG_Scheduler::analyze_custom_cron_expression($sanitized);
+            if (is_wp_error($analysis)) {
+                $details = $analysis->get_error_data();
+                return new WP_Error(
+                    'invalid_schedule_cron',
+                    $analysis->get_error_message(),
+                    [
+                        'status' => 400,
+                        'details' => isset($details['details']) ? (array) $details['details'] : [],
+                    ]
+                );
+            }
+
+            if (!empty($analysis['errors'])) {
+                return new WP_Error(
+                    'invalid_schedule_cron',
+                    (string) $analysis['errors'][0],
+                    [
+                        'status' => 400,
+                        'details' => $analysis['errors'],
+                    ]
+                );
+            }
+
+            $impact = $scheduler->generate_cron_impact_summary($sanitized, $components, $analysis);
+            $runs = isset($analysis['runs']) && is_array($analysis['runs']) ? $analysis['runs'] : [];
+            $current_timestamp = current_time('timestamp');
+            $formatted_runs = [];
+
+            foreach ($runs as $run) {
+                if (!$run instanceof \DateTimeImmutable) {
+                    continue;
+                }
+                $timestamp = $run->getTimestamp();
+                $formatted_runs[] = [
+                    'timestamp' => $timestamp,
+                    'formatted' => wp_date(get_option('date_format') . ' ' . get_option('time_format'), $timestamp),
+                    'relative' => sprintf(__('dans %s', 'backup-jlg'), human_time_diff($current_timestamp, $timestamp)),
+                    'iso' => wp_date('c', $timestamp),
+                ];
+            }
+
+            $min_interval = isset($analysis['min_interval']) ? (int) $analysis['min_interval'] : null;
+            $interval_label = '';
+            if ($min_interval) {
+                $minute_in_seconds = defined('MINUTE_IN_SECONDS') ? (int) MINUTE_IN_SECONDS : 60;
+                if ($min_interval < $minute_in_seconds) {
+                    $interval_label = __('moins d’une minute', 'backup-jlg');
+                } else {
+                    $interval_label = human_time_diff($current_timestamp, $current_timestamp + $min_interval);
+                }
+            }
+
+            $severity = 'success';
+            if (!empty($analysis['warnings'])) {
+                $severity = 'warning';
+            }
+
+            $message = '';
+            if (!empty($analysis['warnings'])) {
+                $message = (string) $analysis['warnings'][0];
+            } elseif ($min_interval) {
+                $message = sprintf(
+                    __('Intervalle minimum détecté : %s.', 'backup-jlg'),
+                    $interval_label
+                );
+            } elseif (!empty($formatted_runs)) {
+                $message = sprintf(
+                    __('Prochaine exécution planifiée dans %s.', 'backup-jlg'),
+                    human_time_diff($current_timestamp, $formatted_runs[0]['timestamp'])
+                );
+            }
+
+            $timezone = function_exists('wp_timezone_string') ? wp_timezone_string() : 'UTC';
+
+            return rest_ensure_response([
+                'expression' => $sanitized,
+                'next_runs' => $formatted_runs,
+                'warnings' => $analysis['warnings'],
+                'errors' => $analysis['errors'],
+                'severity' => $severity,
+                'message' => $message,
+                'interval' => [
+                    'min' => $min_interval,
+                    'min_human' => $interval_label,
+                ],
+                'timezone' => $timezone,
+                'impact' => $impact,
             ]);
         });
     }
