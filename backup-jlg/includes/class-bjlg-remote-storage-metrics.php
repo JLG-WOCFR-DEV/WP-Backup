@@ -217,6 +217,8 @@ class BJLG_Remote_Storage_Metrics {
         ];
 
         if (!$entry['connected']) {
+            $entry['quota_samples'] = self::get_quota_sample_for_destination($destination_id);
+
             return $entry;
         }
 
@@ -238,6 +240,20 @@ class BJLG_Remote_Storage_Metrics {
             }
             if (isset($usage['free_bytes'])) {
                 $entry['free_bytes'] = self::sanitize_bytes($usage['free_bytes']);
+            }
+        }
+
+        $entry['quota_samples'] = self::get_quota_sample_for_destination($destination_id);
+
+        if (!empty($entry['quota_samples'])) {
+            if ($entry['used_bytes'] === null && $entry['quota_samples']['used_bytes'] !== null) {
+                $entry['used_bytes'] = $entry['quota_samples']['used_bytes'];
+            }
+            if ($entry['quota_bytes'] === null && $entry['quota_samples']['quota_bytes'] !== null) {
+                $entry['quota_bytes'] = $entry['quota_samples']['quota_bytes'];
+            }
+            if ($entry['free_bytes'] === null && $entry['quota_samples']['free_bytes'] !== null) {
+                $entry['free_bytes'] = $entry['quota_samples']['free_bytes'];
             }
         }
 
@@ -301,5 +317,58 @@ class BJLG_Remote_Storage_Metrics {
         }
 
         return null;
+    }
+
+    /**
+     * Retourne la dernière mesure de quota collectée via la purge distante.
+     */
+    private static function get_quota_sample_for_destination(string $destination_id): array
+    {
+        if (!function_exists('bjlg_get_option')) {
+            return [];
+        }
+
+        $metrics = \bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
+        if (!is_array($metrics) || empty($metrics['quotas']) || !is_array($metrics['quotas'])) {
+            return [];
+        }
+
+        $quotas = $metrics['quotas'];
+        if (empty($quotas['destinations']) || !is_array($quotas['destinations'])) {
+            return [];
+        }
+
+        $destination_metrics = $quotas['destinations'][$destination_id] ?? null;
+        if (!is_array($destination_metrics)) {
+            return [];
+        }
+
+        $used = isset($destination_metrics['used_bytes']) ? self::sanitize_bytes($destination_metrics['used_bytes']) : null;
+        $quota = isset($destination_metrics['quota_bytes']) ? self::sanitize_bytes($destination_metrics['quota_bytes']) : null;
+        $free = isset($destination_metrics['free_bytes']) ? self::sanitize_bytes($destination_metrics['free_bytes']) : null;
+
+        if ($free === null && $used !== null && $quota !== null) {
+            $free = max(0, $quota - $used);
+        }
+
+        if ($used === null && $quota === null && $free === null) {
+            return [];
+        }
+
+        $ratio = isset($destination_metrics['usage_ratio']) ? (float) $destination_metrics['usage_ratio'] : null;
+        if ($ratio !== null) {
+            $ratio = max(0.0, min(1.0, $ratio));
+        }
+
+        return [
+            'used_bytes' => $used,
+            'quota_bytes' => $quota,
+            'free_bytes' => $free,
+            'usage_ratio' => $ratio,
+            'average_usage_ratio' => isset($destination_metrics['average_usage_ratio']) ? (float) $destination_metrics['average_usage_ratio'] : null,
+            'last_seen_at' => isset($destination_metrics['last_seen_at']) ? (int) $destination_metrics['last_seen_at'] : 0,
+            'samples' => isset($destination_metrics['samples']) ? (int) $destination_metrics['samples'] : 0,
+            'source' => 'remote_purge',
+        ];
     }
 }

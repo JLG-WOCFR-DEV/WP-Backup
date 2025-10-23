@@ -128,6 +128,53 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
         $this->assertSame($entry['errors'], $failures[0][2]);
     }
 
+    public function test_process_queue_updates_metrics_with_durations_and_quotas(): void
+    {
+        $worker = new BJLG_Remote_Purge_Worker();
+        $destinationId = 'quota-dest';
+        $this->prepareManifestWithDestinations([$destinationId]);
+
+        $incremental = new BJLG_Incremental();
+        $queue = $incremental->get_remote_purge_queue();
+        $this->assertNotEmpty($queue);
+        $file = $queue[0]['file'];
+
+        $registeredAt = time() - 300;
+        $incremental->update_remote_purge_entry($file, [
+            'registered_at' => $registeredAt,
+            'next_attempt_at' => time(),
+        ]);
+
+        $this->registerStubDestination(0, [
+            'used_bytes' => 1500,
+            'quota_bytes' => 3000,
+        ], $destinationId);
+
+        $worker->process_queue();
+
+        $metrics = bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
+        $this->assertIsArray($metrics);
+
+        $this->assertArrayHasKey('durations', $metrics);
+        $this->assertArrayHasKey('average_seconds', $metrics['durations']);
+        $this->assertGreaterThan(0, $metrics['durations']['average_seconds']);
+
+        $this->assertArrayHasKey('projections', $metrics);
+        $this->assertArrayHasKey('queue_in_15m', $metrics['projections']);
+        $this->assertArrayHasKey('clearance_seconds', $metrics['projections']);
+
+        $this->assertArrayHasKey('quotas', $metrics);
+        $this->assertSame(1, $metrics['quotas']['samples']);
+        $this->assertArrayHasKey('destinations', $metrics['quotas']);
+        $this->assertArrayHasKey($destinationId, $metrics['quotas']['destinations']);
+
+        $destinationMetrics = $metrics['quotas']['destinations'][$destinationId];
+        $this->assertSame(1500, $destinationMetrics['used_bytes']);
+        $this->assertSame(3000, $destinationMetrics['quota_bytes']);
+        $this->assertNotNull($destinationMetrics['usage_ratio']);
+        $this->assertGreaterThan(0, $destinationMetrics['usage_ratio']);
+    }
+
     /**
      * @param array<int,string> $destinations
      */
@@ -186,21 +233,26 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
         return $path;
     }
 
-    private function registerStubDestination(int $failuresBeforeSuccess)
+    private function registerStubDestination(int $failuresBeforeSuccess, ?array $quotaPayload = null, string $destinationId = 'fake')
     {
-        $destination = new class($failuresBeforeSuccess) implements BJLG_Destination_Interface {
+        $destination = new class($failuresBeforeSuccess, $quotaPayload, $destinationId) implements BJLG_Destination_Interface {
             public int $remainingFailures;
             /** @var array<int,string> */
             public array $deleteCalls = [];
+            /** @var array<string,mixed>|null */
+            private $quotaPayload;
+            private string $identifier;
 
-            public function __construct(int $remainingFailures)
+            public function __construct(int $remainingFailures, ?array $quotaPayload, string $identifier)
             {
                 $this->remainingFailures = $remainingFailures;
+                $this->quotaPayload = $quotaPayload;
+                $this->identifier = $identifier;
             }
 
             public function get_id()
             {
-                return 'fake';
+                return $this->identifier;
             }
 
             public function get_name()
@@ -238,7 +290,12 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
                     return ['success' => false, 'message' => 'fail'];
                 }
 
-                return ['success' => true];
+                $result = ['success' => true];
+                if (is_array($this->quotaPayload)) {
+                    $result['quota'] = $this->quotaPayload;
+                }
+
+                return $result;
             }
 
             public function get_storage_usage()
@@ -247,8 +304,9 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
             }
         };
 
-        add_filter('bjlg_destination_factory', static function ($provided, $destinationId) use ($destination) {
-            if ($destinationId === 'fake') {
+        $registeredId = $destination->get_id();
+        add_filter('bjlg_destination_factory', static function ($provided, $destinationId) use ($destination, $registeredId) {
+            if ($destinationId === $registeredId) {
                 return $destination;
             }
 
