@@ -110,6 +110,14 @@ class BJLG_Settings {
             ],
             'templates' => [],
         ],
+        'update_guard' => [
+            'enabled' => true,
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'reminder' => [
+                'enabled' => false,
+                'message' => 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.',
+            ],
+        ],
         'performance' => [
             'multi_threading' => false,
             'max_workers' => 2,
@@ -552,6 +560,43 @@ class BJLG_Settings {
                 $saved_settings['incremental'] = $incremental_settings;
 
                 BJLG_Debug::log('Réglages incrémentaux sauvegardés : ' . print_r($incremental_settings, true));
+            }
+
+            // --- Snapshot pré-mise à jour ---
+            $update_guard_fields = ['update_guard_enabled', 'update_guard_components', 'update_guard_reminder_enabled', 'update_guard_reminder_message'];
+            $update_guard_submitted = false;
+            foreach ($update_guard_fields as $field) {
+                if (array_key_exists($field, $_POST)) {
+                    $update_guard_submitted = true;
+                    break;
+                }
+            }
+
+            if ($update_guard_submitted) {
+                $raw_components = isset($_POST['update_guard_components']) ? (array) $_POST['update_guard_components'] : [];
+                $components = [];
+                $allowed_components = self::get_default_backup_components();
+
+                foreach ($raw_components as $component) {
+                    $key = sanitize_key((string) $component);
+                    if ($key === '' || !in_array($key, $allowed_components, true) || in_array($key, $components, true)) {
+                        continue;
+                    }
+                    $components[] = $key;
+                }
+
+                $update_guard_settings = [
+                    'enabled' => array_key_exists('update_guard_enabled', $_POST) ? $this->to_bool(wp_unslash($_POST['update_guard_enabled'])) : false,
+                    'components' => $components,
+                    'reminder' => [
+                        'enabled' => array_key_exists('update_guard_reminder_enabled', $_POST) ? $this->to_bool(wp_unslash($_POST['update_guard_reminder_enabled'])) : false,
+                        'message' => isset($_POST['update_guard_reminder_message']) ? sanitize_text_field(wp_unslash($_POST['update_guard_reminder_message'])) : '',
+                    ],
+                ];
+
+                $this->update_option_value('bjlg_update_guard_settings', $update_guard_settings);
+                $saved_settings['update_guard'] = $update_guard_settings;
+                BJLG_Debug::log('Réglages du snapshot pré-mise à jour sauvegardés : ' . print_r($update_guard_settings, true));
             }
 
             // --- Réglages de la Marque Blanche ---
@@ -1422,6 +1467,43 @@ class BJLG_Settings {
 
                 return $sanitized;
 
+            case 'bjlg_update_guard_settings':
+                $defaults = $this->default_settings['update_guard'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (array_key_exists('enabled', $value)) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+
+                    if (array_key_exists('components', $value)) {
+                        $components = [];
+                        if (is_array($value['components'])) {
+                            $allowed = self::get_default_backup_components();
+                            foreach ($value['components'] as $component) {
+                                $component = sanitize_key((string) $component);
+                                if ($component !== '' && in_array($component, $allowed, true) && !in_array($component, $components, true)) {
+                                    $components[] = $component;
+                                }
+                            }
+                        }
+
+                        $sanitized['components'] = $components;
+                    }
+
+                    if (isset($value['reminder']) && is_array($value['reminder'])) {
+                        $reminder = $value['reminder'];
+                        if (array_key_exists('enabled', $reminder)) {
+                            $sanitized['reminder']['enabled'] = $this->to_bool($reminder['enabled']);
+                        }
+                        if (array_key_exists('message', $reminder)) {
+                            $sanitized['reminder']['message'] = sanitize_text_field((string) $reminder['message']);
+                        }
+                    }
+                }
+
+                return $sanitized;
+
             case 'bjlg_performance_settings':
                 $defaults = $this->default_settings['performance'];
                 $sanitized = $defaults;
@@ -1899,6 +1981,7 @@ class BJLG_Settings {
             'encryption' => 'bjlg_encryption_settings',
             'incremental' => 'bjlg_incremental_settings',
             'notifications' => 'bjlg_notification_settings',
+            'update_guard' => 'bjlg_update_guard_settings',
             'performance' => 'bjlg_performance_settings',
             'webhooks' => 'bjlg_webhook_settings',
             'schedule' => 'bjlg_schedule_settings',

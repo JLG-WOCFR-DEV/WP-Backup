@@ -94,4 +94,36 @@ final class BJLG_SiteContextTest extends TestCase
         $this->assertSame(2, get_current_blog_id());
         $this->assertSame([7], $GLOBALS['bjlg_test_blog_switch_log']);
     }
+
+    public function test_network_synced_option_prefers_network_value(): void
+    {
+        $GLOBALS['bjlg_test_is_multisite'] = true;
+        BJLG_Site_Context::bootstrap();
+
+        bjlg_with_network(function () {
+            bjlg_update_option('bjlg_api_keys', [['id' => 'network-key']], ['network' => true]);
+        });
+
+        bjlg_update_option('bjlg_api_keys', [['id' => 'site-key']]);
+
+        $value = bjlg_get_option('bjlg_api_keys');
+
+        $this->assertIsArray($value);
+        $this->assertSame('network-key', $value[0]['id']);
+    }
+
+    public function test_network_synced_option_updates_propagate_to_network(): void
+    {
+        $GLOBALS['bjlg_test_is_multisite'] = true;
+        BJLG_Site_Context::bootstrap();
+
+        bjlg_update_option('bjlg_notification_settings', ['email_recipients' => 'site@example.com']);
+
+        $network_value = bjlg_with_network(function () {
+            return bjlg_get_option('bjlg_notification_settings');
+        });
+
+        $this->assertIsArray($network_value);
+        $this->assertSame('site@example.com', $network_value['email_recipients']);
+    }
 }

@@ -6,6 +6,7 @@ use BJLG\BJLG_Notification_Queue;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/class-bjlg-notification-queue.php';
+require_once __DIR__ . '/../includes/class-bjlg-notification-receipts.php';
 
 final class BJLG_NotificationQueueActionsTest extends TestCase
 {
