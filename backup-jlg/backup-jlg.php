@@ -561,7 +561,7 @@ final class BJLG_Plugin {
             'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php',
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
-            'class-bjlg-notification-transport.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-storage-metrics.php', 'class-bjlg-remote-purge-worker.php',
+            'class-bjlg-notification-transport.php', 'class-bjlg-notification-receipts.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-storage-metrics.php', 'class-bjlg-remote-purge-worker.php',
             'class-bjlg-restore-self-test.php',
             'class-bjlg-update-guard.php',
             'class-bjlg-performance.php', 'class-bjlg-rate-limiter.php', 'class-bjlg-rest-api.php',

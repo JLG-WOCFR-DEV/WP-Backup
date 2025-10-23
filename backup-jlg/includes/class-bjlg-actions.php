@@ -33,6 +33,8 @@ class BJLG_Actions {
         add_action('template_redirect', [$this, 'maybe_handle_public_download']);
         add_action('wp_ajax_bjlg_notification_queue_retry', [$this, 'handle_notification_queue_retry']);
         add_action('wp_ajax_bjlg_notification_queue_delete', [$this, 'handle_notification_queue_delete']);
+        add_action('wp_ajax_bjlg_notification_acknowledge', [$this, 'handle_notification_acknowledge']);
+        add_action('wp_ajax_bjlg_notification_resolve', [$this, 'handle_notification_resolve']);
         add_action('wp_ajax_bjlg_remote_purge_retry', [$this, 'handle_remote_purge_retry']);
         add_action('wp_ajax_bjlg_remote_purge_delete', [$this, 'handle_remote_purge_delete']);
     }
@@ -575,6 +577,74 @@ class BJLG_Actions {
         ]);
     }
 
+    public function handle_notification_acknowledge() {
+        if (!\bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $entry_id = isset($_POST['entry_id']) ? sanitize_text_field(wp_unslash($_POST['entry_id'])) : '';
+        $summary = isset($_POST['summary']) ? sanitize_textarea_field(wp_unslash($_POST['summary'])) : '';
+
+        if ($entry_id === '') {
+            wp_send_json_error(['message' => __('Identifiant de notification manquant.', 'backup-jlg')], 400);
+        }
+
+        if (!class_exists(BJLG_Notification_Receipts::class)) {
+            wp_send_json_error(['message' => __('Suivi des accusés indisponible.', 'backup-jlg')], 500);
+        }
+
+        $record = BJLG_Notification_Receipts::acknowledge($entry_id, $this->get_current_user_label(), $summary);
+
+        if (empty($record)) {
+            wp_send_json_error(['message' => __('Impossible d’enregistrer cet accusé.', 'backup-jlg')], 500);
+        }
+
+        $receipt = BJLG_Notification_Receipts::prepare_for_display($record);
+        $metrics = $this->get_dashboard_metrics_snapshot();
+
+        wp_send_json_success([
+            'message' => __('Accusé de réception consigné.', 'backup-jlg'),
+            'receipt' => $receipt,
+            'metrics' => $metrics,
+        ]);
+    }
+
+    public function handle_notification_resolve() {
+        if (!\bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $entry_id = isset($_POST['entry_id']) ? sanitize_text_field(wp_unslash($_POST['entry_id'])) : '';
+        $summary = isset($_POST['summary']) ? sanitize_textarea_field(wp_unslash($_POST['summary'])) : '';
+
+        if ($entry_id === '') {
+            wp_send_json_error(['message' => __('Identifiant de notification manquant.', 'backup-jlg')], 400);
+        }
+
+        if (!class_exists(BJLG_Notification_Receipts::class)) {
+            wp_send_json_error(['message' => __('Suivi des résolutions indisponible.', 'backup-jlg')], 500);
+        }
+
+        $record = BJLG_Notification_Receipts::resolve($entry_id, $this->get_current_user_label(), $summary);
+
+        if (empty($record)) {
+            wp_send_json_error(['message' => __('Impossible de marquer cet incident comme résolu.', 'backup-jlg')], 500);
+        }
+
+        $receipt = BJLG_Notification_Receipts::prepare_for_display($record);
+        $metrics = $this->get_dashboard_metrics_snapshot();
+
+        wp_send_json_success([
+            'message' => __('Résolution consignée.', 'backup-jlg'),
+            'receipt' => $receipt,
+            'metrics' => $metrics,
+        ]);
+    }
+
     public function handle_remote_purge_retry() {
         if (!\bjlg_can_manage_backups()) {
             wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
@@ -629,6 +699,20 @@ class BJLG_Actions {
             'message' => __('Purge distante retirée de la file.', 'backup-jlg'),
             'metrics' => $metrics,
         ]);
+    }
+
+    private function get_current_user_label() {
+        if (function_exists('wp_get_current_user')) {
+            $user = wp_get_current_user();
+            if ($user && isset($user->display_name) && $user->display_name !== '') {
+                return (string) $user->display_name;
+            }
+            if ($user && isset($user->user_login) && $user->user_login !== '') {
+                return (string) $user->user_login;
+            }
+        }
+
+        return __('Opérateur', 'backup-jlg');
     }
 
     private function get_dashboard_metrics_snapshot() {
