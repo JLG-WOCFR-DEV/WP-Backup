@@ -567,6 +567,190 @@ function restoreSubmitState($submit, state) {
     $submit.prop('disabled', false).removeClass('is-busy');
 }
 
+function renderReceiptMeta(receipt) {
+    const parts = [];
+    if (receipt.created_relative) {
+        parts.push('Créé ' + receipt.created_relative);
+    } else if (receipt.created_formatted) {
+        parts.push('Créé le ' + receipt.created_formatted);
+    }
+    if (receipt.acknowledged_relative) {
+        parts.push('Accusé ' + receipt.acknowledged_relative);
+    }
+    if (receipt.resolved_relative) {
+        parts.push('Résolu ' + receipt.resolved_relative);
+    }
+
+    return parts.join(' · ');
+}
+
+function updateReceiptTimeline($item, steps) {
+    const $existing = $item.find('.bjlg-notification-receipts__timeline');
+    if (!steps || !steps.length) {
+        $existing.remove();
+        return;
+    }
+
+    let $timeline = $existing;
+    if (!$timeline.length) {
+        $timeline = $('<ol/>', {
+            'class': 'bjlg-notification-receipts__timeline',
+            hidden: true
+        }).appendTo($item);
+    }
+
+    $timeline.empty();
+    steps.forEach(function(step) {
+        const $entry = $('<li/>', { 'class': 'bjlg-notification-receipts__timeline-item' }).appendTo($timeline);
+        const $header = $('<div/>', { 'class': 'bjlg-notification-receipts__timeline-header' }).appendTo($entry);
+        $('<strong/>').text(step.actor || '').appendTo($header);
+        if (step.relative) {
+            $('<span/>').text(step.relative).appendTo($header);
+        } else if (step.formatted) {
+            $('<span/>').text(step.formatted).appendTo($header);
+        }
+        $('<p/>', { 'class': 'bjlg-notification-receipts__timeline-summary', text: step.summary || '' }).appendTo($entry);
+    });
+}
+
+function ensureReceiptToggle($actions) {
+    if (!$actions.find('[data-notification-receipt-toggle]').length) {
+        $('<button/>', {
+            type: 'button',
+            'class': 'button-link',
+            'data-notification-receipt-toggle': '',
+            text: 'Historique'
+        }).appendTo($actions);
+    }
+}
+
+function updateReceiptActions($item, receipt) {
+    const $actions = $item.find('.bjlg-notification-receipts__actions');
+    if (!$actions.length) {
+        return;
+    }
+
+    $actions.find('[data-notification-receipt-action="acknowledge"]').toggle(receipt.status === 'pending');
+    $actions.find('[data-notification-receipt-action="resolve"]').toggle(receipt.status !== 'resolved');
+
+    if (receipt.steps && receipt.steps.length) {
+        ensureReceiptToggle($actions);
+    }
+}
+
+function updateReceiptItem($item, receipt) {
+    if (!$item || !$item.length || !receipt) {
+        return;
+    }
+
+    $item.attr('data-receipt-status', receipt.status || 'pending');
+    $item.find('.bjlg-notification-receipts__title').text(receipt.title || receipt.event || '');
+    $item.find('.bjlg-notification-receipts__badge')
+        .text(receipt.status_label || '')
+        .attr('class', 'bjlg-notification-receipts__badge bjlg-notification-receipts__badge--' + (receipt.status || 'pending'));
+    $item.find('.bjlg-notification-receipts__meta').text(renderReceiptMeta(receipt));
+    updateReceiptTimeline($item, receipt.steps || []);
+    updateReceiptActions($item, receipt);
+}
+
+function showReceiptNotice($container, message, success) {
+    if (!$container || !$container.length || !message) {
+        return;
+    }
+
+    let $notice = $container.find('.bjlg-notification-receipts__notice');
+    if (!$notice.length) {
+        $notice = $('<div/>', { 'class': 'bjlg-notification-receipts__notice notice' });
+        $container.prepend($notice);
+    }
+
+    $notice
+        .removeClass('notice-success notice-error')
+        .addClass(success ? 'notice-success' : 'notice-error')
+        .text(message)
+        .show();
+
+    setTimeout(function() {
+        $notice.fadeOut();
+    }, 4000);
+}
+
+$(document).on('click', '[data-notification-receipt-toggle]', function(e) {
+    e.preventDefault();
+    const $item = $(this).closest('.bjlg-notification-receipts__item');
+    if (!$item.length) {
+        return;
+    }
+
+    const $timeline = $item.find('.bjlg-notification-receipts__timeline');
+    if (!$timeline.length) {
+        return;
+    }
+
+    const isHidden = $timeline.prop('hidden');
+    $timeline.prop('hidden', !isHidden);
+});
+
+$(document).on('click', '[data-notification-receipt-action]', function(e) {
+    e.preventDefault();
+
+    const $button = $(this);
+    const action = $button.data('notificationReceiptAction');
+    const entryId = $button.data('entryId');
+
+    if (!action || !entryId || !window.bjlg_ajax || !bjlg_ajax.ajax_url || !bjlg_ajax.nonce) {
+        return;
+    }
+
+    let summary = '';
+    if (action === 'acknowledge') {
+        const note = window.prompt('Ajouter une note pour l\'accusé de réception ?');
+        if (note === null) {
+            return;
+        }
+        summary = note;
+    } else if (action === 'resolve') {
+        const note = window.prompt('Consigner la résolution :', '');
+        if (note === null) {
+            return;
+        }
+        summary = note;
+    }
+
+    const payload = {
+        action: action === 'resolve' ? 'bjlg_notification_resolve' : 'bjlg_notification_acknowledge',
+        nonce: bjlg_ajax.nonce,
+        entry_id: entryId,
+        summary: summary
+    };
+
+    $button.prop('disabled', true).attr('aria-busy', 'true');
+
+    $.post(bjlg_ajax.ajax_url, payload)
+        .done(function(response) {
+            const $container = $button.closest('.bjlg-notification-receipts');
+            if (response && response.success) {
+                if (response.data && response.data.receipt) {
+                    updateReceiptItem($button.closest('.bjlg-notification-receipts__item'), response.data.receipt);
+                }
+                const message = response.data && response.data.message ? String(response.data.message) : 'Mise à jour enregistrée.';
+                showReceiptNotice($container, message, true);
+            } else {
+                const errorMessage = response && response.data && response.data.message
+                    ? String(response.data.message)
+                    : 'Impossible de mettre à jour cet incident.';
+                showReceiptNotice($container, errorMessage, false);
+            }
+        })
+        .fail(function() {
+            const $container = $button.closest('.bjlg-notification-receipts');
+            showReceiptNotice($container, 'Erreur de communication avec le serveur.', false);
+        })
+        .always(function() {
+            $button.prop('disabled', false).removeAttr('aria-busy');
+        });
+});
+
 // --- AFFICHER / MASQUER LES SECRETS ---
 $('body').on('click', '.bjlg-toggle-secret', function(e) {
     e.preventDefault();
