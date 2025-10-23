@@ -3251,6 +3251,9 @@ class BJLG_Admin {
         $template_settings = isset($notification_settings['templates']) && is_array($notification_settings['templates'])
             ? $notification_settings['templates']
             : [];
+        $notification_receipts = class_exists(BJLG_Notification_Receipts::class)
+            ? BJLG_Notification_Receipts::get_recent_for_display(10)
+            : [];
         $template_tokens = class_exists(BJLG_Notifications::class) && method_exists(BJLG_Notifications::class, 'get_template_tokens')
             ? BJLG_Notifications::get_template_tokens()
             : [
@@ -4073,6 +4076,71 @@ class BJLG_Admin {
 
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les canaux</button></p>
             </form>
+
+            <div class="bjlg-notification-receipts" data-ajax-url="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" data-nonce="<?php echo esc_attr(wp_create_nonce('bjlg_nonce')); ?>">
+                <h4><span class="dashicons dashicons-yes-alt" aria-hidden="true"></span> <?php esc_html_e('Accusés de réception récents', 'backup-jlg'); ?></h4>
+                <?php if (empty($notification_receipts)): ?>
+                    <p class="description"><?php esc_html_e('Aucun incident suivi n’a encore été consigné.', 'backup-jlg'); ?></p>
+                <?php else: ?>
+                    <ul class="bjlg-notification-receipts__list" role="list">
+                        <?php foreach ($notification_receipts as $receipt): ?>
+                            <li class="bjlg-notification-receipts__item" data-receipt-id="<?php echo esc_attr($receipt['id']); ?>" data-receipt-status="<?php echo esc_attr($receipt['status']); ?>">
+                                <div class="bjlg-notification-receipts__header">
+                                    <strong class="bjlg-notification-receipts__title"><?php echo esc_html($receipt['title'] !== '' ? $receipt['title'] : $receipt['event']); ?></strong>
+                                    <span class="bjlg-notification-receipts__badge bjlg-notification-receipts__badge--<?php echo esc_attr($receipt['status']); ?>"><?php echo esc_html($receipt['status_label']); ?></span>
+                                </div>
+                                <p class="bjlg-notification-receipts__meta">
+                                    <?php if (!empty($receipt['created_relative'])): ?>
+                                        <?php echo esc_html(sprintf(__('Créé %s', 'backup-jlg'), $receipt['created_relative'])); ?>
+                                    <?php elseif (!empty($receipt['created_formatted'])): ?>
+                                        <?php echo esc_html(sprintf(__('Créé le %s', 'backup-jlg'), $receipt['created_formatted'])); ?>
+                                    <?php endif; ?>
+                                    <?php if (!empty($receipt['acknowledged_relative'])): ?>
+                                        · <?php echo esc_html(sprintf(__('Accusé %s', 'backup-jlg'), $receipt['acknowledged_relative'])); ?>
+                                    <?php endif; ?>
+                                    <?php if (!empty($receipt['resolved_relative'])): ?>
+                                        · <?php echo esc_html(sprintf(__('Résolu %s', 'backup-jlg'), $receipt['resolved_relative'])); ?>
+                                    <?php endif; ?>
+                                </p>
+                                <div class="bjlg-notification-receipts__actions">
+                                    <?php if ($receipt['status'] === 'pending'): ?>
+                                        <button type="button" class="button button-secondary" data-notification-receipt-action="acknowledge" data-entry-id="<?php echo esc_attr($receipt['id']); ?>">
+                                            <?php esc_html_e('Accuser réception', 'backup-jlg'); ?>
+                                        </button>
+                                    <?php endif; ?>
+                                    <?php if ($receipt['status'] !== 'resolved'): ?>
+                                        <button type="button" class="button button-secondary" data-notification-receipt-action="resolve" data-entry-id="<?php echo esc_attr($receipt['id']); ?>">
+                                            <?php esc_html_e('Consigner une résolution', 'backup-jlg'); ?>
+                                        </button>
+                                    <?php endif; ?>
+                                    <?php if (!empty($receipt['steps'])): ?>
+                                        <button type="button" class="button-link" data-notification-receipt-toggle>
+                                            <?php esc_html_e('Historique', 'backup-jlg'); ?>
+                                        </button>
+                                    <?php endif; ?>
+                                </div>
+                                <?php if (!empty($receipt['steps'])): ?>
+                                    <ol class="bjlg-notification-receipts__timeline" hidden>
+                                        <?php foreach ($receipt['steps'] as $step): ?>
+                                            <li class="bjlg-notification-receipts__timeline-item">
+                                                <div class="bjlg-notification-receipts__timeline-header">
+                                                    <strong><?php echo esc_html($step['actor']); ?></strong>
+                                                    <?php if (!empty($step['relative'])): ?>
+                                                        <span><?php echo esc_html($step['relative']); ?></span>
+                                                    <?php elseif (!empty($step['formatted'])): ?>
+                                                        <span><?php echo esc_html($step['formatted']); ?></span>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <p class="bjlg-notification-receipts__timeline-summary"><?php echo esc_html($step['summary']); ?></p>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ol>
+                                <?php endif; ?>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php endif; ?>
+            </div>
 
             <h3><span class="dashicons dashicons-performance" aria-hidden="true"></span> Performance</h3>
             <form class="bjlg-settings-form" data-success-message="Paramètres de performance sauvegardés." data-error-message="Impossible de sauvegarder la configuration de performance.">

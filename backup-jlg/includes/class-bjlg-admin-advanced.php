@@ -403,6 +403,14 @@ class BJLG_Admin_Advanced {
 
             $details = [];
 
+            $resolution_payload = null;
+            if (class_exists(__NAMESPACE__ . '\\BJLG_Notification_Receipts') && !empty($entry['id'])) {
+                $receipt = BJLG_Notification_Receipts::get($entry['id']);
+                if (is_array($receipt)) {
+                    $resolution_payload = BJLG_Notification_Receipts::prepare_for_display($receipt);
+                }
+            }
+
             if (!empty($entry['quiet_until'])) {
                 [$quiet_formatted, $quiet_relative] = $this->format_timestamp_pair($entry['quiet_until'], $now);
                 if ($quiet_relative !== '') {
@@ -494,6 +502,38 @@ class BJLG_Admin_Advanced {
 
             if ($severity_label !== '') {
                 $details['severity_label'] = $severity_label;
+            }
+
+            $resolution_status = isset($entry['resolution_status']) ? (string) $entry['resolution_status'] : 'pending';
+            $details['resolution_status'] = $resolution_status;
+            $details['resolution_status_label'] = $this->get_resolution_status_label($resolution_status);
+
+            if ($resolution_payload) {
+                $details['acknowledged_relative'] = $resolution_payload['acknowledged_relative'] ?? '';
+                $details['acknowledged_formatted'] = $resolution_payload['acknowledged_formatted'] ?? '';
+                $details['resolved_relative'] = $resolution_payload['resolved_relative'] ?? '';
+                $details['resolved_formatted'] = $resolution_payload['resolved_formatted'] ?? '';
+                $details['resolution_steps'] = $resolution_payload['steps'] ?? [];
+            } elseif (!empty($entry['resolution']) && is_array($entry['resolution'])) {
+                $acknowledged = isset($entry['resolution']['acknowledged_at']) ? (int) $entry['resolution']['acknowledged_at'] : 0;
+                $resolved = isset($entry['resolution']['resolved_at']) ? (int) $entry['resolution']['resolved_at'] : 0;
+                [$ack_formatted, $ack_relative] = $this->format_timestamp_pair($acknowledged ?: null, $now);
+                [$res_formatted, $res_relative] = $this->format_timestamp_pair($resolved ?: null, $now);
+                if ($ack_relative !== '') {
+                    $details['acknowledged_relative'] = $ack_relative;
+                }
+                if ($ack_formatted !== '') {
+                    $details['acknowledged_formatted'] = $ack_formatted;
+                }
+                if ($res_relative !== '') {
+                    $details['resolved_relative'] = $res_relative;
+                }
+                if ($res_formatted !== '') {
+                    $details['resolved_formatted'] = $res_formatted;
+                }
+                if (!empty($entry['resolution']['steps']) && is_array($entry['resolution']['steps'])) {
+                    $details['resolution_steps'] = $entry['resolution']['steps'];
+                }
             }
 
             $formatted[] = [
@@ -898,6 +938,18 @@ class BJLG_Admin_Advanced {
             case 'info':
             default:
                 return 'info';
+        }
+    }
+
+    private function get_resolution_status_label(string $status): string {
+        switch ($status) {
+            case 'resolved':
+                return __('Résolu', 'backup-jlg');
+            case 'acknowledged':
+                return __('Accusé', 'backup-jlg');
+            case 'pending':
+            default:
+                return __('En attente', 'backup-jlg');
         }
     }
 
