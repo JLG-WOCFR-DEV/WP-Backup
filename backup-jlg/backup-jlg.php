@@ -667,6 +667,7 @@ final class BJLG_Plugin {
             'settings' => 'assets/js/admin-settings.js',
             'logs' => 'assets/js/admin-logs.js',
             'api' => 'assets/js/admin-api.js',
+            'rbac' => 'assets/js/admin-rbac.js',
         ];
 
         $module_urls = [];
@@ -683,6 +684,7 @@ final class BJLG_Plugin {
             'restore' => ['backup'],
             'settings' => ['settings'],
             'integrations' => ['api'],
+            'rbac' => ['rbac'],
         ];
 
         wp_enqueue_script(
