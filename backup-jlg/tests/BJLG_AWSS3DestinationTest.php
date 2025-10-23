@@ -2,10 +2,11 @@
 declare(strict_types=1);
 
 use BJLG\BJLG_AWS_S3;
-use Exception;
+use BJLG\BJLG_Remote_Storage_Usage_Exception;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/destinations/interface-bjlg-destination.php';
+require_once __DIR__ . '/../includes/destinations/class-bjlg-remote-storage-usage-exception.php';
 require_once __DIR__ . '/../includes/destinations/class-bjlg-aws-s3.php';
 
 final class BJLG_AWSS3DestinationTest extends TestCase
@@ -289,17 +290,16 @@ final class BJLG_AWSS3DestinationTest extends TestCase
         $handler = function ($url, array $args) {
             $this->requests[] = ['url' => $url, 'args' => $args];
 
-            if (strpos($url, 'metrics=usage') !== false) {
+            if (isset($args['method']) && $args['method'] === 'HEAD') {
                 return [
                     'response' => [
                         'code' => 200,
                         'message' => 'OK',
                     ],
-                    'body' => json_encode([
-                        'usedBytes' => 2048,
-                        'quotaBytes' => 4096,
-                        'freeBytes' => 2048,
-                    ]),
+                    'headers' => [
+                        'x-amz-bucket-size-bytes' => '2048',
+                        'x-amz-bucket-quota' => '4096',
+                    ],
                 ];
             }
 
@@ -329,14 +329,18 @@ final class BJLG_AWSS3DestinationTest extends TestCase
         $this->assertSame(2048, $usage['free_bytes']);
         $this->assertSame('provider', $usage['source']);
         $this->assertSame(1609459200, $usage['refreshed_at']);
+        $this->assertIsInt($usage['latency_ms']);
+        $this->assertGreaterThanOrEqual(0, $usage['latency_ms']);
+        $this->assertIsArray($usage['errors']);
+        $this->assertEmpty($usage['errors']);
     }
 
-    public function test_get_storage_usage_falls_back_to_listing_when_snapshot_fails(): void
+    public function test_get_storage_usage_throws_exception_when_head_request_fails(): void
     {
         $handler = function ($url, array $args) {
             $this->requests[] = ['url' => $url, 'args' => $args];
 
-            if (strpos($url, 'metrics=usage') !== false) {
+            if (isset($args['method']) && $args['method'] === 'HEAD') {
                 return [
                     'response' => [
                         'code' => 500,
@@ -351,7 +355,7 @@ final class BJLG_AWSS3DestinationTest extends TestCase
                     'code' => 200,
                     'message' => 'OK',
                 ],
-                'body' => '<ListBucketResult><Contents><Key>backup-1.zip</Key><Size>100</Size><LastModified>2021-01-01T00:00:00Z</LastModified></Contents><Contents><Key>backup-2.zip</Key><Size>150</Size><LastModified>2021-01-02T00:00:00Z</LastModified></Contents></ListBucketResult>',
+                'body' => '',
             ];
         };
 
@@ -365,12 +369,13 @@ final class BJLG_AWSS3DestinationTest extends TestCase
             'enabled' => true,
         ]);
 
-        $usage = $destination->get_storage_usage();
-
-        $this->assertSame(250, $usage['used_bytes']);
-        $this->assertNull($usage['quota_bytes']);
-        $this->assertNull($usage['free_bytes']);
-        $this->assertSame('estimate', $usage['source']);
+        try {
+            $destination->get_storage_usage();
+            $this->fail('Une exception BJLG_Remote_Storage_Usage_Exception était attendue.');
+        } catch (BJLG_Remote_Storage_Usage_Exception $exception) {
+            $this->assertSame('S3_HEAD_BUCKET_ERROR', $exception->get_provider_code());
+            $this->assertGreaterThanOrEqual(0, $exception->get_latency_ms());
+        }
     }
 
     private function createDestination(?callable $handler = null): BJLG_AWS_S3

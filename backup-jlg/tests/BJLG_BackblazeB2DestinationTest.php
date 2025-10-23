@@ -2,9 +2,11 @@
 declare(strict_types=1);
 
 use BJLG\BJLG_Backblaze_B2;
+use BJLG\BJLG_Remote_Storage_Usage_Exception;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/destinations/interface-bjlg-destination.php';
+require_once __DIR__ . '/../includes/destinations/class-bjlg-remote-storage-usage-exception.php';
 require_once __DIR__ . '/../includes/destinations/class-bjlg-backblaze-b2.php';
 
 final class BJLG_BackblazeB2DestinationTest extends TestCase
@@ -182,9 +184,11 @@ final class BJLG_BackblazeB2DestinationTest extends TestCase
 
             if (strpos($url, 'b2_get_usage') !== false) {
                 return $this->jsonResponse([
-                    'usedBytes' => 5000,
-                    'capacityBytes' => 10000,
-                    'freeBytes' => 5000,
+                    'storage' => [
+                        'currentValue' => 5000,
+                        'limit' => 10000,
+                        'remaining' => 5000,
+                    ],
                 ]);
             }
 
@@ -208,9 +212,13 @@ final class BJLG_BackblazeB2DestinationTest extends TestCase
         $this->assertSame(5000, $usage['free_bytes']);
         $this->assertSame('provider', $usage['source']);
         $this->assertSame(strtotime('2021-02-01T00:00:00Z'), $usage['refreshed_at']);
+        $this->assertIsInt($usage['latency_ms']);
+        $this->assertGreaterThanOrEqual(0, $usage['latency_ms']);
+        $this->assertIsArray($usage['errors']);
+        $this->assertEmpty($usage['errors']);
     }
 
-    public function test_get_storage_usage_falls_back_to_listing_when_snapshot_fails(): void
+    public function test_get_storage_usage_throws_exception_when_usage_call_fails(): void
     {
         $handler = function (string $url, array $args): array {
             $this->requests[] = ['url' => $url, 'args' => $args];
@@ -234,15 +242,6 @@ final class BJLG_BackblazeB2DestinationTest extends TestCase
                 ];
             }
 
-            if (strpos($url, 'b2_list_file_names') !== false) {
-                return $this->jsonResponse([
-                    'files' => [
-                        ['fileName' => 'nightly/backup-1.zip', 'contentLength' => 2000, 'uploadTimestamp' => 1612137600000],
-                        ['fileName' => 'nightly/backup-2.zip', 'contentLength' => 3000, 'uploadTimestamp' => 1612141200000],
-                    ],
-                ]);
-            }
-
             return $this->jsonResponse([]);
         };
 
@@ -257,12 +256,13 @@ final class BJLG_BackblazeB2DestinationTest extends TestCase
             'enabled' => true,
         ]);
 
-        $usage = $destination->get_storage_usage();
-
-        $this->assertSame(5000, $usage['used_bytes']);
-        $this->assertNull($usage['quota_bytes']);
-        $this->assertNull($usage['free_bytes']);
-        $this->assertSame('estimate', $usage['source']);
+        try {
+            $destination->get_storage_usage();
+            $this->fail('Une exception BJLG_Remote_Storage_Usage_Exception était attendue.');
+        } catch (BJLG_Remote_Storage_Usage_Exception $exception) {
+            $this->assertSame('B2_USAGE_API_ERROR', $exception->get_provider_code());
+            $this->assertGreaterThanOrEqual(0, $exception->get_latency_ms());
+        }
     }
 
     private function createDestination(?callable $handler = null): BJLG_Backblaze_B2

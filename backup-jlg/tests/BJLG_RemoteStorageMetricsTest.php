@@ -185,6 +185,46 @@ final class BJLG_RemoteStorageMetricsTest extends TestCase
         $this->assertSame(2, $entry['backups_count']);
     }
 
+    public function test_refresh_snapshot_dispatches_error_alert_when_usage_contains_errors(): void
+    {
+        add_filter('bjlg_known_destination_ids', static fn() => ['stub']);
+
+        $destination = $this->createDestination([
+            'errors' => ['API_FAIL'],
+        ], []);
+
+        add_filter(
+            'bjlg_destination_factory',
+            static function ($provided, $destination_id) use ($destination) {
+                if ($destination_id === 'stub') {
+                    return $destination;
+                }
+
+                return $provided;
+            },
+            10,
+            2
+        );
+
+        $captured = [];
+        add_action(
+            'bjlg_remote_storage_metrics_error',
+            static function ($context) use (&$captured) {
+                $captured[] = $context;
+            },
+            10,
+            1
+        );
+
+        BJLG_Remote_Storage_Metrics::refresh_snapshot();
+
+        $this->assertCount(1, $captured);
+        $this->assertSame('stub', $captured[0]['destination_id']);
+        $this->assertSame(['API_FAIL'], $captured[0]['errors']);
+        $this->assertArrayHasKey('latency_ms', $captured[0]);
+        $this->assertArrayHasKey('timestamp', $captured[0]);
+    }
+
     /**
      * @param array<string, mixed> $usage
      * @param array<int, array<string, mixed>> $backups
