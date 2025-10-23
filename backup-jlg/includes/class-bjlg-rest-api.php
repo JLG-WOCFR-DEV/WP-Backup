@@ -288,6 +288,13 @@ class BJLG_REST_API {
             ])
         ]);
 
+        register_rest_route(self::API_NAMESPACE, '/sla-report', [
+            'methods' => 'GET',
+            'callback' => [$this, 'get_sla_report'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args(),
+        ]);
+
         // Routes : Configuration
         register_rest_route(self::API_NAMESPACE, '/settings', [
             [
@@ -2539,6 +2546,57 @@ class BJLG_REST_API {
             ]);
         });
     }
+
+    /**
+     * Endpoint : Dernier rapport de validation SLA.
+     */
+    public function get_sla_report($request) {
+        return $this->with_request_site($request, function () {
+            $entry = BJLG_History::get_last_event_metadata('sandbox_restore_validation');
+
+            if (!is_array($entry)) {
+                return rest_ensure_response([
+                    'available' => false,
+                    'entry' => null,
+                    'report' => null,
+                ]);
+            }
+
+            $metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+            $report = isset($metadata['report']) && is_array($metadata['report']) ? $metadata['report'] : [];
+            $timestamp = isset($entry['timestamp']) ? strtotime($entry['timestamp']) : false;
+
+            $response = [
+                'available' => true,
+                'entry' => [
+                    'id' => isset($entry['id']) ? (int) $entry['id'] : 0,
+                    'timestamp' => $entry['timestamp'],
+                    'status' => $entry['status'],
+                    'details' => $entry['details'],
+                    'metadata' => $metadata,
+                ],
+                'report' => $report,
+            ];
+
+            if ($timestamp) {
+                $response['entry']['timestamp_unix'] = $timestamp;
+                if (function_exists('human_time_diff')) {
+                    $response['entry']['relative'] = human_time_diff($timestamp, time());
+                }
+            }
+
+            $response['summary'] = [
+                'status' => $entry['status'],
+                'rto_seconds' => $report['objectives']['rto_seconds'] ?? null,
+                'rpo_seconds' => $report['objectives']['rpo_seconds'] ?? null,
+                'rto_human' => $report['objectives']['rto_human'] ?? ($report['timings']['duration_human'] ?? null),
+                'rpo_human' => $report['objectives']['rpo_human'] ?? null,
+                'validated_at' => $entry['timestamp'],
+            ];
+
+            return rest_ensure_response($response);
+        });
+    }
     
     /**
      * Endpoint : Obtenir les paramètres
@@ -3106,6 +3164,7 @@ class BJLG_REST_API {
             'GET /health' => 'Get system health',
             'GET /stats' => 'Get statistics',
             'GET /history' => 'Get activity history',
+            'GET /sla-report' => 'Get latest SLA validation report',
             'GET /settings' => 'Get current settings',
             'PUT /settings' => 'Update settings',
             'GET /schedules' => 'Get backup schedules',

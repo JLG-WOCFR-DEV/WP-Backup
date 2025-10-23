@@ -29,6 +29,7 @@ class BJLG_History {
             action_type varchar(50) NOT NULL,
             status varchar(20) NOT NULL,
             details text NOT NULL,
+            metadata longtext NULL,
             user_id bigint(20) DEFAULT NULL,
             ip_address varchar(45) DEFAULT NULL,
             PRIMARY KEY  (id),
@@ -63,7 +64,7 @@ class BJLG_History {
      * @param int|null $user_id ID de l'utilisateur (null pour utilisateur actuel).
      * @param int|null $blog_id Identifiant du site cible pour enregistrer l'entrée.
      */
-    public static function log($action, $status, $details = '', $user_id = null, $blog_id = null) {
+    public static function log($action, $status, $details = '', $user_id = null, $blog_id = null, array $metadata = []) {
         global $wpdb;
         $table_name = self::get_table_name($blog_id);
         
@@ -89,6 +90,12 @@ class BJLG_History {
         ];
 
         $formats = ['%s', '%s', '%s', '%s'];
+
+        $encoded_metadata = self::encode_metadata($metadata);
+        if ($encoded_metadata !== null) {
+            $data['metadata'] = $encoded_metadata;
+            $formats[] = '%s';
+        }
 
         if ($user_id !== null) {
             $data['user_id'] = $user_id;
@@ -179,7 +186,11 @@ class BJLG_History {
         }
 
         $results = $wpdb->get_results($query, ARRAY_A);
-        
+
+        foreach ($results as &$entry) {
+            $entry['metadata'] = self::decode_metadata($entry['metadata'] ?? null);
+        }
+
         // Enrichir les résultats avec les noms d'utilisateur
         foreach ($results as &$entry) {
             if (!empty($entry['user_id'])) {
@@ -502,7 +513,87 @@ class BJLG_History {
             'webhook_triggered' => 'Webhook déclenché',
             'api_key_created' => 'Clé API créée',
             'encryption_key_generated' => 'Clé de chiffrement générée',
-            'support_package' => 'Pack de support créé'
+            'support_package' => 'Pack de support créé',
+            'sandbox_restore_validation' => 'Validation de restauration sandbox'
         ];
+    }
+
+    /**
+     * Retourne la dernière entrée correspondant à une action donnée.
+     *
+     * @param string      $action
+     * @param string|null $status
+     * @param int|null    $blog_id
+     * @return array<string,mixed>|null
+     */
+    public static function get_last_event_metadata($action, $status = null, $blog_id = null) {
+        global $wpdb;
+
+        if (!self::wpdb_supports(['prepare', 'get_row'])) {
+            return null;
+        }
+
+        $table_name = self::get_table_name($blog_id);
+        $where = ['action_type = %s'];
+        $params = [$action];
+
+        if ($status !== null) {
+            $where[] = 'status = %s';
+            $params[] = $status;
+        }
+
+        $sql = "SELECT * FROM $table_name WHERE " . implode(' AND ', $where) . " ORDER BY timestamp DESC, id DESC LIMIT 1";
+        $query = $wpdb->prepare($sql, ...$params);
+        $row = $wpdb->get_row($query, ARRAY_A);
+
+        if (!is_array($row)) {
+            return null;
+        }
+
+        $row['metadata'] = self::decode_metadata($row['metadata'] ?? null);
+
+        return $row;
+    }
+
+    /**
+     * Sérialise les métadonnées pour la base de données.
+     *
+     * @param array<string,mixed> $metadata
+     * @return string|null
+     */
+    private static function encode_metadata(array $metadata) {
+        if (empty($metadata)) {
+            return null;
+        }
+
+        $encoded = function_exists('wp_json_encode')
+            ? wp_json_encode($metadata)
+            : json_encode($metadata);
+
+        if (!is_string($encoded) || $encoded === '') {
+            return null;
+        }
+
+        return $encoded;
+    }
+
+    /**
+     * Désérialise une colonne de métadonnées.
+     *
+     * @param mixed $metadata
+     * @return array<string,mixed>
+     */
+    private static function decode_metadata($metadata) {
+        if (is_array($metadata)) {
+            return $metadata;
+        }
+
+        if (!is_string($metadata) || $metadata === '') {
+            return [];
+        }
+
+        $decoded = json_decode($metadata, true);
+
+        return is_array($decoded) ? $decoded : [];
     }
 }

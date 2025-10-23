@@ -51,6 +51,308 @@ class BJLG_Restore {
     }
 
     /**
+     * Exécute une validation automatisée de restauration dans une sandbox.
+     *
+     * @param array<string,mixed> $args
+     * @return array<string,mixed>
+     */
+    public function run_sandbox_validation(array $args = []): array {
+        $started_at = time();
+        $timer_start = microtime(true);
+        $task_id = '';
+        $task_state = [];
+        $sandbox_context = null;
+        $cleanup_result = ['performed' => false, 'error' => null];
+        $backup_file = '';
+        $status = 'failure';
+        $message = '';
+
+        $components = [];
+
+        try {
+            if (!self::user_can_use_sandbox()) {
+                throw new RuntimeException(__('La sandbox de restauration n’est pas disponible pour cette installation.', 'backup-jlg'));
+            }
+
+            $backup_file = $this->resolve_validation_backup($args);
+
+            $password = null;
+            if (isset($args['password']) && is_string($args['password'])) {
+                $password = $args['password'] !== '' ? $args['password'] : null;
+            }
+
+            if (substr($backup_file, -4) === '.enc' && $password === null) {
+                throw new RuntimeException(__('La sauvegarde la plus récente est chiffrée. Fournissez un mot de passe pour lancer la validation sandbox.', 'backup-jlg'));
+            }
+
+            $components = self::normalize_requested_components($args['components'] ?? null);
+
+            $environment = self::prepare_environment(self::ENV_SANDBOX, [
+                'sandbox_path' => isset($args['sandbox_path']) && is_string($args['sandbox_path'])
+                    ? $args['sandbox_path']
+                    : '',
+            ]);
+
+            $sandbox_context = $environment['sandbox'];
+            $task_id = 'bjlg_sandbox_validation_' . md5(uniqid('sandbox', true));
+
+            $password_encrypted = null;
+            if ($password !== null) {
+                $password_encrypted = self::encrypt_password_for_transient($password);
+            }
+
+            $task_data = [
+                'progress' => 0,
+                'status' => 'pending',
+                'status_text' => 'Initialisation de la restauration sandbox...',
+                'filename' => basename($backup_file),
+                'filepath' => $backup_file,
+                'password_encrypted' => $password_encrypted,
+                'create_restore_point' => false,
+                'components' => $components,
+                'environment' => $environment['environment'],
+                'routing_table' => $environment['routing_table'],
+            ];
+
+            if (!empty($environment['sandbox'])) {
+                $task_data['sandbox'] = $environment['sandbox'];
+            }
+
+            if (!BJLG_Backup::reserve_task_slot($task_id)) {
+                throw new RuntimeException(__('Une autre restauration est déjà en cours. La validation sandbox sera reprogrammée.', 'backup-jlg'));
+            }
+
+            if (!set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl())) {
+                BJLG_Backup::release_task_slot($task_id);
+                throw new RuntimeException(__('Impossible d’initialiser la tâche de validation sandbox.', 'backup-jlg'));
+            }
+
+            BJLG_Backup::release_task_slot($task_id);
+
+            $this->run_restore_task($task_id);
+
+            $task_state = get_transient($task_id);
+
+            if (is_array($task_state) && isset($task_state['status']) && $task_state['status'] === 'complete') {
+                $status = 'success';
+                $message = __('Validation sandbox terminée avec succès.', 'backup-jlg');
+            } else {
+                $status = 'failure';
+                $message = __('La validation sandbox ne s’est pas terminée correctement.', 'backup-jlg');
+            }
+        } catch (Throwable $throwable) {
+            $status = 'failure';
+            $message = sprintf(__('Validation sandbox échouée : %s', 'backup-jlg'), $throwable->getMessage());
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('[Sandbox validation] ' . $throwable->getMessage(), 'error');
+            }
+        } finally {
+            if ($task_id !== '') {
+                $cleanup_result = $this->cleanup_validation_sandbox(
+                    is_array($sandbox_context) && isset($sandbox_context['base_path'])
+                        ? $sandbox_context['base_path']
+                        : ''
+                );
+
+                delete_transient($task_id);
+            }
+        }
+
+        $completed_at = time();
+        $duration_seconds = (int) max(0, round(microtime(true) - $timer_start));
+        $duration_human = $this->format_duration_for_report($duration_seconds);
+
+        $backup_mtime = ($backup_file !== '' && file_exists($backup_file)) ? @filemtime($backup_file) : false;
+        $rpo_seconds = ($backup_mtime !== false) ? max(0, $started_at - (int) $backup_mtime) : null;
+        $rpo_human = $rpo_seconds !== null ? $this->format_duration_for_report($rpo_seconds) : null;
+
+        return [
+            'status' => $status,
+            'message' => $message,
+            'backup_file' => $backup_file,
+            'started_at' => $started_at,
+            'completed_at' => $completed_at,
+            'timings' => [
+                'duration_seconds' => $duration_seconds,
+                'duration_human' => $duration_human,
+            ],
+            'objectives' => [
+                'rto_seconds' => $duration_seconds,
+                'rto_human' => $duration_human,
+                'rpo_seconds' => $rpo_seconds,
+                'rpo_human' => $rpo_human,
+            ],
+            'components' => $components,
+            'sandbox' => [
+                'base_path' => is_array($sandbox_context) && isset($sandbox_context['base_path'])
+                    ? (string) $sandbox_context['base_path']
+                    : '',
+                'cleanup' => $cleanup_result,
+            ],
+            'task' => [
+                'id' => $task_id,
+                'state' => is_array($task_state) ? $task_state : [],
+            ],
+        ];
+    }
+
+    /**
+     * Résout le fichier de sauvegarde à utiliser pour la validation sandbox.
+     *
+     * @param array<string,mixed> $args
+     * @return string
+     */
+    private function resolve_validation_backup(array $args): string {
+        $requested = '';
+
+        if (isset($args['backup']) && is_string($args['backup']) && $args['backup'] !== '') {
+            $requested = $args['backup'];
+        } elseif (isset($args['backup_file']) && is_string($args['backup_file']) && $args['backup_file'] !== '') {
+            $requested = $args['backup_file'];
+        }
+
+        if ($requested !== '') {
+            $resolved = BJLG_Backup_Path_Resolver::resolve($requested);
+            if (!is_wp_error($resolved)) {
+                return $resolved;
+            }
+        }
+
+        $candidates = $this->list_validation_backup_candidates();
+
+        if (empty($candidates)) {
+            throw new RuntimeException(__('Aucune sauvegarde n’est disponible pour la validation sandbox.', 'backup-jlg'));
+        }
+
+        return $candidates[0]['path'];
+    }
+
+    /**
+     * Liste les fichiers de sauvegarde disponibles, triés du plus récent au plus ancien.
+     *
+     * @return array<int,array{path:string,modified:int}>
+     */
+    private function list_validation_backup_candidates(): array {
+        if (!defined('BJLG_BACKUP_DIR')) {
+            return [];
+        }
+
+        $base_dir = BJLG_BACKUP_DIR;
+        if (!is_string($base_dir) || $base_dir === '') {
+            return [];
+        }
+
+        if (function_exists('trailingslashit')) {
+            $base_dir = trailingslashit($base_dir);
+        } else {
+            $base_dir = rtrim($base_dir, '/\\') . '/';
+        }
+
+        $patterns = [
+            $base_dir . '*.zip',
+            $base_dir . '*.zip.enc',
+        ];
+
+        $candidates = [];
+
+        foreach ($patterns as $pattern) {
+            $matches = glob($pattern);
+            if (!is_array($matches)) {
+                continue;
+            }
+
+            foreach ($matches as $match) {
+                if (!is_string($match) || !is_file($match)) {
+                    continue;
+                }
+
+                $candidates[] = [
+                    'path' => $match,
+                    'modified' => (int) @filemtime($match),
+                ];
+            }
+        }
+
+        usort($candidates, function ($a, $b) {
+            return $b['modified'] <=> $a['modified'];
+        });
+
+        return $candidates;
+    }
+
+    /**
+     * Nettoie la sandbox créée pour la validation automatique.
+     *
+     * @param string $base_path
+     * @return array{performed:bool,error:?string}
+     */
+    private function cleanup_validation_sandbox($base_path): array {
+        $result = [
+            'performed' => false,
+            'error' => null,
+        ];
+
+        if (!is_string($base_path) || $base_path === '' || !file_exists($base_path)) {
+            return $result;
+        }
+
+        try {
+            $this->recursive_delete($base_path);
+            $result['performed'] = true;
+        } catch (Throwable $throwable) {
+            $result['error'] = $throwable->getMessage();
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('[Sandbox validation] ' . $throwable->getMessage(), 'error');
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Formate une durée en chaîne lisible.
+     */
+    private function format_duration_for_report($seconds): string {
+        $seconds = (int) $seconds;
+
+        if ($seconds <= 0) {
+            return '0s';
+        }
+
+        if (function_exists('human_time_diff')) {
+            $reference = time();
+
+            return human_time_diff($reference - $seconds, $reference);
+        }
+
+        if ($seconds >= HOUR_IN_SECONDS) {
+            $hours = (int) floor($seconds / HOUR_IN_SECONDS);
+            $minutes = (int) floor(($seconds % HOUR_IN_SECONDS) / MINUTE_IN_SECONDS);
+
+            if ($minutes > 0) {
+                return sprintf('%dh %dm', $hours, $minutes);
+            }
+
+            return sprintf('%dh', $hours);
+        }
+
+        if ($seconds >= MINUTE_IN_SECONDS) {
+            $minutes = (int) floor($seconds / MINUTE_IN_SECONDS);
+            $remaining = $seconds % MINUTE_IN_SECONDS;
+
+            if ($remaining > 0) {
+                return sprintf('%dm %ds', $minutes, $remaining);
+            }
+
+            return sprintf('%dm', $minutes);
+        }
+
+        return sprintf('%ds', $seconds);
+    }
+
+    /**
      * Nettoie un environnement sandbox existant.
      */
     public function handle_cleanup_sandbox() {

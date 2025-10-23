@@ -196,12 +196,74 @@ class BJLG_Admin_Advanced {
 
         $metrics['encryption'] = $this->get_encryption_metrics();
 
+        $metrics['sla_validation'] = $this->build_sla_validation_panel();
+
         $metrics['summary'] = $this->build_summary($metrics);
         $metrics['alerts'] = $this->build_alerts($metrics);
         $metrics['restore_self_test'] = $this->get_restore_self_test_snapshot($now);
         $metrics['reliability'] = $this->build_reliability($metrics);
 
         return $metrics;
+    }
+
+    private function build_sla_validation_panel(): array {
+        $entry = BJLG_History::get_last_event_metadata('sandbox_restore_validation');
+
+        if (!is_array($entry)) {
+            return [
+                'available' => false,
+                'status' => 'unknown',
+                'message' => __('Aucune validation sandbox enregistrée.', 'backup-jlg'),
+                'actions' => [
+                    __('Planifiez une restauration sandbox automatisée pour valider votre SLA.', 'backup-jlg'),
+                ],
+            ];
+        }
+
+        $metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+        $report = isset($metadata['report']) && is_array($metadata['report']) ? $metadata['report'] : [];
+        $objectives = isset($report['objectives']) && is_array($report['objectives']) ? $report['objectives'] : [];
+        $timings = isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [];
+        $sandbox = isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [];
+        $status = isset($entry['status']) ? (string) $entry['status'] : 'info';
+        $timestamp = isset($entry['timestamp']) ? strtotime($entry['timestamp']) : false;
+        $relative = ($timestamp && function_exists('human_time_diff')) ? human_time_diff($timestamp, time()) : '';
+        $backup_filename = isset($report['backup_file']) && is_string($report['backup_file']) ? basename($report['backup_file']) : '';
+        $cleanup = isset($sandbox['cleanup']) && is_array($sandbox['cleanup']) ? $sandbox['cleanup'] : [];
+
+        $actions = [];
+        if ($status === 'success') {
+            $actions[] = __('Consignez cette validation dans votre registre SLA.', 'backup-jlg');
+            $actions[] = __('Planifiez un contrôle manuel après les mises à jour critiques.', 'backup-jlg');
+        } else {
+            $actions[] = __('Relancez une restauration sandbox depuis l’onglet Restauration pour diagnostiquer l’incident.', 'backup-jlg');
+            $actions[] = __('Vérifiez l’espace disque local et la connectivité des destinations distantes.', 'backup-jlg');
+            $actions[] = __('Inspectez l’historique détaillé et les notifications associées.', 'backup-jlg');
+        }
+
+        return [
+            'available' => true,
+            'status' => $status,
+            'validated_at' => $entry['timestamp'],
+            'validated_relative' => $relative,
+            'message' => $entry['details'],
+            'report' => $report,
+            'actions' => $actions,
+            'objectives' => [
+                'rto_seconds' => isset($objectives['rto_seconds']) ? (float) $objectives['rto_seconds'] : null,
+                'rto_human' => isset($objectives['rto_human']) ? (string) $objectives['rto_human'] : ($timings['duration_human'] ?? ''),
+                'rpo_seconds' => isset($objectives['rpo_seconds']) ? (float) $objectives['rpo_seconds'] : null,
+                'rpo_human' => isset($objectives['rpo_human']) ? (string) $objectives['rpo_human'] : '',
+            ],
+            'backup' => [
+                'filename' => $backup_filename,
+                'path' => isset($report['backup_file']) ? (string) $report['backup_file'] : '',
+            ],
+            'sandbox' => [
+                'path' => isset($sandbox['base_path']) ? (string) $sandbox['base_path'] : '',
+                'cleanup' => $cleanup,
+            ],
+        ];
     }
 
     private function build_queue_metrics(int $now): array {
@@ -1075,6 +1137,15 @@ class BJLG_Admin_Advanced {
             $summary['scheduler_next_run_relative'] = $metrics['scheduler']['next_runs'][0]['next_run_relative'];
         }
 
+        if (!empty($metrics['sla_validation']['available'])) {
+            $sla = $metrics['sla_validation'];
+            $summary['sla_status'] = $sla['status'];
+            $summary['sla_validated_at'] = $sla['validated_at'];
+            $summary['sla_validated_relative'] = $sla['validated_relative'];
+            $summary['sla_rto_human'] = $sla['objectives']['rto_human'] ?? '';
+            $summary['sla_rpo_human'] = $sla['objectives']['rpo_human'] ?? '';
+        }
+
         return $summary;
     }
 
@@ -1732,6 +1803,32 @@ class BJLG_Admin_Advanced {
                     ]
                 );
             }
+        }
+
+        $sla_panel = $metrics['sla_validation'] ?? [];
+        if (!empty($sla_panel['available'])) {
+            $sla_status = isset($sla_panel['status']) ? sanitize_key((string) $sla_panel['status']) : 'info';
+            if ($sla_status === 'failure') {
+                $alerts[] = $this->make_alert(
+                    'error',
+                    __('Validation SLA en échec', 'backup-jlg'),
+                    __('La dernière restauration sandbox automatisée a échoué. Consultez le rapport pour appliquer les actions de remédiation.', 'backup-jlg'),
+                    [
+                        'label' => __('Ouvrir le rapport SLA', 'backup-jlg'),
+                        'url' => add_query_arg(['page' => 'backup-jlg', 'section' => 'monitoring'], admin_url('admin.php')) . '#bjlg-sla-panel',
+                    ]
+                );
+            }
+        } else {
+            $alerts[] = $this->make_alert(
+                'warning',
+                __('Validation SLA non réalisée', 'backup-jlg'),
+                __('Aucune restauration sandbox planifiée n’a encore été exécutée. Programmez une validation pour mesurer votre RTO/RPO.', 'backup-jlg'),
+                [
+                    'label' => __('Programmer la sandbox', 'backup-jlg'),
+                    'url' => add_query_arg(['page' => 'backup-jlg', 'section' => 'monitoring'], admin_url('admin.php')),
+                ]
+            );
         }
 
         if (!empty($metrics['scheduler']['overdue'])) {
