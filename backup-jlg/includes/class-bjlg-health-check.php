@@ -123,16 +123,16 @@ class BJLG_Health_Check {
      * @return array ['status' => 'success'|'error', 'message' => string]
      */
     private function check_backup_directory() {
-        if (!is_dir(BJLG_BACKUP_DIR)) {
-            if (!@mkdir(BJLG_BACKUP_DIR, 0755, true)) {
+        if (!is_dir(bjlg_get_backup_directory())) {
+            if (!@mkdir(bjlg_get_backup_directory(), 0755, true)) {
                 return [
-                    'status' => 'error', 
-                    'message' => "Le dossier de sauvegarde n'existe pas et n'a pas pu être créé. Chemin : " . BJLG_BACKUP_DIR
+                    'status' => 'error',
+                    'message' => "Le dossier de sauvegarde n'existe pas et n'a pas pu être créé. Chemin : " . bjlg_get_backup_directory()
                 ];
             }
         }
         
-        if (!is_writable(BJLG_BACKUP_DIR)) {
+        if (!is_writable(bjlg_get_backup_directory())) {
             return [
                 'status' => 'error', 
                 'message' => "Le dossier de sauvegarde n'est pas accessible en écriture ! Veuillez vérifier les permissions (CHMOD 755 ou 775)."
@@ -146,13 +146,13 @@ class BJLG_Health_Check {
         ];
 
         foreach ($sentinels as $filename => $contents) {
-            $path = BJLG_BACKUP_DIR . $filename;
+            $path = bjlg_get_backup_directory() . $filename;
             if (!file_exists($path)) {
                 @file_put_contents($path, $contents);
             }
         }
 
-        $web_config_path = BJLG_BACKUP_DIR . 'web.config';
+        $web_config_path = bjlg_get_backup_directory() . 'web.config';
         if (!file_exists($web_config_path)) {
             $web_config_contents = <<<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -169,7 +169,7 @@ XML;
         }
 
         // Compter les sauvegardes
-        $backups = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
+        $backups = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
         $count = count($backups);
         $size = 0;
         foreach ($backups as $backup) {
@@ -434,7 +434,7 @@ XML;
         }
 
         // Tester la création d'une archive
-        $test_file = BJLG_BACKUP_DIR . 'test_' . uniqid() . '.zip';
+        $test_file = bjlg_get_backup_directory() . 'test_' . uniqid() . '.zip';
         $zip = new \ZipArchive();
 
         if ($zip->open($test_file, \ZipArchive::CREATE) === TRUE) {

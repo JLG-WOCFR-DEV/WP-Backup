@@ -109,7 +109,7 @@ final class BJLG_Test_BackupFixtures
 
             $zip->close();
 
-            $destination = BJLG_BACKUP_DIR . $archiveFilename;
+            $destination = bjlg_get_backup_directory() . $archiveFilename;
             if (!@copy($zipPath, $destination)) {
                 throw new RuntimeException('Impossible de copier l\'archive générée vers le répertoire de sauvegarde.');
             }

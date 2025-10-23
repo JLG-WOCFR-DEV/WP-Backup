@@ -239,7 +239,7 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
 
     private function createBackupFile(string $prefix): string
     {
-        $path = BJLG_BACKUP_DIR . $prefix . '-' . uniqid('', true) . '.zip';
+        $path = bjlg_get_backup_directory() . $prefix . '-' . uniqid('', true) . '.zip';
         file_put_contents($path, 'test');
         $this->createdPaths[] = $path;
 

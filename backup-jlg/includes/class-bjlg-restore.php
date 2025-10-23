@@ -643,17 +643,17 @@ class BJLG_Restore {
         $backup_filename = $base_filename . '.zip';
 
         if (function_exists('wp_unique_filename')) {
-            $backup_filename = wp_unique_filename(BJLG_BACKUP_DIR, $backup_filename);
+            $backup_filename = wp_unique_filename(bjlg_get_backup_directory(), $backup_filename);
         }
 
-        $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
+        $backup_filepath = bjlg_get_backup_directory() . $backup_filename;
 
         while (file_exists($backup_filepath)) {
             $unique_suffix = str_replace('.', '-', uniqid('', true));
             $backup_filename = sprintf('%s-%s.zip', $base_filename, $unique_suffix);
-            $backup_filepath = BJLG_BACKUP_DIR . $backup_filename;
+            $backup_filepath = bjlg_get_backup_directory() . $backup_filename;
         }
-        $sql_filepath = BJLG_BACKUP_DIR . 'database_temp_prerestore.sql';
+        $sql_filepath = bjlg_get_backup_directory() . 'database_temp_prerestore.sql';
 
         $zip = new ZipArchive();
 
@@ -709,7 +709,7 @@ class BJLG_Restore {
                 ],
             ];
 
-            $backup_dir_path = BJLG_BACKUP_DIR;
+            $backup_dir_path = bjlg_get_backup_directory();
             if (function_exists('wp_normalize_path')) {
                 $backup_dir_path = wp_normalize_path($backup_dir_path);
             }
@@ -926,7 +926,7 @@ class BJLG_Restore {
         ];
 
         if (defined('BJLG_BACKUP_DIR')) {
-            $defaults[] = self::normalize_path(BJLG_BACKUP_DIR);
+            $defaults[] = self::normalize_path(bjlg_get_backup_directory());
         }
 
         if (defined('WP_CONTENT_DIR')) {
@@ -988,7 +988,7 @@ class BJLG_Restore {
      * Retourne le répertoire sandbox par défaut.
      */
     private static function get_default_sandbox_base_dir() {
-        $base = defined('BJLG_BACKUP_DIR') ? BJLG_BACKUP_DIR : sys_get_temp_dir() . '/bjlg-backups/';
+        $base = defined('BJLG_BACKUP_DIR') ? bjlg_get_backup_directory() : sys_get_temp_dir() . '/bjlg-backups/';
 
         return rtrim($base, '/\\') . '/sandboxes';
     }
@@ -1122,21 +1122,21 @@ class BJLG_Restore {
             ]);
         }
 
-        if (!wp_mkdir_p(BJLG_BACKUP_DIR)) {
+        if (!wp_mkdir_p(bjlg_get_backup_directory())) {
             wp_send_json_error([
                 'message' => 'Répertoire de sauvegarde inaccessible.',
                 'details' => [
-                    'backup_directory' => BJLG_BACKUP_DIR,
+                    'backup_directory' => bjlg_get_backup_directory(),
                 ],
             ]);
         }
 
-        $is_writable = function_exists('wp_is_writable') ? wp_is_writable(BJLG_BACKUP_DIR) : is_writable(BJLG_BACKUP_DIR);
+        $is_writable = function_exists('wp_is_writable') ? wp_is_writable(bjlg_get_backup_directory()) : is_writable(bjlg_get_backup_directory());
         if (!$is_writable) {
             wp_send_json_error([
                 'message' => 'Répertoire de sauvegarde non accessible en écriture.',
                 'details' => [
-                    'backup_directory' => BJLG_BACKUP_DIR,
+                    'backup_directory' => bjlg_get_backup_directory(),
                 ],
             ]);
         }
@@ -1215,7 +1215,7 @@ class BJLG_Restore {
         }
 
         // Déplacer le fichier uploadé vers le répertoire des sauvegardes
-        $destination = BJLG_BACKUP_DIR . 'restore_' . uniqid('', true) . '_' . $sanitized_filename;
+        $destination = bjlg_get_backup_directory() . 'restore_' . uniqid('', true) . '_' . $sanitized_filename;
         $moved = @rename($handled_upload['file'], $destination);
 
         if (!$moved) {
@@ -1604,7 +1604,7 @@ class BJLG_Restore {
             }
         }
 
-        $temp_extract_dir = BJLG_BACKUP_DIR . 'temp_restore_' . uniqid();
+        $temp_extract_dir = bjlg_get_backup_directory() . 'temp_restore_' . uniqid();
         $final_error_status = null;
         $error_status_recorded = false;
 

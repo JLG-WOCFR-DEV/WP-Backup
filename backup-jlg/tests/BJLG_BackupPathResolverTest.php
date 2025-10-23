@@ -11,22 +11,22 @@ final class BJLG_BackupPathResolverTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        bjlg_tests_recursive_delete(BJLG_BACKUP_DIR);
-        if (!is_dir(BJLG_BACKUP_DIR)) {
-            mkdir(BJLG_BACKUP_DIR, 0777, true);
+        bjlg_tests_recursive_delete(bjlg_get_backup_directory());
+        if (!is_dir(bjlg_get_backup_directory())) {
+            mkdir(bjlg_get_backup_directory(), 0777, true);
         }
     }
 
     protected function tearDown(): void
     {
-        bjlg_tests_recursive_delete(BJLG_BACKUP_DIR);
-        mkdir(BJLG_BACKUP_DIR, 0777, true);
+        bjlg_tests_recursive_delete(bjlg_get_backup_directory());
+        mkdir(bjlg_get_backup_directory(), 0777, true);
         parent::tearDown();
     }
 
     public function test_resolve_returns_absolute_path_for_existing_archive(): void
     {
-        $backupPath = BJLG_BACKUP_DIR . 'sample-backup.zip';
+        $backupPath = bjlg_get_backup_directory() . 'sample-backup.zip';
         file_put_contents($backupPath, 'dummy');
 
         $resolved = BJLG_Backup_Path_Resolver::resolve('sample-backup.zip');
@@ -36,7 +36,7 @@ final class BJLG_BackupPathResolverTest extends TestCase
 
     public function test_resolve_appends_zip_extension_when_missing(): void
     {
-        $backupPath = BJLG_BACKUP_DIR . 'nightly.zip';
+        $backupPath = bjlg_get_backup_directory() . 'nightly.zip';
         file_put_contents($backupPath, 'nightly');
 
         $resolved = BJLG_Backup_Path_Resolver::resolve('nightly');
@@ -53,7 +53,7 @@ final class BJLG_BackupPathResolverTest extends TestCase
         $outsidePath = sys_get_temp_dir() . '/bjlg-outside-' . uniqid('', true) . '.zip';
         file_put_contents($outsidePath, 'outside');
 
-        $linkPath = BJLG_BACKUP_DIR . 'linked.zip';
+        $linkPath = bjlg_get_backup_directory() . 'linked.zip';
         if (@symlink($outsidePath, $linkPath) === false) {
             $this->markTestSkipped('Symlinks cannot be created in this environment.');
         }

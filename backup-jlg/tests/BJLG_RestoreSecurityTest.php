@@ -76,11 +76,11 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $_POST = [];
         $this->additionalBackupPaths = [];
 
-        if (!is_dir(BJLG_BACKUP_DIR)) {
-            mkdir(BJLG_BACKUP_DIR, 0777, true);
+        if (!is_dir(bjlg_get_backup_directory())) {
+            mkdir(bjlg_get_backup_directory(), 0777, true);
         }
 
-        $this->existingBackupPath = BJLG_BACKUP_DIR . 'backup.zip';
+        $this->existingBackupPath = bjlg_get_backup_directory() . 'backup.zip';
         file_put_contents($this->existingBackupPath, 'dummy-backup');
     }
 
@@ -185,7 +185,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
 
     public function test_handle_run_restore_allows_encrypted_backup_with_password(): void
     {
-        $encryptedPath = BJLG_BACKUP_DIR . 'encrypted-backup.zip.enc';
+        $encryptedPath = bjlg_get_backup_directory() . 'encrypted-backup.zip.enc';
         file_put_contents($encryptedPath, 'encrypted-dummy');
         $this->additionalBackupPaths[] = $encryptedPath;
 
@@ -212,7 +212,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
 
     public function test_handle_run_restore_requires_password_for_encrypted_backup(): void
     {
-        $encryptedPath = BJLG_BACKUP_DIR . 'encrypted-no-password.zip.enc';
+        $encryptedPath = bjlg_get_backup_directory() . 'encrypted-no-password.zip.enc';
         file_put_contents($encryptedPath, 'encrypted-dummy');
         $this->additionalBackupPaths[] = $encryptedPath;
 
@@ -457,7 +457,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
 
     public function test_restore_rejects_directory_traversal_entries(): void
     {
-        $malicious_target = rtrim(BJLG_BACKUP_DIR, '/\\') . '/malicious.php';
+        $malicious_target = rtrim(bjlg_get_backup_directory(), '/\\') . '/malicious.php';
 
         if (file_exists($malicious_target)) {
             unlink($malicious_target);
@@ -483,7 +483,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $zip->addFromString('../malicious.php', '<?php echo "hacked";');
         $zip->close();
 
-        $destination = BJLG_BACKUP_DIR . 'malicious.zip';
+        $destination = bjlg_get_backup_directory() . 'malicious.zip';
         copy($zip_path, $destination);
 
         $restore = new BJLG\BJLG_Restore();
@@ -549,7 +549,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
 
         $zip->close();
 
-        $destination = BJLG_BACKUP_DIR . 'symlink.zip';
+        $destination = bjlg_get_backup_directory() . 'symlink.zip';
         copy($zip_path, $destination);
 
         $restore = new BJLG\BJLG_Restore();
@@ -588,7 +588,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
     {
         bjlg_update_option('bjlg_encryption_settings', ['enabled' => true]);
 
-        $zip_path = BJLG_BACKUP_DIR . 'encrypted-restore-' . uniqid('', true) . '.zip';
+        $zip_path = bjlg_get_backup_directory() . 'encrypted-restore-' . uniqid('', true) . '.zip';
         $zip = new ZipArchive();
         $open_result = $zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE);
         $this->assertTrue($open_result === true || $open_result === ZipArchive::ER_OK);

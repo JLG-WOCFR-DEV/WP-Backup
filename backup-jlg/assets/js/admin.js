@@ -944,6 +944,201 @@ jQuery(function($) {
         requestModules(modules);
     });
 
+    (function initNetworkAdminView() {
+        const root = document.getElementById('bjlg-network-admin-app');
+        if (!root) {
+            return;
+        }
+
+        const networkEnabled = root.getAttribute('data-network-enabled') === '1';
+        const fallback = root.querySelector('.bjlg-network-app__fallback');
+        const panel = root.querySelector('.bjlg-network-app__panel');
+
+        const i18n = window.wp && window.wp.i18n ? window.wp.i18n : {};
+        const __ = typeof i18n.__ === 'function' ? i18n.__ : function(str) { return str; };
+        const sprintf = typeof i18n.sprintf === 'function'
+            ? i18n.sprintf
+            : function(format) {
+                const args = Array.prototype.slice.call(arguments, 1);
+                let index = 0;
+                return String(format).replace(/%s/g, function() {
+                    const replacement = args[index];
+                    index++;
+                    return typeof replacement === 'undefined' ? '' : replacement;
+                });
+            };
+        const numberFormat = typeof i18n.numberFormat === 'function'
+            ? i18n.numberFormat
+            : function(value, precision) {
+                const numeric = typeof value === 'number' ? value : parseFloat(value);
+                if (!isFinite(numeric)) {
+                    return '0.00';
+                }
+
+                const pow = Math.pow(10, precision);
+                return String(Math.round(numeric * pow) / pow);
+            };
+
+        const networkConfig = (window.bjlg_ajax && window.bjlg_ajax.network) ? window.bjlg_ajax.network : null;
+        let sites = parseJSONSafe(root.getAttribute('data-sites'), []);
+
+        const hideFallback = function() {
+            if (!fallback) {
+                return;
+            }
+            fallback.setAttribute('hidden', 'hidden');
+            fallback.classList.add('is-hidden');
+        };
+
+        const renderStatus = function(container, site) {
+            container.innerHTML = '';
+
+            if (!site) {
+                const message = document.createElement('p');
+                message.textContent = networkEnabled
+                    ? __('Sélectionnez un site pour afficher ses informations.', 'backup-jlg')
+                    : __('Le mode réseau est désactivé. Activez-le pour synchroniser les données.', 'backup-jlg');
+                container.appendChild(message);
+
+                return;
+            }
+
+            const statsList = document.createElement('dl');
+            statsList.className = 'bjlg-network-app__stats';
+
+            const addStat = function(label, value) {
+                const term = document.createElement('dt');
+                term.textContent = label;
+                const description = document.createElement('dd');
+                description.textContent = value;
+                statsList.appendChild(term);
+                statsList.appendChild(description);
+            };
+
+            const history = site.history || {};
+            addStat(__('Actions enregistrées', 'backup-jlg'), String(history.total_actions || 0));
+            addStat(__('Réussites', 'backup-jlg'), String(history.successful || 0));
+            addStat(__('Échecs', 'backup-jlg'), String(history.failed || 0));
+
+            const quota = site.quota || {};
+            const quotaValue = typeof quota.used === 'number'
+                ? sprintf(__('%s Mo', 'backup-jlg'), numberFormat(quota.used / (1024 * 1024), 2))
+                : __('Inconnu', 'backup-jlg');
+
+            addStat(__('Quota consommé', 'backup-jlg'), quotaValue);
+
+            container.appendChild(statsList);
+        };
+
+        const mountInterface = function(list) {
+            if (!panel) {
+                return;
+            }
+
+            panel.innerHTML = '';
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'bjlg-network-app__layout';
+
+            const selector = document.createElement('div');
+            selector.className = 'bjlg-network-app__controls';
+
+            const label = document.createElement('label');
+            label.setAttribute('for', 'bjlg-network-site-select');
+            label.textContent = __('Site du réseau', 'backup-jlg');
+            selector.appendChild(label);
+
+            const select = document.createElement('select');
+            select.id = 'bjlg-network-site-select';
+            select.className = 'bjlg-network-app__select';
+
+            list.forEach(function(site, index) {
+                const option = document.createElement('option');
+                option.value = String(site.id);
+                option.textContent = site.name || __('Site', 'backup-jlg') + ' #' + site.id;
+                option.setAttribute('data-index', String(index));
+                select.appendChild(option);
+            });
+
+            selector.appendChild(select);
+
+            const openButton = document.createElement('a');
+            openButton.className = 'button button-secondary';
+            openButton.id = 'bjlg-network-open-dashboard';
+            openButton.target = '_blank';
+            openButton.rel = 'noopener noreferrer';
+            openButton.textContent = __('Ouvrir le tableau de bord', 'backup-jlg');
+            selector.appendChild(openButton);
+
+            const status = document.createElement('div');
+            status.id = 'bjlg-network-site-status';
+            status.className = 'bjlg-network-app__status';
+
+            wrapper.appendChild(selector);
+            wrapper.appendChild(status);
+            panel.appendChild(wrapper);
+
+            const updateSelection = function(site) {
+                if (openButton) {
+                    openButton.href = site && site.admin_url ? site.admin_url : '#';
+                    openButton.setAttribute('aria-disabled', site && site.admin_url ? 'false' : 'true');
+                }
+                renderStatus(status, site || null);
+            };
+
+            select.addEventListener('change', function() {
+                const selectedIndex = select.selectedIndex;
+                const site = list[selectedIndex];
+                updateSelection(site);
+            });
+
+            if (list.length) {
+                select.selectedIndex = 0;
+                updateSelection(list[0]);
+                hideFallback();
+            } else {
+                select.disabled = true;
+                updateSelection(null);
+            }
+        };
+
+        const updateSites = function(list) {
+            if (!Array.isArray(list)) {
+                return;
+            }
+
+            sites = list;
+            mountInterface(sites);
+        };
+
+        mountInterface(sites);
+
+        if (!networkEnabled) {
+            return;
+        }
+
+        if (!networkConfig || !networkConfig.enabled || !networkConfig.endpoints || !networkConfig.endpoints.sites) {
+            return;
+        }
+
+        if (!window.wp || !window.wp.apiFetch) {
+            return;
+        }
+
+        window.wp.apiFetch({
+            url: networkConfig.endpoints.sites,
+            headers: {
+                'X-WP-Nonce': bjlg_ajax.rest_nonce
+            }
+        }).then(function(response) {
+            if (response && Array.isArray(response.sites)) {
+                updateSites(response.sites);
+            }
+        }).catch(function() {
+            // Leave fallback visible in case of errors.
+        });
+    })();
+
     (function setupContrastToggle() {
         const $button = $('#bjlg-contrast-toggle');
         const $context = $('.bjlg-wrap');

@@ -43,7 +43,7 @@ class BJLG_Incremental {
     private static $latest_instance = null;
 
     public function __construct() {
-        $this->manifest_file = BJLG_BACKUP_DIR . '.incremental-manifest.json';
+        $this->manifest_file = bjlg_get_backup_directory() . '.incremental-manifest.json';
         $this->load_manifest();
 
         self::$latest_instance = $this;
@@ -721,7 +721,7 @@ class BJLG_Incremental {
             if (!empty($full_backup_entry['path']) && is_string($full_backup_entry['path'])) {
                 $full_backup_path = $full_backup_entry['path'];
             } elseif (!empty($full_backup_entry['file']) && is_string($full_backup_entry['file'])) {
-                $full_backup_path = BJLG_BACKUP_DIR . ltrim($full_backup_entry['file'], '\\/');
+                $full_backup_path = bjlg_get_backup_directory() . ltrim($full_backup_entry['file'], '\\/');
             }
         }
 
@@ -964,7 +964,7 @@ class BJLG_Incremental {
         }
 
         if ($backup_filepath === '' && $backup_filename !== '') {
-            $backup_filepath = BJLG_BACKUP_DIR . ltrim($backup_filename, '\\/');
+            $backup_filepath = bjlg_get_backup_directory() . ltrim($backup_filename, '\\/');
         }
 
         $components = [];
@@ -1133,7 +1133,7 @@ class BJLG_Incremental {
                 continue;
             }
 
-            $absolute = BJLG_BACKUP_DIR . ltrim($candidate, '\\/');
+            $absolute = bjlg_get_backup_directory() . ltrim($candidate, '\\/');
             if (file_exists($absolute)) {
                 return $absolute;
             }
@@ -1411,7 +1411,7 @@ class BJLG_Incremental {
         $missing = [];
         
         foreach ($chain as $backup) {
-            $filepath = BJLG_BACKUP_DIR . $backup['file'];
+            $filepath = bjlg_get_backup_directory() . $backup['file'];
             if (!file_exists($filepath)) {
                 $missing[] = $backup['file'];
             }

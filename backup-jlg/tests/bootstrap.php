@@ -347,6 +347,26 @@ if (!defined('BJLG_BACKUP_DIR')) {
     define('BJLG_BACKUP_DIR', $test_backup_dir);
 }
 
+if (!function_exists('bjlg_get_backup_directory')) {
+    function bjlg_get_backup_directory($site_id = null, $context = null) {
+        $base = BJLG_BACKUP_DIR;
+
+        if (strpos($base, 'site-') !== false || strpos($base, 'network') !== false) {
+            return trailingslashit($base);
+        }
+
+        $normalized_base = trailingslashit($base);
+
+        if ($context === 'network') {
+            return trailingslashit($normalized_base . 'network');
+        }
+
+        $target = $site_id !== null ? (int) $site_id : (function_exists('get_current_blog_id') ? (int) get_current_blog_id() : 1);
+
+        return trailingslashit($normalized_base . 'site-' . $target);
+    }
+}
+
 if (!function_exists('bjlg_tests_recursive_delete')) {
     function bjlg_tests_recursive_delete(string $path): void
     {
@@ -379,12 +399,12 @@ if (!function_exists('bjlg_tests_recursive_delete')) {
 if (!function_exists('bjlg_tests_cleanup_backup_dir')) {
     function bjlg_tests_cleanup_backup_dir(): void
     {
-        if (!is_dir(BJLG_BACKUP_DIR)) {
+        if (!is_dir(bjlg_get_backup_directory())) {
             return;
         }
 
         $sentinels = ['.htaccess', 'index.php', 'web.config'];
-        $items = glob(BJLG_BACKUP_DIR . '*') ?: [];
+        $items = glob(bjlg_get_backup_directory() . '*') ?: [];
 
         foreach ($items as $item) {
             $basename = basename($item);
@@ -404,7 +424,7 @@ if (!function_exists('bjlg_tests_cleanup_backup_dir')) {
 if (!function_exists('bjlg_tests_ensure_backup_sentinels')) {
     function bjlg_tests_ensure_backup_sentinels(): void
     {
-        if (!is_dir(BJLG_BACKUP_DIR)) {
+        if (!is_dir(bjlg_get_backup_directory())) {
             return;
         }
 
@@ -414,13 +434,13 @@ if (!function_exists('bjlg_tests_ensure_backup_sentinels')) {
         ];
 
         foreach ($sentinels as $filename => $contents) {
-            $path = BJLG_BACKUP_DIR . $filename;
+            $path = bjlg_get_backup_directory() . $filename;
             if (!file_exists($path)) {
                 file_put_contents($path, $contents);
             }
         }
 
-        $web_config_path = BJLG_BACKUP_DIR . 'web.config';
+        $web_config_path = bjlg_get_backup_directory() . 'web.config';
         if (!file_exists($web_config_path)) {
             $web_config_contents = <<<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -438,8 +458,8 @@ XML;
     }
 }
 
-if (!is_dir(BJLG_BACKUP_DIR)) {
-    mkdir(BJLG_BACKUP_DIR, 0777, true);
+if (!is_dir(bjlg_get_backup_directory())) {
+    mkdir(bjlg_get_backup_directory(), 0777, true);
 }
 
 bjlg_tests_cleanup_backup_dir();
@@ -697,13 +717,35 @@ if (!class_exists('BJLG_Debug') && class_exists('BJLG\\BJLG_Debug')) {
 if (!class_exists('BJLG_History')) {
     class BJLG_History
     {
-        public static function get_stats($period = 'week')
+        /** @var array<int,array<int,array<string,mixed>>>> */
+        public static $history_store = [];
+
+        public static function get_stats($period = 'week', $blog_id = null)
         {
+            $blog_key = $blog_id !== null ? (int) $blog_id : (function_exists('get_current_blog_id') ? (int) get_current_blog_id() : 1);
+            $entries = self::$history_store[$blog_key] ?? [];
+
+            $total = count($entries);
+            $successful = 0;
+            $failed = 0;
+            $info = 0;
+
+            foreach ($entries as $entry) {
+                $status = isset($entry['status']) ? (string) $entry['status'] : '';
+                if ($status === 'success') {
+                    $successful++;
+                } elseif ($status === 'failure') {
+                    $failed++;
+                } elseif ($status === 'info') {
+                    $info++;
+                }
+            }
+
             return [
-                'total_actions' => 0,
-                'successful' => 0,
-                'failed' => 0,
-                'info' => 0,
+                'total_actions' => $total,
+                'successful' => $successful,
+                'failed' => $failed,
+                'info' => $info,
                 'by_action' => [],
                 'by_user' => [],
                 'most_active_hour' => null,
@@ -721,9 +763,29 @@ if (!class_exists('BJLG_History')) {
             }
         }
 
-        public static function get_history($limit = 100)
+        public static function get_history($limit = 100, $filters = [], $blog_id = null)
         {
-            return [];
+            $blog_key = $blog_id !== null ? (int) $blog_id : (function_exists('get_current_blog_id') ? (int) get_current_blog_id() : 1);
+            $entries = self::$history_store[$blog_key] ?? [];
+
+            $filtered = [];
+
+            foreach ($entries as $entry) {
+                if (isset($filters['action_type']) && (string) $filters['action_type'] !== (string) ($entry['action_type'] ?? '')) {
+                    continue;
+                }
+
+                if (isset($filters['status']) && (string) $filters['status'] !== (string) ($entry['status'] ?? '')) {
+                    continue;
+                }
+
+                $filtered[] = $entry;
+                if (count($filtered) >= $limit) {
+                    break;
+                }
+            }
+
+            return $filtered;
         }
     }
 }

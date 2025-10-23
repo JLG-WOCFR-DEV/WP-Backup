@@ -377,10 +377,76 @@ class BJLG_Admin {
 
         bjlg_with_network(function () {
             $this->handle_network_admin_actions();
-            $this->render_admin_page();
         });
 
+        $network_mode_enabled = BJLG_Site_Context::is_network_mode_enabled();
+        $sites_snapshot = $this->collect_network_site_snapshot();
+        $sites_json = !empty($sites_snapshot) ? wp_json_encode($sites_snapshot) : '[]';
+
         $this->is_network_screen = $previous_state;
+
+        ?>
+        <div class="wrap bjlg-wrap bjlg-network-wrap">
+            <h1 class="wp-heading-inline"><?php esc_html_e('Gestion des sauvegardes réseau', 'backup-jlg'); ?></h1>
+
+            <?php if (!$network_mode_enabled): ?>
+                <div class="notice notice-warning"><p><?php esc_html_e('Le mode réseau est actuellement désactivé. Activez-le pour partager les historiques, quotas et paramètres à l’échelle du réseau.', 'backup-jlg'); ?></p></div>
+            <?php endif; ?>
+
+            <div id="bjlg-network-admin-app"
+                 data-network-enabled="<?php echo $network_mode_enabled ? '1' : '0'; ?>"
+                 data-sites="<?php echo esc_attr($sites_json); ?>">
+                <noscript><p><?php esc_html_e('Activez JavaScript pour administrer les sites du réseau.', 'backup-jlg'); ?></p></noscript>
+
+                <div class="bjlg-network-app__panel" aria-live="polite" aria-atomic="true">
+                    <div class="bjlg-network-app__loading"><?php esc_html_e('Chargement des données réseau…', 'backup-jlg'); ?></div>
+                </div>
+
+                <div class="bjlg-network-app__fallback" data-has-sites="<?php echo empty($sites_snapshot) ? '0' : '1'; ?>">
+                    <?php if (!empty($sites_snapshot)): ?>
+                        <table class="widefat striped">
+                            <thead>
+                            <tr>
+                                <th><?php esc_html_e('Site', 'backup-jlg'); ?></th>
+                                <th><?php esc_html_e('Dernières activités', 'backup-jlg'); ?></th>
+                                <th><?php esc_html_e('Quotas utilisés', 'backup-jlg'); ?></th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <?php foreach ($sites_snapshot as $site): ?>
+                                <tr>
+                                    <td>
+                                        <strong><?php echo esc_html($site['name']); ?></strong><br>
+                                        <a href="<?php echo esc_url($site['admin_url']); ?>" class="button button-small"><?php esc_html_e('Ouvrir', 'backup-jlg'); ?></a>
+                                    </td>
+                                    <td>
+                                        <?php
+                                        $history = $site['history'];
+                                        printf(
+                                            /* translators: 1: total entries, 2: number of successful entries */
+                                            esc_html__('Total : %1$d · Réussites : %2$d', 'backup-jlg'),
+                                            (int) ($history['total_actions'] ?? 0),
+                                            (int) ($history['successful'] ?? 0)
+                                        );
+                                        ?>
+                                    </td>
+                                    <td>
+                                        <?php
+                                        $quota_used = isset($site['quota']['used']) ? (int) $site['quota']['used'] : 0;
+                                        echo esc_html(size_format($quota_used, 2));
+                                        ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php else: ?>
+                        <p><?php esc_html_e('Aucun site réseau disponible ou données indisponibles.', 'backup-jlg'); ?></p>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </div>
+        <?php
     }
 
     /**
@@ -4535,7 +4601,7 @@ class BJLG_Admin {
      * Section : Logs et outils
      */
     private function render_logs_section() {
-        $relative_backup_dir = str_replace(untrailingslashit(ABSPATH), '', BJLG_BACKUP_DIR);
+        $relative_backup_dir = str_replace(untrailingslashit(ABSPATH), '', bjlg_get_backup_directory());
         ?>
         <div class="bjlg-section">
             <h2>Journaux et Outils de Diagnostic</h2>
@@ -4941,6 +5007,69 @@ class BJLG_Admin {
         });
 
         return $results;
+    }
+
+    private function collect_network_site_snapshot(): array
+    {
+        $sites = $this->get_network_sites();
+        if (empty($sites)) {
+            return [];
+        }
+
+        $snapshot = [];
+
+        foreach ($sites as $site) {
+            $blog_id = isset($site['id']) ? (int) $site['id'] : 0;
+
+            if ($blog_id <= 0) {
+                continue;
+            }
+
+            $site_data = bjlg_with_site($blog_id, function () use ($site, $blog_id) {
+                $history_stats = ['total_actions' => 0, 'successful' => 0, 'failed' => 0];
+                if (class_exists(BJLG_History::class)) {
+                    $history_stats = BJLG_History::get_stats('month', $blog_id);
+                }
+
+                $metrics = \bjlg_get_option('bjlg_remote_storage_metrics', []);
+                $quota_used = 0;
+
+                if (is_array($metrics)) {
+                    foreach ($metrics as $metric) {
+                        if (!is_array($metric)) {
+                            continue;
+                        }
+
+                        $quota_used += isset($metric['used']) ? (int) $metric['used'] : 0;
+                    }
+                }
+
+                $admin_url = function_exists('get_admin_url')
+                    ? get_admin_url($blog_id, 'admin.php?page=backup-jlg')
+                    : '';
+
+                return [
+                    'id' => $blog_id,
+                    'name' => $site['name'],
+                    'url' => $site['url'],
+                    'admin_url' => $admin_url,
+                    'history' => [
+                        'total_actions' => isset($history_stats['total_actions']) ? (int) $history_stats['total_actions'] : 0,
+                        'successful' => isset($history_stats['successful']) ? (int) $history_stats['successful'] : 0,
+                        'failed' => isset($history_stats['failed']) ? (int) $history_stats['failed'] : 0,
+                    ],
+                    'quota' => [
+                        'used' => $quota_used,
+                    ],
+                ];
+            });
+
+            if (is_array($site_data)) {
+                $snapshot[] = $site_data;
+            }
+        }
+
+        return $snapshot;
     }
 
     private function get_permission_choices() {

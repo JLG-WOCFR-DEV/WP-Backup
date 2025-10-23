@@ -718,12 +718,9 @@ class BJLG_REST_API {
         $context = $this->get_requested_context($request);
 
         if ($context === 'network') {
-            if (!function_exists('is_multisite') || !is_multisite()) {
-                return new WP_Error(
-                    'bjlg_network_context_unavailable',
-                    __('Le contexte réseau n’est pas disponible sur cette installation.', 'backup-jlg'),
-                    ['status' => 400]
-                );
+            $availability = $this->ensure_network_context_available();
+            if (is_wp_error($availability)) {
+                return $availability;
             }
 
             if ($this->get_requested_site_id($request)) {
@@ -776,6 +773,27 @@ class BJLG_REST_API {
         return \bjlg_with_site($site_id, static function () use ($callback) {
             return $callback();
         });
+    }
+
+    private function ensure_network_context_available()
+    {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return new WP_Error(
+                'bjlg_network_context_unavailable',
+                __('Le contexte réseau n’est pas disponible sur cette installation.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        if (!BJLG_Site_Context::is_network_mode_enabled()) {
+            return new WP_Error(
+                'bjlg_network_mode_disabled',
+                __('Le mode réseau est désactivé pour Backup JLG.', 'backup-jlg'),
+                ['status' => 400]
+            );
+        }
+
+        return true;
     }
     
     /**
@@ -1588,7 +1606,7 @@ class BJLG_REST_API {
             $per_page = max(1, min(100, (int) $per_page));
 
             $backups = [];
-            $files = glob(BJLG_BACKUP_DIR . '*.zip*');
+            $files = glob(bjlg_get_backup_directory() . '*.zip*');
 
             if (empty($files)) {
                 return rest_ensure_response([
@@ -2550,9 +2568,9 @@ class BJLG_REST_API {
      */
     public function get_status($request) {
         return $this->with_request_site($request, function () use ($request) {
-            $backup_files = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
+            $backup_files = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
 
-            $backup_directory = BJLG_BACKUP_DIR;
+            $backup_directory = bjlg_get_backup_directory();
             $disk_free_space = null;
             $disk_space_error = false;
 
@@ -3307,7 +3325,7 @@ class BJLG_REST_API {
      */
     private function get_total_backup_size() {
         $total = 0;
-        $files = glob(BJLG_BACKUP_DIR . '*.zip*') ?: [];
+        $files = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
 
         foreach ($files as $file) {
             $total += filesize($file);

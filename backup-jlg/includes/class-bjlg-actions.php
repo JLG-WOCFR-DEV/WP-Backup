@@ -60,7 +60,7 @@ class BJLG_Actions {
             wp_send_json_error(['message' => 'Nom de fichier invalide.'], 400);
         }
 
-        $real_backup_dir = realpath(BJLG_BACKUP_DIR);
+        $real_backup_dir = realpath(bjlg_get_backup_directory());
 
         if ($real_backup_dir === false) {
             wp_send_json_error(['message' => 'Répertoire de sauvegarde introuvable.'], 500);
@@ -123,7 +123,7 @@ class BJLG_Actions {
         }
 
         $filename = '';
-        $real_backup_dir = realpath(BJLG_BACKUP_DIR);
+        $real_backup_dir = realpath(bjlg_get_backup_directory());
 
         if ($real_backup_dir === false) {
             wp_send_json_error(['message' => 'Répertoire de sauvegarde introuvable.'], 500);
@@ -336,7 +336,7 @@ class BJLG_Actions {
             return new WP_Error('bjlg_forbidden', 'Permissions insuffisantes pour télécharger cette sauvegarde.', ['status' => 403]);
         }
 
-        $real_backup_dir = realpath(BJLG_BACKUP_DIR);
+        $real_backup_dir = realpath(bjlg_get_backup_directory());
         $real_filepath = realpath($filepath);
 
         if ($real_backup_dir === false || $real_filepath === false) {
