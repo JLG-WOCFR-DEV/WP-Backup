@@ -189,6 +189,7 @@ class BJLG_Admin_Advanced {
         $metrics['storage']['remote_last_refreshed_relative'] = $remote_snapshot['generated_at_relative'];
         $metrics['storage']['remote_refresh_stale'] = $remote_snapshot['stale'];
         $metrics['storage']['remote_warning_threshold'] = $remote_snapshot['threshold_percent'];
+        $metrics['storage']['remote_threshold'] = isset($remote_snapshot['threshold_ratio']) ? (float) $remote_snapshot['threshold_ratio'] : $threshold_ratio;
 
         $metrics['queues'] = $this->build_queue_metrics($now);
 
@@ -532,6 +533,10 @@ class BJLG_Admin_Advanced {
         $throughput = isset($raw['throughput']) && is_array($raw['throughput']) ? $raw['throughput'] : [];
         $failures = isset($raw['failures']) && is_array($raw['failures']) ? $raw['failures'] : [];
 
+        $forecast = isset($raw['forecast']) && is_array($raw['forecast']) ? $raw['forecast'] : [];
+        $overall_forecast = isset($forecast['overall']) && is_array($forecast['overall']) ? $forecast['overall'] : [];
+        $forecast_destinations = isset($forecast['destinations']) && is_array($forecast['destinations']) ? $forecast['destinations'] : [];
+
         $formatted = [
             'updated_relative' => $updated_relative,
             'updated_formatted' => $updated_formatted,
@@ -546,6 +551,11 @@ class BJLG_Admin_Advanced {
             'failures_total' => isset($failures['total']) ? (int) $failures['total'] : 0,
             'last_failure_relative' => '',
             'last_failure_message' => isset($failures['last_message']) ? (string) $failures['last_message'] : '',
+            'forecast_label' => isset($overall_forecast['forecast_label']) ? (string) $overall_forecast['forecast_label'] : '',
+            'forecast_seconds' => isset($overall_forecast['forecast_seconds']) ? (int) $overall_forecast['forecast_seconds'] : null,
+            'forecast_destinations' => $this->format_forecast_destinations($forecast_destinations, $now),
+            'forecast_projected_relative' => '',
+            'forecast_projected_formatted' => '',
         ];
 
         if (!empty($pending['average_seconds'])) {
@@ -584,6 +594,56 @@ class BJLG_Admin_Advanced {
             );
             $formatted['last_failure_relative'] = $failure_relative;
             $formatted['last_failure_formatted'] = $failure_formatted;
+        }
+
+        if (!empty($overall_forecast['projected_clearance'])) {
+            [$projected_formatted, $projected_relative] = $this->format_timestamp_pair(
+                $overall_forecast['projected_clearance'],
+                $now
+            );
+            $formatted['forecast_projected_relative'] = $projected_relative;
+            $formatted['forecast_projected_formatted'] = $projected_formatted;
+        }
+
+        return $formatted;
+    }
+
+    /**
+     * @param array<string,array<string,mixed>> $forecasts
+     */
+    private function format_forecast_destinations(array $forecasts, int $now): array {
+        if (empty($forecasts)) {
+            return [];
+        }
+
+        $formatted = [];
+        foreach ($forecasts as $destination_id => $data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $label = (string) $destination_id;
+            if (class_exists(__NAMESPACE__ . '\\BJLG_Settings')) {
+                $destination_label = BJLG_Settings::get_destination_label($destination_id);
+                if (is_string($destination_label) && $destination_label !== '') {
+                    $label = $destination_label;
+                }
+            }
+
+            $forecast_label = isset($data['forecast_label']) ? (string) $data['forecast_label'] : '';
+            $projected_relative = '';
+
+            if (!empty($data['projected_clearance'])) {
+                [, $projected_relative] = $this->format_timestamp_pair($data['projected_clearance'], $now);
+            }
+
+            $formatted[] = [
+                'id' => sanitize_key((string) $destination_id),
+                'label' => sanitize_text_field($label),
+                'forecast_label' => sanitize_text_field($forecast_label),
+                'projected_relative' => $projected_relative,
+                'pending' => isset($data['pending']) ? (int) $data['pending'] : 0,
+            ];
         }
 
         return $formatted;
@@ -985,6 +1045,25 @@ class BJLG_Admin_Advanced {
             $destination['last_refreshed_at'] = $generated_at;
             $destination['threshold_percent'] = $threshold_percent;
 
+            $daily_delta = isset($destination['daily_delta_bytes']) ? (float) $destination['daily_delta_bytes'] : null;
+            $destination['daily_delta_bytes'] = $daily_delta;
+            $destination['daily_delta_label'] = isset($destination['daily_delta_label'])
+                ? sanitize_text_field((string) $destination['daily_delta_label'])
+                : '';
+            $forecast_label = isset($destination['forecast_label']) ? (string) $destination['forecast_label'] : '';
+            $destination['forecast_label'] = sanitize_text_field($forecast_label);
+
+            $days_to_threshold = isset($destination['days_to_threshold']) && is_numeric($destination['days_to_threshold'])
+                ? (float) $destination['days_to_threshold']
+                : null;
+            $destination['days_to_threshold'] = $days_to_threshold;
+            $destination['days_to_threshold_label'] = isset($destination['days_to_threshold_label'])
+                ? sanitize_text_field((string) $destination['days_to_threshold_label'])
+                : '';
+
+            $projection_intent = isset($destination['projection_intent']) ? (string) $destination['projection_intent'] : '';
+            $destination['projection_intent'] = $projection_intent !== '' ? sanitize_key($projection_intent) : '';
+
             if ($ratio !== null && $ratio >= $threshold_ratio && !$stale && $destination_id !== '') {
                 $last_notified = isset($digest[$destination_id]) ? (int) $digest[$destination_id] : 0;
                 if ($generated_at > $last_notified) {
@@ -1000,6 +1079,18 @@ class BJLG_Admin_Advanced {
                     ]);
                     $digest[$destination_id] = $generated_at;
                     $digest_updated = true;
+                }
+            }
+
+            if ($destination_id !== '') {
+                if ($ratio !== null && $ratio >= $threshold_ratio) {
+                    $destination['badge'] = 'critical';
+                } elseif ($days_to_threshold !== null && $days_to_threshold <= 1) {
+                    $destination['badge'] = 'critical';
+                } elseif ($days_to_threshold !== null && $days_to_threshold <= 3) {
+                    $destination['badge'] = 'warning';
+                } elseif ($projection_intent === 'success') {
+                    $destination['badge'] = 'success';
                 }
             }
         }
@@ -1020,6 +1111,7 @@ class BJLG_Admin_Advanced {
             'generated_at_relative' => $relative,
             'stale' => $stale,
             'threshold_percent' => $threshold_percent,
+            'threshold_ratio' => $threshold_ratio,
         ];
     }
 
