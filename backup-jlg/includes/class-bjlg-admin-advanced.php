@@ -496,6 +496,68 @@ class BJLG_Admin_Advanced {
                 }
             }
 
+            $acknowledged_at = isset($entry['acknowledged_at']) ? (int) $entry['acknowledged_at'] : 0;
+            $acknowledged_by = isset($entry['acknowledged_by']) ? sanitize_text_field((string) $entry['acknowledged_by']) : '';
+            $acknowledged = !empty($entry['acknowledged']) || $acknowledged_at > 0 || $acknowledged_by !== '';
+
+            if ($acknowledged) {
+                [$ack_formatted, $ack_relative] = $this->format_timestamp_pair($acknowledged_at, $now);
+                if ($ack_relative !== '') {
+                    $details['acknowledged_relative'] = $ack_relative;
+                }
+                if ($ack_formatted !== '') {
+                    $details['acknowledged_formatted'] = $ack_formatted;
+                }
+                if ($acknowledged_by !== '') {
+                    $details['acknowledged_by'] = $acknowledged_by;
+                }
+
+                $ack_label = $acknowledged_by !== ''
+                    ? sprintf(__('Accusée par %s', 'backup-jlg'), $acknowledged_by)
+                    : __('Accusée', 'backup-jlg');
+
+                if (!empty($details['acknowledged_relative'])) {
+                    $ack_label .= ' — ' . $details['acknowledged_relative'];
+                }
+
+                $details['acknowledged_label'] = $ack_label;
+            }
+
+            $resolved_at = isset($entry['resolved_at']) ? (int) $entry['resolved_at'] : 0;
+            $resolved = !empty($entry['resolved']) || $resolved_at > 0;
+
+            if ($resolved) {
+                [$resolved_formatted, $resolved_relative] = $this->format_timestamp_pair($resolved_at, $now);
+                if ($resolved_relative !== '') {
+                    $details['resolved_relative'] = $resolved_relative;
+                }
+                if ($resolved_formatted !== '') {
+                    $details['resolved_formatted'] = $resolved_formatted;
+                }
+
+                $resolved_label = __('Résolue', 'backup-jlg');
+                if (!empty($details['resolved_relative'])) {
+                    $resolved_label .= ' — ' . $details['resolved_relative'];
+                }
+
+                $details['resolved_label'] = $resolved_label;
+
+                if (!empty($entry['resolution_notes'])) {
+                    $notes = is_string($entry['resolution_notes'])
+                        ? $entry['resolution_notes']
+                        : (is_array($entry['resolution_notes']) ? implode("\n", $entry['resolution_notes']) : '');
+
+                    if ($notes !== '') {
+                        if (function_exists('sanitize_textarea_field')) {
+                            $notes = sanitize_textarea_field($notes);
+                        } else {
+                            $notes = sanitize_text_field($notes);
+                        }
+                        $details['resolution_notes'] = $notes;
+                    }
+                }
+            }
+
             $severity = isset($entry['severity']) ? (string) $entry['severity'] : 'info';
             $severity_label = $this->get_notification_severity_label($severity);
             $severity_intent = $this->get_notification_severity_intent($severity);
@@ -552,6 +614,8 @@ class BJLG_Admin_Advanced {
                 'severity' => $severity,
                 'severity_label' => $severity_label,
                 'severity_intent' => $severity_intent,
+                'acknowledged' => $acknowledged,
+                'resolved' => $resolved,
                 'details' => $details,
             ];
         }

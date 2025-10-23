@@ -15,7 +15,24 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         parent::setUp();
         bjlg_update_option('bjlg_notification_queue', []);
         $GLOBALS['bjlg_test_scheduled_events']['single'] = [];
-        BJLG\BJLG_Notification_Receipts::delete_all();
+
+        $GLOBALS['current_user'] = (object) [
+            'ID' => 42,
+            'display_name' => 'Test Operator',
+            'user_login' => 'test-operator',
+        ];
+        $GLOBALS['current_user_id'] = 42;
+        $GLOBALS['bjlg_test_users'][42] = $GLOBALS['current_user'];
+    }
+
+    protected function tearDown(): void
+    {
+        unset($GLOBALS['current_user'], $GLOBALS['current_user_id']);
+        if (isset($GLOBALS['bjlg_test_users'][42])) {
+            unset($GLOBALS['bjlg_test_users'][42]);
+        }
+
+        parent::tearDown();
     }
 
     public function test_retry_entry_resets_channels_and_schedules_event(): void
@@ -95,98 +112,135 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         $this->assertSame([], $queue);
     }
 
-    public function test_enqueue_initializes_resolution_and_reminder(): void
+    public function test_acknowledge_channel_marks_entry_and_channel(): void
     {
-        $now = time();
-        $entry = [
-            'id' => 'entry-resolution',
-            'event' => 'backup_failed',
-            'title' => 'Backup failed',
-            'subject' => 'Failure',
-            'lines' => ['Failure'],
-            'body' => 'Body',
-            'context' => [],
-            'channels' => [
-                'email' => [
-                    'enabled' => true,
-                    'status' => 'pending',
-                    'recipients' => ['admin@example.com'],
-                ],
-            ],
-            'created_at' => $now,
-            'resolution' => [
-                'steps' => [
-                    [
-                        'timestamp' => $now,
-                        'actor' => 'Système',
-                        'summary' => 'Initialisé',
-                        'type' => 'created',
+        bjlg_update_option('bjlg_notification_queue', [
+            [
+                'id' => 'ack-entry',
+                'event' => 'backup_failed',
+                'title' => 'Backup failed',
+                'channels' => [
+                    'email' => [
+                        'enabled' => true,
+                        'status' => 'pending',
+                        'attempts' => 0,
+                    ],
+                    'slack' => [
+                        'enabled' => true,
+                        'status' => 'pending',
+                        'attempts' => 0,
                     ],
                 ],
             ],
-        ];
+        ]);
 
-        $queued = BJLG_Notification_Queue::enqueue($entry);
-        BJLG\BJLG_Notification_Receipts::record_creation($queued);
-
-        $this->assertIsArray($queued);
-        $this->assertArrayHasKey('resolution', $queued);
-        $this->assertArrayHasKey('reminders', $queued);
-        $this->assertSame('entry-resolution', $queued['id']);
-
-        $receipts = BJLG\BJLG_Notification_Receipts::get('entry-resolution');
-        $this->assertIsArray($receipts);
-        $this->assertSame('entry-resolution', $receipts['id']);
-        $this->assertNull($receipts['acknowledged_at']);
-
-        $scheduled = $GLOBALS['bjlg_test_scheduled_events']['single'] ?? [];
-        $hooks = array_column($scheduled, 'hook');
-        $this->assertContains('bjlg_notification_queue_reminder', $hooks);
-    }
-
-    public function test_acknowledge_updates_queue_resolution(): void
-    {
-        $now = time();
-        $entry = [
-            'id' => 'entry-ack',
-            'event' => 'backup_failed',
-            'title' => 'Failure',
-            'subject' => 'Failure',
-            'lines' => ['Failure'],
-            'body' => 'Body',
-            'context' => [],
-            'channels' => [
-                'email' => [
-                    'enabled' => true,
-                    'status' => 'pending',
-                    'recipients' => ['admin@example.com'],
-                ],
-            ],
-            'created_at' => $now,
-            'resolution' => [
-                'steps' => [
-                    [
-                        'timestamp' => $now,
-                        'actor' => 'Système',
-                        'summary' => 'Initialisé',
-                        'type' => 'created',
-                    ],
-                ],
-            ],
-        ];
-
-        $queued = BJLG_Notification_Queue::enqueue($entry);
-        $this->assertIsArray($queued);
-
-        BJLG\BJLG_Notification_Receipts::record_creation($queued);
-        $record = BJLG\BJLG_Notification_Receipts::acknowledge('entry-ack', 'Tester', 'Note');
-        $this->assertNotEmpty($record['acknowledged_at']);
+        $this->assertTrue(BJLG_Notification_Queue::acknowledge_channel('ack-entry', 'email', 42));
 
         $queue = bjlg_get_option('bjlg_notification_queue');
-        $this->assertNotEmpty($queue);
-        $entry_state = $queue[0];
-        $this->assertSame('entry-ack', $entry_state['id']);
-        $this->assertNotEmpty($entry_state['resolution']['acknowledged_at']);
-        $this->assertFalse($entry_state['reminders']['active']);
+        $this->assertCount(1, $queue);
+        $entry = $queue[0];
+        $this->assertArrayHasKey('acknowledged_at', $entry);
+        $this->assertGreaterThan(0, $entry['acknowledged_at']);
+        $this->assertSame('Test Operator', $entry['acknowledged_by']);
+
+        $email = $entry['channels']['email'];
+        $this->assertSame('Test Operator', $email['acknowledged_by']);
+        $this->assertGreaterThan(0, $email['acknowledged_at']);
+
+        $slack = $entry['channels']['slack'];
+        $this->assertTrue(!isset($slack['acknowledged_at']) || (int) $slack['acknowledged_at'] === 0);
+    }
+
+    public function test_acknowledge_entry_marks_all_channels(): void
+    {
+        bjlg_update_option('bjlg_notification_queue', [
+            [
+                'id' => 'ack-all',
+                'event' => 'backup_failed',
+                'title' => 'Backup failed',
+                'channels' => [
+                    'email' => [
+                        'enabled' => true,
+                        'status' => 'pending',
+                        'attempts' => 0,
+                    ],
+                    'sms' => [
+                        'enabled' => true,
+                        'status' => 'pending',
+                        'attempts' => 0,
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue(BJLG_Notification_Queue::acknowledge_entry('ack-all', 42));
+
+        $queue = bjlg_get_option('bjlg_notification_queue');
+        $entry = $queue[0];
+        $this->assertArrayHasKey('acknowledged_at', $entry);
+        $this->assertSame('Test Operator', $entry['acknowledged_by']);
+
+        foreach ($entry['channels'] as $channel) {
+            $this->assertSame('Test Operator', $channel['acknowledged_by']);
+            $this->assertGreaterThan(0, $channel['acknowledged_at']);
+        }
+    }
+
+    public function test_resolve_channel_logs_when_all_channels_resolved(): void
+    {
+        $GLOBALS['bjlg_test_hooks']['actions']['bjlg_history_logged'] = [];
+        $GLOBALS['bjlg_test_hooks']['actions']['bjlg_notification_resolved'] = [];
+
+        $history = [];
+        add_action('bjlg_history_logged', function ($action, $status, $details) use (&$history) {
+            $history[] = compact('action', 'status', 'details');
+        }, 10, 3);
+
+        $resolvedEntries = [];
+        add_action('bjlg_notification_resolved', function ($entry) use (&$resolvedEntries) {
+            $resolvedEntries[] = $entry;
+        }, 10, 1);
+
+        bjlg_update_option('bjlg_notification_queue', [
+            [
+                'id' => 'resolve-me',
+                'event' => 'backup_failed',
+                'title' => 'Backup failed',
+                'channels' => [
+                    'email' => [
+                        'enabled' => true,
+                        'status' => 'pending',
+                        'attempts' => 1,
+                    ],
+                    'slack' => [
+                        'enabled' => true,
+                        'status' => 'pending',
+                        'attempts' => 2,
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue(BJLG_Notification_Queue::resolve_channel('resolve-me', 'email', 42, 'Email ok'));
+
+        $queue = bjlg_get_option('bjlg_notification_queue');
+        $entry = $queue[0];
+        $this->assertArrayHasKey('resolution_notes', $entry);
+        $this->assertStringContainsString('email', $entry['resolution_notes']);
+        $this->assertSame([], $history);
+        $this->assertSame([], $resolvedEntries);
+
+        $this->assertTrue(BJLG_Notification_Queue::resolve_channel('resolve-me', 'slack', 42, 'Slack ok'));
+
+        $queue = bjlg_get_option('bjlg_notification_queue');
+        $entry = $queue[0];
+        $this->assertGreaterThan(0, $entry['resolved_at']);
+        $this->assertStringContainsString('slack', $entry['resolution_notes']);
+
+        $this->assertNotEmpty($history);
+        $this->assertSame('notification_resolved', $history[0]['action']);
+        $this->assertSame('info', $history[0]['status']);
+        $this->assertNotEmpty($resolvedEntries);
+        $this->assertSame('resolve-me', $resolvedEntries[0]['id']);
     }
 }

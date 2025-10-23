@@ -138,6 +138,12 @@ class BJLG_Notification_Queue {
                 $channel_next_attempt = isset($channel['next_attempt_at']) ? (int) $channel['next_attempt_at'] : 0;
                 $channel_error = isset($channel['last_error']) ? (string) $channel['last_error'] : '';
                 $is_escalation = !empty($channel['escalation']);
+                $channel_acknowledged_at = isset($channel['acknowledged_at']) ? (int) $channel['acknowledged_at'] : 0;
+                $channel_acknowledged_by = isset($channel['acknowledged_by'])
+                    ? self::sanitize_actor_label($channel['acknowledged_by'])
+                    : '';
+                $channel_resolved_at = isset($channel['resolved_at']) ? (int) $channel['resolved_at'] : 0;
+                $channel_resolution_notes = self::sanitize_notes_value($channel['resolution_notes'] ?? '');
 
                 if ($channel_next_attempt > 0) {
                     $entry_next_attempt = self::min_time_value($entry_next_attempt, $channel_next_attempt);
@@ -168,6 +174,12 @@ class BJLG_Notification_Queue {
                     'last_error' => $channel_error,
                     'next_attempt_at' => $channel_next_attempt,
                     'escalation' => $is_escalation,
+                    'acknowledged_at' => $channel_acknowledged_at,
+                    'acknowledged_by' => $channel_acknowledged_by,
+                    'acknowledged' => $channel_acknowledged_at > 0 || $channel_acknowledged_by !== '',
+                    'resolved_at' => $channel_resolved_at,
+                    'resolved' => $channel_resolved_at > 0,
+                    'resolution_notes' => $channel_resolution_notes,
                 ];
             }
 
@@ -202,13 +214,10 @@ class BJLG_Notification_Queue {
                 $snapshot['next_attempt_at'] = self::min_time_value($snapshot['next_attempt_at'], $entry_next_attempt);
             }
 
-            $resolution = isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : [];
-            $resolution_status = 'pending';
-            if (!empty($resolution['resolved_at'])) {
-                $resolution_status = 'resolved';
-            } elseif (!empty($resolution['acknowledged_at'])) {
-                $resolution_status = 'acknowledged';
-            }
+            $acknowledged_at = isset($entry['acknowledged_at']) ? (int) $entry['acknowledged_at'] : 0;
+            $acknowledged_by = isset($entry['acknowledged_by']) ? self::sanitize_actor_label($entry['acknowledged_by']) : '';
+            $resolved_at = isset($entry['resolved_at']) ? (int) $entry['resolved_at'] : 0;
+            $resolution_notes = self::sanitize_notes_value($entry['resolution_notes'] ?? '');
 
             $snapshot['entries'][] = [
                 'id' => isset($entry['id']) ? sanitize_text_field((string) $entry['id']) : '',
@@ -225,9 +234,12 @@ class BJLG_Notification_Queue {
                 'has_escalation_pending' => $escalation_pending,
                 'escalation_next_attempt' => $escalation_next,
                 'severity' => isset($entry['severity']) ? sanitize_key((string) $entry['severity']) : 'info',
-                'resolution' => $resolution,
-                'resolution_status' => $resolution_status,
-                'reminders' => isset($entry['reminders']) && is_array($entry['reminders']) ? $entry['reminders'] : [],
+                'acknowledged_at' => $acknowledged_at,
+                'acknowledged_by' => $acknowledged_by,
+                'acknowledged' => $acknowledged_at > 0 || $acknowledged_by !== '',
+                'resolved_at' => $resolved_at,
+                'resolved' => $resolved_at > 0,
+                'resolution_notes' => $resolution_notes,
             ];
         }
 
@@ -357,6 +369,314 @@ class BJLG_Notification_Queue {
          * @param array<string,mixed> $removed_entry
          */
         do_action('bjlg_notification_queue_entry_deleted', $removed_entry);
+
+        return true;
+    }
+
+    /**
+     * Marks a specific channel within an entry as acknowledged by an operator.
+     *
+     * @param string   $entry_id
+     * @param string   $channel_key
+     * @param int|null $user_id
+     */
+    public static function acknowledge_channel($entry_id, $channel_key, $user_id = null) {
+        $entry_id = is_string($entry_id) ? trim($entry_id) : '';
+        $channel_key = is_string($channel_key) ? sanitize_key($channel_key) : '';
+
+        if ($entry_id === '' || $channel_key === '') {
+            return false;
+        }
+
+        $queue = self::get_queue();
+        $now = time();
+        $actor_label = self::resolve_actor_name($user_id);
+        $updated = false;
+
+        foreach ($queue as &$entry) {
+            if (!is_array($entry) || !isset($entry['id']) || (string) $entry['id'] !== $entry_id) {
+                continue;
+            }
+
+            if (empty($entry['channels']) || !is_array($entry['channels'])) {
+                break;
+            }
+
+            foreach ($entry['channels'] as $key => &$channel) {
+                $normalized_key = sanitize_key((string) $key);
+                if ($normalized_key !== $channel_key || !is_array($channel)) {
+                    continue;
+                }
+
+                $channel['acknowledged_at'] = $now;
+                if ($actor_label !== '') {
+                    $channel['acknowledged_by'] = $actor_label;
+                }
+
+                if (empty($entry['acknowledged_at'])) {
+                    $entry['acknowledged_at'] = $now;
+                }
+
+                if ($actor_label !== '') {
+                    $entry['acknowledged_by'] = $actor_label;
+                }
+
+                $entry['updated_at'] = $now;
+                $updated = true;
+                break 2;
+            }
+            unset($channel);
+
+            break;
+        }
+        unset($entry);
+
+        if (!$updated) {
+            return false;
+        }
+
+        self::save_queue($queue);
+
+        return true;
+    }
+
+    /**
+     * Marks an entire entry as acknowledged.
+     *
+     * @param string   $entry_id
+     * @param int|null $user_id
+     */
+    public static function acknowledge_entry($entry_id, $user_id = null) {
+        $entry_id = is_string($entry_id) ? trim($entry_id) : '';
+        if ($entry_id === '') {
+            return false;
+        }
+
+        $queue = self::get_queue();
+        $now = time();
+        $actor_label = self::resolve_actor_name($user_id);
+        $updated = false;
+
+        foreach ($queue as &$entry) {
+            if (!is_array($entry) || !isset($entry['id']) || (string) $entry['id'] !== $entry_id) {
+                continue;
+            }
+
+            $entry['acknowledged_at'] = $now;
+            if ($actor_label !== '') {
+                $entry['acknowledged_by'] = $actor_label;
+            }
+
+            if (!empty($entry['channels']) && is_array($entry['channels'])) {
+                foreach ($entry['channels'] as &$channel) {
+                    if (!is_array($channel)) {
+                        continue;
+                    }
+
+                    $channel['acknowledged_at'] = $now;
+                    if ($actor_label !== '') {
+                        $channel['acknowledged_by'] = $actor_label;
+                    }
+                }
+                unset($channel);
+            }
+
+            $entry['updated_at'] = $now;
+            $updated = true;
+            break;
+        }
+        unset($entry);
+
+        if (!$updated) {
+            return false;
+        }
+
+        self::save_queue($queue);
+
+        return true;
+    }
+
+    /**
+     * Marks a channel as resolved. When all channels are resolved the entry is closed and logged.
+     *
+     * @param string      $entry_id
+     * @param string      $channel_key
+     * @param int|null    $user_id
+     * @param string|null $notes
+     */
+    public static function resolve_channel($entry_id, $channel_key, $user_id = null, $notes = '') {
+        $entry_id = is_string($entry_id) ? trim($entry_id) : '';
+        $channel_key = is_string($channel_key) ? sanitize_key($channel_key) : '';
+
+        if ($entry_id === '' || $channel_key === '') {
+            return false;
+        }
+
+        $queue = self::get_queue();
+        $now = time();
+        $actor_label = self::resolve_actor_name($user_id);
+        $sanitized_notes = self::sanitize_notes_value($notes ?? '');
+        $updated = false;
+        $was_resolved = false;
+        $entry_reference = null;
+
+        foreach ($queue as &$entry) {
+            if (!is_array($entry) || !isset($entry['id']) || (string) $entry['id'] !== $entry_id) {
+                continue;
+            }
+
+            if (empty($entry['channels']) || !is_array($entry['channels'])) {
+                break;
+            }
+
+            $was_resolved = self::is_entry_resolved($entry);
+
+            foreach ($entry['channels'] as $key => &$channel) {
+                $normalized_key = sanitize_key((string) $key);
+                if ($normalized_key !== $channel_key || !is_array($channel)) {
+                    continue;
+                }
+
+                $channel['resolved_at'] = $now;
+                $channel['acknowledged_at'] = $channel['acknowledged_at'] ?? $now;
+
+                if ($actor_label !== '') {
+                    $channel['acknowledged_by'] = $actor_label;
+                }
+
+                if ($sanitized_notes !== '') {
+                    $channel['resolution_notes'] = $sanitized_notes;
+                }
+
+                if (empty($entry['acknowledged_at'])) {
+                    $entry['acknowledged_at'] = $now;
+                }
+
+                if ($actor_label !== '') {
+                    $entry['acknowledged_by'] = $actor_label;
+                }
+
+                if ($sanitized_notes !== '') {
+                    $entry['resolution_notes'] = self::append_resolution_note(
+                        $entry['resolution_notes'] ?? '',
+                        $normalized_key,
+                        $sanitized_notes
+                    );
+                }
+
+                $entry['updated_at'] = $now;
+                $updated = true;
+                break;
+            }
+            unset($channel);
+
+            if ($updated) {
+                $all_resolved = self::are_all_channels_resolved($entry['channels']);
+                if ($all_resolved) {
+                    if (empty($entry['resolved_at'])) {
+                        $entry['resolved_at'] = $now;
+                    }
+                }
+
+                $entry_reference = $entry;
+                break;
+            }
+
+            break;
+        }
+        unset($entry);
+
+        if (!$updated) {
+            return false;
+        }
+
+        self::save_queue($queue);
+
+        if ($entry_reference !== null) {
+            $is_resolved = self::is_entry_resolved($entry_reference);
+            if (!$was_resolved && $is_resolved) {
+                self::log_resolution_event($entry_reference, $actor_label, $entry_reference['resolution_notes'] ?? '');
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Marks an entire entry as resolved.
+     *
+     * @param string      $entry_id
+     * @param int|null    $user_id
+     * @param string|null $notes
+     */
+    public static function resolve_entry($entry_id, $user_id = null, $notes = '') {
+        $entry_id = is_string($entry_id) ? trim($entry_id) : '';
+        if ($entry_id === '') {
+            return false;
+        }
+
+        $queue = self::get_queue();
+        $now = time();
+        $actor_label = self::resolve_actor_name($user_id);
+        $sanitized_notes = self::sanitize_notes_value($notes ?? '');
+        $updated = false;
+        $was_resolved = false;
+        $entry_reference = null;
+
+        foreach ($queue as &$entry) {
+            if (!is_array($entry) || !isset($entry['id']) || (string) $entry['id'] !== $entry_id) {
+                continue;
+            }
+
+            $was_resolved = self::is_entry_resolved($entry);
+
+            $entry['acknowledged_at'] = $entry['acknowledged_at'] ?? $now;
+            $entry['resolved_at'] = $now;
+            if ($actor_label !== '') {
+                $entry['acknowledged_by'] = $actor_label;
+            }
+            if ($sanitized_notes !== '') {
+                $entry['resolution_notes'] = $sanitized_notes;
+            }
+
+            if (!empty($entry['channels']) && is_array($entry['channels'])) {
+                foreach ($entry['channels'] as $key => &$channel) {
+                    if (!is_array($channel)) {
+                        continue;
+                    }
+
+                    $channel['acknowledged_at'] = $channel['acknowledged_at'] ?? $now;
+                    $channel['resolved_at'] = $now;
+                    if ($actor_label !== '') {
+                        $channel['acknowledged_by'] = $actor_label;
+                    }
+
+                    if ($sanitized_notes !== '') {
+                        $channel['resolution_notes'] = $sanitized_notes;
+                    }
+                }
+                unset($channel);
+            }
+
+            $entry['updated_at'] = $now;
+            $entry_reference = $entry;
+            $updated = true;
+            break;
+        }
+        unset($entry);
+
+        if (!$updated) {
+            return false;
+        }
+
+        self::save_queue($queue);
+
+        if ($entry_reference !== null) {
+            $is_resolved = self::is_entry_resolved($entry_reference);
+            if (!$was_resolved && $is_resolved) {
+                self::log_resolution_event($entry_reference, $actor_label, $entry_reference['resolution_notes'] ?? '');
+            }
+        }
 
         return true;
     }
@@ -802,6 +1122,10 @@ class BJLG_Notification_Queue {
             'next_attempt_at' => isset($entry['next_attempt_at']) ? (int) $entry['next_attempt_at'] : $now,
             'channels' => [],
             'severity' => self::normalize_severity_value($entry['severity'] ?? ''),
+            'acknowledged_by' => self::sanitize_actor_label($entry['acknowledged_by'] ?? ''),
+            'acknowledged_at' => isset($entry['acknowledged_at']) ? (int) $entry['acknowledged_at'] : 0,
+            'resolved_at' => isset($entry['resolved_at']) ? (int) $entry['resolved_at'] : 0,
+            'resolution_notes' => self::sanitize_notes_value($entry['resolution_notes'] ?? ''),
         ];
 
         $normalized['resolution'] = self::normalize_resolution(
@@ -874,6 +1198,10 @@ class BJLG_Notification_Queue {
                 'enabled' => !empty($channel['enabled']),
                 'status' => isset($channel['status']) ? (string) $channel['status'] : 'pending',
                 'attempts' => isset($channel['attempts']) ? (int) $channel['attempts'] : 0,
+                'acknowledged_by' => self::sanitize_actor_label($channel['acknowledged_by'] ?? ''),
+                'acknowledged_at' => isset($channel['acknowledged_at']) ? (int) $channel['acknowledged_at'] : 0,
+                'resolved_at' => isset($channel['resolved_at']) ? (int) $channel['resolved_at'] : 0,
+                'resolution_notes' => self::sanitize_notes_value($channel['resolution_notes'] ?? ''),
             ];
 
             if (isset($channel['recipients']) && is_array($channel['recipients'])) {
@@ -1181,5 +1509,180 @@ class BJLG_Notification_Queue {
 
     private function unlock() {
         delete_transient(self::LOCK_TRANSIENT);
+    }
+
+    private static function resolve_actor_name($user_id = null) {
+        $user = null;
+
+        if ($user_id !== null && is_numeric($user_id) && (int) $user_id > 0) {
+            if (function_exists('get_user_by')) {
+                $user = get_user_by('id', (int) $user_id);
+            } elseif (function_exists('get_userdata')) {
+                $user = get_userdata((int) $user_id);
+            }
+        }
+
+        if ($user === null && function_exists('wp_get_current_user')) {
+            $user = wp_get_current_user();
+        }
+
+        if (is_object($user)) {
+            if (!empty($user->display_name)) {
+                return self::sanitize_actor_label($user->display_name);
+            }
+
+            if (!empty($user->user_login)) {
+                return self::sanitize_actor_label($user->user_login);
+            }
+
+            if (!empty($user->user_email)) {
+                return self::sanitize_actor_label($user->user_email);
+            }
+        }
+
+        if ($user_id !== null && is_numeric($user_id) && (int) $user_id > 0) {
+            return self::sanitize_actor_label(sprintf(__('Utilisateur #%d', 'backup-jlg'), (int) $user_id));
+        }
+
+        return '';
+    }
+
+    private static function sanitize_actor_label($value) {
+        if (!is_string($value)) {
+            return '';
+        }
+
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        return sanitize_text_field($value);
+    }
+
+    private static function sanitize_notes_value($value) {
+        if (is_array($value)) {
+            $parts = [];
+            foreach ($value as $note) {
+                $sanitized = self::sanitize_notes_value($note);
+                if ($sanitized !== '') {
+                    $parts[] = $sanitized;
+                }
+            }
+
+            return implode("\n", $parts);
+        }
+
+        if (!is_string($value)) {
+            return '';
+        }
+
+        $value = trim($value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        if (function_exists('sanitize_textarea_field')) {
+            return sanitize_textarea_field($value);
+        }
+
+        return sanitize_text_field($value);
+    }
+
+    private static function append_resolution_note($existing, $channel_key, $note) {
+        $existing = self::sanitize_notes_value($existing);
+        $note = self::sanitize_notes_value($note);
+
+        if ($note === '') {
+            return $existing;
+        }
+
+        $label = sanitize_key((string) $channel_key);
+        if ($label !== '') {
+            $note = sprintf('%s: %s', $label, $note);
+        }
+
+        if ($existing === '') {
+            return $note;
+        }
+
+        return $existing . "\n" . $note;
+    }
+
+    private static function are_all_channels_resolved($channels) {
+        if (!is_array($channels) || empty($channels)) {
+            return false;
+        }
+
+        $has_enabled = false;
+
+        foreach ($channels as $channel) {
+            if (!is_array($channel)) {
+                continue;
+            }
+
+            if (isset($channel['enabled']) && !$channel['enabled']) {
+                continue;
+            }
+
+            $has_enabled = true;
+            $resolved_at = isset($channel['resolved_at']) ? (int) $channel['resolved_at'] : 0;
+            if ($resolved_at <= 0) {
+                return false;
+            }
+        }
+
+        return $has_enabled;
+    }
+
+    private static function is_entry_resolved(array $entry) {
+        $resolved_at = isset($entry['resolved_at']) ? (int) $entry['resolved_at'] : 0;
+        if ($resolved_at > 0) {
+            return true;
+        }
+
+        $channels = isset($entry['channels']) && is_array($entry['channels']) ? $entry['channels'] : [];
+
+        return self::are_all_channels_resolved($channels);
+    }
+
+    private static function log_resolution_event(array $entry, $actor_label, $notes) {
+        $actor_label = self::sanitize_actor_label($actor_label);
+        $notes = self::sanitize_notes_value($notes);
+
+        $title = isset($entry['title']) ? (string) $entry['title'] : '';
+        if ($title === '' && !empty($entry['event'])) {
+            $title = (string) $entry['event'];
+        }
+        if ($title === '' && !empty($entry['id'])) {
+            $title = (string) $entry['id'];
+        }
+
+        if ($actor_label === '') {
+            $actor_label = __('un opérateur', 'backup-jlg');
+        }
+
+        if (class_exists(BJLG_History::class)) {
+            $message = sprintf(
+                __('Notification « %s » résolue par %s.', 'backup-jlg'),
+                $title !== '' ? $title : __('notification', 'backup-jlg'),
+                $actor_label
+            );
+
+            if ($notes !== '') {
+                $message .= ' ' . sprintf(__('Notes : %s', 'backup-jlg'), $notes);
+            }
+
+            BJLG_History::log('notification_resolved', 'info', $message);
+        }
+
+        /**
+         * Fires when a notification queue entry has been fully resolved.
+         *
+         * @param array<string,mixed> $entry
+         */
+        do_action('bjlg_notification_resolved', $entry);
     }
 }

@@ -37,7 +37,8 @@ class BJLG_Admin {
         add_action('wp_dashboard_setup', [$this, 'register_dashboard_widget']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_dashboard_widget_assets']);
         add_action('wp_ajax_bjlg_update_onboarding_progress', [$this, 'ajax_update_onboarding_progress']);
-        add_action('admin_post_bjlg_download_self_test_report', [$this, 'handle_download_self_test_report']);
+        add_action('wp_ajax_bjlg_notification_ack', [$this, 'ajax_acknowledge_notification']);
+        add_action('wp_ajax_bjlg_notification_resolve', [$this, 'ajax_resolve_notification']);
     }
 
     /**
@@ -432,7 +433,86 @@ class BJLG_Admin {
             'completed' => $this->onboarding_progress,
         ]);
     }
-    
+
+    private function get_dashboard_metrics_snapshot(): array {
+        if ($this->advanced_admin instanceof BJLG_Admin_Advanced) {
+            return $this->advanced_admin->get_dashboard_metrics();
+        }
+
+        if (class_exists(BJLG_Admin_Advanced::class)) {
+            $advanced = new BJLG_Admin_Advanced();
+
+            return $advanced->get_dashboard_metrics();
+        }
+
+        return [];
+    }
+
+    public function ajax_acknowledge_notification() {
+        if (!function_exists('bjlg_can_manage_backups') || !bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $entry_id = isset($_POST['entry_id']) ? sanitize_text_field(wp_unslash($_POST['entry_id'])) : '';
+        $channel = isset($_POST['channel']) ? sanitize_key(wp_unslash($_POST['channel'])) : '';
+
+        if ($entry_id === '') {
+            wp_send_json_error(['message' => __('Identifiant de notification manquant.', 'backup-jlg')], 400);
+        }
+
+        $user_id = function_exists('get_current_user_id') ? get_current_user_id() : null;
+
+        $acknowledged = $channel !== ''
+            ? BJLG_Notification_Queue::acknowledge_channel($entry_id, $channel, $user_id)
+            : BJLG_Notification_Queue::acknowledge_entry($entry_id, $user_id);
+
+        if (!$acknowledged) {
+            wp_send_json_error(['message' => __('Impossible de marquer cette notification comme accusée.', 'backup-jlg')], 500);
+        }
+
+        $metrics = $this->get_dashboard_metrics_snapshot();
+
+        wp_send_json_success([
+            'message' => __('Notification marquée comme accusée.', 'backup-jlg'),
+            'metrics' => $metrics,
+        ]);
+    }
+
+    public function ajax_resolve_notification() {
+        if (!function_exists('bjlg_can_manage_backups') || !bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $entry_id = isset($_POST['entry_id']) ? sanitize_text_field(wp_unslash($_POST['entry_id'])) : '';
+        $channel = isset($_POST['channel']) ? sanitize_key(wp_unslash($_POST['channel'])) : '';
+        $notes = isset($_POST['notes']) ? wp_unslash($_POST['notes']) : '';
+
+        if ($entry_id === '') {
+            wp_send_json_error(['message' => __('Identifiant de notification manquant.', 'backup-jlg')], 400);
+        }
+
+        $user_id = function_exists('get_current_user_id') ? get_current_user_id() : null;
+
+        $resolved = $channel !== ''
+            ? BJLG_Notification_Queue::resolve_channel($entry_id, $channel, $user_id, $notes)
+            : BJLG_Notification_Queue::resolve_entry($entry_id, $user_id, $notes);
+
+        if (!$resolved) {
+            wp_send_json_error(['message' => __('Impossible de clore cette notification.', 'backup-jlg')], 500);
+        }
+
+        $metrics = $this->get_dashboard_metrics_snapshot();
+
+        wp_send_json_success([
+            'message' => __('Notification résolue.', 'backup-jlg'),
+            'metrics' => $metrics,
+        ]);
+    }
+
     private function map_legacy_tab_to_section(string $tab): string {
         switch ($tab) {
             case 'backup_restore':

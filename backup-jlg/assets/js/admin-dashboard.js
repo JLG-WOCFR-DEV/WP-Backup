@@ -39,9 +39,17 @@ jQuery(function($) {
         return number === 1 ? singular : plural;
     };
 
-    const ajaxData = window.bjlg_ajax || {};
+    window.bjlg_ajax = window.bjlg_ajax || {};
+    const ajaxData = window.bjlg_ajax;
 
     const queueActionMap = {
+        'acknowledge-notification': { action: 'bjlg_notification_ack', param: 'entry_id' },
+        'resolve-notification': {
+            action: 'bjlg_notification_resolve',
+            param: 'entry_id',
+            promptField: 'notes',
+            prompt: __('Ajoutez des notes de résolution (optionnel)', 'backup-jlg')
+        },
         'retry-notification': { action: 'bjlg_notification_queue_retry', param: 'entry_id' },
         'clear-notification': { action: 'bjlg_notification_queue_delete', param: 'entry_id' },
         'acknowledge-notification': { action: 'bjlg_notification_acknowledge', param: 'entry_id', summary: { required: false, prompt: __('Ajouter une note pour l’accusé ?', 'backup-jlg') } },
@@ -49,6 +57,8 @@ jQuery(function($) {
         'retry-remote-purge': { action: 'bjlg_remote_purge_retry', param: 'file' },
         'clear-remote-purge': { action: 'bjlg_remote_purge_delete', param: 'file' }
     };
+
+    window.bjlgDashboardQueueActions = queueActionMap;
 
     const announce = function(message, priority) {
         if (!message) {
@@ -825,19 +835,19 @@ jQuery(function($) {
                     }).appendTo($entry);
                 }
 
-                if (entry.details && entry.details.resolution_status_label) {
-                    const resolutionParts = [sprintf(__('Statut : %s', 'backup-jlg'), entry.details.resolution_status_label)];
-                    if (entry.details.acknowledged_relative) {
-                        resolutionParts.push(sprintf(__('accusé %s', 'backup-jlg'), entry.details.acknowledged_relative));
-                    }
-                    if (entry.details.resolved_relative) {
-                        resolutionParts.push(sprintf(__('résolu %s', 'backup-jlg'), entry.details.resolved_relative));
-                    }
-
+                if (entry.details && entry.details.acknowledged_label) {
                     $('<p/>', {
-                        'class': 'bjlg-queue-card__entry-flag',
-                        'data-field': 'resolution',
-                        text: resolutionParts.join(' • ')
+                        'class': 'bjlg-queue-card__entry-meta',
+                        'data-field': 'acknowledged',
+                        text: entry.details.acknowledged_label
+                    }).appendTo($entry);
+                }
+
+                if (entry.details && entry.details.resolved_label) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-meta',
+                        'data-field': 'resolved',
+                        text: entry.details.resolved_label
                     }).appendTo($entry);
                 }
 
@@ -873,28 +883,40 @@ jQuery(function($) {
                     $('<p/>', { 'class': 'bjlg-queue-card__entry-message', text: entry.message }).appendTo($entry);
                 }
 
+                if (entry.details && entry.details.resolution_notes) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-message',
+                        'data-field': 'resolution-notes',
+                        text: entry.details.resolution_notes
+                    }).appendTo($entry);
+                }
+
                 const $actions = $('<div/>', { 'class': 'bjlg-queue-card__entry-actions' }).appendTo($entry);
                 if (key === 'notifications' && entry.id) {
-                    if (entry.details && entry.details.resolution_status === 'pending') {
-                        $('<button/>', {
-                            type: 'button',
-                            'class': 'button button-secondary button-small',
-                            'data-queue-action': 'acknowledge-notification',
-                            'data-entry-id': entry.id,
-                            'data-entry-title': entry.title || entry.event || entry.id,
-                            text: __('Accusé', 'backup-jlg')
-                        }).appendTo($actions);
+                    const $ackButton = $('<button/>', {
+                        type: 'button',
+                        'class': 'button button-secondary button-small',
+                        'data-queue-action': 'acknowledge-notification',
+                        'data-entry-id': entry.id,
+                        text: __('Accuser réception', 'backup-jlg')
+                    }).appendTo($actions);
+
+                    if (entry.acknowledged) {
+                        $ackButton.prop('disabled', true).attr('aria-disabled', 'true');
                     }
-                    if (!entry.details || entry.details.resolution_status !== 'resolved') {
-                        $('<button/>', {
-                            type: 'button',
-                            'class': 'button button-secondary button-small',
-                            'data-queue-action': 'resolve-notification',
-                            'data-entry-id': entry.id,
-                            'data-entry-title': entry.title || entry.event || entry.id,
-                            text: __('Résolution', 'backup-jlg')
-                        }).appendTo($actions);
+
+                    const $resolveButton = $('<button/>', {
+                        type: 'button',
+                        'class': 'button button-secondary button-small',
+                        'data-queue-action': 'resolve-notification',
+                        'data-entry-id': entry.id,
+                        text: __('Clore', 'backup-jlg')
+                    }).appendTo($actions);
+
+                    if (entry.resolved) {
+                        $resolveButton.prop('disabled', true).attr('aria-disabled', 'true');
                     }
+
                     $('<button/>', {
                         type: 'button',
                         'class': 'button button-secondary button-small',
@@ -1271,7 +1293,9 @@ jQuery(function($) {
             });
     };
 
-    $overview.on('click', '[data-queue-action]', function(event) {
+    const $queueDelegateRoot = $overview.length ? $overview : $(document);
+
+    $queueDelegateRoot.on('click', '[data-queue-action]', function(event) {
         event.preventDefault();
 
         const $button = $(this);
@@ -1282,7 +1306,9 @@ jQuery(function($) {
             return;
         }
 
-        if (!$overview.length || !ajaxData.ajax_url || !ajaxData.nonce) {
+        const $container = $overview.length ? $overview : $button.closest('.bjlg-dashboard-overview');
+
+        if (!$container.length || !ajaxData.ajax_url || !ajaxData.nonce) {
             announce(__('Impossible de contacter le serveur. Rechargez la page.', 'backup-jlg'), 'assertive');
             return;
         }
@@ -1303,21 +1329,25 @@ jQuery(function($) {
         };
         payload[config.param] = value;
 
-        if (config.summary) {
-            const entryTitle = $button.data('entryTitle') ? String($button.data('entryTitle')) : '';
-            let promptMessage = config.summary.prompt || '';
-            if (entryTitle) {
-                promptMessage = promptMessage ? promptMessage + '\n' + entryTitle : entryTitle;
+        if (config.channelParam) {
+            const channelValue = $button.data(config.channelParam) || $button.data('channel');
+            if (channelValue) {
+                payload[config.channelParam] = channelValue;
             }
-            const input = window.prompt(promptMessage, '');
-            if (input === null) {
+        }
+
+        if (config.promptField) {
+            const promptMessage = typeof config.prompt === 'string'
+                ? config.prompt
+                : __('Ajoutez des notes (optionnel)', 'backup-jlg');
+            const defaultValue = $button.data('defaultNotes') || '';
+            const userNotes = window.prompt(promptMessage, defaultValue);
+
+            if (userNotes === null) {
                 return;
             }
-            if (config.summary.required && !input.trim()) {
-                announce(__('Veuillez indiquer un résumé avant de continuer.', 'backup-jlg'), 'assertive');
-                return;
-            }
-            payload.summary = input;
+
+            payload[config.promptField] = userNotes;
         }
 
         $button.prop('disabled', true).attr('aria-busy', 'true');
