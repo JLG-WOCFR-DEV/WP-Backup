@@ -78,6 +78,7 @@ class BJLG_Scheduler {
         add_action('wp_ajax_bjlg_toggle_schedule_state', [$this, 'handle_toggle_schedule_state']);
         add_action('wp_ajax_bjlg_duplicate_schedule', [$this, 'handle_duplicate_schedule']);
         add_action('wp_ajax_bjlg_preview_cron_expression', [$this, 'handle_preview_cron_expression']);
+        add_action('wp_ajax_bjlg_scheduler_recommendations', [$this, 'handle_scheduler_recommendations']);
 
         // Hook Cron pour l'exécution automatique
         add_action(self::SCHEDULE_HOOK, [$this, 'run_scheduled_backup']);
@@ -491,6 +492,53 @@ class BJLG_Scheduler {
 
         wp_send_json_success([
             'schedules' => $summary,
+        ]);
+    }
+
+    /**
+     * Fournit des recommandations de capacité pour les planifications.
+     */
+    public function handle_scheduler_recommendations() {
+        if (!\bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => 'Permission refusée.'], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $posted = wp_unslash($_POST);
+        $override_schedule = null;
+
+        if (isset($posted['current_schedule'])) {
+            $raw_schedule = $posted['current_schedule'];
+            if (is_string($raw_schedule)) {
+                $decoded = json_decode($raw_schedule, true);
+                if (is_array($decoded)) {
+                    $raw_schedule = $decoded;
+                }
+            }
+
+            if (is_array($raw_schedule)) {
+                $override_schedule = BJLG_Settings::sanitize_schedule_entry($raw_schedule, 0);
+
+                if (isset($raw_schedule['id']) && is_scalar($raw_schedule['id'])) {
+                    $override_id = sanitize_key((string) $raw_schedule['id']);
+                    $override_schedule['id'] = $override_id;
+                }
+
+                if (isset($raw_schedule['recurrence'])) {
+                    $override_schedule['recurrence'] = sanitize_key((string) $raw_schedule['recurrence']);
+                }
+
+                if (isset($raw_schedule['custom_cron'])) {
+                    $override_schedule['custom_cron'] = BJLG_Settings::sanitize_cron_expression($raw_schedule['custom_cron']);
+                }
+            }
+        }
+
+        $forecast = $this->get_capacity_forecast($override_schedule);
+
+        wp_send_json_success([
+            'forecast' => $forecast,
         ]);
     }
 
@@ -1372,6 +1420,383 @@ class BJLG_Scheduler {
         }
 
         return $stats;
+    }
+
+    /**
+     * Calcule un pronostic de capacité basé sur l'historique et les créneaux.
+     */
+    public function get_capacity_forecast(array $override_schedule = null): array {
+        $collection = $this->get_schedule_settings();
+        $schedules = isset($collection['schedules']) && is_array($collection['schedules'])
+            ? $collection['schedules']
+            : [];
+
+        if (is_array($override_schedule)) {
+            $merged = false;
+            if (!empty($override_schedule['id'])) {
+                foreach ($schedules as &$existing) {
+                    if (!is_array($existing) || empty($existing['id'])) {
+                        continue;
+                    }
+
+                    if ($existing['id'] === $override_schedule['id']) {
+                        $existing = array_merge($existing, $override_schedule);
+                        $merged = true;
+                        break;
+                    }
+                }
+                unset($existing);
+            }
+
+            if (!$merged) {
+                $schedules[] = $override_schedule;
+            }
+        }
+
+        $next_runs = $this->get_next_runs_summary($schedules);
+        $baseline_duration = $this->compute_average_backup_duration_seconds();
+        $baseline_duration = max(300, (int) round($baseline_duration));
+        $now = current_time('timestamp');
+
+        $windows = [];
+        foreach ($schedules as $schedule) {
+            if (!is_array($schedule) || empty($schedule['id'])) {
+                continue;
+            }
+
+            $recurrence = $schedule['recurrence'] ?? 'disabled';
+            if ($recurrence === 'disabled') {
+                continue;
+            }
+
+            $id = (string) $schedule['id'];
+            $next_run_summary = isset($next_runs[$id]) ? $next_runs[$id] : null;
+            $next_run = $next_run_summary['next_run'] ?? null;
+            if (!$next_run) {
+                continue;
+            }
+
+            $duration = $this->estimate_schedule_duration($schedule, $baseline_duration);
+            $windows[] = $this->build_time_window_entry($schedule, $next_run_summary, (int) round($duration), $now);
+        }
+
+        usort($windows, static function ($left, $right) {
+            if ($left['start'] === $right['start']) {
+                return $left['end'] <=> $right['end'];
+            }
+
+            return $left['start'] <=> $right['start'];
+        });
+
+        $total_duration = 0;
+        $span_start = null;
+        $span_end = null;
+
+        foreach ($windows as $window) {
+            $total_duration += $window['duration'];
+            $span_start = $span_start === null ? $window['start'] : min($span_start, $window['start']);
+            $span_end = $span_end === null ? $window['end'] : max($span_end, $window['end']);
+        }
+
+        $conflicts = [];
+        $window_count = count($windows);
+        for ($i = 0; $i < $window_count; $i++) {
+            for ($j = $i + 1; $j < $window_count; $j++) {
+                if ($windows[$j]['start'] >= $windows[$i]['end']) {
+                    break;
+                }
+
+                $overlap = min($windows[$i]['end'], $windows[$j]['end']) - max($windows[$i]['start'], $windows[$j]['start']);
+                if ($overlap <= 0) {
+                    continue;
+                }
+
+                $conflicts[] = [
+                    'primary' => $windows[$i]['id'],
+                    'secondary' => $windows[$j]['id'],
+                    'participants' => [$windows[$i]['label'], $windows[$j]['label']],
+                    'overlap_seconds' => (int) $overlap,
+                    'overlap_label' => $this->format_duration_label((int) $overlap),
+                    'label' => sprintf(
+                        /* translators: 1: schedule label, 2: schedule label */
+                        __('Chevauchement entre %1$s et %2$s', 'backup-jlg'),
+                        $windows[$i]['label'],
+                        $windows[$j]['label']
+                    ),
+                ];
+            }
+        }
+
+        $ideal_windows = [];
+        if (empty($windows)) {
+            $gap_start = $now + HOUR_IN_SECONDS;
+            $gap_end = $gap_start + (6 * HOUR_IN_SECONDS);
+            $ideal_windows[] = $this->format_gap_window($gap_start, $gap_end, $now);
+        } else {
+            $cursor = $windows[0]['start'];
+            foreach ($windows as $window) {
+                if ($window['start'] > $cursor) {
+                    $ideal_windows[] = $this->format_gap_window($cursor, $window['start'], $now);
+                }
+                $cursor = max($cursor, $window['end']);
+            }
+
+            $ideal_windows[] = $this->format_gap_window($cursor, $cursor + max($baseline_duration, 900), $now);
+        }
+
+        $ideal_windows = array_values(array_filter($ideal_windows, static function ($entry) use ($baseline_duration) {
+            return isset($entry['duration']) && $entry['duration'] >= max(600, (int) round($baseline_duration / 2));
+        }));
+
+        $events = [];
+        foreach ($windows as $window) {
+            $events[] = [$window['start'], 1];
+            $events[] = [$window['end'], -1];
+        }
+        usort($events, static function ($left, $right) {
+            if ($left[0] === $right[0]) {
+                return $left[1] <=> $right[1];
+            }
+
+            return $left[0] <=> $right[0];
+        });
+
+        $active = 0;
+        $peak = 0;
+        foreach ($events as $event) {
+            $active += (int) $event[1];
+            if ($active > $peak) {
+                $peak = $active;
+            }
+        }
+
+        $total_seconds = (int) round($total_duration);
+        $total_hours = $total_seconds > 0 ? round($total_seconds / HOUR_IN_SECONDS, 2) : 0.0;
+        $span = ($span_end !== null && $span_start !== null) ? max(0, $span_end - $span_start) : 0;
+        $density_percent = $span > 0
+            ? min(100, round(($total_duration / $span) * 100, 2))
+            : 0.0;
+
+        $load_level = 'low';
+        if ($peak > 2 || $total_seconds >= 10800 || $density_percent >= 80) {
+            $load_level = 'high';
+        } elseif ($peak > 1 || $total_seconds >= 5400 || $density_percent >= 55) {
+            $load_level = 'medium';
+        }
+
+        $advice = [];
+        if ($peak > 1) {
+            $advice[] = [
+                'severity' => 'warning',
+                'message' => __('Plusieurs sauvegardes sont prévues en parallèle. Répartissez-les pour éviter la saturation.', 'backup-jlg'),
+            ];
+        }
+
+        if ($density_percent > 70) {
+            $advice[] = [
+                'severity' => 'warning',
+                'message' => __('La fenêtre planifiée est très dense. Envisagez des sauvegardes incrémentales ou des horaires alternatifs.', 'backup-jlg'),
+            ];
+        }
+
+        if (empty($conflicts) && empty($advice)) {
+            $advice[] = [
+                'severity' => 'success',
+                'message' => __('Aucun conflit détecté : la répartition actuelle est équilibrée.', 'backup-jlg'),
+            ];
+        }
+
+        if (!empty($ideal_windows)) {
+            $first_gap = $ideal_windows[0];
+            $advice[] = [
+                'severity' => 'info',
+                'message' => sprintf(
+                    /* translators: %s: formatted duration */
+                    __('Fenêtre disponible d’environ %s pour ajouter une sauvegarde.', 'backup-jlg'),
+                    $first_gap['duration_label'] ?? ''
+                ),
+            ];
+        }
+
+        $estimated_load = [
+            'baseline_duration' => $baseline_duration,
+            'total_seconds' => $total_seconds,
+            'total_hours' => $total_hours,
+            'peak_concurrent' => $peak,
+            'density_percent' => $density_percent,
+            'window_count' => $window_count,
+            'load_level' => $load_level,
+        ];
+
+        return [
+            'generated_at' => $now,
+            'average_duration' => $baseline_duration,
+            'estimated_load' => $estimated_load,
+            'windows' => $windows,
+            'conflicts' => $conflicts,
+            'ideal_windows' => array_slice($ideal_windows, 0, 5),
+            'advice' => $advice,
+            'suggested_adjustments' => $this->build_suggested_adjustments($load_level),
+            'draft_schedule' => $override_schedule,
+        ];
+    }
+
+    private function compute_average_backup_duration_seconds(): float {
+        $stats = \bjlg_get_option('bjlg_performance_stats', []);
+        $durations = [];
+
+        if (is_array($stats)) {
+            foreach ($stats as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                if (!isset($entry['duration']) || !is_numeric($entry['duration'])) {
+                    continue;
+                }
+                $durations[] = (float) $entry['duration'];
+            }
+        }
+
+        if (empty($durations) && class_exists(BJLG_History::class)) {
+            $history_entries = BJLG_History::get_history(20, ['action_type' => 'backup_created']);
+            if (is_array($history_entries)) {
+                foreach ($history_entries as $entry) {
+                    if (!is_array($entry) || empty($entry['details'])) {
+                        continue;
+                    }
+                    if (preg_match('/Durée\s*:\s*(\d+(?:\.\d+)?)/', (string) $entry['details'], $matches)) {
+                        $durations[] = (float) $matches[1];
+                    }
+                }
+            }
+        }
+
+        if (empty($durations)) {
+            return 900.0;
+        }
+
+        $average = array_sum($durations) / count($durations);
+
+        return max(300.0, (float) $average);
+    }
+
+    private function estimate_schedule_duration(array $schedule, float $baseline): float {
+        $components = isset($schedule['components']) && is_array($schedule['components'])
+            ? array_values($schedule['components'])
+            : [];
+
+        $component_factor = 1.0 + (max(0, count($components) - 1) * 0.2);
+        if (in_array('uploads', $components, true)) {
+            $component_factor += 0.15;
+        }
+
+        $duration = $baseline * $component_factor;
+
+        if (!empty($schedule['incremental'])) {
+            $duration *= 0.6;
+        }
+
+        return max(300.0, $duration);
+    }
+
+    private function build_time_window_entry(array $schedule, array $summary, int $duration, int $now): array {
+        $start = isset($summary['next_run']) ? (int) $summary['next_run'] : $now;
+        $end = $start + max(300, $duration);
+        $label = isset($schedule['label']) && $schedule['label'] !== ''
+            ? (string) $schedule['label']
+            : (isset($schedule['id']) ? (string) $schedule['id'] : '');
+
+        return [
+            'id' => isset($schedule['id']) ? (string) $schedule['id'] : '',
+            'label' => $label,
+            'start' => $start,
+            'end' => $end,
+            'duration' => $end - $start,
+            'duration_label' => $this->format_duration_label($end - $start),
+            'start_formatted' => get_date_from_gmt($this->format_gmt_datetime($start), 'd/m/Y H:i'),
+            'end_formatted' => get_date_from_gmt($this->format_gmt_datetime($end), 'd/m/Y H:i'),
+            'start_relative' => $start >= $now ? human_time_diff($start, $now) : __('déjà passé', 'backup-jlg'),
+        ];
+    }
+
+    private function format_gap_window(int $start, int $end, int $now): array {
+        $gap_start = min($start, $end);
+        $gap_end = max($start, $end);
+        $duration = max(0, $gap_end - $gap_start);
+
+        return [
+            'start' => $gap_start,
+            'end' => $gap_end,
+            'duration' => $duration,
+            'duration_label' => $this->format_duration_label($duration),
+            'label' => sprintf(
+                /* translators: %s: formatted duration */
+                __('Fenêtre libre (~%s)', 'backup-jlg'),
+                $this->format_duration_label($duration)
+            ),
+            'start_formatted' => get_date_from_gmt($this->format_gmt_datetime($gap_start), 'd/m/Y H:i'),
+            'end_formatted' => get_date_from_gmt($this->format_gmt_datetime($gap_end), 'd/m/Y H:i'),
+            'start_relative' => $gap_start >= $now ? human_time_diff($gap_start, $now) : __('immédiat', 'backup-jlg'),
+        ];
+    }
+
+    private function build_suggested_adjustments(string $load_level): array {
+        switch ($load_level) {
+            case 'high':
+                return [
+                    'scenario_id' => 'pre_deploy',
+                    'label' => __('Snapshots rapides pré-déploiement', 'backup-jlg'),
+                    'recurrence' => 'custom',
+                    'custom_cron' => '*/10 * * * *',
+                    'components' => ['db', 'plugins', 'themes'],
+                    'incremental' => false,
+                ];
+            case 'medium':
+                return [
+                    'scenario_id' => 'weekly_media',
+                    'label' => __('Synchronisation médias hebdomadaire', 'backup-jlg'),
+                    'recurrence' => 'weekly',
+                    'day' => 'sunday',
+                    'time' => '04:00',
+                    'components' => ['uploads'],
+                    'incremental' => true,
+                ];
+        }
+
+        return [
+            'scenario_id' => 'nightly_full',
+            'label' => __('Archive complète nocturne', 'backup-jlg'),
+            'recurrence' => 'daily',
+            'time' => '02:30',
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'incremental' => false,
+        ];
+    }
+
+    private function format_duration_label(int $seconds): string {
+        if ($seconds <= 0) {
+            return __('instantané', 'backup-jlg');
+        }
+
+        if ($seconds < MINUTE_IN_SECONDS) {
+            return sprintf(__('%ds', 'backup-jlg'), $seconds);
+        }
+
+        if ($seconds < HOUR_IN_SECONDS) {
+            $minutes = max(1, (int) round($seconds / MINUTE_IN_SECONDS));
+
+            return sprintf(__('%d min', 'backup-jlg'), $minutes);
+        }
+
+        if ($seconds < DAY_IN_SECONDS) {
+            $hours = round($seconds / HOUR_IN_SECONDS, 1);
+
+            return sprintf(__('%1$.1fh', 'backup-jlg'), $hours);
+        }
+
+        $days = round($seconds / DAY_IN_SECONDS, 1);
+
+        return sprintf(__('%1$.1fj', 'backup-jlg'), $days);
     }
 
     private function get_destination_batch_size() {

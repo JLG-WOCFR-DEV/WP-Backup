@@ -3409,8 +3409,26 @@ class BJLG_Admin {
                 }
                 ?>
             </div>
-            
+
             <h3><span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span> Planification des Sauvegardes</h3>
+            <div class="notice notice-info bjlg-schedule-help" aria-live="polite">
+                <p><?php echo esc_html__(
+                    'Les recommandations de charge et les scénarios suggérés sont calculés automatiquement lors de la modification d’une planification.',
+                    'backup-jlg'
+                ); ?></p>
+                <p class="description"><?php echo esc_html__(
+                    'Si JavaScript est désactivé, référez-vous aux conseils ci-dessous pour répartir vos sauvegardes et surveiller les chevauchements.',
+                    'backup-jlg'
+                ); ?></p>
+            </div>
+            <noscript>
+                <div class="notice notice-warning">
+                    <p><?php echo esc_html__(
+                        'Activez JavaScript dans votre navigateur pour obtenir les analyses de capacité et les aides contextuelles.',
+                        'backup-jlg'
+                    ); ?></p>
+                </div>
+            </noscript>
             <form
                 id="bjlg-schedule-form"
                 data-default-schedule="<?php echo esc_attr(wp_json_encode($default_schedule)); ?>"
@@ -5424,6 +5442,20 @@ class BJLG_Admin {
                         <td>
                             <div class="bjlg-schedule-summary" data-field="summary" aria-live="polite">
                                 <?php echo $summary_html; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr class="bjlg-schedule-recommendations-row">
+                        <th scope="row"><?php esc_html_e('Recommandations', 'backup-jlg'); ?></th>
+                        <td>
+                            <div class="bjlg-schedule-recommendations" data-field="recommendations" aria-live="polite">
+                                <p class="bjlg-schedule-recommendations__status" data-role="recommendation-status" hidden></p>
+                                <div class="bjlg-schedule-recommendations__badges" data-role="recommendation-badges"></div>
+                                <div class="bjlg-schedule-recommendations__tips" data-role="recommendation-tips"></div>
+                                <p class="bjlg-schedule-recommendations__empty" data-role="recommendation-empty"><?php echo esc_html__(
+                                    'Modifiez la planification pour découvrir les recommandations.',
+                                    'backup-jlg'
+                                ); ?></p>
                             </div>
                         </td>
                     </tr>

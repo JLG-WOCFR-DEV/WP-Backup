@@ -3,6 +3,26 @@ jQuery(function($) {
 
 // --- GESTIONNAIRE DE PLANIFICATION ---
 (function setupScheduleManager() {
+    const wpI18n = window.wp && window.wp.i18n ? window.wp.i18n : null;
+    const __ = wpI18n && typeof wpI18n.__ === 'function' ? wpI18n.__ : function(text) { return text; };
+
+    function debounce(fn, wait) {
+        let timer = null;
+        const delay = typeof wait === 'number' && wait >= 0 ? wait : 200;
+
+        return function debounced() {
+            const context = this;
+            const args = arguments;
+            if (timer) {
+                clearTimeout(timer);
+            }
+            timer = setTimeout(function() {
+                timer = null;
+                fn.apply(context, args);
+            }, delay);
+        };
+    }
+
     const $scheduleForm = $('#bjlg-schedule-form');
     if (!$scheduleForm.length || typeof bjlg_ajax !== 'object') {
         return;
@@ -1511,6 +1531,35 @@ jQuery(function($) {
         });
     }
 
+    function markRecommendedScenario(helper, scenarioId) {
+        if (!helper || !helper.scenarios || !helper.scenarios.length) {
+            return;
+        }
+
+        const suffix = ' ' + __('(recommandé)', 'backup-jlg');
+
+        helper.scenarios.find('[data-cron-scenario]').each(function() {
+            const $button = $(this);
+            const identifier = ($button.attr('data-cron-scenario') || '').toString();
+            const isMatch = scenarioId && identifier === scenarioId;
+            const $title = $button.find('.bjlg-cron-scenario__title');
+            if ($title.length && typeof $title.data('original-text') === 'undefined') {
+                $title.data('original-text', $title.text());
+            }
+            const baseText = $title.length ? ($title.data('original-text') || $title.text()) : '';
+
+            $button.toggleClass('is-recommended', !!isMatch);
+
+            if ($title.length) {
+                if (isMatch) {
+                    $title.text(baseText + suffix);
+                } else {
+                    $title.text(baseText);
+                }
+            }
+        });
+    }
+
     function applyCronScenario($item, scenario) {
         if (!$item || !scenario || typeof scenario !== 'object') {
             return;
@@ -2202,6 +2251,10 @@ jQuery(function($) {
 
         buildCronTokenPanel(helper.tokens, $item);
         buildCronScenarioPanel(helper.scenarios, $item);
+        const suggestedScenario = ($item.data('bjlgSuggestedScenario') || '').toString();
+        if (suggestedScenario) {
+            markRecommendedScenario(helper, suggestedScenario);
+        }
         initializeCronHistory(helper, $item);
 
         if (helper.suggestionsTitle && helper.suggestionsTitle.length && !helper.suggestionsTitle.data('initialized')) {
@@ -3066,6 +3119,326 @@ jQuery(function($) {
         ];
     }
 
+    const recommendationState = typeof WeakMap === 'function' ? new WeakMap() : null;
+    const recommendationBadgeClasses = {
+        success: 'bjlg-badge-bg-emerald',
+        warning: 'bjlg-badge-bg-amber',
+        danger: 'bjlg-badge-bg-rose',
+        info: 'bjlg-badge-bg-sky',
+        neutral: 'bjlg-badge-bg-slate'
+    };
+
+    function summarizeForecastForDisplay(forecast) {
+        const summary = { badges: [], tips: [], loadLevel: 'low', scenario: null };
+        if (!forecast || typeof forecast !== 'object') {
+            return summary;
+        }
+
+        const estimated = forecast.estimated_load || {};
+        const loadLevel = (estimated.load_level || 'low').toString();
+        summary.loadLevel = loadLevel;
+
+        const peak = Number(estimated.peak_concurrent || 0);
+        const totalSeconds = Number(estimated.total_seconds || 0);
+        const density = Number(estimated.density_percent || 0);
+
+        const durationLabel = totalSeconds >= 3600
+            ? (Number(estimated.total_hours || 0).toFixed(1) + 'h')
+            : Math.max(1, Math.round(totalSeconds / 60)) + ' min';
+
+        const loadLabels = {
+            low: __('Charge faible', 'backup-jlg'),
+            medium: __('Charge modérée', 'backup-jlg'),
+            high: __('Charge élevée', 'backup-jlg')
+        };
+        const loadVariants = { low: 'success', medium: 'warning', high: 'danger' };
+
+        summary.badges.push({
+            text: loadLabels[loadLevel] || __('Charge', 'backup-jlg'),
+            variant: loadVariants[loadLevel] || 'info',
+            meta: peak > 1
+                ? __('Pics simultanés : ', 'backup-jlg') + peak
+                : __('Durée totale : ', 'backup-jlg') + durationLabel
+        });
+
+        if (Array.isArray(forecast.conflicts) && forecast.conflicts.length) {
+            summary.badges.push({
+                text: __('Conflits détectés', 'backup-jlg'),
+                variant: 'danger',
+                meta: forecast.conflicts.length.toString()
+            });
+        }
+
+        if (density > 0) {
+            summary.badges.push({
+                text: __('Occupation', 'backup-jlg'),
+                variant: density > 70 ? 'warning' : 'info',
+                meta: density + '%'
+            });
+        }
+
+        if (Array.isArray(forecast.advice)) {
+            forecast.advice.forEach(function(entry) {
+                if (!entry || typeof entry !== 'object' || !entry.message) {
+                    return;
+                }
+                summary.tips.push({
+                    text: entry.message,
+                    variant: entry.severity || 'info'
+                });
+            });
+        }
+
+        if (Array.isArray(forecast.ideal_windows) && forecast.ideal_windows.length) {
+            const windowInfo = forecast.ideal_windows[0];
+            if (windowInfo && windowInfo.label) {
+                summary.tips.push({
+                    text: __('Fenêtre libre : ', 'backup-jlg') + windowInfo.label,
+                    variant: 'info'
+                });
+            }
+        }
+
+        if (!summary.tips.length) {
+            summary.tips.push({
+                text: __('Analyse disponible : ajustez vos sauvegardes selon vos objectifs.', 'backup-jlg'),
+                variant: 'info'
+            });
+        }
+
+        if (forecast.suggested_adjustments && typeof forecast.suggested_adjustments === 'object') {
+            summary.scenario = forecast.suggested_adjustments;
+            if (forecast.suggested_adjustments.label) {
+                summary.tips.unshift({
+                    text: __('Scénario suggéré : ', 'backup-jlg') + forecast.suggested_adjustments.label,
+                    variant: 'success'
+                });
+            }
+        }
+
+        return summary;
+    }
+
+    function ensureRecommendationPanel($item) {
+        if (!$item || !$item.length) {
+            return $();
+        }
+        return $item.find('[data-field="recommendations"]');
+    }
+
+    function setRecommendationLoading($panel, isLoading) {
+        if (!$panel || !$panel.length) {
+            return;
+        }
+        const $status = $panel.find('[data-role="recommendation-status"]');
+        if (isLoading) {
+            $panel.attr('data-loading', '1');
+            if ($status.length) {
+                $status.text(__('Analyse en cours…', 'backup-jlg')).show();
+            }
+        } else {
+            $panel.removeAttr('data-loading');
+            if ($status.length) {
+                $status.text('').hide();
+            }
+        }
+    }
+
+    function renderScheduleRecommendations($item, summary) {
+        const $panel = ensureRecommendationPanel($item);
+        if (!$panel.length) {
+            return;
+        }
+        const $badges = $panel.find('[data-role="recommendation-badges"]');
+        const $tips = $panel.find('[data-role="recommendation-tips"]');
+        const $empty = $panel.find('[data-role="recommendation-empty"]');
+
+        if ($badges.length) {
+            $badges.empty();
+        }
+        if ($tips.length) {
+            $tips.empty();
+        }
+
+        const hasBadges = summary && Array.isArray(summary.badges) && summary.badges.length;
+        const hasTips = summary && Array.isArray(summary.tips) && summary.tips.length;
+
+        if (!hasBadges && !hasTips) {
+            if ($empty.length) {
+                $empty.text(__('Modifiez la planification pour obtenir des recommandations.', 'backup-jlg')).show();
+            }
+            return;
+        }
+
+        if ($empty.length) {
+            $empty.hide().text('');
+        }
+
+        if (hasBadges && $badges.length) {
+            summary.badges.forEach(function(badge) {
+                if (!badge || !badge.text) {
+                    return;
+                }
+                const variant = badge.variant || 'neutral';
+                const className = recommendationBadgeClasses[variant] || recommendationBadgeClasses.neutral;
+                const $badge = $('<span/>', {
+                    class: 'bjlg-badge bjlg-schedule-recommendations__badge ' + className,
+                    text: badge.text
+                });
+                if (badge.meta) {
+                    $('<small/>', { text: ' ' + badge.meta }).appendTo($badge);
+                }
+                $badges.append($badge);
+            });
+        }
+
+        if (hasTips && $tips.length) {
+            summary.tips.forEach(function(tip) {
+                if (!tip || !tip.text) {
+                    return;
+                }
+                const variant = tip.variant || 'info';
+                $('<p/>', {
+                    class: 'bjlg-schedule-recommendations__tip bjlg-schedule-recommendations__tip--' + variant,
+                    text: tip.text
+                }).appendTo($tips);
+            });
+        }
+    }
+
+    const triggerRecommendationUpdate = debounce(function(element) {
+        const $item = $(element);
+        requestScheduleRecommendations($item);
+    }, 450);
+
+    function scheduleRecommendationRefresh($item, immediate) {
+        if (!$item || !$item.length || $item.hasClass('bjlg-schedule-item--template')) {
+            return;
+        }
+
+        if (immediate) {
+            requestScheduleRecommendations($item);
+            return;
+        }
+
+        triggerRecommendationUpdate($item[0]);
+    }
+
+    function recommendationKeyFromData(data) {
+        try {
+            return JSON.stringify({
+                id: data.id || '',
+                recurrence: data.recurrence || '',
+                components: Array.isArray(data.components) ? data.components.slice().sort() : [],
+                incremental: !!data.incremental,
+                custom_cron: data.custom_cron || '',
+                time: data.time || '',
+                day: data.day || '',
+            });
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function requestScheduleRecommendations($item) {
+        if (!$item || !$item.length) {
+            return;
+        }
+
+        const $panel = ensureRecommendationPanel($item);
+        if (!$panel.length) {
+            return;
+        }
+
+        const data = collectScheduleData($item, false);
+        const requestKey = recommendationKeyFromData(data);
+        let state = recommendationState && recommendationState.get ? recommendationState.get($item[0]) : null;
+
+        if (state && state.key === requestKey && state.summary) {
+            renderScheduleRecommendations($item, state.summary);
+            applySuggestedScenarioHighlight($item, state.forecast || null);
+            return;
+        }
+
+        setRecommendationLoading($panel, true);
+
+        if (state && state.request && typeof state.request.abort === 'function') {
+            state.request.abort();
+        }
+
+        const payload = {
+            action: 'bjlg_scheduler_recommendations',
+            nonce: bjlg_ajax.nonce,
+            current_schedule: JSON.stringify(data)
+        };
+
+        const jqXHR = $.ajax({
+            url: bjlg_ajax.ajax_url,
+            method: 'POST',
+            dataType: 'json',
+            data: payload
+        }).done(function(response) {
+            if (!response || !response.success || !response.data || !response.data.forecast) {
+                renderScheduleRecommendations($item, null);
+                return;
+            }
+
+            const forecast = response.data.forecast;
+            const summary = summarizeForecastForDisplay(forecast);
+
+            renderScheduleRecommendations($item, summary);
+            applySuggestedScenarioHighlight($item, forecast);
+
+            if (recommendationState && recommendationState.set) {
+                recommendationState.set($item[0], {
+                    key: requestKey,
+                    summary: summary,
+                    forecast: forecast,
+                    request: null
+                });
+            }
+        }).fail(function() {
+            renderScheduleRecommendations($item, {
+                badges: [],
+                tips: [{ text: __('Erreur lors du calcul des recommandations.', 'backup-jlg'), variant: 'danger' }]
+            });
+        }).always(function() {
+            setRecommendationLoading($panel, false);
+        });
+
+        if (recommendationState && recommendationState.set) {
+            recommendationState.set($item[0], {
+                key: requestKey,
+                summary: null,
+                forecast: null,
+                request: jqXHR
+            });
+        }
+    }
+
+    function applySuggestedScenarioHighlight($item, forecast) {
+        if (!$item || !$item.length || !forecast || typeof forecast !== 'object') {
+            return;
+        }
+
+        const adjustments = forecast.suggested_adjustments || null;
+        if (!adjustments || typeof adjustments !== 'object') {
+            return;
+        }
+
+        if (typeof adjustments.scenario_id === 'string') {
+            $item.data('bjlgSuggestedScenario', adjustments.scenario_id);
+        }
+        if (typeof adjustments.label === 'string') {
+            $item.data('bjlgSuggestedLabel', adjustments.label);
+        }
+
+        const helper = ensureCronAssistant($item);
+        if (helper) {
+            markRecommendedScenario(helper, adjustments.scenario_id || '');
+        }
+    }
+
     function collectScheduleData($item, forSummary) {
         const id = ($item.find('[data-field="id"]').val() || '').toString();
         const label = ($item.find('[data-field="label"]').val() || '').toString();
@@ -3214,6 +3587,7 @@ jQuery(function($) {
         refreshCronInsights($item);
         updateScheduleSummaryForItem($item);
         updateRunButtonState($item);
+        scheduleRecommendationRefresh($item, true);
     }
 
     function rebuildScheduleItems(schedules, nextRuns) {
@@ -3602,6 +3976,7 @@ jQuery(function($) {
         refreshCronInsights($item);
         updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
+        scheduleRecommendationRefresh($item, false);
     });
 
     $scheduleForm.on('change', '.bjlg-schedule-item [data-field="components"], .bjlg-schedule-item [data-field="encrypt"], .bjlg-schedule-item [data-field="incremental"], .bjlg-schedule-item [data-field="day"], .bjlg-schedule-item [data-field="day_of_month"], .bjlg-schedule-item [data-field="time"], .bjlg-schedule-item [data-field="custom_cron"], .bjlg-schedule-item [data-field="post_checks"], .bjlg-schedule-item [data-field="secondary_destinations"]', function() {
@@ -3614,6 +3989,7 @@ jQuery(function($) {
         }
         updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
+        scheduleRecommendationRefresh($item, false);
     });
 
     $scheduleForm.on('input', '.bjlg-schedule-item [data-field="label"], .bjlg-schedule-item textarea[data-field], .bjlg-schedule-item [data-field="custom_cron"]', function() {
@@ -3626,6 +4002,7 @@ jQuery(function($) {
         }
         updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
+        scheduleRecommendationRefresh($item, false);
     });
 
     scheduleItems().each(function() {
@@ -3780,6 +4157,11 @@ jQuery(function($) {
             state.timelineView = view;
             renderTimeline();
         });
+    }
+
+    if (typeof window !== 'undefined') {
+        window.__BJLG_SCHEDULING_TEST__ = window.__BJLG_SCHEDULING_TEST__ || {};
+        window.__BJLG_SCHEDULING_TEST__.summarizeForecast = summarizeForecastForDisplay;
     }
 })();
 });
