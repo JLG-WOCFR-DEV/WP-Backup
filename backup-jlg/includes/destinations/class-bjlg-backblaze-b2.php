@@ -307,395 +307,77 @@ class BJLG_Backblaze_B2 implements BJLG_Destination_Interface {
         return $outcome;
     }
 
+    private const ERROR_USAGE_API_FAILURE = 'B2_USAGE_API_ERROR';
+    private const ERROR_USAGE_EMPTY = 'B2_USAGE_API_EMPTY';
+
     public function get_storage_usage() {
         $defaults = [
             'used_bytes' => null,
             'quota_bytes' => null,
             'free_bytes' => null,
+            'latency_ms' => null,
+            'errors' => [],
         ];
 
         if (!$this->is_connected()) {
             return $defaults;
         }
 
-        $snapshot = $this->get_remote_quota_snapshot();
-        if (($snapshot['status'] ?? '') === 'ok') {
-            return array_merge($defaults, array_intersect_key($snapshot, $defaults));
-        }
-
-        return array_merge($defaults, $this->estimate_usage_from_listing($this->get_settings()));
-    }
-
-    public function get_remote_quota_snapshot() {
-        $snapshot = [
-            'status' => 'unavailable',
-            'used_bytes' => null,
-            'quota_bytes' => null,
-            'free_bytes' => null,
-            'fetched_at' => $this->get_time(),
-            'error' => null,
-            'source' => 'provider',
-        ];
-
-        if (!$this->is_connected()) {
-            $snapshot['error'] = __('Backblaze B2 n\'est pas configuré.', 'backup-jlg');
-
-            return $snapshot;
-        }
-
         $settings = $this->get_settings();
+        $started_at = microtime(true);
 
         try {
-            $usage_snapshot = $this->fetch_usage_snapshot($settings);
-            if (is_array($usage_snapshot)) {
-                $snapshot['status'] = 'ok';
-                $snapshot['used_bytes'] = $usage_snapshot['used_bytes'] ?? null;
-                $snapshot['quota_bytes'] = $usage_snapshot['quota_bytes'] ?? null;
-                $snapshot['free_bytes'] = $usage_snapshot['free_bytes'] ?? null;
-                if ($snapshot['free_bytes'] === null && $snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null) {
-                    $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
-                }
-                $snapshot['error'] = null;
-
-                return $snapshot;
-            }
+            $snapshot = $this->fetch_usage_snapshot($settings);
         } catch (Exception $exception) {
-            $snapshot['error'] = $exception->getMessage();
-            if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log('API quota Backblaze B2 indisponible : ' . $exception->getMessage());
-            }
-        }
+            $latency = (int) round((microtime(true) - $started_at) * 1000);
 
-        try {
-            $auth = $this->authorize($settings);
-            $api_url = rtrim($auth['apiUrl'], '/');
-            $endpoint = $api_url . '/b2api/v2/b2_get_usage';
-            $payload = wp_json_encode(['bucketId' => $settings['bucket_id']]);
-
-            $response = $this->perform_request(
-                'POST',
-                $endpoint,
-                [
-                    'Authorization' => $auth['authorizationToken'],
-                    'Content-Type' => 'application/json',
-                ],
-                $payload
+            throw new BJLG_Remote_Storage_Usage_Exception(
+                'Backblaze B2 : impossible de récupérer les quotas — ' . $exception->getMessage(),
+                self::ERROR_USAGE_API_FAILURE,
+                $latency,
+                (int) $exception->getCode(),
+                $exception
             );
-
-            $usage = $this->parse_usage_snapshot(isset($response['body']) ? (string) $response['body'] : '');
-
-            if (!empty($usage)) {
-                $snapshot['status'] = 'ok';
-                $snapshot['used_bytes'] = $usage['used_bytes'] ?? null;
-                $snapshot['quota_bytes'] = $usage['quota_bytes'] ?? null;
-                $snapshot['free_bytes'] = $usage['free_bytes'] ?? null;
-                if ($snapshot['free_bytes'] === null && $snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null) {
-                    $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
-                }
-                $snapshot['error'] = null;
-
-                $this->log(sprintf(
-                    'Backblaze B2 : métriques distantes récupérées (used=%s quota=%s).',
-                    $snapshot['used_bytes'] !== null ? (string) $snapshot['used_bytes'] : 'n/a',
-                    $snapshot['quota_bytes'] !== null ? (string) $snapshot['quota_bytes'] : 'n/a'
-                ));
-
-                return $snapshot;
-            }
-        } catch (Exception $exception) {
-            $snapshot['error'] = $exception->getMessage();
-            $this->log('Backblaze B2 : impossible de récupérer le snapshot — ' . $exception->getMessage());
         }
 
-        return $snapshot;
-    }
+        $latency = (int) round((microtime(true) - $started_at) * 1000);
 
-    private function fetch_usage_snapshot(array $settings): ?array {
-        $auth = $this->authorize($settings);
-        $payload = [];
-        if (!empty($settings['bucket_id'])) {
-            $payload['bucketId'] = $settings['bucket_id'];
-        }
-        if (isset($auth['accountId'])) {
-            $payload['accountId'] = $auth['accountId'];
-        }
-
-        $response = $this->perform_request(
-            'POST',
-            rtrim($auth['apiUrl'], '/') . '/b2api/v2/b2_get_usage',
-            [
-                'Authorization' => $auth['authorizationToken'],
-                'Content-Type' => 'application/json',
-            ],
-            wp_json_encode($payload)
-        );
-
-        $data = json_decode((string) $response['body'], true);
-        if (!is_array($data)) {
-            return null;
+        if (!is_array($snapshot) || (
+            !array_key_exists('used_bytes', $snapshot)
+            && !array_key_exists('quota_bytes', $snapshot)
+            && !array_key_exists('free_bytes', $snapshot)
+        )) {
+            throw new BJLG_Remote_Storage_Usage_Exception(
+                'Backblaze B2 : la réponse de `b2_get_usage` est vide.',
+                self::ERROR_USAGE_EMPTY,
+                $latency
+            );
         }
 
-        $used = null;
-        $quota = null;
-        $free = null;
+        $usage = array_merge($defaults, $snapshot);
 
-        if (isset($data['storage']) && is_array($data['storage'])) {
-            $storage = $data['storage'];
-
-            if (isset($storage['buckets']) && is_array($storage['buckets'])) {
-                foreach ($storage['buckets'] as $bucket) {
-                    if (!is_array($bucket)) {
-                        continue;
-                    }
-
-                    $bucket_id = isset($bucket['bucketId']) ? (string) $bucket['bucketId'] : '';
-                    if ($bucket_id !== '' && $settings['bucket_id'] !== '' && $bucket_id !== $settings['bucket_id']) {
-                        continue;
-                    }
-
-                    $used = $this->sanitize_positive_int($bucket['currentValue'] ?? $bucket['usage'] ?? null);
-                    $quota = $this->sanitize_positive_int($bucket['limit'] ?? $bucket['quota'] ?? null);
-                    $free = $this->sanitize_positive_int($bucket['remaining'] ?? null);
-
-                    break;
-                }
-            }
-
-            if ($used === null && isset($storage['currentValue'])) {
-                $used = $this->sanitize_positive_int($storage['currentValue']);
-            }
-
-            if ($quota === null && isset($storage['limit'])) {
-                $quota = $this->sanitize_positive_int($storage['limit']);
-            }
-
-            if ($free === null && isset($storage['remaining'])) {
-                $free = $this->sanitize_positive_int($storage['remaining']);
-            }
+        if ($usage['quota_bytes'] !== null && $usage['used_bytes'] !== null && $usage['free_bytes'] === null) {
+            $usage['free_bytes'] = max(0, (int) $usage['quota_bytes'] - (int) $usage['used_bytes']);
+        }
+        if ($usage['quota_bytes'] === null && $usage['used_bytes'] !== null && $usage['free_bytes'] !== null) {
+            $usage['quota_bytes'] = max(0, (int) $usage['used_bytes'] + (int) $usage['free_bytes']);
         }
 
-        if ($used === null && isset($data['usageInBytes'])) {
-            $used = $this->sanitize_positive_int($data['usageInBytes']);
+        $usage['latency_ms'] = max(0, $latency);
+        $usage['source'] = 'provider';
+        $usage['refreshed_at'] = $this->get_time();
+
+        if (class_exists(BJLG_Debug::class)) {
+            BJLG_Debug::log(sprintf(
+                'Métriques Backblaze B2 : used=%s quota=%s free=%s (latence=%sms)',
+                $usage['used_bytes'] !== null ? number_format_i18n((int) $usage['used_bytes']) : 'n/a',
+                $usage['quota_bytes'] !== null ? number_format_i18n((int) $usage['quota_bytes']) : 'n/a',
+                $usage['free_bytes'] !== null ? number_format_i18n((int) $usage['free_bytes']) : 'n/a',
+                $usage['latency_ms']
+            ));
         }
 
-        if ($quota !== null && $used !== null && $free === null) {
-            $free = max(0, (int) $quota - (int) $used);
-        }
-        if ($quota === null && $used !== null && $free !== null) {
-            $quota = max(0, (int) $used + (int) $free);
-        }
-
-        $snapshot = null;
-        if ($used !== null || $quota !== null || $free !== null) {
-            $snapshot = [
-                'used_bytes' => $used,
-                'quota_bytes' => $quota,
-                'free_bytes' => $free,
-            ];
-        }
-
-        /**
-         * Filtre les métriques Backblaze B2 calculées depuis l'API `b2_get_usage`.
-         *
-         * @param array<string,int|null>|null $snapshot
-         * @param array<string,mixed>          $payload
-         * @param array<string,mixed>          $response_data
-         * @param self                         $destination
-         */
-        $filtered = apply_filters('bjlg_backblaze_usage_snapshot', $snapshot, $payload, $data, $this);
-
-        if (is_array($filtered)) {
-            $snapshot = [
-                'used_bytes' => isset($filtered['used_bytes']) ? $this->sanitize_positive_int($filtered['used_bytes']) : $used,
-                'quota_bytes' => isset($filtered['quota_bytes']) ? $this->sanitize_positive_int($filtered['quota_bytes']) : $quota,
-                'free_bytes' => isset($filtered['free_bytes']) ? $this->sanitize_positive_int($filtered['free_bytes']) : $free,
-            ];
-        }
-
-        if ($snapshot !== null && ($snapshot['used_bytes'] !== null || $snapshot['quota_bytes'] !== null || $snapshot['free_bytes'] !== null)) {
-            if ($snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null && $snapshot['free_bytes'] === null) {
-                $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
-            }
-
-            if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log(sprintf(
-                    'Métriques Backblaze B2 : used=%s quota=%s free=%s',
-                    $snapshot['used_bytes'] !== null ? number_format_i18n((int) $snapshot['used_bytes']) : 'n/a',
-                    $snapshot['quota_bytes'] !== null ? number_format_i18n((int) $snapshot['quota_bytes']) : 'n/a',
-                    $snapshot['free_bytes'] !== null ? number_format_i18n((int) $snapshot['free_bytes']) : 'n/a'
-                ));
-            }
-
-            return $snapshot;
-        }
-
-        return null;
-    }
-
-    private function sanitize_positive_int($value): ?int {
-        if (is_int($value)) {
-            return $value >= 0 ? $value : null;
-        }
-
-        if (is_numeric($value)) {
-            $numeric = (float) $value;
-            if (is_finite($numeric) && $numeric >= 0) {
-                return (int) floor($numeric);
-            }
-        }
-
-        if (is_string($value) && preg_match('/(-?\d+(?:[\.,]\d+)?)/', $value, $matches)) {
-            $numeric = (float) str_replace(',', '.', $matches[1]);
-            if (is_finite($numeric) && $numeric >= 0) {
-                return (int) floor($numeric);
-            }
-        }
-
-        return null;
-    }
-
-    private function fetch_usage_snapshot(array $settings): ?array {
-        $auth = $this->authorize($settings);
-        $payload = [];
-        if (!empty($settings['bucket_id'])) {
-            $payload['bucketId'] = $settings['bucket_id'];
-        }
-        if (isset($auth['accountId'])) {
-            $payload['accountId'] = $auth['accountId'];
-        }
-
-        $response = $this->perform_request(
-            'POST',
-            rtrim($auth['apiUrl'], '/') . '/b2api/v2/b2_get_usage',
-            [
-                'Authorization' => $auth['authorizationToken'],
-                'Content-Type' => 'application/json',
-            ],
-            wp_json_encode($payload)
-        );
-
-        $data = json_decode((string) $response['body'], true);
-        if (!is_array($data)) {
-            return null;
-        }
-
-        $used = null;
-        $quota = null;
-        $free = null;
-
-        if (isset($data['storage']) && is_array($data['storage'])) {
-            $storage = $data['storage'];
-
-            if (isset($storage['buckets']) && is_array($storage['buckets'])) {
-                foreach ($storage['buckets'] as $bucket) {
-                    if (!is_array($bucket)) {
-                        continue;
-                    }
-
-                    $bucket_id = isset($bucket['bucketId']) ? (string) $bucket['bucketId'] : '';
-                    if ($bucket_id !== '' && $settings['bucket_id'] !== '' && $bucket_id !== $settings['bucket_id']) {
-                        continue;
-                    }
-
-                    $used = $this->sanitize_positive_int($bucket['currentValue'] ?? $bucket['usage'] ?? null);
-                    $quota = $this->sanitize_positive_int($bucket['limit'] ?? $bucket['quota'] ?? null);
-                    $free = $this->sanitize_positive_int($bucket['remaining'] ?? null);
-
-                    break;
-                }
-            }
-
-            if ($used === null && isset($storage['currentValue'])) {
-                $used = $this->sanitize_positive_int($storage['currentValue']);
-            }
-
-            if ($quota === null && isset($storage['limit'])) {
-                $quota = $this->sanitize_positive_int($storage['limit']);
-            }
-
-            if ($free === null && isset($storage['remaining'])) {
-                $free = $this->sanitize_positive_int($storage['remaining']);
-            }
-        }
-
-        if ($used === null && isset($data['usageInBytes'])) {
-            $used = $this->sanitize_positive_int($data['usageInBytes']);
-        }
-
-        if ($quota !== null && $used !== null && $free === null) {
-            $free = max(0, (int) $quota - (int) $used);
-        }
-        if ($quota === null && $used !== null && $free !== null) {
-            $quota = max(0, (int) $used + (int) $free);
-        }
-
-        $snapshot = null;
-        if ($used !== null || $quota !== null || $free !== null) {
-            $snapshot = [
-                'used_bytes' => $used,
-                'quota_bytes' => $quota,
-                'free_bytes' => $free,
-            ];
-        }
-
-        /**
-         * Filtre les métriques Backblaze B2 calculées depuis l'API `b2_get_usage`.
-         *
-         * @param array<string,int|null>|null $snapshot
-         * @param array<string,mixed>          $payload
-         * @param array<string,mixed>          $response_data
-         * @param self                         $destination
-         */
-        $filtered = apply_filters('bjlg_backblaze_usage_snapshot', $snapshot, $payload, $data, $this);
-
-        if (is_array($filtered)) {
-            $snapshot = [
-                'used_bytes' => isset($filtered['used_bytes']) ? $this->sanitize_positive_int($filtered['used_bytes']) : $used,
-                'quota_bytes' => isset($filtered['quota_bytes']) ? $this->sanitize_positive_int($filtered['quota_bytes']) : $quota,
-                'free_bytes' => isset($filtered['free_bytes']) ? $this->sanitize_positive_int($filtered['free_bytes']) : $free,
-            ];
-        }
-
-        if ($snapshot !== null && ($snapshot['used_bytes'] !== null || $snapshot['quota_bytes'] !== null || $snapshot['free_bytes'] !== null)) {
-            if ($snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null && $snapshot['free_bytes'] === null) {
-                $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
-            }
-
-            if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log(sprintf(
-                    'Métriques Backblaze B2 : used=%s quota=%s free=%s',
-                    $snapshot['used_bytes'] !== null ? number_format_i18n((int) $snapshot['used_bytes']) : 'n/a',
-                    $snapshot['quota_bytes'] !== null ? number_format_i18n((int) $snapshot['quota_bytes']) : 'n/a',
-                    $snapshot['free_bytes'] !== null ? number_format_i18n((int) $snapshot['free_bytes']) : 'n/a'
-                ));
-            }
-
-            return $snapshot;
-        }
-
-        return null;
-    }
-
-    private function sanitize_positive_int($value): ?int {
-        if (is_int($value)) {
-            return $value >= 0 ? $value : null;
-        }
-
-        if (is_numeric($value)) {
-            $numeric = (float) $value;
-            if (is_finite($numeric) && $numeric >= 0) {
-                return (int) floor($numeric);
-            }
-        }
-
-        if (is_string($value) && preg_match('/(-?\d+(?:[\.,]\d+)?)/', $value, $matches)) {
-            $numeric = (float) str_replace(',', '.', $matches[1]);
-            if (is_finite($numeric) && $numeric >= 0) {
-                return (int) floor($numeric);
-            }
-        }
-
-        return null;
+        return $usage;
     }
 
     private function fetch_usage_snapshot(array $settings): ?array {

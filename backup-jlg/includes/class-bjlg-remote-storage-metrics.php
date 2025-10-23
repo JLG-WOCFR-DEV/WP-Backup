@@ -254,11 +254,18 @@ class BJLG_Remote_Storage_Metrics {
         $start = microtime(true);
         try {
             $usage = $destination->get_storage_usage();
+        } catch (BJLG_Remote_Storage_Usage_Exception $exception) {
+            $entry['errors'][] = sprintf('[%s] %s', $exception->get_provider_code(), $exception->getMessage());
+            $entry['latency_ms'] = $exception->get_latency_ms();
+            $usage = [];
         } catch (\Throwable $exception) {
             $entry['errors'][] = $exception->getMessage();
             $usage = [];
         }
-        $entry['latency_ms'] = (int) round((microtime(true) - $start) * 1000);
+
+        if ($entry['latency_ms'] === null) {
+            $entry['latency_ms'] = (int) round((microtime(true) - $start) * 1000);
+        }
 
         if (is_array($usage)) {
             if (isset($usage['used_bytes'])) {
@@ -270,6 +277,18 @@ class BJLG_Remote_Storage_Metrics {
             if (isset($usage['free_bytes'])) {
                 $entry['free_bytes'] = self::sanitize_bytes($usage['free_bytes']);
             }
+            if (isset($usage['errors']) && is_array($usage['errors'])) {
+                foreach ($usage['errors'] as $error) {
+                    $normalized = trim((string) $error);
+                    if ($normalized !== '') {
+                        $entry['errors'][] = $normalized;
+                    }
+                }
+            }
+        }
+
+        if (is_array($usage) && isset($usage['latency_ms']) && $usage['latency_ms'] !== null) {
+            $entry['latency_ms'] = (int) max(0, $usage['latency_ms']);
         }
 
         $entry['quota_samples'] = self::get_quota_sample_for_destination($destination_id);
@@ -303,13 +322,11 @@ class BJLG_Remote_Storage_Metrics {
             $entry['free_human'] = size_format((int) $entry['free_bytes']);
         }
 
-        if (method_exists($destination, 'list_remote_backups')) {
-            try {
-                $backups = $destination->list_remote_backups();
-            } catch (\Throwable $exception) {
-                $entry['errors'][] = $exception->getMessage();
-                $backups = [];
-            }
+        if (!method_exists($destination, 'list_remote_backups')) {
+            self::maybe_dispatch_error_alert($destination_id, $entry);
+
+            return $entry;
+        }
 
             if (is_array($backups)) {
                 $entry['backups_count'] = count($backups);
@@ -371,6 +388,8 @@ class BJLG_Remote_Storage_Metrics {
             }
         }
 
+        self::maybe_dispatch_error_alert($destination_id, $entry);
+
         return $entry;
     }
 
@@ -392,37 +411,32 @@ class BJLG_Remote_Storage_Metrics {
         return null;
     }
 
-    private static function format_daily_delta_label(?float $bytes_per_day): string {
-        if ($bytes_per_day === null) {
-            return '';
+    /**
+     * Déclenche un hook lorsque des erreurs de collecte sont détectées.
+     */
+    private static function maybe_dispatch_error_alert(string $destination_id, array $entry): void
+    {
+        if (empty($entry['errors'])) {
+            return;
         }
 
-        if (abs($bytes_per_day) < 1) {
-            return __('Variation négligeable', 'backup-jlg');
-        }
-
-        $label = size_format((int) max(1, round(abs($bytes_per_day))));
-
-        if ($bytes_per_day > 0) {
-            return sprintf(__('Croissance de %s par jour', 'backup-jlg'), $label);
-        }
-
-        return sprintf(__('Réduction de %s par jour', 'backup-jlg'), $label);
-    }
-
-    private static function format_days_label(float $days): string {
-        if ($days <= 0) {
-            return __('moins d\'un jour', 'backup-jlg');
-        }
-
-        if ($days < 1) {
-            $hours = (int) max(1, ceil($days * 24));
-
-            return sprintf(_n('%s heure', '%s heures', $hours, 'backup-jlg'), number_format_i18n($hours));
-        }
-
-        $rounded = (int) ceil($days);
-
-        return sprintf(_n('%s jour', '%s jours', $rounded, 'backup-jlg'), number_format_i18n($rounded));
+        /**
+         * Signale qu'une destination a rencontré des erreurs lors de la collecte des métriques distantes.
+         *
+         * @param array<string, mixed> $context {
+         *     @type string      $destination_id Identifiant de la destination.
+         *     @type string      $name           Nom lisible de la destination.
+         *     @type string[]    $errors         Liste des erreurs normalisées.
+         *     @type int|null    $latency_ms     Latence observée en millisecondes.
+         *     @type int         $timestamp      Horodatage de la collecte.
+         * }
+         */
+        do_action('bjlg_remote_storage_metrics_error', [
+            'destination_id' => $destination_id,
+            'name' => $entry['name'],
+            'errors' => $entry['errors'],
+            'latency_ms' => $entry['latency_ms'],
+            'timestamp' => isset($entry['refreshed_at']) ? (int) $entry['refreshed_at'] : self::now(),
+        ]);
     }
 }

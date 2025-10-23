@@ -81,9 +81,11 @@ interface BJLG_Destination_Interface {
      * Retourne un instantané de l'utilisation de l'espace de stockage distant.
      *
      * @return array<string, mixed> {
-     *     @type int|null $used_bytes  Espace utilisé en octets (si disponible).
-     *     @type int|null $quota_bytes Quota total en octets (si disponible).
-     *     @type int|null $free_bytes  Espace restant en octets (si disponible).
+     *     @type int|null    $used_bytes   Espace utilisé en octets (si disponible).
+     *     @type int|null    $quota_bytes  Quota total en octets (si disponible).
+     *     @type int|null    $free_bytes   Espace restant en octets (si disponible).
+     *     @type int|null    $latency_ms   Latence de la requête distante en millisecondes.
+     *     @type string[]    $errors      Codes d'erreurs éventuels signalés par le fournisseur.
      * }
      */
     public function get_storage_usage();

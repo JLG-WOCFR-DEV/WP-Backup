@@ -2,9 +2,11 @@
 declare(strict_types=1);
 
 use BJLG\BJLG_Azure_Blob;
+use BJLG\BJLG_Remote_Storage_Usage_Exception;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/destinations/interface-bjlg-destination.php';
+require_once __DIR__ . '/../includes/destinations/class-bjlg-remote-storage-usage-exception.php';
 require_once __DIR__ . '/../includes/destinations/class-bjlg-azure-blob.php';
 
 final class BJLG_AzureBlobDestinationTest extends TestCase
@@ -152,19 +154,13 @@ final class BJLG_AzureBlobDestinationTest extends TestCase
         $handler = function (string $url, array $args): array {
             $this->requests[] = ['url' => $url, 'args' => $args];
 
-            if (strpos($url, 'comp=usage') !== false) {
+            if (strpos($url, 'comp=stats') !== false) {
                 return [
                     'response' => [
                         'code' => 200,
                         'message' => 'OK',
                     ],
-                    'body' => json_encode([
-                        'usage' => [
-                            'usedBytes' => 1000,
-                            'quotaBytes' => 2000,
-                            'freeBytes' => 1000,
-                        ],
-                    ]),
+                    'body' => '<ContainerStats><BlobCapacityInBytes>1000</BlobCapacityInBytes><QuotaInBytes>2000</QuotaInBytes></ContainerStats>',
                 ];
             }
 
@@ -194,30 +190,24 @@ final class BJLG_AzureBlobDestinationTest extends TestCase
         $this->assertSame(1000, $usage['free_bytes']);
         $this->assertSame('provider', $usage['source']);
         $this->assertSame(strtotime('2021-01-01T00:00:00Z'), $usage['refreshed_at']);
+        $this->assertIsInt($usage['latency_ms']);
+        $this->assertGreaterThanOrEqual(0, $usage['latency_ms']);
+        $this->assertIsArray($usage['errors']);
+        $this->assertEmpty($usage['errors']);
     }
 
-    public function test_get_storage_usage_falls_back_to_listing_when_snapshot_fails(): void
+    public function test_get_storage_usage_throws_exception_when_stats_call_fails(): void
     {
         $handler = function (string $url, array $args): array {
             $this->requests[] = ['url' => $url, 'args' => $args];
 
-            if (strpos($url, 'comp=usage') !== false) {
+            if (strpos($url, 'comp=stats') !== false) {
                 return [
                     'response' => [
                         'code' => 500,
                         'message' => 'Error',
                     ],
                     'body' => 'error',
-                ];
-            }
-
-            if (strpos($url, 'comp=list') !== false) {
-                return [
-                    'response' => [
-                        'code' => 200,
-                        'message' => 'OK',
-                    ],
-                    'body' => '<EnumerationResults><Blobs><Blob><Name>daily/backup-1.zip</Name><Properties><ContentLength>500</ContentLength><LastModified>Fri, 01 Jan 2021 00:00:00 GMT</LastModified></Properties></Blob><Blob><Name>daily/backup-2.zip</Name><Properties><ContentLength>700</ContentLength><LastModified>Fri, 01 Jan 2021 01:00:00 GMT</LastModified></Properties></Blob></Blobs></EnumerationResults>',
                 ];
             }
 
@@ -240,12 +230,13 @@ final class BJLG_AzureBlobDestinationTest extends TestCase
             'enabled' => true,
         ]);
 
-        $usage = $destination->get_storage_usage();
-
-        $this->assertSame(1200, $usage['used_bytes']);
-        $this->assertNull($usage['quota_bytes']);
-        $this->assertNull($usage['free_bytes']);
-        $this->assertSame('estimate', $usage['source']);
+        try {
+            $destination->get_storage_usage();
+            $this->fail('Une exception BJLG_Remote_Storage_Usage_Exception était attendue.');
+        } catch (BJLG_Remote_Storage_Usage_Exception $exception) {
+            $this->assertSame('AZURE_USAGE_API_ERROR', $exception->get_provider_code());
+            $this->assertGreaterThanOrEqual(0, $exception->get_latency_ms());
+        }
     }
 
     private function createDestination(?callable $handler = null): BJLG_Azure_Blob

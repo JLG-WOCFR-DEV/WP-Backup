@@ -364,408 +364,77 @@ class BJLG_Azure_Blob implements BJLG_Destination_Interface {
         return $outcome;
     }
 
+    private const ERROR_USAGE_API_FAILURE = 'AZURE_USAGE_API_ERROR';
+    private const ERROR_USAGE_EMPTY = 'AZURE_USAGE_API_EMPTY';
+
     public function get_storage_usage() {
         $defaults = [
             'used_bytes' => null,
             'quota_bytes' => null,
             'free_bytes' => null,
+            'latency_ms' => null,
+            'errors' => [],
         ];
 
         if (!$this->is_connected()) {
             return $defaults;
         }
 
-        $snapshot = $this->get_remote_quota_snapshot();
-        if (($snapshot['status'] ?? '') === 'ok') {
-            return array_merge($defaults, array_intersect_key($snapshot, $defaults));
-        }
-
-        return array_merge($defaults, $this->estimate_usage_from_listing($this->get_settings()));
-    }
-
-    public function get_remote_quota_snapshot() {
-        $snapshot = [
-            'status' => 'unavailable',
-            'used_bytes' => null,
-            'quota_bytes' => null,
-            'free_bytes' => null,
-            'fetched_at' => $this->get_time(),
-            'error' => null,
-            'source' => 'provider',
-        ];
-
-        if (!$this->is_connected()) {
-            $snapshot['error'] = __('Azure Blob Storage n\'est pas configuré.', 'backup-jlg');
-
-            return $snapshot;
-        }
-
         $settings = $this->get_settings();
+        $started_at = microtime(true);
 
         try {
-            $usage_snapshot = $this->fetch_container_usage_snapshot($settings);
-            if (is_array($usage_snapshot)) {
-                $snapshot['status'] = 'ok';
-                $snapshot['used_bytes'] = $usage_snapshot['used_bytes'] ?? null;
-                $snapshot['quota_bytes'] = $usage_snapshot['quota_bytes'] ?? null;
-                $snapshot['free_bytes'] = $usage_snapshot['free_bytes'] ?? null;
-                if ($snapshot['free_bytes'] === null && $snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null) {
-                    $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
-                }
-                $snapshot['error'] = null;
-
-                return $snapshot;
-            }
+            $snapshot = $this->fetch_container_usage_snapshot($settings);
         } catch (Exception $exception) {
-            $snapshot['error'] = $exception->getMessage();
-            if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log('API quota Azure Blob indisponible : ' . $exception->getMessage());
-            }
+            $latency = (int) round((microtime(true) - $started_at) * 1000);
+
+            throw new BJLG_Remote_Storage_Usage_Exception(
+                'Azure Blob : impossible de récupérer les statistiques de conteneur — ' . $exception->getMessage(),
+                self::ERROR_USAGE_API_FAILURE,
+                $latency,
+                (int) $exception->getCode(),
+                $exception
+            );
         }
 
-        try {
-            $response = $this->perform_request('GET', '', '', [], $settings, ['restype' => 'container', 'comp' => 'usage']);
-            $body = isset($response['body']) ? (string) $response['body'] : '';
-            $usage = $this->parse_usage_snapshot($body);
+        $latency = (int) round((microtime(true) - $started_at) * 1000);
 
-            if (!empty($usage)) {
-                $snapshot['status'] = 'ok';
-                $snapshot['used_bytes'] = $usage['used_bytes'] ?? null;
-                $snapshot['quota_bytes'] = $usage['quota_bytes'] ?? null;
-                $snapshot['free_bytes'] = $usage['free_bytes'] ?? null;
-                if ($snapshot['free_bytes'] === null && $snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null) {
-                    $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
-                }
-                $snapshot['error'] = null;
-
-                $this->log(sprintf(
-                    'Azure Blob : métriques distantes récupérées (used=%s quota=%s).',
-                    $snapshot['used_bytes'] !== null ? (string) $snapshot['used_bytes'] : 'n/a',
-                    $snapshot['quota_bytes'] !== null ? (string) $snapshot['quota_bytes'] : 'n/a'
-                ));
-
-                return $snapshot;
-            }
-        } catch (Exception $exception) {
-            $snapshot['error'] = $exception->getMessage();
-            $this->log('Azure Blob : impossible de récupérer le snapshot — ' . $exception->getMessage());
+        if (!is_array($snapshot) || (
+            !array_key_exists('used_bytes', $snapshot)
+            && !array_key_exists('quota_bytes', $snapshot)
+            && !array_key_exists('free_bytes', $snapshot)
+        )) {
+            throw new BJLG_Remote_Storage_Usage_Exception(
+                'Azure Blob : la réponse de l’API `comp=stats` est vide.',
+                self::ERROR_USAGE_EMPTY,
+                $latency
+            );
         }
 
-        return $snapshot;
-    }
+        $usage = array_merge($defaults, $snapshot);
 
-    private function fetch_container_usage_snapshot(array $settings): ?array {
-        $response = $this->perform_request('GET', '', '', [], $settings, ['restype' => 'container', 'comp' => 'stats']);
-        $headers = $this->normalize_headers(isset($response['headers']) ? $response['headers'] : []);
-        $body = isset($response['body']) ? (string) $response['body'] : '';
-
-        $used = null;
-        $quota = $this->extract_quota_from_headers($headers);
-        $free = null;
-
-        if ($body !== '') {
-            $xml = @simplexml_load_string($body);
-            if ($xml !== false) {
-                if (isset($xml->BlobCapacityInBytes)) {
-                    $used = $this->sanitize_positive_int((string) $xml->BlobCapacityInBytes);
-                } elseif (isset($xml->ApproximateSizeInBytes)) {
-                    $used = $this->sanitize_positive_int((string) $xml->ApproximateSizeInBytes);
-                }
-
-                if ($quota === null && isset($xml->ContainerQuota)) {
-                    $quota_candidate = $this->sanitize_positive_int((string) $xml->ContainerQuota);
-                    if ($quota_candidate !== null) {
-                        $quota = $this->maybe_convert_quota_to_bytes($quota_candidate, $headers);
-                    }
-                }
-
-                if ($quota === null && isset($xml->QuotaInBytes)) {
-                    $quota = $this->sanitize_positive_int((string) $xml->QuotaInBytes);
-                }
-            }
+        if ($usage['quota_bytes'] !== null && $usage['used_bytes'] !== null && $usage['free_bytes'] === null) {
+            $usage['free_bytes'] = max(0, (int) $usage['quota_bytes'] - (int) $usage['used_bytes']);
+        }
+        if ($usage['quota_bytes'] === null && $usage['used_bytes'] !== null && $usage['free_bytes'] !== null) {
+            $usage['quota_bytes'] = max(0, (int) $usage['used_bytes'] + (int) $usage['free_bytes']);
         }
 
-        if ($quota !== null && $used !== null) {
-            $free = max(0, (int) $quota - (int) $used);
+        $usage['latency_ms'] = max(0, $latency);
+        $usage['source'] = 'provider';
+        $usage['refreshed_at'] = $this->get_time();
+
+        if (class_exists(BJLG_Debug::class)) {
+            BJLG_Debug::log(sprintf(
+                'Métriques Azure Blob : used=%s quota=%s free=%s (latence=%sms)',
+                $usage['used_bytes'] !== null ? number_format_i18n((int) $usage['used_bytes']) : 'n/a',
+                $usage['quota_bytes'] !== null ? number_format_i18n((int) $usage['quota_bytes']) : 'n/a',
+                $usage['free_bytes'] !== null ? number_format_i18n((int) $usage['free_bytes']) : 'n/a',
+                $usage['latency_ms']
+            ));
         }
 
-        $snapshot = null;
-        if ($used !== null || $quota !== null || $free !== null) {
-            $snapshot = [
-                'used_bytes' => $used,
-                'quota_bytes' => $quota,
-                'free_bytes' => $free,
-            ];
-        }
-
-        /**
-         * Filtre les métriques Azure Blob calculées à partir de l'API `comp=stats`.
-         *
-         * @param array<string,int|null>|null $snapshot
-         * @param array<string,string>         $headers
-         * @param array<string,mixed>          $settings
-         * @param self                         $destination
-         */
-        $filtered = apply_filters('bjlg_azure_blob_usage_snapshot', $snapshot, $headers, $settings, $this);
-
-        if (is_array($filtered)) {
-            $snapshot = [
-                'used_bytes' => isset($filtered['used_bytes']) ? $this->sanitize_positive_int($filtered['used_bytes']) : $used,
-                'quota_bytes' => isset($filtered['quota_bytes']) ? $this->sanitize_positive_int($filtered['quota_bytes']) : $quota,
-                'free_bytes' => isset($filtered['free_bytes']) ? $this->sanitize_positive_int($filtered['free_bytes']) : $free,
-            ];
-        }
-
-        if ($snapshot !== null && ($snapshot['used_bytes'] !== null || $snapshot['quota_bytes'] !== null || $snapshot['free_bytes'] !== null)) {
-            if ($snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null && $snapshot['free_bytes'] === null) {
-                $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
-            }
-
-            if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log(sprintf(
-                    'Métriques Azure Blob : used=%s quota=%s free=%s',
-                    $snapshot['used_bytes'] !== null ? number_format_i18n((int) $snapshot['used_bytes']) : 'n/a',
-                    $snapshot['quota_bytes'] !== null ? number_format_i18n((int) $snapshot['quota_bytes']) : 'n/a',
-                    $snapshot['free_bytes'] !== null ? number_format_i18n((int) $snapshot['free_bytes']) : 'n/a'
-                ));
-            }
-
-            return $snapshot;
-        }
-
-        return null;
-    }
-
-    private function normalize_headers($raw_headers): array {
-        if ($raw_headers instanceof \WP_Http_Headers) {
-            $raw_headers = $raw_headers->getAll();
-        } elseif (is_object($raw_headers) && method_exists($raw_headers, 'getAll')) {
-            $raw_headers = $raw_headers->getAll();
-        }
-
-        if (!is_array($raw_headers)) {
-            return [];
-        }
-
-        $normalized = [];
-        foreach ($raw_headers as $key => $value) {
-            if ($key === null || $key === '') {
-                continue;
-            }
-
-            if (is_array($value)) {
-                $value = implode(',', array_map('strval', $value));
-            }
-
-            $normalized[strtolower((string) $key)] = trim((string) $value);
-        }
-
-        return $normalized;
-    }
-
-    private function extract_quota_from_headers(array $headers): ?int {
-        if (isset($headers['x-ms-blob-container-quota'])) {
-            $value = $this->sanitize_positive_int($headers['x-ms-blob-container-quota']);
-            if ($value !== null) {
-                return (int) $value * 1024 * 1024 * 1024;
-            }
-        }
-
-        if (isset($headers['x-ms-resource-quota'])) {
-            $value = $this->sanitize_positive_int($headers['x-ms-resource-quota']);
-            if ($value !== null) {
-                return $value;
-            }
-        }
-
-        return null;
-    }
-
-    private function maybe_convert_quota_to_bytes(int $value, array $headers): int {
-        if (isset($headers['x-ms-blob-container-quota'])) {
-            return (int) $value * 1024 * 1024 * 1024;
-        }
-
-        return $value;
-    }
-
-    private function sanitize_positive_int($value): ?int {
-        if (is_int($value)) {
-            return $value >= 0 ? $value : null;
-        }
-
-        if (is_numeric($value)) {
-            $numeric = (float) $value;
-            if (is_finite($numeric) && $numeric >= 0) {
-                return (int) floor($numeric);
-            }
-        }
-
-        if (is_string($value) && preg_match('/(-?\d+(?:[\.,]\d+)?)/', $value, $matches)) {
-            $numeric = (float) str_replace(',', '.', $matches[1]);
-            if (is_finite($numeric) && $numeric >= 0) {
-                return (int) floor($numeric);
-            }
-        }
-
-        return null;
-    }
-
-    private function fetch_container_usage_snapshot(array $settings): ?array {
-        $response = $this->perform_request('GET', '', '', [], $settings, ['restype' => 'container', 'comp' => 'stats']);
-        $headers = $this->normalize_headers(isset($response['headers']) ? $response['headers'] : []);
-        $body = isset($response['body']) ? (string) $response['body'] : '';
-
-        $used = null;
-        $quota = $this->extract_quota_from_headers($headers);
-        $free = null;
-
-        if ($body !== '') {
-            $xml = @simplexml_load_string($body);
-            if ($xml !== false) {
-                if (isset($xml->BlobCapacityInBytes)) {
-                    $used = $this->sanitize_positive_int((string) $xml->BlobCapacityInBytes);
-                } elseif (isset($xml->ApproximateSizeInBytes)) {
-                    $used = $this->sanitize_positive_int((string) $xml->ApproximateSizeInBytes);
-                }
-
-                if ($quota === null && isset($xml->ContainerQuota)) {
-                    $quota_candidate = $this->sanitize_positive_int((string) $xml->ContainerQuota);
-                    if ($quota_candidate !== null) {
-                        $quota = $this->maybe_convert_quota_to_bytes($quota_candidate, $headers);
-                    }
-                }
-
-                if ($quota === null && isset($xml->QuotaInBytes)) {
-                    $quota = $this->sanitize_positive_int((string) $xml->QuotaInBytes);
-                }
-            }
-        }
-
-        if ($quota !== null && $used !== null) {
-            $free = max(0, (int) $quota - (int) $used);
-        }
-
-        $snapshot = null;
-        if ($used !== null || $quota !== null || $free !== null) {
-            $snapshot = [
-                'used_bytes' => $used,
-                'quota_bytes' => $quota,
-                'free_bytes' => $free,
-            ];
-        }
-
-        /**
-         * Filtre les métriques Azure Blob calculées à partir de l'API `comp=stats`.
-         *
-         * @param array<string,int|null>|null $snapshot
-         * @param array<string,string>         $headers
-         * @param array<string,mixed>          $settings
-         * @param self                         $destination
-         */
-        $filtered = apply_filters('bjlg_azure_blob_usage_snapshot', $snapshot, $headers, $settings, $this);
-
-        if (is_array($filtered)) {
-            $snapshot = [
-                'used_bytes' => isset($filtered['used_bytes']) ? $this->sanitize_positive_int($filtered['used_bytes']) : $used,
-                'quota_bytes' => isset($filtered['quota_bytes']) ? $this->sanitize_positive_int($filtered['quota_bytes']) : $quota,
-                'free_bytes' => isset($filtered['free_bytes']) ? $this->sanitize_positive_int($filtered['free_bytes']) : $free,
-            ];
-        }
-
-        if ($snapshot !== null && ($snapshot['used_bytes'] !== null || $snapshot['quota_bytes'] !== null || $snapshot['free_bytes'] !== null)) {
-            if ($snapshot['quota_bytes'] !== null && $snapshot['used_bytes'] !== null && $snapshot['free_bytes'] === null) {
-                $snapshot['free_bytes'] = max(0, (int) $snapshot['quota_bytes'] - (int) $snapshot['used_bytes']);
-            }
-
-            if (class_exists(BJLG_Debug::class)) {
-                BJLG_Debug::log(sprintf(
-                    'Métriques Azure Blob : used=%s quota=%s free=%s',
-                    $snapshot['used_bytes'] !== null ? number_format_i18n((int) $snapshot['used_bytes']) : 'n/a',
-                    $snapshot['quota_bytes'] !== null ? number_format_i18n((int) $snapshot['quota_bytes']) : 'n/a',
-                    $snapshot['free_bytes'] !== null ? number_format_i18n((int) $snapshot['free_bytes']) : 'n/a'
-                ));
-            }
-
-            return $snapshot;
-        }
-
-        return null;
-    }
-
-    private function normalize_headers($raw_headers): array {
-        if ($raw_headers instanceof \WP_Http_Headers) {
-            $raw_headers = $raw_headers->getAll();
-        } elseif (is_object($raw_headers) && method_exists($raw_headers, 'getAll')) {
-            $raw_headers = $raw_headers->getAll();
-        }
-
-        if (!is_array($raw_headers)) {
-            return [];
-        }
-
-        $normalized = [];
-        foreach ($raw_headers as $key => $value) {
-            if ($key === null || $key === '') {
-                continue;
-            }
-
-            if (is_array($value)) {
-                $value = implode(',', array_map('strval', $value));
-            }
-
-            $normalized[strtolower((string) $key)] = trim((string) $value);
-        }
-
-        return $normalized;
-    }
-
-    private function extract_quota_from_headers(array $headers): ?int {
-        if (isset($headers['x-ms-blob-container-quota'])) {
-            $value = $this->sanitize_positive_int($headers['x-ms-blob-container-quota']);
-            if ($value !== null) {
-                return (int) $value * 1024 * 1024 * 1024;
-            }
-        }
-
-        if (isset($headers['x-ms-resource-quota'])) {
-            $value = $this->sanitize_positive_int($headers['x-ms-resource-quota']);
-            if ($value !== null) {
-                return $value;
-            }
-        }
-
-        return null;
-    }
-
-    private function maybe_convert_quota_to_bytes(int $value, array $headers): int {
-        if (isset($headers['x-ms-blob-container-quota'])) {
-            return (int) $value * 1024 * 1024 * 1024;
-        }
-
-        return $value;
-    }
-
-    private function sanitize_positive_int($value): ?int {
-        if (is_int($value)) {
-            return $value >= 0 ? $value : null;
-        }
-
-        if (is_numeric($value)) {
-            $numeric = (float) $value;
-            if (is_finite($numeric) && $numeric >= 0) {
-                return (int) floor($numeric);
-            }
-        }
-
-        if (is_string($value) && preg_match('/(-?\d+(?:[\.,]\d+)?)/', $value, $matches)) {
-            $numeric = (float) str_replace(',', '.', $matches[1]);
-            if (is_finite($numeric) && $numeric >= 0) {
-                return (int) floor($numeric);
-            }
-        }
-
-        return null;
+        return $usage;
     }
 
     private function fetch_container_usage_snapshot(array $settings): ?array {

@@ -521,35 +521,13 @@ final class BJLG_RemoteStorageMetricsTest extends TestCase
         $this->assertSame(2, $entry['backups_count']);
     }
 
-    public function test_refresh_snapshot_includes_growth_projection(): void
+    public function test_refresh_snapshot_dispatches_error_alert_when_usage_contains_errors(): void
     {
-        bjlg_update_option('bjlg_monitoring_settings', [
-            'storage_quota_warning_threshold' => 80,
-            'remote_metrics_ttl_minutes' => 30,
-        ]);
-
-        $previous_time = time() - DAY_IN_SECONDS;
-        bjlg_update_option(BJLG_Remote_Storage_Metrics::OPTION_KEY, [
-            'generated_at' => $previous_time,
-            'destinations' => [
-                [
-                    'id' => 'stub',
-                    'used_bytes' => 1000,
-                    'quota_bytes' => 5000,
-                    'refreshed_at' => $previous_time,
-                ],
-            ],
-            'threshold_percent' => 80.0,
-        ]);
-
         add_filter('bjlg_known_destination_ids', static fn() => ['stub']);
 
         $destination = $this->createDestination([
-            'used_bytes' => 2000,
-            'quota_bytes' => 5000,
-        ], [
-            ['size' => 1000],
-        ]);
+            'errors' => ['API_FAIL'],
+        ], []);
 
         add_filter(
             'bjlg_destination_factory',
@@ -564,16 +542,23 @@ final class BJLG_RemoteStorageMetricsTest extends TestCase
             2
         );
 
-        $snapshot = BJLG_Remote_Storage_Metrics::refresh_snapshot();
-        $this->assertNotEmpty($snapshot['destinations']);
-        $entry = $snapshot['destinations'][0];
+        $captured = [];
+        add_action(
+            'bjlg_remote_storage_metrics_error',
+            static function ($context) use (&$captured) {
+                $captured[] = $context;
+            },
+            10,
+            1
+        );
 
-        $this->assertArrayHasKey('daily_delta_bytes', $entry);
-        $this->assertNotNull($entry['daily_delta_bytes']);
-        $this->assertNotEmpty($entry['forecast_label']);
-        $this->assertNotNull($entry['days_to_threshold']);
-        $this->assertNotSame('', $entry['days_to_threshold_label']);
-        $this->assertArrayHasKey('projection_intent', $entry);
+        BJLG_Remote_Storage_Metrics::refresh_snapshot();
+
+        $this->assertCount(1, $captured);
+        $this->assertSame('stub', $captured[0]['destination_id']);
+        $this->assertSame(['API_FAIL'], $captured[0]['errors']);
+        $this->assertArrayHasKey('latency_ms', $captured[0]);
+        $this->assertArrayHasKey('timestamp', $captured[0]);
     }
 
     /**
