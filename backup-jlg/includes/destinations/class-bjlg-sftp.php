@@ -321,6 +321,11 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
             return $defaults;
         }
 
+        $snapshot = $this->get_remote_quota_snapshot();
+        if (($snapshot['status'] ?? '') === 'ok') {
+            return array_merge($defaults, array_intersect_key($snapshot, $defaults));
+        }
+
         try {
             $backups = $this->list_remote_backups();
         } catch (Exception $exception) {
@@ -341,6 +346,28 @@ class BJLG_SFTP implements BJLG_Destination_Interface {
             'quota_bytes' => null,
             'free_bytes' => null,
         ];
+    }
+
+    public function get_remote_quota_snapshot() {
+        $snapshot = [
+            'status' => 'unavailable',
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+            'fetched_at' => $this->get_time(),
+            'error' => null,
+            'source' => 'provider',
+        ];
+
+        if (!class_exists(PhpseclibSFTP::class) || !$this->is_connected()) {
+            $snapshot['error'] = __('Le connecteur SFTP n\'est pas disponible.', 'backup-jlg');
+
+            return $snapshot;
+        }
+
+        $snapshot['error'] = __('Le protocole SFTP ne fournit pas de métriques de quota standardisées.', 'backup-jlg');
+
+        return $snapshot;
     }
 
     private function fetch_remote_backups(PhpseclibSFTP $connection, array $settings): array {
