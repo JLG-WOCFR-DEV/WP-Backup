@@ -3388,6 +3388,23 @@ class BJLG_Admin {
             : $event_defaults;
         $event_triggers_json = esc_attr(wp_json_encode($event_triggers));
         $event_defaults_json = esc_attr(wp_json_encode($event_defaults));
+        $restore_check = isset($schedule_collection['restore_check']) && is_array($schedule_collection['restore_check'])
+            ? $schedule_collection['restore_check']
+            : [
+                'settings' => BJLG_Scheduler::sanitize_restore_check_settings([]),
+                'state' => [
+                    'last_run' => null,
+                    'last_status' => null,
+                    'last_message' => '',
+                    'last_report' => null,
+                ],
+                'schedule' => [
+                    'next_run' => null,
+                    'next_run_formatted' => null,
+                    'next_run_relative' => null,
+                ],
+            ];
+        $restore_check_json = esc_attr(wp_json_encode($restore_check));
         $event_trigger_labels = [
             'filesystem' => [
                 'title' => __('Fichiers & médias', 'backup-jlg'),
@@ -3718,6 +3735,7 @@ class BJLG_Admin {
                 data-schedules="<?php echo $schedules_json; ?>"
                 data-event-triggers="<?php echo $event_triggers_json; ?>"
                 data-event-defaults="<?php echo $event_defaults_json; ?>"
+                data-restore-check="<?php echo $restore_check_json; ?>"
             >
                 <div id="bjlg-schedule-feedback" class="notice" role="status" aria-live="polite" style="display:none;"></div>
                 <div class="bjlg-schedule-list">
@@ -3821,7 +3839,106 @@ class BJLG_Admin {
                 </p>
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les planifications</button></p>
             </form>
-            
+
+            <section class="bjlg-restore-check" aria-labelledby="bjlg-restore-check-title">
+                <header class="bjlg-restore-check__header">
+                    <h4 id="bjlg-restore-check-title"><?php esc_html_e('Validation automatique des restaurations', 'backup-jlg'); ?></h4>
+                    <p class="description"><?php esc_html_e('Planifiez une restauration vers une sandbox pour vérifier automatiquement vos sauvegardes et mesurer vos objectifs RTO/RPO.', 'backup-jlg'); ?></p>
+                </header>
+                <form id="bjlg-restore-check-form" data-restore-check="<?php echo $restore_check_json; ?>">
+                    <div id="bjlg-restore-check-feedback" class="notice" role="status" aria-live="polite" style="display:none;"></div>
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row"><?php esc_html_e('Validation programmée', 'backup-jlg'); ?></th>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="enabled" value="1" data-restore-field="enabled">
+                                    <?php esc_html_e('Activer la validation périodique dans une sandbox isolée', 'backup-jlg'); ?>
+                                </label>
+                                <p class="description"><?php esc_html_e('Une restauration de contrôle sera effectuée avec les paramètres ci-dessous.', 'backup-jlg'); ?></p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><?php esc_html_e('Fréquence', 'backup-jlg'); ?></th>
+                            <td>
+                                <select name="recurrence" data-restore-field="recurrence">
+                                    <option value="daily"><?php esc_html_e('Quotidienne', 'backup-jlg'); ?></option>
+                                    <option value="twice_daily"><?php esc_html_e('Deux fois par jour', 'backup-jlg'); ?></option>
+                                    <option value="hourly"><?php esc_html_e('Toutes les heures', 'backup-jlg'); ?></option>
+                                    <option value="weekly"><?php esc_html_e('Hebdomadaire', 'backup-jlg'); ?></option>
+                                    <option value="monthly"><?php esc_html_e('Mensuelle', 'backup-jlg'); ?></option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr class="bjlg-restore-check-weekly" aria-hidden="true">
+                            <th scope="row"><?php esc_html_e('Jour de la semaine', 'backup-jlg'); ?></th>
+                            <td>
+                                <select name="day" data-restore-field="day">
+                                    <?php
+                                    $days = [
+                                        'monday' => __('Lundi', 'backup-jlg'),
+                                        'tuesday' => __('Mardi', 'backup-jlg'),
+                                        'wednesday' => __('Mercredi', 'backup-jlg'),
+                                        'thursday' => __('Jeudi', 'backup-jlg'),
+                                        'friday' => __('Vendredi', 'backup-jlg'),
+                                        'saturday' => __('Samedi', 'backup-jlg'),
+                                        'sunday' => __('Dimanche', 'backup-jlg'),
+                                    ];
+                                    foreach ($days as $key => $label) {
+                                        printf('<option value="%1$s">%2$s</option>', esc_attr($key), esc_html($label));
+                                    }
+                                    ?>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr class="bjlg-restore-check-monthly" aria-hidden="true">
+                            <th scope="row"><?php esc_html_e('Jour du mois', 'backup-jlg'); ?></th>
+                            <td>
+                                <input type="number" name="day_of_month" min="1" max="31" data-restore-field="day_of_month" class="small-text">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><?php esc_html_e('Heure locale', 'backup-jlg'); ?></th>
+                            <td>
+                                <input type="time" name="time" data-restore-field="time">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><?php esc_html_e('Composants restaurés', 'backup-jlg'); ?></th>
+                            <td>
+                                <label><input type="checkbox" name="components[]" value="db" data-restore-component="db"> <?php esc_html_e('Base de données', 'backup-jlg'); ?></label><br>
+                                <label><input type="checkbox" name="components[]" value="plugins" data-restore-component="plugins"> <?php esc_html_e('Extensions', 'backup-jlg'); ?></label><br>
+                                <label><input type="checkbox" name="components[]" value="themes" data-restore-component="themes"> <?php esc_html_e('Thèmes', 'backup-jlg'); ?></label><br>
+                                <label><input type="checkbox" name="components[]" value="uploads" data-restore-component="uploads"> <?php esc_html_e('Médias', 'backup-jlg'); ?></label>
+                                <p class="description"><?php esc_html_e('Sélectionnez les éléments à vérifier lors de la restauration.', 'backup-jlg'); ?></p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><?php esc_html_e('Chemin sandbox personnalisé', 'backup-jlg'); ?></th>
+                            <td>
+                                <input type="text" class="regular-text" name="sandbox_path" data-restore-field="sandbox_path" placeholder="/tmp/bjlg-sandbox">
+                                <p class="description"><?php esc_html_e('Laissez vide pour utiliser le dossier sandbox par défaut.', 'backup-jlg'); ?></p>
+                            </td>
+                        </tr>
+                        <tr class="bjlg-restore-check-next-run">
+                            <th scope="row"><?php esc_html_e('Prochaine exécution', 'backup-jlg'); ?></th>
+                            <td>
+                                <span class="bjlg-restore-check-next-run-value" data-restore-next-run>—</span>
+                                <span class="description" data-restore-next-run-relative></span>
+                            </td>
+                        </tr>
+                        <tr class="bjlg-restore-check-last-run">
+                            <th scope="row"><?php esc_html_e('Dernier résultat', 'backup-jlg'); ?></th>
+                            <td>
+                                <span class="bjlg-restore-check-last-status" data-restore-last-status>—</span>
+                                <p class="description" data-restore-last-message></p>
+                            </td>
+                        </tr>
+                    </table>
+                    <p class="submit"><button type="submit" class="button button-secondary"><?php esc_html_e('Enregistrer la validation programmée', 'backup-jlg'); ?></button></p>
+                </form>
+            </section>
+
             <h3><span class="dashicons dashicons-admin-links" aria-hidden="true"></span> Webhook</h3>
             <form id="bjlg-webhook-tools" class="bjlg-webhook-form" aria-labelledby="bjlg-webhook-tools-title">
                 <p id="bjlg-webhook-tools-title">Utilisez ce point de terminaison pour déclencher une sauvegarde à distance en toute sécurité :</p>
@@ -5358,12 +5475,57 @@ class BJLG_Admin {
             }
         }
 
+        $restore_defaults = BJLG_Scheduler::sanitize_restore_check_settings([]);
+        $restore_state_defaults = [
+            'last_run' => null,
+            'last_status' => null,
+            'last_message' => '',
+            'last_report' => null,
+        ];
+
+        $restore_settings = $restore_defaults;
+        $restore_state = $restore_state_defaults;
+
+        if (isset($scheduler) && $scheduler) {
+            if (method_exists($scheduler, 'get_restore_check_settings')) {
+                $restore_settings = wp_parse_args($scheduler->get_restore_check_settings(), $restore_defaults);
+            }
+
+            if (method_exists($scheduler, 'get_restore_check_state')) {
+                $restore_state = wp_parse_args($scheduler->get_restore_check_state(), $restore_state_defaults);
+            }
+        } else {
+            $stored_restore = \bjlg_get_option('bjlg_restore_check_settings', []);
+            $restore_settings = BJLG_Scheduler::sanitize_restore_check_settings($stored_restore);
+
+            $stored_state = \bjlg_get_option('bjlg_restore_check_state', []);
+            if (is_array($stored_state)) {
+                $restore_state = wp_parse_args($stored_state, $restore_state_defaults);
+            }
+        }
+
+        $restore_next_run = wp_next_scheduled(BJLG_Scheduler::RESTORE_CHECK_HOOK);
+        $restore_schedule = [
+            'next_run' => $restore_next_run ?: null,
+            'next_run_formatted' => $restore_next_run
+                ? get_date_from_gmt(gmdate('Y-m-d H:i:s', $restore_next_run), 'd/m/Y H:i:s')
+                : null,
+            'next_run_relative' => ($restore_next_run && function_exists('human_time_diff'))
+                ? human_time_diff(time(), $restore_next_run)
+                : null,
+        ];
+
         return [
             'schedules' => $schedules,
             'next_runs' => $next_runs,
             'default' => $default_schedule,
             'event_triggers' => $event_triggers,
             'event_defaults' => $event_defaults,
+            'restore_check' => [
+                'settings' => $restore_settings,
+                'state' => $restore_state,
+                'schedule' => $restore_schedule,
+            ],
         ];
     }
 
