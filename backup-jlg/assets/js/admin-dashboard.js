@@ -43,17 +43,11 @@ jQuery(function($) {
     const ajaxData = window.bjlg_ajax;
 
     const queueActionMap = {
-        'acknowledge-notification': { action: 'bjlg_notification_ack', param: 'entry_id' },
-        'resolve-notification': {
-            action: 'bjlg_notification_resolve',
-            param: 'entry_id',
-            promptField: 'notes',
-            prompt: __('Ajoutez des notes de résolution (optionnel)', 'backup-jlg')
-        },
-        'retry-notification': { action: 'bjlg_notification_queue_retry', param: 'entry_id' },
-        'clear-notification': { action: 'bjlg_notification_queue_delete', param: 'entry_id' },
         'acknowledge-notification': { action: 'bjlg_notification_acknowledge', param: 'entry_id', summary: { required: false, prompt: __('Ajouter une note pour l’accusé ?', 'backup-jlg') } },
         'resolve-notification': { action: 'bjlg_notification_resolve', param: 'entry_id', summary: { required: true, prompt: __('Consigner la résolution :', 'backup-jlg') } },
+        'retry-notification': { action: 'bjlg_notification_queue_retry', param: 'entry_id' },
+        'clear-notification': { action: 'bjlg_notification_queue_delete', param: 'entry_id' },
+        'remind-notification': { action: 'bjlg_notification_queue_remind', param: 'entry_id' },
         'retry-remote-purge': { action: 'bjlg_remote_purge_retry', param: 'file' },
         'clear-remote-purge': { action: 'bjlg_remote_purge_delete', param: 'file' }
     };
@@ -644,6 +638,18 @@ jQuery(function($) {
             const countsText = sprintf(__('En attente : %1$s • Nouvel essai : %2$s • Échecs : %3$s', 'backup-jlg'), formatNumber(pending), formatNumber(retry), formatNumber(failed));
             $card.find('[data-field="status-counts"]').text(countsText);
 
+            const ackCounts = queue.ack_status_counts || {};
+            const ackPending = Number(ackCounts.pending || 0);
+            const ackAcknowledged = Number(ackCounts.acknowledged || 0);
+            const ackResolved = Number(ackCounts.resolved || 0);
+            const ackText = sprintf(
+                __('Accusés en attente : %1$s • Pris en charge : %2$s • Résolus : %3$s', 'backup-jlg'),
+                formatNumber(ackPending),
+                formatNumber(ackAcknowledged),
+                formatNumber(ackResolved)
+            );
+            $card.find('[data-field="ack-status-counts"]').text(ackText);
+
             const $nextField = $card.find('[data-field="next"]');
             if (queue.next_attempt_relative) {
                 $nextField.text(sprintf(__('Prochain passage %s', 'backup-jlg'), queue.next_attempt_relative));
@@ -656,6 +662,17 @@ jQuery(function($) {
                 $oldestField.text(sprintf(__('Entrée la plus ancienne %s', 'backup-jlg'), queue.oldest_entry_relative));
             } else {
                 $oldestField.text('');
+            }
+
+            const $reminderField = $card.find('[data-field="next-reminder"]');
+            if ($reminderField.length) {
+                if (queue.next_reminder_relative) {
+                    $reminderField.text(sprintf(__('Prochain rappel %s', 'backup-jlg'), queue.next_reminder_relative));
+                } else if (queue.next_reminder_formatted) {
+                    $reminderField.text(sprintf(__('Prochain rappel le %s', 'backup-jlg'), queue.next_reminder_formatted));
+                } else {
+                    $reminderField.text(__('Aucun rappel planifié.', 'backup-jlg'));
+                }
             }
 
             const sla = queue.sla || null;
@@ -879,6 +896,41 @@ jQuery(function($) {
                     }).appendTo($entry);
                 }
 
+                if (entry.details && entry.details.resolution_status_label) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-meta',
+                        'data-field': 'resolution-status',
+                        text: sprintf(__('Suivi : %s', 'backup-jlg'), entry.details.resolution_status_label)
+                    }).appendTo($entry);
+                }
+
+                if (entry.details && entry.details.reminder_label) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-meta',
+                        'data-field': 'reminder',
+                        text: entry.details.reminder_label
+                    }).appendTo($entry);
+                }
+
+                if (entry.details && entry.details.resolution_summary) {
+                    $('<p/>', {
+                        'class': 'bjlg-queue-card__entry-message',
+                        'data-field': 'resolution-summary',
+                        text: entry.details.resolution_summary
+                    }).appendTo($entry);
+                }
+
+                if (entry.details && Array.isArray(entry.details.resolution_actions) && entry.details.resolution_actions.length) {
+                    const $actionsList = $('<ul/>', {
+                        'class': 'bjlg-queue-card__entry-list',
+                        'data-field': 'resolution-actions'
+                    }).appendTo($entry);
+
+                    entry.details.resolution_actions.forEach(function(actionLine) {
+                        $('<li/>', { text: actionLine }).appendTo($actionsList);
+                    });
+                }
+
                 if (entry.message) {
                     $('<p/>', { 'class': 'bjlg-queue-card__entry-message', text: entry.message }).appendTo($entry);
                 }
@@ -893,6 +945,10 @@ jQuery(function($) {
 
                 const $actions = $('<div/>', { 'class': 'bjlg-queue-card__entry-actions' }).appendTo($entry);
                 if (key === 'notifications' && entry.id) {
+                    const reminders = entry.reminders || {};
+                    const reminderActive = reminders.active !== false;
+                    const reminderDisabled = Boolean(entry.resolved) || !reminderActive;
+
                     const $ackButton = $('<button/>', {
                         type: 'button',
                         'class': 'button button-secondary button-small',
@@ -915,6 +971,18 @@ jQuery(function($) {
 
                     if (entry.resolved) {
                         $resolveButton.prop('disabled', true).attr('aria-disabled', 'true');
+                    }
+
+                    const $reminderButton = $('<button/>', {
+                        type: 'button',
+                        'class': 'button button-secondary button-small',
+                        'data-queue-action': 'remind-notification',
+                        'data-entry-id': entry.id,
+                        text: __('Relancer le rappel', 'backup-jlg')
+                    }).appendTo($actions);
+
+                    if (reminderDisabled) {
+                        $reminderButton.prop('disabled', true).attr('aria-disabled', 'true');
                     }
 
                     $('<button/>', {
