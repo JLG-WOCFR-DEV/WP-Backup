@@ -968,6 +968,26 @@ class BJLG_Notifications {
         $timings = isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [];
         $sandbox = isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [];
         $cleanup = isset($sandbox['cleanup']) && is_array($sandbox['cleanup']) ? $sandbox['cleanup'] : [];
+        $report_meta = isset($report['report']) && is_array($report['report']) ? $report['report'] : [];
+
+        $log_excerpt = [];
+        $raw_log_excerpt = [];
+        if (isset($report['log_excerpt']) && is_array($report['log_excerpt'])) {
+            $raw_log_excerpt = $report['log_excerpt'];
+        } elseif (isset($report['log']) && is_array($report['log'])) {
+            $raw_log_excerpt = array_slice($report['log'], -5);
+        }
+
+        foreach ($raw_log_excerpt as $entry) {
+            if (!is_array($entry) || empty($entry['message'])) {
+                continue;
+            }
+
+            $log_excerpt[] = [
+                'timestamp' => isset($entry['timestamp']) ? (int) $entry['timestamp'] : null,
+                'message' => (string) $entry['message'],
+            ];
+        }
 
         $components = [];
         if (isset($report['components']) && is_array($report['components'])) {
@@ -991,6 +1011,9 @@ class BJLG_Notifications {
             'sandbox_path' => isset($sandbox['base_path']) ? (string) $sandbox['base_path'] : '',
             'cleanup_performed' => !empty($cleanup['performed']),
             'cleanup_error' => isset($cleanup['error']) && $cleanup['error'] !== null ? (string) $cleanup['error'] : null,
+            'report_id' => isset($report_meta['id']) ? (string) $report_meta['id'] : '',
+            'report_files' => isset($report_meta['files']) && is_array($report_meta['files']) ? $report_meta['files'] : [],
+            'log_excerpt' => $log_excerpt,
             'raw' => $report,
         ];
     }
@@ -1415,6 +1438,28 @@ class BJLG_Notifications {
 
                 if (!empty($context['cleanup_error'])) {
                     $lines[] = __('Nettoyage sandbox : ', 'backup-jlg') . $context['cleanup_error'];
+                }
+
+                if (!empty($context['report_files']['json']['url'])) {
+                    $lines[] = __('Rapport détaillé : ', 'backup-jlg') . $context['report_files']['json']['url'];
+                }
+
+                if (!empty($context['report_files']['log']['url'])) {
+                    $lines[] = __('Journal NDJSON : ', 'backup-jlg') . $context['report_files']['log']['url'];
+                }
+
+                if (!empty($context['log_excerpt']) && is_array($context['log_excerpt'])) {
+                    $lines[] = __('Extrait du journal :', 'backup-jlg');
+                    $log_lines = array_slice($context['log_excerpt'], -3);
+                    foreach ($log_lines as $log_entry) {
+                        if (!is_array($log_entry) || empty($log_entry['message'])) {
+                            continue;
+                        }
+                        $prefix = !empty($log_entry['timestamp'])
+                            ? $this->format_timestamp((int) $log_entry['timestamp']) . ' — '
+                            : '';
+                        $lines[] = $prefix . $log_entry['message'];
+                    }
                 }
                 break;
             default:
