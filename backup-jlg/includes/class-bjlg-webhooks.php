@@ -13,6 +13,10 @@ class BJLG_Webhooks {
     const WEBHOOK_QUERY_VAR = 'bjlg_trigger_backup';
     const WEBHOOK_HEADER = 'X-BJLG-Webhook-Key';
     const WEBHOOK_SECURE_MARKER = '1';
+    private const EVENT_URL_KEYS = [
+        'bjlg.storage.capacity' => 'storage_capacity',
+        'bjlg.sla.validation' => 'sla_validation',
+    ];
 
     public function __construct() {
         // Écoute sur chaque chargement de page pour détecter l'appel du webhook
@@ -23,10 +27,11 @@ class BJLG_Webhooks {
         
         // Gère les webhooks sortants pour notifications
         add_action('bjlg_send_webhook', [$this, 'send_webhook_notification'], 10, 2);
-        
+
         // Webhooks pour événements
         add_action('bjlg_backup_complete', [$this, 'notify_backup_complete'], 10, 2);
         add_action('bjlg_backup_failed', [$this, 'notify_backup_failed'], 10, 2);
+        add_action('bjlg_sla_alert', [$this, 'handle_sla_alert_webhook']);
     }
 
     /**
@@ -377,7 +382,93 @@ class BJLG_Webhooks {
 
         return '';
     }
-    
+
+    /**
+     * Déclenche un webhook personnalisé si l'URL correspondante est configurée.
+     */
+    public static function dispatch_event(string $event, array $payload = []): void
+    {
+        $event = trim($event);
+
+        if ($event === '') {
+            return;
+        }
+
+        $url_key = self::EVENT_URL_KEYS[$event] ?? null;
+        if ($url_key === null) {
+            return;
+        }
+
+        $settings = \bjlg_get_option('bjlg_webhook_settings', []);
+        if (!is_array($settings) || empty($settings['enabled'])) {
+            return;
+        }
+
+        $urls = isset($settings['urls']) && is_array($settings['urls']) ? $settings['urls'] : [];
+        $url = isset($urls[$url_key]) ? trim((string) $urls[$url_key]) : '';
+
+        if ($url === '') {
+            return;
+        }
+
+        if (!array_key_exists('site_id', $payload)) {
+            $payload['site_id'] = function_exists('get_current_blog_id') ? (int) get_current_blog_id() : null;
+        }
+
+        $payload['event'] = $event;
+
+        /**
+         * Filtre la charge utile envoyée pour un événement webhook personnalisé.
+         *
+         * @param array<string,mixed> $payload
+         * @param string              $event
+         * @param string              $url_key
+         */
+        $filtered_payload = apply_filters('bjlg_webhook_event_payload', $payload, $event, $url_key);
+
+        do_action('bjlg_send_webhook', $url, $filtered_payload);
+    }
+
+    /**
+     * Prépare l'envoi du webhook de capacité de stockage.
+     */
+    public static function notify_storage_capacity(array $snapshot): void
+    {
+        $payload = [
+            'snapshot' => $snapshot,
+        ];
+
+        if (isset($snapshot['threshold_percent'])) {
+            $payload['threshold_percent'] = $snapshot['threshold_percent'];
+        }
+
+        if (isset($snapshot['generated_at'])) {
+            $payload['generated_at'] = $snapshot['generated_at'];
+        }
+
+        self::dispatch_event('bjlg.storage.capacity', $payload);
+    }
+
+    /**
+     * Prépare l'envoi du webhook de validation SLA sandbox.
+     */
+    public static function notify_sla_validation(array $report, array $metadata, string $status, string $summary, string $message): void
+    {
+        $payload = [
+            'report' => $report,
+            'metadata' => $metadata,
+            'status' => $status,
+            'summary' => $summary,
+            'message' => $message,
+        ];
+
+        if (isset($report['id'])) {
+            $payload['report_id'] = $report['id'];
+        }
+
+        self::dispatch_event('bjlg.sla.validation', $payload);
+    }
+
     /**
      * Envoie une notification webhook à une URL externe
      */
@@ -458,19 +549,82 @@ class BJLG_Webhooks {
      */
     public function notify_backup_failed($error_message, $details) {
         $webhook_settings = \bjlg_get_option('bjlg_webhook_settings', []);
-        
+
         if (empty($webhook_settings['enabled']) || empty($webhook_settings['urls']['backup_failed'])) {
             return;
         }
-        
+
         $data = [
             'event' => 'backup_failed',
             'error' => $error_message,
             'components' => $details['components'] ?? [],
             'task_id' => $details['task_id'] ?? null
         ];
-        
+
         $this->send_webhook_notification($webhook_settings['urls']['backup_failed'], $data);
+    }
+
+    /**
+     * Notifie un changement de statut SLA réseau.
+     */
+    public function handle_sla_alert_webhook($payload) {
+        if (!is_array($payload)) {
+            return;
+        }
+
+        $webhook_settings = \bjlg_get_option('bjlg_webhook_settings', []);
+        if (empty($webhook_settings['enabled']) || empty($webhook_settings['urls']['sla_alert'])) {
+            return;
+        }
+
+        $status = isset($payload['status']) ? sanitize_key($payload['status']) : 'unknown';
+        if ($status === '') {
+            $status = 'unknown';
+        }
+
+        $intent = isset($payload['intent']) ? sanitize_key($payload['intent']) : 'info';
+        if ($intent === '') {
+            $intent = 'info';
+        }
+
+        $available_copies = isset($payload['available_copies']) && is_numeric($payload['available_copies'])
+            ? (int) round((float) $payload['available_copies'])
+            : null;
+        $expected_copies = isset($payload['expected_copies']) && is_numeric($payload['expected_copies'])
+            ? (int) round((float) $payload['expected_copies'])
+            : null;
+        $rto_seconds = isset($payload['rto_seconds']) && is_numeric($payload['rto_seconds'])
+            ? (float) $payload['rto_seconds']
+            : null;
+        $rpo_seconds = isset($payload['rpo_seconds']) && is_numeric($payload['rpo_seconds'])
+            ? (float) $payload['rpo_seconds']
+            : null;
+        $quota_utilization = isset($payload['quota_utilization']) && is_numeric($payload['quota_utilization'])
+            ? (float) $payload['quota_utilization']
+            : null;
+        $quota_percent = $quota_utilization !== null ? round($quota_utilization * 100, 2) : null;
+        $timestamp = isset($payload['timestamp']) && is_numeric($payload['timestamp'])
+            ? (int) $payload['timestamp']
+            : current_time('timestamp');
+
+        $data = [
+            'event' => 'sla_alert',
+            'status' => $status,
+            'intent' => $intent,
+            'label' => isset($payload['label']) ? sanitize_text_field((string) $payload['label']) : '',
+            'available_copies' => $available_copies,
+            'expected_copies' => $expected_copies,
+            'rto_seconds' => $rto_seconds,
+            'rpo_seconds' => $rpo_seconds,
+            'validated_relative' => isset($payload['validated_relative']) ? sanitize_text_field((string) $payload['validated_relative']) : '',
+            'quota_utilization' => $quota_utilization,
+            'quota_utilization_percent' => $quota_percent,
+            'quota_label' => isset($payload['quota_label']) ? sanitize_text_field((string) $payload['quota_label']) : '',
+            'projection_label' => isset($payload['projection_label']) ? sanitize_text_field((string) $payload['projection_label']) : '',
+            'timestamp' => $timestamp,
+        ];
+
+        $this->send_webhook_notification($webhook_settings['urls']['sla_alert'], $data);
     }
     
     /**

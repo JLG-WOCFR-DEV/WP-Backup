@@ -213,6 +213,10 @@ class BJLG_Remote_Storage_Metrics {
          */
         do_action('bjlg_remote_storage_metrics_refreshed', $results);
 
+        if (class_exists(__NAMESPACE__ . '\\BJLG_Webhooks')) {
+            BJLG_Webhooks::notify_storage_capacity($results);
+        }
+
         return $results;
     }
 

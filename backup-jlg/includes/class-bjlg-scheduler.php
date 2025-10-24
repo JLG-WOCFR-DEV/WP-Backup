@@ -1,6 +1,8 @@
 <?php
 namespace BJLG;
 
+use DateTimeImmutable;
+use DateTimeZone;
 use Throwable;
 
 if (!defined('ABSPATH')) {
@@ -25,6 +27,7 @@ class BJLG_Scheduler {
     private const SANDBOX_SCHEDULE_OPTION = 'bjlg_sandbox_validation_schedule';
     private const EVENT_SETTINGS_OPTION = 'bjlg_event_trigger_settings';
     private const EVENT_STATE_OPTION = 'bjlg_event_trigger_state';
+    private const EVENT_METRICS_OPTION = 'bjlg_event_trigger_metrics';
     private const MAX_EVENT_SAMPLES = 10;
     private const RESTORE_CHECK_OPTION = 'bjlg_restore_check_settings';
     private const RESTORE_CHECK_STATE_OPTION = 'bjlg_restore_check_state';
@@ -89,6 +92,7 @@ class BJLG_Scheduler {
         add_action(self::SANDBOX_VALIDATION_HOOK, [self::class, 'run_sandbox_validation_job']);
         add_action(self::SANDBOX_AUTOMATION_HOOK, [self::class, 'run_sandbox_automation_job']);
         add_action('bjlg_settings_saved', [self::class, 'handle_settings_saved'], 15, 1);
+        add_action('bjlg_event_signal', [self::class, 'handle_external_event'], 10, 3);
     }
 
     /**
@@ -117,16 +121,6 @@ class BJLG_Scheduler {
         self::sync_sandbox_automation_schedule();
     }
 
-        if (isset($events[$hook]) && is_array($events[$hook])) {
-            foreach ($events[$hook] as $timestamp => $event_group) {
-                foreach ($event_group as $event) {
-                    if (isset($event['hook']) && $event['hook'] === $hook) {
-                        wp_unschedule_event($timestamp, $hook, $event['args'] ?? []);
-                    }
-                }
-            }
-        }
-
     public static function run_sandbox_automation_job(): void {
         self::instance()->execute_sandbox_automation_job();
     }
@@ -134,6 +128,11 @@ class BJLG_Scheduler {
     public static function handle_settings_saved($settings = []): void {
         unset($settings);
         self::sync_sandbox_automation_schedule(true);
+    }
+
+    public static function handle_external_event($source, $payload = [], $metadata = []): void
+    {
+        self::instance()->route_external_event($source, $payload, $metadata);
     }
 
     /**
@@ -204,6 +203,32 @@ class BJLG_Scheduler {
                 $args['password'] = $password_override;
             }
 
+            $report = $this->execute_restore_validation_job($args, 'scheduler', ['source' => 'restore_check']);
+            $status = is_array($report) && isset($report['status']) ? (string) $report['status'] : 'success';
+        } catch (Throwable $throwable) {
+            $status = 'failure';
+            $report = [
+                'status' => 'failure',
+                'message' => $throwable->getMessage(),
+                'error' => $throwable->getMessage(),
+            ];
+
+            BJLG_History::log('sandbox_restore_validation', 'failure', $throwable->getMessage(), null, null, [
+                'error' => $throwable->getMessage(),
+                'triggered_at' => time(),
+                'source' => 'scheduler',
+            ]);
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('[Sandbox restore check] ' . $throwable->getMessage(), 'error');
+            }
+
+            do_action('bjlg_sandbox_restore_validation_failed', $report);
+        }
+
+        $this->update_sandbox_schedule_state($status, $report);
+    }
+
     private function execute_restore_validation_job(array $args, string $source, array $context = []): array
     {
         $result = [
@@ -219,14 +244,20 @@ class BJLG_Scheduler {
         try {
             $restore = new BJLG_Restore();
             $report = $restore->run_sandbox_validation($args);
-            $this->dispatch_sandbox_report($report, ['source' => 'scheduler']);
+            $context_payload = is_array($context) ? $context : [];
+            $context_payload['source'] = $source;
+            $this->dispatch_sandbox_report($report, $context_payload);
+            $result = [
+                'status' => isset($report['status']) ? (string) $report['status'] : 'success',
+                'message' => isset($report['message']) ? (string) $report['message'] : '',
+                'report' => $report,
+            ];
         } catch (Throwable $throwable) {
-            $status = 'failure';
             $message = 'Validation sandbox échouée : ' . $throwable->getMessage();
             BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, [
                 'error' => $throwable->getMessage(),
                 'triggered_at' => time(),
-                'source' => 'scheduler',
+                'source' => $source,
             ]);
 
             if (class_exists(BJLG_Debug::class)) {
@@ -240,7 +271,14 @@ class BJLG_Scheduler {
             ];
 
             do_action('bjlg_sandbox_restore_validation_failed', $report);
+            $result = [
+                'status' => 'failure',
+                'message' => $message,
+                'report' => $report,
+            ];
         }
+
+        return $result;
     }
 
     /**
@@ -278,7 +316,7 @@ class BJLG_Scheduler {
                 'triggered_at' => time(),
                 'source' => 'automation',
                 'automation' => $settings,
-            ]);
+            ];
 
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log('[Sandbox automation job] ' . $throwable->getMessage(), 'error');
@@ -389,6 +427,9 @@ class BJLG_Scheduler {
 
         if ($status === 'success') {
             $message = $summary !== '' ? $summary : ($base_message !== '' ? $base_message : __('Validation sandbox réussie.', 'backup-jlg'));
+            if (class_exists(BJLG_Webhooks::class)) {
+                BJLG_Webhooks::notify_sla_validation($report, $metadata, $status, $summary, $message);
+            }
             BJLG_History::log('sandbox_restore_validation', 'success', $message, null, null, $metadata);
             do_action('bjlg_sandbox_restore_validation_passed', $report);
             return;
@@ -396,6 +437,9 @@ class BJLG_Scheduler {
 
         $failure_message = $base_message !== '' ? $base_message : __('Validation sandbox échouée.', 'backup-jlg');
         $message = $summary !== '' ? $summary . ' | ' . $failure_message : $failure_message;
+        if (class_exists(BJLG_Webhooks::class)) {
+            BJLG_Webhooks::notify_sla_validation($report, $metadata, $status, $summary, $message);
+        }
         BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $metadata);
         do_action('bjlg_sandbox_restore_validation_failed', $report);
     }
@@ -2864,19 +2908,67 @@ class BJLG_Scheduler {
     public static function get_event_trigger_defaults(): array
     {
         return [
-            'version' => 1,
+            'version' => 2,
             'triggers' => [
                 'filesystem' => [
                     'enabled' => false,
                     'cooldown' => 600,
                     'batch_window' => 120,
                     'max_batch' => 10,
+                    'quiet_hours' => [
+                        'enabled' => false,
+                        'start' => '22:00',
+                        'end' => '06:00',
+                        'timezone' => 'site',
+                    ],
                 ],
                 'database' => [
                     'enabled' => false,
                     'cooldown' => 300,
                     'batch_window' => 60,
                     'max_batch' => 10,
+                    'quiet_hours' => [
+                        'enabled' => false,
+                        'start' => '23:00',
+                        'end' => '05:00',
+                        'timezone' => 'site',
+                    ],
+                ],
+                'inotify' => [
+                    'enabled' => false,
+                    'cooldown' => 180,
+                    'batch_window' => 45,
+                    'max_batch' => 20,
+                    'quiet_hours' => [
+                        'enabled' => false,
+                        'start' => '22:00',
+                        'end' => '06:00',
+                        'timezone' => 'site',
+                    ],
+                ],
+                'application_webhook' => [
+                    'enabled' => false,
+                    'cooldown' => 300,
+                    'batch_window' => 120,
+                    'max_batch' => 25,
+                    'quiet_hours' => [
+                        'enabled' => false,
+                        'start' => '21:00',
+                        'end' => '07:00',
+                        'timezone' => 'site',
+                    ],
+                ],
+                'binlog' => [
+                    'enabled' => false,
+                    'cooldown' => 180,
+                    'batch_window' => 90,
+                    'max_batch' => 30,
+                    'quiet_hours' => [
+                        'enabled' => false,
+                        'start' => '00:00',
+                        'end' => '00:00',
+                        'timezone' => 'site',
+                    ],
                 ],
             ],
         ];
@@ -2892,7 +2984,7 @@ class BJLG_Scheduler {
         }
 
         $defaults = self::get_event_trigger_defaults();
-        $sanitized = ['version' => 1, 'triggers' => []];
+        $sanitized = ['version' => $defaults['version'], 'triggers' => []];
         $raw_triggers = [];
 
         if (is_array($raw) && isset($raw['triggers']) && is_array($raw['triggers'])) {
@@ -2911,15 +3003,96 @@ class BJLG_Scheduler {
             $batch_window = isset($entry['batch_window']) ? (int) $entry['batch_window'] : $default_settings['batch_window'];
             $max_batch = isset($entry['max_batch']) ? (int) $entry['max_batch'] : $default_settings['max_batch'];
 
+            $quiet_defaults = isset($default_settings['quiet_hours']) && is_array($default_settings['quiet_hours'])
+                ? $default_settings['quiet_hours']
+                : ['enabled' => false, 'start' => '00:00', 'end' => '00:00', 'timezone' => 'site'];
+            $quiet_raw = isset($entry['quiet_hours']) && is_array($entry['quiet_hours'])
+                ? $entry['quiet_hours']
+                : [];
+
             $sanitized['triggers'][$trigger_key] = [
                 'enabled' => $enabled,
                 'cooldown' => max(0, $cooldown),
                 'batch_window' => max(0, $batch_window),
                 'max_batch' => max(1, $max_batch),
+                'quiet_hours' => self::sanitize_quiet_hours($quiet_raw, $quiet_defaults),
             ];
         }
 
         return $sanitized;
+    }
+
+    private static function sanitize_quiet_hours($raw, array $defaults): array
+    {
+        $enabled = false;
+        $start = isset($defaults['start']) ? (string) $defaults['start'] : '00:00';
+        $end = isset($defaults['end']) ? (string) $defaults['end'] : '00:00';
+        $timezone = isset($defaults['timezone']) ? (string) $defaults['timezone'] : 'site';
+
+        if (is_array($raw)) {
+            $enabled = !empty($raw['enabled']);
+            if (isset($raw['start'])) {
+                $start = self::sanitize_quiet_time($raw['start'], $start);
+            }
+            if (isset($raw['end'])) {
+                $end = self::sanitize_quiet_time($raw['end'], $end);
+            }
+            if (isset($raw['timezone'])) {
+                $timezone = self::sanitize_quiet_timezone($raw['timezone'], $timezone);
+            }
+        }
+
+        return [
+            'enabled' => $enabled,
+            'start' => self::sanitize_quiet_time($start, $defaults['start'] ?? '00:00'),
+            'end' => self::sanitize_quiet_time($end, $defaults['end'] ?? '00:00'),
+            'timezone' => self::sanitize_quiet_timezone($timezone, $defaults['timezone'] ?? 'site'),
+        ];
+    }
+
+    private static function sanitize_quiet_time($value, string $fallback): string
+    {
+        $value = is_string($value) ? trim($value) : '';
+        if ($value === '') {
+            $value = $fallback;
+        }
+
+        if (!preg_match('/^(\d{1,2}):(\d{1,2})$/', $value, $matches)) {
+            return $fallback;
+        }
+
+        $hours = (int) $matches[1];
+        $minutes = (int) $matches[2];
+        $hours = max(0, min(23, $hours));
+        $minutes = max(0, min(59, $minutes));
+
+        return sprintf('%02d:%02d', $hours, $minutes);
+    }
+
+    private static function sanitize_quiet_timezone($value, string $fallback): string
+    {
+        $value = is_string($value) ? trim($value) : '';
+        if ($value === '') {
+            return $fallback;
+        }
+
+        $normalized = strtolower($value);
+        if (in_array($normalized, ['site', 'default'], true)) {
+            return 'site';
+        }
+
+        if ($normalized === 'utc' || $normalized === 'gmt') {
+            return 'UTC';
+        }
+
+        try {
+            $timezone = new DateTimeZone($value);
+            return $timezone->getName();
+        } catch (\Throwable $throwable) {
+            unset($throwable);
+        }
+
+        return $fallback !== '' ? $fallback : 'site';
     }
 
     public function get_event_trigger_settings(): array
@@ -3087,7 +3260,8 @@ class BJLG_Scheduler {
 
         $state['pending'][$normalized_key] = $bucket;
 
-        if ($this->should_dispatch_event($normalized_key, $trigger_settings, $bucket, $now, $state)) {
+        $resume_at = null;
+        if ($this->should_dispatch_event($normalized_key, $trigger_settings, $bucket, $now, $state, $resume_at)) {
             $dispatched = $this->dispatch_event_trigger($normalized_key, $trigger_settings, $bucket, $now);
             if ($dispatched) {
                 unset($state['pending'][$normalized_key]);
@@ -3106,6 +3280,14 @@ class BJLG_Scheduler {
             return;
         }
 
+        if ($resume_at !== null) {
+            $state['next_run'][$normalized_key] = $resume_at;
+            $this->schedule_event_trigger($normalized_key, $resume_at);
+            $this->save_event_state($state);
+
+            return;
+        }
+
         $next_run = $this->calculate_next_event_run($normalized_key, $trigger_settings, $bucket, $now, $state);
         if ($next_run !== null) {
             $state['next_run'][$normalized_key] = $next_run;
@@ -3113,6 +3295,80 @@ class BJLG_Scheduler {
         }
 
         $this->save_event_state($state);
+    }
+
+    private function route_external_event($source, $payload, $metadata): void
+    {
+        $source_key = '';
+        if (is_string($source) && $source !== '') {
+            $source_key = $this->normalize_trigger_key($source);
+        } elseif (is_array($source) && isset($source['key'])) {
+            $source_key = $this->normalize_trigger_key((string) $source['key']);
+        }
+
+        if ($source_key === '') {
+            return;
+        }
+
+        $metadata = is_array($metadata) ? $metadata : [];
+        $trigger_override = '';
+        if (isset($metadata['trigger'])) {
+            $trigger_override = $this->normalize_trigger_key((string) $metadata['trigger']);
+        }
+
+        $trigger_key = $this->map_signal_to_trigger($trigger_override !== '' ? $trigger_override : $source_key, $metadata);
+
+        if ($trigger_key === '') {
+            return;
+        }
+
+        $payload_array = is_array($payload) ? $payload : [];
+
+        foreach ($metadata as $meta_key => $meta_value) {
+            if (!is_scalar($meta_value)) {
+                continue;
+            }
+
+            $payload_array['meta_' . $meta_key] = $meta_value;
+        }
+
+        if ($source_key !== $trigger_key && !isset($payload_array['source'])) {
+            $payload_array['source'] = $source_key;
+        }
+
+        $this->handle_event_trigger($trigger_key, $payload_array);
+    }
+
+    private function map_signal_to_trigger(string $source_key, array $metadata = []): string
+    {
+        if (isset($metadata['channel'])) {
+            $channel = $this->normalize_trigger_key((string) $metadata['channel']);
+            if ($channel !== '') {
+                $source_key = $channel;
+            }
+        }
+
+        switch ($source_key) {
+            case 'filesystem_inotify':
+            case 'inotify':
+            case 'fs':
+            case 'filesystem':
+            case 'watcher':
+                return 'inotify';
+            case 'webhook':
+            case 'app':
+            case 'application':
+            case 'application_webhook':
+            case 'business_event':
+                return 'application_webhook';
+            case 'binlog':
+            case 'mysql':
+            case 'database_binlog':
+            case 'db_binlog':
+                return 'binlog';
+            default:
+                return $source_key;
+        }
     }
 
     public function process_event_trigger_queue($trigger_key = null): void
@@ -3143,7 +3399,8 @@ class BJLG_Scheduler {
                 continue;
             }
 
-            if ($this->should_dispatch_event($key, $trigger_settings, $bucket, $now, $state)) {
+            $resume_at = null;
+            if ($this->should_dispatch_event($key, $trigger_settings, $bucket, $now, $state, $resume_at)) {
                 $dispatched = $this->dispatch_event_trigger($key, $trigger_settings, $bucket, $now);
                 if ($dispatched) {
                     unset($state['pending'][$key]);
@@ -3152,6 +3409,13 @@ class BJLG_Scheduler {
                     $updated = true;
                     continue;
                 }
+            }
+
+            if ($resume_at !== null) {
+                $state['next_run'][$key] = $resume_at;
+                $this->schedule_event_trigger($key, $resume_at);
+                $updated = true;
+                continue;
             }
 
             $next_run = $this->calculate_next_event_run($key, $trigger_settings, $bucket, $now, $state);
@@ -3192,6 +3456,11 @@ class BJLG_Scheduler {
             $next_run = isset($state['next_run'][$key]) ? (int) $state['next_run'][$key] : null;
             if ($next_run === null || $next_run < $now) {
                 $next_run = $this->calculate_next_event_run($key, $trigger_settings, $bucket, $now, $state);
+            } else {
+                $resume_at = null;
+                if ($this->is_within_quiet_hours($key, $trigger_settings, $next_run, $resume_at) && $resume_at !== null) {
+                    $next_run = $resume_at;
+                }
             }
 
             if ($next_run !== null) {
@@ -3206,9 +3475,14 @@ class BJLG_Scheduler {
         }
     }
 
-    private function should_dispatch_event(string $trigger_key, array $settings, array $bucket, int $now, array $state): bool
+    private function should_dispatch_event(string $trigger_key, array $settings, array $bucket, int $now, array $state, ?int &$resume_at = null): bool
     {
+        $resume_at = null;
         if (empty($settings['enabled'])) {
+            return false;
+        }
+
+        if ($this->is_within_quiet_hours($trigger_key, $settings, $now, $resume_at)) {
             return false;
         }
 
@@ -3234,6 +3508,119 @@ class BJLG_Scheduler {
         $first_seen = isset($bucket['first_seen']) ? (int) $bucket['first_seen'] : $now;
 
         return ($now - $first_seen) >= $batch_window;
+    }
+
+    private function is_within_quiet_hours(string $trigger_key, array $settings, int $timestamp, ?int &$resume_at = null): bool
+    {
+        $resume_at = null;
+        if (!isset($settings['quiet_hours']) || !is_array($settings['quiet_hours'])) {
+            return false;
+        }
+
+        $quiet = $settings['quiet_hours'];
+        if (empty($quiet['enabled'])) {
+            return false;
+        }
+
+        $start_parts = $this->parse_quiet_time(isset($quiet['start']) ? (string) $quiet['start'] : '00:00');
+        $end_parts = $this->parse_quiet_time(isset($quiet['end']) ? (string) $quiet['end'] : '00:00');
+
+        if ($start_parts === null || $end_parts === null) {
+            return false;
+        }
+
+        if ($start_parts['total'] === $end_parts['total']) {
+            return false;
+        }
+
+        $timezone = $this->resolve_quiet_timezone(isset($quiet['timezone']) ? (string) $quiet['timezone'] : 'site');
+        $current = (new DateTimeImmutable('@' . $timestamp))->setTimezone($timezone);
+        $start = $current->setTime($start_parts['hour'], $start_parts['minute']);
+        $end = $current->setTime($end_parts['hour'], $end_parts['minute']);
+
+        if ($start_parts['total'] < $end_parts['total']) {
+            if ($current >= $start && $current < $end) {
+                $resume_at = $end->getTimestamp();
+
+                return true;
+            }
+
+            return false;
+        }
+
+        if ($current >= $start) {
+            $resume_at = $end->modify('+1 day')->getTimestamp();
+
+            return true;
+        }
+
+        $start_previous = $start->modify('-1 day');
+        if ($current >= $start_previous && $current < $end) {
+            $resume_at = $end->getTimestamp();
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private function resolve_quiet_timezone(string $timezone): DateTimeZone
+    {
+        $normalized = strtolower(trim($timezone));
+
+        if ($normalized === '' || $normalized === 'site' || $normalized === 'default') {
+            if (function_exists('wp_timezone')) {
+                return wp_timezone();
+            }
+
+            $option = function_exists('get_option') ? (string) get_option('timezone_string') : '';
+            if ($option !== '') {
+                try {
+                    return new DateTimeZone($option);
+                } catch (Throwable $throwable) {
+                    unset($throwable);
+                }
+            }
+
+            $offset = function_exists('get_option') ? (float) get_option('gmt_offset', 0.0) : 0.0;
+            if ($offset !== 0.0) {
+                $offset_seconds = (int) round($offset * HOUR_IN_SECONDS);
+                $tz_name = timezone_name_from_abbr('', $offset_seconds, 0);
+                if ($tz_name !== false) {
+                    return new DateTimeZone($tz_name);
+                }
+            }
+
+            return new DateTimeZone('UTC');
+        }
+
+        if ($normalized === 'utc' || $normalized === 'gmt') {
+            return new DateTimeZone('UTC');
+        }
+
+        try {
+            return new DateTimeZone($timezone);
+        } catch (Throwable $throwable) {
+            unset($throwable);
+        }
+
+        return new DateTimeZone('UTC');
+    }
+
+    private function parse_quiet_time(string $time): ?array
+    {
+        if (!preg_match('/^(\d{1,2}):(\d{1,2})$/', $time, $matches)) {
+            return null;
+        }
+
+        $hours = max(0, min(23, (int) $matches[1]));
+        $minutes = max(0, min(59, (int) $matches[2]));
+
+        return [
+            'hour' => $hours,
+            'minute' => $minutes,
+            'total' => ($hours * 60) + $minutes,
+        ];
     }
 
     private function dispatch_event_trigger(string $trigger_key, array $settings, array $bucket, int $now): bool
@@ -3293,16 +3680,51 @@ class BJLG_Scheduler {
             return false;
         }
 
-        BJLG_Debug::log(sprintf('Sauvegarde événementielle déclenchée (%s) - Task ID: %s', $trigger_key, $task_id));
-        BJLG_History::log(
-            'event_trigger',
-            'info',
-            sprintf(
-                __('Déclencheur "%1$s" : %2$d évènement(s) regroupé(s).', 'backup-jlg'),
-                $trigger_key,
-                (int) ($bucket['count'] ?? 1)
-            )
+        $label = $this->get_trigger_label($trigger_key);
+        $sample_preview = '';
+        if (!empty($samples)) {
+            $sample_preview = $this->summarize_event_sample((array) $samples[0]);
+        }
+
+        $this->record_event_metrics($trigger_key, $bucket, $now);
+
+        $debug_message = sprintf(
+            'Sauvegarde événementielle déclenchée (%s/%s) - Task ID: %s%s',
+            $trigger_key,
+            $label,
+            $task_id,
+            $sample_preview !== '' ? ' | ' . $sample_preview : ''
         );
+        BJLG_Debug::log($debug_message);
+
+        $history_message = sprintf(
+            __('Déclencheur « %1$s » : %2$d évènement(s) regroupé(s).', 'backup-jlg'),
+            $label,
+            (int) ($bucket['count'] ?? 1)
+        );
+
+        $history_meta = [
+            'trigger' => $trigger_key,
+            'task_id' => $task_id,
+            'count' => (int) ($bucket['count'] ?? 1),
+            'first_seen' => isset($bucket['first_seen']) ? (int) $bucket['first_seen'] : $now,
+            'last_seen' => isset($bucket['last_seen']) ? (int) $bucket['last_seen'] : $now,
+        ];
+
+        if ($sample_preview !== '') {
+            $history_meta['sample'] = $sample_preview;
+        }
+
+        BJLG_History::log('event_trigger', 'info', $history_message, null, null, $history_meta);
+
+        /**
+         * Fires when an event trigger has been dispatched and enqueued.
+         *
+         * @param string $trigger_key
+         * @param array<string,mixed> $bucket
+         * @param string $task_id
+         */
+        do_action('bjlg_event_trigger_dispatched', $trigger_key, $bucket, $task_id);
 
         return true;
     }
@@ -3317,9 +3739,102 @@ class BJLG_Scheduler {
             return ['db'];
         }
 
+        if ($trigger_key === 'inotify') {
+            return ['uploads', 'plugins', 'themes'];
+        }
+
+        if ($trigger_key === 'application_webhook') {
+            return ['db', 'uploads'];
+        }
+
+        if ($trigger_key === 'binlog') {
+            return ['db'];
+        }
+
         return isset($default_schedule['components']) && is_array($default_schedule['components'])
             ? $default_schedule['components']
             : ['db'];
+    }
+
+    private function get_trigger_label(string $trigger_key): string
+    {
+        switch ($trigger_key) {
+            case 'filesystem':
+                return __('Fichiers & médias', 'backup-jlg');
+            case 'database':
+                return __('Base de données', 'backup-jlg');
+            case 'inotify':
+                return __('Surveillance inotify', 'backup-jlg');
+            case 'application_webhook':
+                return __('Webhooks applicatifs', 'backup-jlg');
+            case 'binlog':
+                return __('Binlog MySQL', 'backup-jlg');
+            default:
+                return ucfirst(str_replace('_', ' ', $trigger_key));
+        }
+    }
+
+    private function summarize_event_sample(array $sample): string
+    {
+        $parts = [];
+        $added = 0;
+        foreach ($sample as $key => $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+
+            $normalized_key = $this->sanitize_payload_key((string) $key);
+            if ($normalized_key === '') {
+                continue;
+            }
+
+            $parts[] = sprintf('%s=%s', $normalized_key, $this->sanitize_payload_string((string) $value));
+            $added++;
+
+            if ($added >= 3) {
+                break;
+            }
+        }
+
+        return implode(', ', $parts);
+    }
+
+    private function record_event_metrics(string $trigger_key, array $bucket, int $now): void
+    {
+        $metrics = \bjlg_get_option(self::EVENT_METRICS_OPTION, []);
+        if (!is_array($metrics)) {
+            $metrics = [];
+        }
+
+        $metrics['version'] = isset($metrics['version']) ? (int) $metrics['version'] : 1;
+        if (!isset($metrics['triggers']) || !is_array($metrics['triggers'])) {
+            $metrics['triggers'] = [];
+        }
+
+        $entry = $metrics['triggers'][$trigger_key] ?? [];
+        $entry['total_dispatched'] = isset($entry['total_dispatched']) ? (int) $entry['total_dispatched'] + 1 : 1;
+        $entry['last_count'] = (int) ($bucket['count'] ?? 0);
+        $entry['last_dispatched_at'] = $now;
+
+        $samples = isset($bucket['payloads']) && is_array($bucket['payloads']) ? $bucket['payloads'] : [];
+        if (!empty($samples)) {
+            $entry['last_payload'] = $this->serialize_event_samples([ (array) $samples[0] ]);
+        }
+
+        $metrics['triggers'][$trigger_key] = $entry;
+
+        \bjlg_update_option(self::EVENT_METRICS_OPTION, $metrics, null, null, false);
+    }
+
+    private function serialize_event_samples(array $samples): string
+    {
+        if (function_exists('wp_json_encode')) {
+            $encoded = wp_json_encode($samples);
+        } else {
+            $encoded = json_encode($samples);
+        }
+
+        return is_string($encoded) ? $encoded : '';
     }
 
     private function calculate_next_event_run(string $trigger_key, array $settings, array $bucket, int $now, array $state): ?int
@@ -3337,13 +3852,20 @@ class BJLG_Scheduler {
 
         $cooldown_until = ($cooldown > 0 && $last_dispatch > 0) ? $last_dispatch + $cooldown : $now;
 
+        $candidate = null;
         if ($count >= $max_batch && $cooldown_until <= $now) {
-            return $now;
+            $candidate = $now;
+        } else {
+            $window_deadline = $batch_window > 0 ? $first_seen + $batch_window : $now;
+            $candidate = max($now, $cooldown_until, $window_deadline);
         }
 
-        $window_deadline = $batch_window > 0 ? $first_seen + $batch_window : $now;
+        $resume_at = null;
+        if ($this->is_within_quiet_hours($trigger_key, $settings, $candidate, $resume_at) && $resume_at !== null) {
+            $candidate = max($candidate, $resume_at);
+        }
 
-        return max($now, $cooldown_until, $window_deadline);
+        return $candidate;
     }
 
     private function schedule_event_trigger(string $trigger_key, int $timestamp): void

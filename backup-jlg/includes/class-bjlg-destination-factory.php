@@ -86,6 +86,11 @@ class BJLG_Destination_Factory {
                     return new BJLG_Managed_Replication();
                 }
                 break;
+            case 'managed_storage':
+                if (class_exists(BJLG_Managed_Storage::class)) {
+                    return new BJLG_Managed_Storage();
+                }
+                break;
         }
 
         return null;

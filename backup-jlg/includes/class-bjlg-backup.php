@@ -5,11 +5,16 @@ use Exception;
 use FilesystemIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
+use Throwable;
 use UnexpectedValueException;
 use ZipArchive;
 
 if (!defined('ABSPATH')) {
     exit;
+}
+
+if (function_exists('add_action')) {
+    add_action('init', [\BJLG\BJLG_Backup::class, 'bootstrap_realtime_capture'], 3);
 }
 
 /**
@@ -81,6 +86,38 @@ class BJLG_Backup {
      * @var array{owner: string, acquired_at: int, initialized: bool, expires_at: int}|null
      */
     private static $in_memory_lock = null;
+
+    private const REALTIME_BUFFER_LIMIT = 10;
+    private const REALTIME_DEFAULT_BATCH_WINDOW = 60;
+    private const REALTIME_DEFAULT_MAX_BATCH = 10;
+
+    /**
+     * Tampon des événements quasi temps réel détectés durant la requête courante.
+     *
+     * @var array<string, array<string, mixed>>
+     */
+    private static $realtime_buffer = [];
+
+    /**
+     * Mémorisation du dernier flush par canal afin d'éviter les rejets en rafale.
+     *
+     * @var array<string, int>
+     */
+    private static $realtime_last_flush = [];
+
+    /**
+     * Cache des réglages de déclencheurs événementiels pour éviter les accès répétés.
+     *
+     * @var array<string, array<string, mixed>>|null
+     */
+    private static $realtime_settings_cache = null;
+
+    /**
+     * Indicateur d'initialisation des hooks de capture quasi temps réel.
+     *
+     * @var bool
+     */
+    private static $realtime_initialized = false;
 
     /**
      * Récupère la durée de vie maximale d'une tâche stockée dans un transient.
@@ -181,6 +218,298 @@ class BJLG_Backup {
         if ($current_owner === $task_id) {
             self::delete_lock_payload();
         }
+    }
+
+    public static function bootstrap_realtime_capture(): void
+    {
+        if (self::$realtime_initialized) {
+            return;
+        }
+
+        self::$realtime_initialized = true;
+
+        if (function_exists('add_action')) {
+            add_action('shutdown', [__CLASS__, 'flush_realtime_events'], 1);
+        }
+    }
+
+    public static function record_realtime_change(string $source, array $payload = [], array $context = []): void
+    {
+        self::bootstrap_realtime_capture();
+
+        $source_key = self::normalize_realtime_source($source);
+        if ($source_key === '') {
+            return;
+        }
+
+        $now = function_exists('current_time') ? (int) current_time('timestamp') : time();
+
+        $normalized_payload = self::normalize_realtime_payload($source_key, $payload, $context);
+
+        if (!isset(self::$realtime_buffer[$source_key])) {
+            self::$realtime_buffer[$source_key] = [
+                'first_seen' => $now,
+                'last_seen' => $now,
+                'count' => 0,
+                'payloads' => [],
+            ];
+        }
+
+        self::$realtime_buffer[$source_key]['last_seen'] = $now;
+        self::$realtime_buffer[$source_key]['count'] = (int) self::$realtime_buffer[$source_key]['count'] + 1;
+
+        if (!empty($normalized_payload)) {
+            $samples = isset(self::$realtime_buffer[$source_key]['payloads'])
+                ? (array) self::$realtime_buffer[$source_key]['payloads']
+                : [];
+            $samples[] = $normalized_payload;
+
+            if (count($samples) > self::REALTIME_BUFFER_LIMIT) {
+                $samples = array_slice($samples, -self::REALTIME_BUFFER_LIMIT);
+            }
+
+            self::$realtime_buffer[$source_key]['payloads'] = $samples;
+        }
+
+        $settings = self::get_realtime_trigger_settings($source_key);
+        if (self::should_flush_buffer($source_key, self::$realtime_buffer[$source_key], $settings, $now)) {
+            self::flush_realtime_source($source_key);
+        }
+    }
+
+    public static function flush_realtime_events(): void
+    {
+        if (empty(self::$realtime_buffer)) {
+            return;
+        }
+
+        foreach (array_keys(self::$realtime_buffer) as $source_key) {
+            self::flush_realtime_source($source_key, true);
+        }
+    }
+
+    private static function normalize_realtime_source($source): string
+    {
+        if (is_array($source) && isset($source['key'])) {
+            $source = $source['key'];
+        }
+
+        $source_key = is_string($source) ? $source : (string) $source;
+        $source_key = trim(strtolower($source_key));
+
+        if ($source_key === '') {
+            return '';
+        }
+
+        switch ($source_key) {
+            case 'fs':
+            case 'watcher':
+            case 'filesystem_inotify':
+            case 'inotify':
+                return 'inotify';
+            case 'webhook':
+            case 'application':
+            case 'app':
+            case 'application_webhook':
+            case 'business_event':
+                return 'application_webhook';
+            case 'binlog':
+            case 'mysql':
+            case 'database_binlog':
+            case 'db_binlog':
+                return 'binlog';
+            case 'db':
+            case 'database':
+                return 'database';
+            case 'files':
+            case 'filesystem':
+                return 'filesystem';
+            default:
+                if (function_exists('sanitize_key')) {
+                    return sanitize_key($source_key);
+                }
+
+                return preg_replace('/[^a-z0-9_\-]/', '', $source_key);
+        }
+    }
+
+    private static function normalize_realtime_payload(string $source_key, array $payload, array $context = []): array
+    {
+        $normalized = [
+            'channel' => $source_key,
+        ];
+
+        $added = 0;
+        foreach ($payload as $key => $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+
+            $normalized_key = self::sanitize_realtime_key($key);
+            if ($normalized_key === '') {
+                continue;
+            }
+
+            $normalized[$normalized_key] = (string) $value;
+            $added++;
+
+            if ($added >= 5) {
+                break;
+            }
+        }
+
+        foreach ($context as $key => $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+
+            $context_key = self::sanitize_realtime_key('ctx_' . $key);
+            if ($context_key === '') {
+                continue;
+            }
+
+            $normalized[$context_key] = (string) $value;
+        }
+
+        return $normalized;
+    }
+
+    private static function sanitize_realtime_key($key): string
+    {
+        $key = is_string($key) ? $key : (string) $key;
+
+        if (function_exists('sanitize_key')) {
+            $key = sanitize_key($key);
+        } else {
+            $key = preg_replace('/[^a-z0-9_\-]/', '', strtolower($key));
+        }
+
+        return substr($key, 0, 40);
+    }
+
+    private static function get_realtime_trigger_settings(string $source_key): array
+    {
+        if (self::$realtime_settings_cache === null) {
+            if (!class_exists(__NAMESPACE__ . '\\BJLG_Scheduler')) {
+                self::$realtime_settings_cache = [];
+            } else {
+                try {
+                    $scheduler = BJLG_Scheduler::instance();
+                    $settings = $scheduler->get_event_trigger_settings();
+                    self::$realtime_settings_cache = isset($settings['triggers']) && is_array($settings['triggers'])
+                        ? $settings['triggers']
+                        : [];
+                } catch (Throwable $throwable) {
+                    self::$realtime_settings_cache = [];
+                    if (class_exists(__NAMESPACE__ . '\\BJLG_Debug')) {
+                        BJLG_Debug::log('[Realtime capture] ' . $throwable->getMessage(), 'error');
+                    }
+                }
+            }
+        }
+
+        return self::$realtime_settings_cache[$source_key] ?? [
+            'max_batch' => self::REALTIME_DEFAULT_MAX_BATCH,
+            'batch_window' => self::REALTIME_DEFAULT_BATCH_WINDOW,
+            'cooldown' => 0,
+        ];
+    }
+
+    private static function should_flush_buffer(string $source_key, array $bucket, array $settings, int $now): bool
+    {
+        $count = isset($bucket['count']) ? (int) $bucket['count'] : 0;
+        $max_batch = max(1, (int) ($settings['max_batch'] ?? self::REALTIME_DEFAULT_MAX_BATCH));
+        if ($count >= $max_batch) {
+            return true;
+        }
+
+        $first_seen = isset($bucket['first_seen']) ? (int) $bucket['first_seen'] : $now;
+        $window = max(0, (int) ($settings['batch_window'] ?? self::REALTIME_DEFAULT_BATCH_WINDOW));
+        if ($window === 0) {
+            return true;
+        }
+
+        if (($now - $first_seen) >= $window) {
+            return true;
+        }
+
+        $last_flush = isset(self::$realtime_last_flush[$source_key]) ? (int) self::$realtime_last_flush[$source_key] : 0;
+        $cooldown = max(0, (int) ($settings['cooldown'] ?? 0));
+
+        return $cooldown > 0 && ($now - $last_flush) >= $cooldown;
+    }
+
+    private static function flush_realtime_source(string $source_key, bool $force = false): void
+    {
+        if (!isset(self::$realtime_buffer[$source_key])) {
+            return;
+        }
+
+        $bucket = self::$realtime_buffer[$source_key];
+        if (!$force) {
+            $settings = self::get_realtime_trigger_settings($source_key);
+            $now = function_exists('current_time') ? (int) current_time('timestamp') : time();
+            if (!self::should_flush_buffer($source_key, $bucket, $settings, $now)) {
+                return;
+            }
+        }
+
+        unset(self::$realtime_buffer[$source_key]);
+        self::$realtime_last_flush[$source_key] = function_exists('current_time') ? (int) current_time('timestamp') : time();
+
+        if (!class_exists(__NAMESPACE__ . '\\BJLG_Scheduler')) {
+            return;
+        }
+
+        $payload = self::summarize_bucket_for_scheduler($source_key, $bucket);
+
+        try {
+            BJLG_Scheduler::instance()->handle_event_trigger($source_key, $payload);
+        } catch (Throwable $throwable) {
+            if (class_exists(__NAMESPACE__ . '\\BJLG_Debug')) {
+                BJLG_Debug::log('[Realtime capture] ' . $throwable->getMessage(), 'error');
+            }
+        }
+    }
+
+    private static function summarize_bucket_for_scheduler(string $source_key, array $bucket): array
+    {
+        $now = function_exists('current_time') ? (int) current_time('timestamp') : time();
+        $first_seen = isset($bucket['first_seen']) ? (int) $bucket['first_seen'] : $now;
+        $last_seen = isset($bucket['last_seen']) ? (int) $bucket['last_seen'] : $first_seen;
+        $count = isset($bucket['count']) ? (int) $bucket['count'] : 0;
+
+        $payload = [
+            'channel' => $source_key,
+            'batch_count' => $count,
+            'first_seen' => $first_seen,
+            'last_seen' => $last_seen,
+        ];
+
+        $samples = isset($bucket['payloads']) && is_array($bucket['payloads']) ? $bucket['payloads'] : [];
+        if (!empty($samples)) {
+            $sample = (array) $samples[count($samples) - 1];
+            $added = 0;
+            foreach ($sample as $key => $value) {
+                if (!is_scalar($value)) {
+                    continue;
+                }
+
+                $normalized_key = self::sanitize_realtime_key('sample_' . $key);
+                if ($normalized_key === '') {
+                    continue;
+                }
+
+                $payload[$normalized_key] = (string) $value;
+                $added++;
+
+                if ($added >= 4) {
+                    break;
+                }
+            }
+        }
+
+        return $payload;
     }
 
     /**

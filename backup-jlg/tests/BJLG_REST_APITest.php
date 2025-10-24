@@ -2830,6 +2830,8 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             'webhook_backup_complete' => 'https://example.com/hook-complete',
             'webhook_backup_failed' => 'https://example.com/hook-failed',
             'webhook_cleanup_complete' => 'https://example.com/hook-cleanup',
+            'webhook_storage_capacity' => 'https://example.com/hook-storage',
+            'webhook_sla_validation' => 'https://example.com/hook-sla',
             'webhook_secret' => 'secret-value',
             'ajax_debug_enabled' => '1',
         ];
@@ -2878,6 +2880,8 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
         $webhooks = bjlg_get_option('bjlg_webhook_settings');
         $this->assertTrue($webhooks['enabled']);
+        $this->assertSame('https://example.com/hook-storage', $webhooks['urls']['storage_capacity']);
+        $this->assertSame('https://example.com/hook-sla', $webhooks['urls']['sla_validation']);
 
         $this->assertTrue(bjlg_get_option('bjlg_ajax_debug_enabled'));
     }
@@ -3106,6 +3110,8 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
                     'backup_complete' => 'https://example.com/hook?foo=bar',
                     'backup_failed' => '',
                     'cleanup_complete' => 'https://example.com/cleanup',
+                    'storage_capacity' => '',
+                    'sla_validation' => '',
                 ],
                 'secret' => 'secret',
             ], bjlg_get_option('bjlg_webhook_settings'));
