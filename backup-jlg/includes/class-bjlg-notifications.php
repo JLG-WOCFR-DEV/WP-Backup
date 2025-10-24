@@ -1274,6 +1274,8 @@ class BJLG_Notifications {
             return;
         }
 
+        $entry_resolution = $this->build_resolution_payload($event, $payload['context'] ?? []);
+
         $entry = [
             'event' => $event,
             'title' => $payload['title'],
@@ -1284,11 +1286,17 @@ class BJLG_Notifications {
             'channels' => $channels,
             'created_at' => time(),
             'severity' => $final_severity,
-            'resolution' => $this->build_resolution_payload($event, $payload['context'] ?? []),
+            'resolution' => $entry_resolution,
         ];
 
         if (!empty($escalation['meta']['channels'])) {
             $entry['escalation'] = $escalation['meta'];
+            if (!empty($entry_resolution['summary'])) {
+                $entry['escalation']['resolution_summary'] = $entry_resolution['summary'];
+            }
+            if (!empty($entry_resolution['actions']) && is_array($entry_resolution['actions'])) {
+                $entry['escalation']['resolution_actions'] = $entry_resolution['actions'];
+            }
         }
 
         if (!empty($entry['resolution']['summary'])) {
@@ -1325,16 +1333,52 @@ class BJLG_Notifications {
             'type' => 'created',
         ]];
 
-        $resolution = [
+        $actions = $this->extract_resolution_actions($event, $context, $title);
+
+        return [
             'acknowledged_at' => null,
             'resolved_at' => null,
             'steps' => $steps,
-            'summary' => class_exists(__NAMESPACE__ . '\\BJLG_Notification_Queue')
-                ? BJLG_Notification_Queue::summarize_resolution_steps($steps)
-                : $summary,
+            'actions' => $actions,
+            'summary' => \BJLG\BJLG_Notification_Queue::render_resolution_summary($steps, $actions),
         ];
 
         return $resolution;
+    }
+
+    private function extract_resolution_actions($event, $context, $title) {
+        $actions = [];
+
+        if (is_array($context)) {
+            if (!empty($context['performed_actions']) && is_array($context['performed_actions'])) {
+                $actions = $context['performed_actions'];
+            } elseif (!empty($context['actions']) && is_array($context['actions'])) {
+                $actions = $context['actions'];
+            } elseif (!empty($context['resolution_actions']) && is_array($context['resolution_actions'])) {
+                $actions = $context['resolution_actions'];
+            }
+        }
+
+        $actions = array_filter(array_map(static function ($value) {
+            return is_string($value) ? trim($value) : '';
+        }, is_array($actions) ? $actions : []));
+
+        if (!empty($actions)) {
+            return array_values($actions);
+        }
+
+        $severity = $this->get_event_severity($event);
+        $definition = $this->describe_severity($severity, [
+            'event' => $event,
+            'title' => $title,
+            'context' => $context,
+        ]);
+
+        if (!empty($definition['actions']) && is_array($definition['actions'])) {
+            return array_values(array_filter(array_map('trim', $definition['actions'])));
+        }
+
+        return [];
     }
 
     /**

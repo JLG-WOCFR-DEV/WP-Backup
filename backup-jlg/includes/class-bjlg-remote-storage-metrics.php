@@ -350,13 +350,14 @@ class BJLG_Remote_Storage_Metrics {
             } elseif (is_array($backups)) {
                 $entry['backups_count'] = count($backups);
 
-            if ($entry['used_bytes'] === null) {
-                $total = 0;
-                foreach ($backups as $backup) {
-                    $total += isset($backup['size']) ? (int) $backup['size'] : 0;
+                if ($entry['used_bytes'] === null) {
+                    $total = 0;
+                    foreach ($backups as $backup) {
+                        $total += isset($backup['size']) ? (int) $backup['size'] : 0;
+                    }
+                    $entry['used_bytes'] = $total;
+                    $entry['used_human'] = size_format($total);
                 }
-                $entry['used_bytes'] = $total;
-                $entry['used_human'] = size_format($total);
             }
         }
 

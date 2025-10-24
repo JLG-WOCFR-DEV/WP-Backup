@@ -243,4 +243,41 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         $this->assertNotEmpty($resolvedEntries);
         $this->assertSame('resolve-me', $resolvedEntries[0]['id']);
     }
+
+    public function test_trigger_manual_reminder_schedules_event(): void
+    {
+        bjlg_update_option('bjlg_notification_queue', [
+            [
+                'id' => 'manual-reminder',
+                'event' => 'backup_failed',
+                'title' => 'Backup failed',
+                'channels' => [
+                    'email' => [
+                        'enabled' => true,
+                        'status' => 'pending',
+                        'attempts' => 0,
+                    ],
+                ],
+                'reminders' => [
+                    'active' => true,
+                    'next_at' => time() + 3600,
+                    'attempts' => 1,
+                ],
+            ],
+        ]);
+
+        $this->assertTrue(BJLG_Notification_Queue::trigger_manual_reminder('manual-reminder'));
+
+        $queue = bjlg_get_option('bjlg_notification_queue');
+        $this->assertCount(1, $queue);
+        $entry = $queue[0];
+        $this->assertArrayHasKey('reminders', $entry);
+        $this->assertTrue(isset($entry['reminders']['active']) ? (bool) $entry['reminders']['active'] : true);
+        $this->assertGreaterThan(time(), $entry['reminders']['next_at']);
+
+        $scheduled = $GLOBALS['bjlg_test_scheduled_events']['single'] ?? [];
+        $this->assertNotEmpty($scheduled);
+        $hooks = array_column($scheduled, 'hook');
+        $this->assertContains('bjlg_notification_queue_reminder', $hooks);
+    }
 }

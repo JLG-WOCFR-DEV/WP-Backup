@@ -33,6 +33,7 @@ class BJLG_Actions {
         add_action('template_redirect', [$this, 'maybe_handle_public_download']);
         add_action('wp_ajax_bjlg_notification_queue_retry', [$this, 'handle_notification_queue_retry']);
         add_action('wp_ajax_bjlg_notification_queue_delete', [$this, 'handle_notification_queue_delete']);
+        add_action('wp_ajax_bjlg_notification_queue_remind', [$this, 'handle_notification_queue_remind']);
         add_action('wp_ajax_bjlg_notification_acknowledge', [$this, 'handle_notification_acknowledge']);
         add_action('wp_ajax_bjlg_notification_resolve', [$this, 'handle_notification_resolve']);
         add_action('wp_ajax_bjlg_remote_purge_retry', [$this, 'handle_remote_purge_retry']);
@@ -573,6 +574,31 @@ class BJLG_Actions {
 
         wp_send_json_success([
             'message' => __('Notification retirée de la file.', 'backup-jlg'),
+            'metrics' => $metrics,
+        ]);
+    }
+
+    public function handle_notification_queue_remind() {
+        if (!\bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $entry_id = isset($_POST['entry_id']) ? sanitize_text_field(wp_unslash($_POST['entry_id'])) : '';
+
+        if ($entry_id === '') {
+            wp_send_json_error(['message' => __('Identifiant de notification manquant.', 'backup-jlg')], 400);
+        }
+
+        if (!BJLG_Notification_Queue::trigger_manual_reminder($entry_id)) {
+            wp_send_json_error(['message' => __('Impossible de programmer un rappel pour cette notification.', 'backup-jlg')], 500);
+        }
+
+        $metrics = $this->get_dashboard_metrics_snapshot();
+
+        wp_send_json_success([
+            'message' => __('Rappel manuel planifié.', 'backup-jlg'),
             'metrics' => $metrics,
         ]);
     }

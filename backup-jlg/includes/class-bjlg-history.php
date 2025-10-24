@@ -63,11 +63,14 @@ class BJLG_History {
      * @param string $details Détails supplémentaires (nom de fichier, message d'erreur, etc.).
      * @param int|null $user_id ID de l'utilisateur (null pour utilisateur actuel).
      * @param int|null $blog_id Identifiant du site cible pour enregistrer l'entrée.
+     * @param array<string,mixed> $metadata Métadonnées structurées associées à l'action.
+     *
+     * @return int|null Identifiant de l'entrée insérée ou null si indisponible.
      */
     public static function log($action, $status, $details = '', $user_id = null, $blog_id = null, array $metadata = []) {
         global $wpdb;
         $table_name = self::get_table_name($blog_id);
-        
+
         // Obtenir l'ID de l'utilisateur actuel si non spécifié
         if ($user_id === null) {
             $user_id = get_current_user_id();
@@ -105,6 +108,8 @@ class BJLG_History {
         $data['ip_address'] = $ip_address;
         $formats[] = '%s';
 
+        $insert_id = null;
+
         if (self::wpdb_supports(['insert'])) {
             $result = $wpdb->insert(
                 $table_name,
@@ -118,13 +123,19 @@ class BJLG_History {
                     : 'unknown';
 
                 BJLG_Debug::log("ERREUR lors de l'enregistrement dans l'historique : " . $error_message);
+            } else {
+                $insert_id = property_exists($wpdb, 'insert_id')
+                    ? (int) $wpdb->insert_id
+                    : null;
             }
         } else {
             BJLG_Debug::log('Historique non persistant : insert() indisponible sur $wpdb.');
         }
-        
+
         // Déclencher une action pour permettre des extensions
         do_action('bjlg_history_logged', $action, $status, $details, $user_id, $blog_id);
+
+        return $insert_id;
     }
 
     /**

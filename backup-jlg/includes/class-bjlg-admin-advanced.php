@@ -312,10 +312,17 @@ class BJLG_Admin_Advanced {
                 'failed' => 0,
                 'completed' => 0,
             ],
+            'ack_status_counts' => [
+                'pending' => 0,
+                'acknowledged' => 0,
+                'resolved' => 0,
+            ],
             'next_attempt_formatted' => '',
             'next_attempt_relative' => '',
             'oldest_entry_formatted' => '',
             'oldest_entry_relative' => '',
+            'next_reminder_formatted' => '',
+            'next_reminder_relative' => '',
             'entries' => [],
         ];
 
@@ -337,8 +344,20 @@ class BJLG_Admin_Advanced {
             $metrics['status_counts'][$status] += (int) $count;
         }
 
+        $ack_counts = isset($snapshot['ack_status_counts']) && is_array($snapshot['ack_status_counts'])
+            ? $snapshot['ack_status_counts']
+            : [];
+        foreach ($ack_counts as $status => $count) {
+            $status = is_string($status) ? $status : (string) $status;
+            if (!isset($metrics['ack_status_counts'][$status])) {
+                $metrics['ack_status_counts'][$status] = 0;
+            }
+            $metrics['ack_status_counts'][$status] += (int) $count;
+        }
+
         [$metrics['next_attempt_formatted'], $metrics['next_attempt_relative']] = $this->format_timestamp_pair($snapshot['next_attempt_at'] ?? null, $now);
         [$metrics['oldest_entry_formatted'], $metrics['oldest_entry_relative']] = $this->format_timestamp_pair($snapshot['oldest_entry_at'] ?? null, $now);
+        [$metrics['next_reminder_formatted'], $metrics['next_reminder_relative']] = $this->format_timestamp_pair($snapshot['next_reminder_at'] ?? null, $now);
 
         $entries = isset($snapshot['entries']) && is_array($snapshot['entries']) ? $snapshot['entries'] : [];
         $metrics['entries'] = $this->format_notification_entries(array_slice($entries, 0, 5), $now);
@@ -666,11 +685,11 @@ class BJLG_Admin_Advanced {
             $details['resolution_status'] = $resolution_status;
             $details['resolution_status_label'] = $this->get_resolution_status_label($resolution_status);
 
-            if (!empty($entry['resolution_summary'])) {
-                $details['resolution_summary'] = function_exists('sanitize_textarea_field')
-                    ? sanitize_textarea_field((string) $entry['resolution_summary'])
-                    : sanitize_text_field((string) $entry['resolution_summary']);
-            }
+            $resolution_summary = isset($entry['resolution_summary']) ? (string) $entry['resolution_summary'] : '';
+            $resolution_actions = isset($entry['resolution_actions']) && is_array($entry['resolution_actions'])
+                ? $entry['resolution_actions']
+                : [];
+            $reminders = isset($entry['reminders']) && is_array($entry['reminders']) ? $entry['reminders'] : [];
 
             if ($resolution_payload) {
                 $details['acknowledged_relative'] = $resolution_payload['acknowledged_relative'] ?? '';
@@ -678,13 +697,11 @@ class BJLG_Admin_Advanced {
                 $details['resolved_relative'] = $resolution_payload['resolved_relative'] ?? '';
                 $details['resolved_formatted'] = $resolution_payload['resolved_formatted'] ?? '';
                 $details['resolution_steps'] = $resolution_payload['steps'] ?? [];
-                if (empty($details['resolution_summary']) && !empty($resolution_payload['steps']) && is_array($resolution_payload['steps'])) {
-                    $summary = BJLG_Notification_Queue::summarize_resolution_steps($resolution_payload['steps']);
-                    if ($summary !== '') {
-                        $details['resolution_summary'] = function_exists('sanitize_textarea_field')
-                            ? sanitize_textarea_field($summary)
-                            : sanitize_text_field($summary);
-                    }
+                if (!empty($resolution_payload['summary'])) {
+                    $resolution_summary = (string) $resolution_payload['summary'];
+                }
+                if (!empty($resolution_payload['actions']) && is_array($resolution_payload['actions'])) {
+                    $resolution_actions = $resolution_payload['actions'];
                 }
             } elseif (!empty($entry['resolution']) && is_array($entry['resolution'])) {
                 $acknowledged = isset($entry['resolution']['acknowledged_at']) ? (int) $entry['resolution']['acknowledged_at'] : 0;
@@ -706,6 +723,65 @@ class BJLG_Admin_Advanced {
                 if (!empty($entry['resolution']['steps']) && is_array($entry['resolution']['steps'])) {
                     $details['resolution_steps'] = $entry['resolution']['steps'];
                 }
+                if (!empty($entry['resolution']['summary']) && is_string($entry['resolution']['summary'])) {
+                    $resolution_summary = (string) $entry['resolution']['summary'];
+                }
+                if (!empty($entry['resolution']['actions']) && is_array($entry['resolution']['actions'])) {
+                    $resolution_actions = $entry['resolution']['actions'];
+                }
+            }
+
+            if ($resolution_summary !== '') {
+                if (function_exists('sanitize_textarea_field')) {
+                    $details['resolution_summary'] = sanitize_textarea_field($resolution_summary);
+                } else {
+                    $details['resolution_summary'] = sanitize_text_field($resolution_summary);
+                }
+            }
+
+            if (!empty($resolution_actions)) {
+                $sanitized_actions = [];
+                foreach ($resolution_actions as $action_line) {
+                    if (!is_string($action_line)) {
+                        continue;
+                    }
+
+                    if (function_exists('sanitize_textarea_field')) {
+                        $sanitized_actions[] = sanitize_textarea_field($action_line);
+                    } else {
+                        $sanitized_actions[] = sanitize_text_field($action_line);
+                    }
+                }
+
+                if (!empty($sanitized_actions)) {
+                    $details['resolution_actions'] = $sanitized_actions;
+                }
+            }
+
+            $reminder_attempts = isset($reminders['attempts']) ? (int) $reminders['attempts'] : 0;
+            if ($reminder_attempts > 0) {
+                $details['reminder_attempts'] = $reminder_attempts;
+            }
+
+            $reminder_label = '';
+            if (!empty($reminders)) {
+                $active = !isset($reminders['active']) || (bool) $reminders['active'];
+                $next_at = isset($reminders['next_at']) ? (int) $reminders['next_at'] : 0;
+
+                if ($active && $next_at > 0) {
+                    [$reminder_formatted, $reminder_relative] = $this->format_timestamp_pair($next_at, $now);
+                    if ($reminder_relative !== '') {
+                        $reminder_label = sprintf(__('Prochain rappel %s', 'backup-jlg'), $reminder_relative);
+                    } elseif ($reminder_formatted !== '') {
+                        $reminder_label = sprintf(__('Prochain rappel le %s', 'backup-jlg'), $reminder_formatted);
+                    }
+                } elseif (!$active) {
+                    $reminder_label = __('Rappels désactivés', 'backup-jlg');
+                }
+            }
+
+            if ($reminder_label !== '') {
+                $details['reminder_label'] = $reminder_label;
             }
 
             $formatted[] = [
