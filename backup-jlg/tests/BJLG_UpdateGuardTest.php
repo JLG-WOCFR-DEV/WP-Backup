@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 require_once __DIR__ . '/../includes/class-bjlg-debug.php';
 require_once __DIR__ . '/../includes/class-bjlg-settings.php';
 require_once __DIR__ . '/../includes/class-bjlg-backup.php';
+require_once __DIR__ . '/../includes/class-bjlg-notification-queue.php';
 require_once __DIR__ . '/../includes/class-bjlg-update-guard.php';
 
 if (!class_exists('BJLG_Test_BackupStub')) {

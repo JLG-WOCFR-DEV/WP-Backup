@@ -156,9 +156,23 @@ class BJLG_Settings {
         'update_guard' => [
             'enabled' => true,
             'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'targets' => [
+                'core' => true,
+                'plugin' => true,
+                'theme' => true,
+            ],
             'reminder' => [
                 'enabled' => false,
                 'message' => 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.',
+                'channels' => [
+                    'notification' => [
+                        'enabled' => false,
+                    ],
+                    'email' => [
+                        'enabled' => false,
+                        'recipients' => '',
+                    ],
+                ],
             ],
         ],
         'performance' => [
@@ -627,7 +641,16 @@ class BJLG_Settings {
             }
 
             // --- Snapshot pré-mise à jour ---
-            $update_guard_fields = ['update_guard_enabled', 'update_guard_components', 'update_guard_reminder_enabled', 'update_guard_reminder_message'];
+            $update_guard_fields = [
+                'update_guard_enabled',
+                'update_guard_components',
+                'update_guard_targets',
+                'update_guard_reminder_enabled',
+                'update_guard_reminder_message',
+                'update_guard_reminder_channel_notification',
+                'update_guard_reminder_channel_email',
+                'update_guard_reminder_email_recipients',
+            ];
             $update_guard_submitted = false;
             foreach ($update_guard_fields as $field) {
                 if (array_key_exists($field, $_POST)) {
@@ -649,12 +672,42 @@ class BJLG_Settings {
                     $components[] = $key;
                 }
 
+                $raw_targets = isset($_POST['update_guard_targets']) ? (array) $_POST['update_guard_targets'] : [];
+                $sanitized_targets = array_map('sanitize_key', $raw_targets);
+                $targets = [];
+                $allowed_targets = ['core', 'plugin', 'theme'];
+                foreach ($allowed_targets as $target_key) {
+                    $targets[$target_key] = in_array($target_key, $sanitized_targets, true);
+                }
+
+                $reminder_message = isset($_POST['update_guard_reminder_message'])
+                    ? sanitize_text_field(wp_unslash($_POST['update_guard_reminder_message']))
+                    : '';
+
+                $email_recipients = isset($_POST['update_guard_reminder_email_recipients'])
+                    ? sanitize_textarea_field(wp_unslash($_POST['update_guard_reminder_email_recipients']))
+                    : '';
+
                 $update_guard_settings = [
                     'enabled' => array_key_exists('update_guard_enabled', $_POST) ? $this->to_bool(wp_unslash($_POST['update_guard_enabled'])) : false,
                     'components' => $components,
+                    'targets' => $targets,
                     'reminder' => [
                         'enabled' => array_key_exists('update_guard_reminder_enabled', $_POST) ? $this->to_bool(wp_unslash($_POST['update_guard_reminder_enabled'])) : false,
-                        'message' => isset($_POST['update_guard_reminder_message']) ? sanitize_text_field(wp_unslash($_POST['update_guard_reminder_message'])) : '',
+                        'message' => $reminder_message,
+                        'channels' => [
+                            'notification' => [
+                                'enabled' => array_key_exists('update_guard_reminder_channel_notification', $_POST)
+                                    ? $this->to_bool(wp_unslash($_POST['update_guard_reminder_channel_notification']))
+                                    : false,
+                            ],
+                            'email' => [
+                                'enabled' => array_key_exists('update_guard_reminder_channel_email', $_POST)
+                                    ? $this->to_bool(wp_unslash($_POST['update_guard_reminder_channel_email']))
+                                    : false,
+                                'recipients' => $email_recipients,
+                            ],
+                        ],
                     ],
                 ];
 
@@ -1619,6 +1672,15 @@ class BJLG_Settings {
                         $sanitized['components'] = $components;
                     }
 
+                    if (array_key_exists('targets', $value) && is_array($value['targets'])) {
+                        $allowed_targets = ['core', 'plugin', 'theme'];
+                        $targets = [];
+                        foreach ($allowed_targets as $target_key) {
+                            $targets[$target_key] = !empty($value['targets'][$target_key]);
+                        }
+                        $sanitized['targets'] = $targets;
+                    }
+
                     if (isset($value['reminder']) && is_array($value['reminder'])) {
                         $reminder = $value['reminder'];
                         if (array_key_exists('enabled', $reminder)) {
@@ -1626,6 +1688,23 @@ class BJLG_Settings {
                         }
                         if (array_key_exists('message', $reminder)) {
                             $sanitized['reminder']['message'] = sanitize_text_field((string) $reminder['message']);
+                        }
+
+                        if (isset($reminder['channels']) && is_array($reminder['channels'])) {
+                            $channels = $sanitized['reminder']['channels'];
+
+                            if (isset($reminder['channels']['notification']) && is_array($reminder['channels']['notification'])) {
+                                $channels['notification']['enabled'] = $this->to_bool($reminder['channels']['notification']['enabled'] ?? false);
+                            }
+
+                            if (isset($reminder['channels']['email']) && is_array($reminder['channels']['email'])) {
+                                $channels['email']['enabled'] = $this->to_bool($reminder['channels']['email']['enabled'] ?? false);
+                                if (array_key_exists('recipients', $reminder['channels']['email'])) {
+                                    $channels['email']['recipients'] = sanitize_textarea_field((string) $reminder['channels']['email']['recipients']);
+                                }
+                            }
+
+                            $sanitized['reminder']['channels'] = $channels;
                         }
                     }
                 }
