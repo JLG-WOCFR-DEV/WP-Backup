@@ -193,12 +193,16 @@ class BJLG_Notification_Queue {
                 continue;
             }
 
-            $resolution = isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : [];
-            $resolution_summary = isset($resolution['summary']) ? (string) $resolution['summary'] : '';
-            $resolution_actions = isset($resolution['actions']) && is_array($resolution['actions'])
-                ? array_values(array_filter(array_map('strval', $resolution['actions'])))
+            $resolution_raw = isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : [];
+            $resolution_payload = self::normalize_resolution($resolution_raw);
+            $resolution_summary = isset($resolution_payload['summary']) ? (string) $resolution_payload['summary'] : '';
+            $resolution_actions = isset($resolution_payload['actions']) && is_array($resolution_payload['actions'])
+                ? array_values(array_filter(array_map('strval', $resolution_payload['actions'])))
                 : [];
-            $resolution_status = self::determine_resolution_status($entry, $resolution);
+            $resolution_steps = isset($resolution_payload['steps']) && is_array($resolution_payload['steps'])
+                ? $resolution_payload['steps']
+                : [];
+            $resolution_status = self::determine_resolution_status($entry, $resolution_payload);
 
             if (!isset($snapshot['ack_status_counts'][$resolution_status])) {
                 $snapshot['ack_status_counts'][$resolution_status] = 0;
@@ -267,6 +271,8 @@ class BJLG_Notification_Queue {
                 'resolution_status' => $resolution_status,
                 'resolution_summary' => $resolution_summary,
                 'resolution_actions' => $resolution_actions,
+                'resolution_steps' => $resolution_steps,
+                'resolution' => $resolution_payload,
                 'reminders' => [
                     'next_at' => $reminder_next,
                     'attempts' => isset($reminders['attempts']) ? (int) $reminders['attempts'] : 0,
@@ -597,6 +603,11 @@ class BJLG_Notification_Queue {
                     $channel['resolution_notes'] = $sanitized_notes;
                 }
 
+                $channel['status'] = 'completed';
+                $channel['completed_at'] = $now;
+                $channel['next_attempt_at'] = 0;
+                unset($channel['last_error'], $channel['last_error_at']);
+
                 if (empty($entry['acknowledged_at'])) {
                     $entry['acknowledged_at'] = $now;
                 }
@@ -622,6 +633,8 @@ class BJLG_Notification_Queue {
                 $entry['resolution']['resolved_at'] = $now;
 
                 $entry['updated_at'] = $now;
+                $entry['next_attempt_at'] = 0;
+                $entry['last_error'] = '';
                 self::refresh_resolution_metadata($entry);
                 $updated = true;
                 break;
@@ -634,6 +647,7 @@ class BJLG_Notification_Queue {
                     if (empty($entry['resolved_at'])) {
                         $entry['resolved_at'] = $now;
                     }
+                    $entry['next_attempt_at'] = 0;
                 }
 
                 $entry_reference = $entry;
@@ -712,6 +726,11 @@ class BJLG_Notification_Queue {
                     if ($sanitized_notes !== '') {
                         $channel['resolution_notes'] = $sanitized_notes;
                     }
+
+                    $channel['status'] = 'completed';
+                    $channel['completed_at'] = $now;
+                    $channel['next_attempt_at'] = 0;
+                    unset($channel['last_error'], $channel['last_error_at']);
                 }
                 unset($channel);
             }
@@ -725,6 +744,8 @@ class BJLG_Notification_Queue {
             $entry['resolution']['resolved_at'] = $now;
 
             $entry['updated_at'] = $now;
+            $entry['next_attempt_at'] = 0;
+            $entry['last_error'] = '';
             self::refresh_resolution_metadata($entry);
             $entry_reference = $entry;
             $updated = true;
