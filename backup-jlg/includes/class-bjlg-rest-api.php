@@ -268,6 +268,13 @@ class BJLG_REST_API {
             'args' => $this->merge_site_args(),
         ]);
 
+        register_rest_route(self::API_NAMESPACE, '/monitoring/remote-purge', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [$this, 'get_remote_purge_monitoring'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args(),
+        ]);
+
         // Routes : Statistiques
         register_rest_route(self::API_NAMESPACE, '/stats', [
             'methods' => 'GET',
@@ -2634,6 +2641,40 @@ class BJLG_REST_API {
                 'status' => $overall_status,
                 'checks' => $results,
                 'timestamp' => current_time('c')
+            ]);
+        });
+    }
+
+    public function get_remote_purge_monitoring($request)
+    {
+        return $this->with_request_site($request, function () {
+            $metrics = \bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
+            if (!is_array($metrics)) {
+                $metrics = [];
+            }
+
+            $destinations = \bjlg_get_option('bjlg_remote_purge_destination_metrics', []);
+            if (!is_array($destinations)) {
+                $destinations = [];
+            }
+
+            $overview = [];
+            if (!empty($metrics['destinations_overview']) && is_array($metrics['destinations_overview'])) {
+                $overview = $metrics['destinations_overview'];
+            }
+
+            if (empty($overview) || empty($overview['destinations'])) {
+                $overview = [
+                    'updated_at' => $destinations['updated_at'] ?? ($metrics['updated_at'] ?? 0),
+                    'destinations' => isset($destinations['destinations']) && is_array($destinations['destinations'])
+                        ? $destinations['destinations']
+                        : [],
+                ];
+            }
+
+            return rest_ensure_response([
+                'metrics' => $metrics,
+                'destinations_overview' => $overview,
             ]);
         });
     }
