@@ -1616,6 +1616,28 @@ class BJLG_Admin {
                     <canvas class="bjlg-chart-card__canvas" id="bjlg-storage-trend" aria-hidden="true"></canvas>
                     <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Aucune mesure d’utilisation disponible.', 'backup-jlg'); ?></p>
                 </article>
+
+                <article class="bjlg-chart-card" data-chart="remote-purge-forecast">
+                    <header class="bjlg-chart-card__header">
+                        <h3 class="bjlg-chart-card__title"><?php esc_html_e('Projection de saturation distante', 'backup-jlg'); ?></h3>
+                        <p class="bjlg-chart-card__subtitle" data-field="chart_remote_forecast_subtitle">
+                            <?php esc_html_e('Heures restantes avant franchissement des seuils d’alerte.', 'backup-jlg'); ?>
+                        </p>
+                    </header>
+                    <canvas class="bjlg-chart-card__canvas" id="bjlg-remote-purge-forecast" aria-hidden="true"></canvas>
+                    <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Aucune projection de capacité disponible.', 'backup-jlg'); ?></p>
+                </article>
+
+                <article class="bjlg-chart-card" data-chart="remote-purge-duration">
+                    <header class="bjlg-chart-card__header">
+                        <h3 class="bjlg-chart-card__title"><?php esc_html_e('Durées moyennes de purge', 'backup-jlg'); ?></h3>
+                        <p class="bjlg-chart-card__subtitle" data-field="chart_remote_duration_subtitle">
+                            <?php esc_html_e('Temps moyen, P95 et pic observés par destination.', 'backup-jlg'); ?>
+                        </p>
+                    </header>
+                    <canvas class="bjlg-chart-card__canvas" id="bjlg-remote-purge-duration" aria-hidden="true"></canvas>
+                    <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Aucune mesure de purge disponible.', 'backup-jlg'); ?></p>
+                </article>
             </div>
 
             <?php if (!empty($queues)): ?>
@@ -1728,8 +1750,8 @@ class BJLG_Admin {
                                     </div>
                                 <?php endif; ?>
 
-                                <?php if ($queue_key === 'remote_purge'): ?>
-                                    <p class="bjlg-queue-card__note"><?php esc_html_e('Prochaine étape : générer des prédictions de saturation et automatiser les corrections.', 'backup-jlg'); ?></p>
+                                <?php if ($queue_key === 'remote_purge' && !empty($queue['sla']['threshold_summary'])): ?>
+                                    <p class="bjlg-queue-card__note"><?php echo esc_html($queue['sla']['threshold_summary']); ?></p>
                                 <?php endif; ?>
 
                                 <ul class="bjlg-queue-card__entries" data-role="entries">

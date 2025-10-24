@@ -148,6 +148,30 @@ jQuery(function($) {
         return numeric.toLocaleString(undefined);
     };
 
+    const describeCapacityThresholds = function(thresholds) {
+        thresholds = thresholds || {};
+        const warning = Number(thresholds.warning_hours || 0);
+        const critical = Number(thresholds.critical_hours || 0);
+        const percent = Number(
+            thresholds.threshold_percent !== undefined
+                ? thresholds.threshold_percent
+                : (thresholds.threshold_ratio || 0) * 100
+        );
+
+        const parts = [];
+        if (critical > 0) {
+            parts.push(sprintf(__('Critique < %s h', 'backup-jlg'), formatNumber(critical)));
+        }
+        if (warning > 0) {
+            parts.push(sprintf(__('Avertissement < %s h', 'backup-jlg'), formatNumber(warning)));
+        }
+        if (percent > 0) {
+            parts.push(sprintf(__('Seuil %s%%', 'backup-jlg'), formatNumber(Math.round(percent))));
+        }
+
+        return parts.join(' • ');
+    };
+
     const defaults = {};
     $overview.find('[data-field]').each(function() {
         const field = $(this).data('field');
@@ -1158,6 +1182,38 @@ jQuery(function($) {
                 renderGenericQueueMetrics($sla, sla);
             }
 
+            if (key === 'remote_purge') {
+                const thresholdSummary = sla && sla.threshold_summary ? sla.threshold_summary : '';
+                const $note = $card.find('.bjlg-queue-card__note');
+
+                if (thresholdSummary) {
+                    if ($note.length) {
+                        $note.text(thresholdSummary).removeAttr('hidden').show();
+                    } else {
+                        const $insertAfter = $sla.length ? $sla : $card.find('.bjlg-queue-card__meta').last();
+                        const $newNote = $('<p/>', {
+                            'class': 'bjlg-queue-card__note',
+                            text: thresholdSummary
+                        });
+
+                        if ($insertAfter.length) {
+                            $newNote.insertAfter($insertAfter.last());
+                        } else {
+                            const $entries = $card.find('[data-role="entries"]');
+                            if ($entries.length) {
+                                $entries.first().before($newNote);
+                            } else {
+                                $card.append($newNote);
+                            }
+                        }
+
+                        $newNote.removeAttr('hidden').show();
+                    }
+                } else if ($note.length) {
+                    $note.text('').attr('hidden', 'hidden').hide();
+                }
+            }
+
             const $entries = $card.find('[data-role="entries"]');
             if (!$entries.length) {
                 return;
@@ -1555,6 +1611,108 @@ jQuery(function($) {
         return { labels: labels, usage: usage };
     };
 
+    const getRemotePurgeForecastDataset = function() {
+        const queues = state.metrics.queues || {};
+        const queue = queues.remote_purge || {};
+        const sla = queue.sla || {};
+        const projections = Array.isArray(sla.capacity_projections) ? sla.capacity_projections : [];
+        if (!projections.length) {
+            return null;
+        }
+
+        const labels = [];
+        const hours = [];
+
+        projections.forEach(function(entry) {
+            if (!entry || typeof entry !== 'object') {
+                return;
+            }
+            labels.push(entry.label || entry.id || '');
+            const hoursValue = Number(entry.hours_remaining || 0);
+            hours.push(Number.isFinite(hoursValue) ? hoursValue : 0);
+        });
+
+        return {
+            labels: labels,
+            hours: hours,
+            thresholds: sla.capacity_thresholds || {},
+            series: projections
+        };
+    };
+
+    const getRemotePurgeDurationDataset = function() {
+        const queues = state.metrics.queues || {};
+        const queue = queues.remote_purge || {};
+        const sla = queue.sla || {};
+        const series = Array.isArray(sla.duration_series) ? sla.duration_series : [];
+        if (!series.length) {
+            return null;
+        }
+
+        const labels = [];
+        const averages = [];
+        const p95 = [];
+        const peaks = [];
+
+        series.forEach(function(entry) {
+            if (!entry || typeof entry !== 'object') {
+                return;
+            }
+            labels.push(entry.label || entry.id || '');
+            const averageSeconds = Number(entry.average_seconds || 0);
+            const p95Seconds = Number(entry.p95_seconds || 0);
+            const maxSeconds = Number(entry.max_seconds || 0);
+
+            averages.push(Number.isFinite(averageSeconds) ? averageSeconds / 60 : 0);
+            p95.push(Number.isFinite(p95Seconds) ? p95Seconds / 60 : 0);
+            peaks.push(Number.isFinite(maxSeconds) ? maxSeconds / 60 : 0);
+        });
+
+        return {
+            labels: labels,
+            averages: averages,
+            p95: p95,
+            peaks: peaks,
+            series: series
+        };
+    };
+
+    const updateRemotePurgeChartSubtitles = function() {
+        const queues = state.metrics.queues || {};
+        const queue = queues.remote_purge || {};
+        const sla = queue.sla || {};
+        const thresholds = sla.capacity_thresholds || {};
+
+        const thresholdLabel = describeCapacityThresholds(thresholds);
+        const projectedLabel = sla.forecast_projected_relative || sla.forecast_projected_formatted || '';
+        const forecastParts = [];
+
+        if (thresholdLabel) {
+            forecastParts.push(thresholdLabel);
+        }
+        if (projectedLabel) {
+            forecastParts.push(sprintf(__('Saturation estimée %s', 'backup-jlg'), projectedLabel));
+        }
+
+        setField('chart_remote_forecast_subtitle', forecastParts.length ? forecastParts.join(' • ') : '');
+
+        const durationParts = [];
+        if (sla.duration_average) {
+            durationParts.push(sprintf(__('Moyenne %s', 'backup-jlg'), sla.duration_average));
+        }
+        if (sla.duration_p95) {
+            durationParts.push(sprintf(__('P95 %s', 'backup-jlg'), sla.duration_p95));
+        }
+        if (sla.duration_peak) {
+            durationParts.push(sprintf(__('Pic %s', 'backup-jlg'), sla.duration_peak));
+        }
+        if (!durationParts.length && sla.duration_last) {
+            durationParts.push(sprintf(__('Dernière purge %s', 'backup-jlg'), sla.duration_last));
+        }
+
+        setField('chart_remote_duration_subtitle', durationParts.length ? durationParts.join(' • ') : '');
+    };
+
     const updateHistoryChart = function() {
         const $card = $overview.find('[data-chart="history-trend"]');
         if (!$card.length) {
@@ -1708,6 +1866,235 @@ jQuery(function($) {
         }
     };
 
+    const updateRemotePurgeForecastChart = function() {
+        const $card = $overview.find('[data-chart="remote-purge-forecast"]');
+        if (!$card.length) {
+            return;
+        }
+
+        const dataset = getRemotePurgeForecastDataset();
+
+        if (typeof window.Chart === 'undefined' || !dataset) {
+            destroyChart('remotePurgeForecast');
+            setChartEmptyState($card, true);
+            return;
+        }
+
+        setChartEmptyState($card, false);
+
+        const canvas = $card.find('canvas')[0];
+        const ctx = canvas ? canvas.getContext('2d') : null;
+        if (!ctx) {
+            return;
+        }
+
+        const warning = Number(dataset.thresholds.warning_hours || 0);
+        const critical = Number(dataset.thresholds.critical_hours || 0);
+        const labels = dataset.labels;
+        const series = dataset.series || [];
+
+        const chartData = {
+            labels: labels,
+            datasets: [
+                {
+                    type: 'bar',
+                    label: __('Heures restantes', 'backup-jlg'),
+                    data: dataset.hours,
+                    backgroundColor: '#1d4ed8',
+                    borderColor: '#1d4ed8',
+                    borderWidth: 1,
+                },
+                {
+                    type: 'line',
+                    label: __('Seuil d’avertissement', 'backup-jlg'),
+                    data: labels.map(function() { return warning; }),
+                    borderColor: '#f59e0b',
+                    borderDash: [6, 3],
+                    borderWidth: 2,
+                    fill: false,
+                    pointRadius: 0,
+                },
+                {
+                    type: 'line',
+                    label: __('Seuil critique', 'backup-jlg'),
+                    data: labels.map(function() { return critical; }),
+                    borderColor: '#dc2626',
+                    borderDash: [4, 4],
+                    borderWidth: 2,
+                    fill: false,
+                    pointRadius: 0,
+                }
+            ]
+        };
+
+        const tooltipCallbacks = {
+            label: function(context) {
+                const entry = series[context.dataIndex] || {};
+                if (context.dataset.type === 'bar') {
+                    const hoursValue = Number(context.parsed.y || 0);
+                    const hoursLabel = entry.hours_label || sprintf(__('%s heure(s)', 'backup-jlg'), formatNumber(hoursValue.toFixed(1)));
+                    return sprintf(__('%1$s : %2$s', 'backup-jlg'), context.dataset.label, hoursLabel);
+                }
+                return sprintf(__('%1$s : %2$s h', 'backup-jlg'), context.dataset.label, formatNumber(context.parsed.y));
+            },
+            afterBody: function(contextItems) {
+                if (!contextItems.length) {
+                    return '';
+                }
+                const entry = series[contextItems[0].dataIndex] || {};
+                if (entry.projected_relative) {
+                    return sprintf(__('Projection actualisée %s', 'backup-jlg'), entry.projected_relative);
+                }
+                return '';
+            }
+        };
+
+        if (!state.charts.remotePurgeForecast) {
+            state.charts.remotePurgeForecast = new window.Chart(ctx, {
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: __('Heures', 'backup-jlg')
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top'
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: tooltipCallbacks
+                        }
+                    }
+                }
+            });
+        } else {
+            const chart = state.charts.remotePurgeForecast;
+            chart.data = chartData;
+            chart.options.plugins.tooltip.callbacks = tooltipCallbacks;
+            chart.update();
+        }
+    };
+
+    const updateRemotePurgeDurationChart = function() {
+        const $card = $overview.find('[data-chart="remote-purge-duration"]');
+        if (!$card.length) {
+            return;
+        }
+
+        const dataset = getRemotePurgeDurationDataset();
+
+        if (typeof window.Chart === 'undefined' || !dataset) {
+            destroyChart('remotePurgeDuration');
+            setChartEmptyState($card, true);
+            return;
+        }
+
+        setChartEmptyState($card, false);
+
+        const canvas = $card.find('canvas')[0];
+        const ctx = canvas ? canvas.getContext('2d') : null;
+        if (!ctx) {
+            return;
+        }
+
+        const series = dataset.series || [];
+
+        const chartData = {
+            labels: dataset.labels,
+            datasets: [
+                {
+                    label: __('Moyenne', 'backup-jlg'),
+                    data: dataset.averages,
+                    borderColor: '#2563eb',
+                    backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                    tension: 0.35,
+                    fill: false,
+                    pointRadius: 3
+                },
+                {
+                    label: __('P95', 'backup-jlg'),
+                    data: dataset.p95,
+                    borderColor: '#10b981',
+                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                    tension: 0.35,
+                    fill: false,
+                    pointRadius: 3
+                },
+                {
+                    label: __('Pic', 'backup-jlg'),
+                    data: dataset.peaks,
+                    borderColor: '#dc2626',
+                    backgroundColor: 'rgba(220, 38, 38, 0.1)',
+                    tension: 0.35,
+                    fill: false,
+                    pointRadius: 3
+                }
+            ]
+        };
+
+        const tooltipCallbacks = {
+            label: function(context) {
+                const entry = series[context.dataIndex] || {};
+                let label = context.dataset.label || '';
+                let valueLabel = '';
+                const parsedValue = Number.isFinite(context.parsed.y) ? context.parsed.y : 0;
+                const formattedValue = formatNumber(Number(parsedValue.toFixed(2)));
+                if (context.datasetIndex === 0) {
+                    valueLabel = entry.average_label || sprintf(__('%s min', 'backup-jlg'), formattedValue);
+                } else if (context.datasetIndex === 1) {
+                    valueLabel = entry.p95_label || sprintf(__('%s min', 'backup-jlg'), formattedValue);
+                } else {
+                    valueLabel = entry.max_label || sprintf(__('%s min', 'backup-jlg'), formattedValue);
+                }
+                return sprintf(__('%1$s : %2$s', 'backup-jlg'), label, valueLabel);
+            }
+        };
+
+        if (!state.charts.remotePurgeDuration) {
+            state.charts.remotePurgeDuration = new window.Chart(ctx, {
+                type: 'line',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top'
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: tooltipCallbacks
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: __('Minutes', 'backup-jlg')
+                            }
+                        }
+                    }
+                }
+            });
+        } else {
+            const chart = state.charts.remotePurgeDuration;
+            chart.data = chartData;
+            chart.options.plugins.tooltip.callbacks = tooltipCallbacks;
+            chart.update();
+        }
+    };
+
     const ensureChartsReady = typeof window.bjlgEnsureChart === 'function'
         ? window.bjlgEnsureChart
         : function() { return Promise.resolve(); };
@@ -1717,9 +2104,13 @@ jQuery(function($) {
     };
 
     const updateCharts = function() {
+        updateRemotePurgeChartSubtitles();
+
         if (!hasChartTargets()) {
             destroyChart('historyTrend');
             destroyChart('storageTrend');
+            destroyChart('remotePurgeForecast');
+            destroyChart('remotePurgeDuration');
             $overview.find('.bjlg-chart-card').each(function() {
                 setChartEmptyState($(this), true);
             });
@@ -1730,10 +2121,14 @@ jQuery(function($) {
             .then(function() {
                 updateHistoryChart();
                 updateStorageChart();
+                updateRemotePurgeForecastChart();
+                updateRemotePurgeDurationChart();
             })
             .catch(function() {
                 destroyChart('historyTrend');
                 destroyChart('storageTrend');
+                destroyChart('remotePurgeForecast');
+                destroyChart('remotePurgeDuration');
                 $overview.find('.bjlg-chart-card').each(function() {
                     setChartEmptyState($(this), true);
                 });
