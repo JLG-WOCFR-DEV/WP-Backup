@@ -173,9 +173,23 @@ class BJLG_Settings {
         'update_guard' => [
             'enabled' => true,
             'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'targets' => [
+                'core' => true,
+                'plugin' => true,
+                'theme' => true,
+            ],
             'reminder' => [
                 'enabled' => false,
                 'message' => 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.',
+                'channels' => [
+                    'notification' => [
+                        'enabled' => false,
+                    ],
+                    'email' => [
+                        'enabled' => false,
+                        'recipients' => '',
+                    ],
+                ],
             ],
         ],
         'performance' => [
@@ -187,6 +201,8 @@ class BJLG_Settings {
         'monitoring' => [
             'storage_quota_warning_threshold' => 85,
             'remote_metrics_ttl_minutes' => 15,
+            'remote_capacity_warning_hours' => 72,
+            'remote_capacity_critical_hours' => 24,
         ],
         'gdrive' => [
             'client_id' => '',
@@ -644,7 +660,16 @@ class BJLG_Settings {
             }
 
             // --- Snapshot pré-mise à jour ---
-            $update_guard_fields = ['update_guard_enabled', 'update_guard_components', 'update_guard_reminder_enabled', 'update_guard_reminder_message'];
+            $update_guard_fields = [
+                'update_guard_enabled',
+                'update_guard_components',
+                'update_guard_targets',
+                'update_guard_reminder_enabled',
+                'update_guard_reminder_message',
+                'update_guard_reminder_channel_notification',
+                'update_guard_reminder_channel_email',
+                'update_guard_reminder_email_recipients',
+            ];
             $update_guard_submitted = false;
             foreach ($update_guard_fields as $field) {
                 if (array_key_exists($field, $_POST)) {
@@ -666,12 +691,42 @@ class BJLG_Settings {
                     $components[] = $key;
                 }
 
+                $raw_targets = isset($_POST['update_guard_targets']) ? (array) $_POST['update_guard_targets'] : [];
+                $sanitized_targets = array_map('sanitize_key', $raw_targets);
+                $targets = [];
+                $allowed_targets = ['core', 'plugin', 'theme'];
+                foreach ($allowed_targets as $target_key) {
+                    $targets[$target_key] = in_array($target_key, $sanitized_targets, true);
+                }
+
+                $reminder_message = isset($_POST['update_guard_reminder_message'])
+                    ? sanitize_text_field(wp_unslash($_POST['update_guard_reminder_message']))
+                    : '';
+
+                $email_recipients = isset($_POST['update_guard_reminder_email_recipients'])
+                    ? sanitize_textarea_field(wp_unslash($_POST['update_guard_reminder_email_recipients']))
+                    : '';
+
                 $update_guard_settings = [
                     'enabled' => array_key_exists('update_guard_enabled', $_POST) ? $this->to_bool(wp_unslash($_POST['update_guard_enabled'])) : false,
                     'components' => $components,
+                    'targets' => $targets,
                     'reminder' => [
                         'enabled' => array_key_exists('update_guard_reminder_enabled', $_POST) ? $this->to_bool(wp_unslash($_POST['update_guard_reminder_enabled'])) : false,
-                        'message' => isset($_POST['update_guard_reminder_message']) ? sanitize_text_field(wp_unslash($_POST['update_guard_reminder_message'])) : '',
+                        'message' => $reminder_message,
+                        'channels' => [
+                            'notification' => [
+                                'enabled' => array_key_exists('update_guard_reminder_channel_notification', $_POST)
+                                    ? $this->to_bool(wp_unslash($_POST['update_guard_reminder_channel_notification']))
+                                    : false,
+                            ],
+                            'email' => [
+                                'enabled' => array_key_exists('update_guard_reminder_channel_email', $_POST)
+                                    ? $this->to_bool(wp_unslash($_POST['update_guard_reminder_channel_email']))
+                                    : false,
+                                'recipients' => $email_recipients,
+                            ],
+                        ],
                     ],
                 ];
 
@@ -1026,7 +1081,12 @@ class BJLG_Settings {
                 BJLG_Debug::log('Réglages de performance sauvegardés.');
             }
 
-            if (isset($_POST['storage_quota_warning_threshold']) || isset($_POST['remote_metrics_ttl_minutes'])) {
+            if (
+                isset($_POST['storage_quota_warning_threshold'])
+                || isset($_POST['remote_metrics_ttl_minutes'])
+                || isset($_POST['remote_capacity_warning_hours'])
+                || isset($_POST['remote_capacity_critical_hours'])
+            ) {
                 $monitoring_defaults = $this->default_settings['monitoring'];
                 $monitoring_settings = $this->get_option_value('bjlg_monitoring_settings', []);
                 if (!is_array($monitoring_settings)) {
@@ -1042,6 +1102,19 @@ class BJLG_Settings {
                 if (isset($_POST['remote_metrics_ttl_minutes'])) {
                     $ttl_minutes = intval(wp_unslash($_POST['remote_metrics_ttl_minutes']));
                     $monitoring_settings['remote_metrics_ttl_minutes'] = max(5, min(1440, $ttl_minutes));
+                }
+
+                if (isset($_POST['remote_capacity_warning_hours'])) {
+                    $warning_hours = intval(wp_unslash($_POST['remote_capacity_warning_hours']));
+                    $monitoring_settings['remote_capacity_warning_hours'] = max(1, min(24 * 7, $warning_hours));
+                }
+
+                if (isset($_POST['remote_capacity_critical_hours'])) {
+                    $critical_hours = intval(wp_unslash($_POST['remote_capacity_critical_hours']));
+                    $warning_reference = isset($monitoring_settings['remote_capacity_warning_hours'])
+                        ? (int) $monitoring_settings['remote_capacity_warning_hours']
+                        : 72;
+                    $monitoring_settings['remote_capacity_critical_hours'] = max(1, min($warning_reference, $critical_hours));
                 }
 
                 $this->update_option_value('bjlg_monitoring_settings', $monitoring_settings);
@@ -1672,6 +1745,15 @@ class BJLG_Settings {
                         $sanitized['components'] = $components;
                     }
 
+                    if (array_key_exists('targets', $value) && is_array($value['targets'])) {
+                        $allowed_targets = ['core', 'plugin', 'theme'];
+                        $targets = [];
+                        foreach ($allowed_targets as $target_key) {
+                            $targets[$target_key] = !empty($value['targets'][$target_key]);
+                        }
+                        $sanitized['targets'] = $targets;
+                    }
+
                     if (isset($value['reminder']) && is_array($value['reminder'])) {
                         $reminder = $value['reminder'];
                         if (array_key_exists('enabled', $reminder)) {
@@ -1679,6 +1761,23 @@ class BJLG_Settings {
                         }
                         if (array_key_exists('message', $reminder)) {
                             $sanitized['reminder']['message'] = sanitize_text_field((string) $reminder['message']);
+                        }
+
+                        if (isset($reminder['channels']) && is_array($reminder['channels'])) {
+                            $channels = $sanitized['reminder']['channels'];
+
+                            if (isset($reminder['channels']['notification']) && is_array($reminder['channels']['notification'])) {
+                                $channels['notification']['enabled'] = $this->to_bool($reminder['channels']['notification']['enabled'] ?? false);
+                            }
+
+                            if (isset($reminder['channels']['email']) && is_array($reminder['channels']['email'])) {
+                                $channels['email']['enabled'] = $this->to_bool($reminder['channels']['email']['enabled'] ?? false);
+                                if (array_key_exists('recipients', $reminder['channels']['email'])) {
+                                    $channels['email']['recipients'] = sanitize_textarea_field((string) $reminder['channels']['email']['recipients']);
+                                }
+                            }
+
+                            $sanitized['reminder']['channels'] = $channels;
                         }
                     }
                 }
@@ -2664,6 +2763,7 @@ class BJLG_Settings {
             'day_of_month' => 1,
             'time' => '23:59',
             'custom_cron' => '',
+            'macro' => '',
             'components' => ['db', 'plugins', 'themes', 'uploads'],
             'encrypt' => false,
             'incremental' => false,
@@ -2772,6 +2872,14 @@ class BJLG_Settings {
             $custom_cron = self::sanitize_cron_expression($entry['custom_cron']);
         }
 
+        $macro = '';
+        if (isset($entry['macro'])) {
+            $candidate_macro = sanitize_key((string) $entry['macro']);
+            if ($candidate_macro !== '' && self::get_schedule_macro_by_id($candidate_macro)) {
+                $macro = $candidate_macro;
+            }
+        }
+
         $previous_recurrence = '';
         if (isset($entry['previous_recurrence'])) {
             $maybe_previous = sanitize_key((string) $entry['previous_recurrence']);
@@ -2816,6 +2924,7 @@ class BJLG_Settings {
             'time' => $time,
             'previous_recurrence' => $previous_recurrence,
             'custom_cron' => $recurrence === 'custom' ? $custom_cron : '',
+            'macro' => $recurrence === 'custom' ? $macro : '',
             'components' => array_values($components),
             'encrypt' => self::to_bool_static($entry['encrypt'] ?? $defaults['encrypt']),
             'incremental' => self::to_bool_static($entry['incremental'] ?? $defaults['incremental']),
@@ -2899,6 +3008,136 @@ class BJLG_Settings {
         }
 
         return array_values($sanitized);
+    }
+
+    /**
+     * Retourne la liste normalisée des macros de planification.
+     */
+    public static function get_schedule_macro_catalog(): array {
+        $catalog = [
+            [
+                'id' => 'hourly_guard',
+                'label' => __('Sauvegarde horaire continue', 'backup-jlg'),
+                'description' => __('Capture la base et les extensions à chaque heure pleine pour sécuriser les mises à jour fréquentes.', 'backup-jlg'),
+                'expression' => '0 * * * *',
+                'category' => 'hourly',
+                'adjustments' => [
+                    'label' => __('Sauvegarde horaire', 'backup-jlg'),
+                    'components' => ['db', 'plugins'],
+                    'incremental' => false,
+                    'encrypt' => true,
+                    'post_checks' => ['checksum'],
+                ],
+            ],
+            [
+                'id' => 'pre_deploy',
+                'label' => __('Snapshot pré-déploiement', 'backup-jlg'),
+                'description' => __('Renforce la fenêtre de changement en déclenchant un snapshot toutes les dix minutes.', 'backup-jlg'),
+                'expression' => '*/10 * * * *',
+                'category' => 'change-window',
+                'adjustments' => [
+                    'label' => __('Snapshot pré-déploiement', 'backup-jlg'),
+                    'components' => ['db', 'plugins', 'themes'],
+                    'incremental' => false,
+                    'encrypt' => true,
+                    'post_checks' => ['checksum', 'dry_run'],
+                ],
+            ],
+            [
+                'id' => 'weekend_snapshot',
+                'label' => __('Snapshot week-end', 'backup-jlg'),
+                'description' => __('Capture complète le samedi et le dimanche à l’aube pour sécuriser les contenus publiés.', 'backup-jlg'),
+                'expression' => '0 5 * * sat,sun',
+                'category' => 'weekend',
+                'adjustments' => [
+                    'label' => __('Snapshot week-end', 'backup-jlg'),
+                    'components' => ['db', 'uploads'],
+                    'incremental' => true,
+                    'encrypt' => false,
+                    'post_checks' => ['checksum'],
+                ],
+            ],
+        ];
+
+        $filtered = apply_filters('bjlg_schedule_macros', $catalog);
+
+        $sanitized = [];
+        if (is_array($filtered)) {
+            foreach ($filtered as $entry) {
+                if (!is_array($entry) || empty($entry['id']) || empty($entry['expression'])) {
+                    continue;
+                }
+                $id = sanitize_key((string) $entry['id']);
+                if ($id === '') {
+                    continue;
+                }
+                $expression = self::sanitize_cron_expression($entry['expression']);
+                if ($expression === '') {
+                    continue;
+                }
+                $sanitized[$id] = [
+                    'id' => $id,
+                    'label' => isset($entry['label']) ? sanitize_text_field($entry['label']) : $id,
+                    'description' => isset($entry['description']) ? sanitize_text_field($entry['description']) : '',
+                    'expression' => $expression,
+                    'category' => isset($entry['category']) ? sanitize_key((string) $entry['category']) : 'custom',
+                    'adjustments' => self::sanitize_schedule_macro_adjustments($entry['adjustments'] ?? []),
+                ];
+            }
+        }
+
+        return array_values($sanitized);
+    }
+
+    /**
+     * Retourne la macro correspondant à l’identifiant demandé.
+     */
+    public static function get_schedule_macro_by_id(string $id)
+    {
+        $catalog = self::get_schedule_macro_catalog();
+        foreach ($catalog as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            if (($entry['id'] ?? '') === $id) {
+                return $entry;
+            }
+        }
+
+        return null;
+    }
+
+    private static function sanitize_schedule_macro_adjustments($raw): array
+    {
+        $defaults = [
+            'label' => '',
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'incremental' => false,
+            'encrypt' => false,
+            'post_checks' => self::get_default_backup_post_checks(),
+        ];
+
+        $adjustments = is_array($raw) ? $raw : [];
+
+        $label = isset($adjustments['label']) ? sanitize_text_field($adjustments['label']) : '';
+        $components = self::sanitize_schedule_components($adjustments['components'] ?? $defaults['components']);
+        if (empty($components)) {
+            $components = $defaults['components'];
+        }
+        $incremental = self::to_bool_static($adjustments['incremental'] ?? $defaults['incremental']);
+        $encrypt = self::to_bool_static($adjustments['encrypt'] ?? $defaults['encrypt']);
+        $post_checks = self::sanitize_post_checks(
+            $adjustments['post_checks'] ?? $defaults['post_checks'],
+            self::get_default_backup_post_checks()
+        );
+
+        return [
+            'label' => $label,
+            'components' => array_values($components),
+            'incremental' => $incremental,
+            'encrypt' => $encrypt,
+            'post_checks' => $post_checks,
+        ];
     }
 
     private static function generate_schedule_id(): string {

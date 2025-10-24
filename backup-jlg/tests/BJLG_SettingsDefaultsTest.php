@@ -130,8 +130,19 @@ final class BJLG_SettingsDefaultsTest extends TestCase
         $this->assertTrue($stored['enabled']);
         $this->assertArrayHasKey('components', $stored);
         $this->assertSame(['db', 'plugins', 'themes', 'uploads'], $stored['components']);
+        $this->assertArrayHasKey('targets', $stored);
+        $this->assertSame([
+            'core' => true,
+            'plugin' => true,
+            'theme' => true,
+        ], $stored['targets']);
         $this->assertArrayHasKey('reminder', $stored);
         $this->assertFalse($stored['reminder']['enabled']);
         $this->assertNotSame('', $stored['reminder']['message']);
+        $this->assertArrayHasKey('channels', $stored['reminder']);
+        $this->assertSame([
+            'notification' => ['enabled' => false],
+            'email' => ['enabled' => false, 'recipients' => ''],
+        ], $stored['reminder']['channels']);
     }
 }
