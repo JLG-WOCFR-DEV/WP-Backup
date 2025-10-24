@@ -17,7 +17,8 @@ class BJLG_Scheduler {
 
     const SCHEDULE_HOOK = 'bjlg_scheduled_backup_hook';
     const SANDBOX_VALIDATION_HOOK = 'bjlg_sandbox_validation_hook';
-    const RESTORE_CHECK_HOOK = 'bjlg_scheduled_restore_check';
+    private const SANDBOX_SCHEDULE_OPTION = 'bjlg_sandbox_schedule';
+    private const SANDBOX_SNAPSHOT_OPTION = 'bjlg_sandbox_validation_snapshot';
     const MIN_CUSTOM_CRON_INTERVAL = 5 * MINUTE_IN_SECONDS;
     const EVENT_CRON_HOOK = 'bjlg_process_event_triggers';
 
@@ -104,16 +105,19 @@ class BJLG_Scheduler {
         self::instance()->maybe_schedule_sandbox_validation();
     }
 
-    /**
-     * Callback CRON pour la validation sandbox.
-     */
-    public static function run_sandbox_validation_job(): void {
-        self::instance()->execute_sandbox_validation_job();
-    }
+        if (isset($events[$hook]) && is_array($events[$hook])) {
+            foreach ($events[$hook] as $timestamp => $event_group) {
+                foreach ($event_group as $event) {
+                    if (isset($event['hook']) && $event['hook'] === $hook) {
+                        wp_unschedule_event($timestamp, $hook, $event['args'] ?? []);
+                    }
+                }
+            }
+        }
 
-    public static function run_scheduled_restore_check_job(): void
-    {
-        self::instance()->run_scheduled_restore_check();
+        while ($timestamp = wp_next_scheduled($hook)) { // phpcs:ignore Squiz.PHP.DisallowMultipleAssignments
+            wp_unschedule_event($timestamp, $hook);
+        }
     }
 
     /**
@@ -231,19 +235,18 @@ class BJLG_Scheduler {
         } catch (Throwable $throwable) {
             $status = 'failure';
             $message = 'Validation sandbox échouée : ' . $throwable->getMessage();
-            $result['status'] = 'failure';
-            $result['message'] = $message;
-            $metadata = [
-                'error' => $throwable->getMessage(),
-                'triggered_at' => time(),
-                'source' => $source,
+            $history_metadata = [
+                'report_summary' => [
+                    'status' => 'failure',
+                    'message' => $throwable->getMessage(),
+                    'log_excerpt' => [],
+                    'started_at' => time(),
+                    'components' => $settings['components'] ?? [],
+                ],
+                'source' => 'scheduler',
             ];
-
-            if (!empty($context)) {
-                $metadata['context'] = $context;
-            }
-
-            BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $metadata);
+            BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $history_metadata);
+            $this->update_sandbox_snapshot($settings, $history_metadata);
 
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log('[Sandbox validation job] ' . $throwable->getMessage(), 'error');
@@ -674,7 +677,7 @@ class BJLG_Scheduler {
         // Hook Cron pour l'exécution automatique
         add_action(self::SCHEDULE_HOOK, [$this, 'run_scheduled_backup']);
         add_action(self::EVENT_CRON_HOOK, [$this, 'process_event_trigger_queue'], 10, 1);
-        add_action(self::RESTORE_CHECK_HOOK, [$this, 'run_scheduled_restore_check']);
+        add_action('admin_post_bjlg_save_sandbox_schedule', [$this, 'handle_save_sandbox_schedule']);
 
         // Filtres pour les intervalles personnalisés
         add_filter('cron_schedules', [$this, 'add_custom_schedules']);
@@ -899,45 +902,42 @@ class BJLG_Scheduler {
         ]);
     }
 
-    public function handle_save_restore_check() {
+    public function handle_save_sandbox_schedule(): void
+    {
         if (!\bjlg_can_manage_backups()) {
-            wp_send_json_error(['message' => 'Permission refusée.']);
+            wp_die(__('Permission refusée.', 'backup-jlg'), '', ['response' => 403]);
         }
 
-        check_ajax_referer('bjlg_nonce', 'nonce');
-
-        $posted = wp_unslash($_POST);
-        $raw_settings = $posted['settings'] ?? [];
-
-        if (is_string($raw_settings)) {
-            $decoded = json_decode($raw_settings, true);
-            if (is_array($decoded)) {
-                $raw_settings = $decoded;
-            }
+        $nonce = isset($_POST['_wpnonce']) ? (string) $_POST['_wpnonce'] : '';
+        if (function_exists('wp_verify_nonce') && !wp_verify_nonce($nonce, 'bjlg_save_sandbox_schedule')) {
+            wp_die(__('Jeton de sécurité invalide.', 'backup-jlg'), '', ['response' => 403]);
         }
 
-        $settings = self::sanitize_restore_check_settings($raw_settings);
-        $this->save_restore_check_settings($settings);
+        $raw = wp_unslash($_POST);
+        $enabled = !empty($raw['bjlg_sandbox_enabled']);
+        $recurrence = isset($raw['bjlg_sandbox_recurrence'])
+            ? sanitize_key((string) $raw['bjlg_sandbox_recurrence'])
+            : 'weekly';
 
-        $next_run = $this->schedule_restore_check_event($settings, true);
-
-        $next_run_formatted = null;
-        $next_run_relative = null;
-        if ($next_run) {
-            $next_run_formatted = get_date_from_gmt($this->format_gmt_datetime($next_run), 'd/m/Y H:i:s');
-            if (function_exists('human_time_diff')) {
-                $next_run_relative = human_time_diff(time(), $next_run);
-            }
+        if (!$enabled) {
+            $recurrence = 'disabled';
         }
 
-        wp_send_json_success([
-            'message' => __('Planification de validation enregistrée.', 'backup-jlg'),
-            'settings' => $settings,
-            'next_run' => $next_run,
-            'next_run_formatted' => $next_run_formatted,
-            'next_run_relative' => $next_run_relative,
-            'state' => $this->get_restore_check_state(),
-        ]);
+        $settings = $this->get_sandbox_schedule_settings();
+        $settings['enabled'] = $enabled;
+        $settings['recurrence'] = $recurrence;
+
+        $sanitized = $this->sanitize_sandbox_schedule_settings($settings);
+        $this->save_sandbox_schedule_settings($sanitized);
+        $this->sync_sandbox_validation_schedule($sanitized);
+
+        $redirect = isset($raw['redirect_to']) && is_string($raw['redirect_to'])
+            ? esc_url_raw($raw['redirect_to'])
+            : admin_url('admin.php?page=backup-jlg');
+        $redirect = add_query_arg('sandbox_schedule_updated', '1', $redirect);
+
+        wp_safe_redirect($redirect);
+        exit;
     }
     
     /**
@@ -1222,91 +1222,12 @@ class BJLG_Scheduler {
     }
 
     private function calculate_custom_cron_next_run($expression, \DateTimeImmutable $now) {
-        $expression = trim((string) $expression);
-        if ($expression === '') {
+        $field_sets = $this->extract_cron_field_sets($expression);
+        if ($field_sets === null) {
             return null;
         }
 
-        $parts = preg_split('/\s+/', $expression);
-        if (!is_array($parts) || count($parts) !== 5) {
-            return null;
-        }
-
-        list($minute_field, $hour_field, $dom_field, $month_field, $dow_field) = $parts;
-
-        $month_names = [
-            'jan' => 1,
-            'feb' => 2,
-            'mar' => 3,
-            'apr' => 4,
-            'may' => 5,
-            'jun' => 6,
-            'jul' => 7,
-            'aug' => 8,
-            'sep' => 9,
-            'oct' => 10,
-            'nov' => 11,
-            'dec' => 12,
-        ];
-        $dow_names = [
-            'sun' => 0,
-            'mon' => 1,
-            'tue' => 2,
-            'wed' => 3,
-            'thu' => 4,
-            'fri' => 5,
-            'sat' => 6,
-        ];
-
-        $minutes = $this->parse_cron_field($minute_field, 0, 59);
-        $hours = $this->parse_cron_field($hour_field, 0, 23);
-        $months = $this->parse_cron_field($month_field, 1, 12, $month_names);
-        $dom_any = $this->is_cron_field_wildcard($dom_field);
-        $dow_any = $this->is_cron_field_wildcard($dow_field);
-        $dom_values = $dom_any ? [] : $this->parse_cron_field($dom_field, 1, 31);
-        $dow_values = $dow_any ? [] : $this->parse_cron_field($dow_field, 0, 6, $dow_names);
-
-        if (empty($minutes) || empty($hours) || empty($months)) {
-            return null;
-        }
-
-        if (!$dom_any && empty($dom_values)) {
-            return null;
-        }
-
-        if (!$dow_any && empty($dow_values)) {
-            return null;
-        }
-
-        $candidate = $now->setTime((int) $now->format('H'), (int) $now->format('i'), 0)->modify('+1 minute');
-
-        for ($i = 0; $i < 525600; $i++) {
-            $minute = (int) $candidate->format('i');
-            if (!in_array($minute, $minutes, true)) {
-                $candidate = $candidate->modify('+1 minute');
-                continue;
-            }
-
-            $hour = (int) $candidate->format('H');
-            if (!in_array($hour, $hours, true)) {
-                $candidate = $candidate->modify('+1 minute');
-                continue;
-            }
-
-            $month = (int) $candidate->format('n');
-            if (!in_array($month, $months, true)) {
-                $candidate = $candidate->modify('+1 minute');
-                continue;
-            }
-
-            if ($this->cron_day_matches($candidate, $dom_values, $dow_values, $dom_any, $dow_any)) {
-                return $candidate;
-            }
-
-            $candidate = $candidate->modify('+1 minute');
-        }
-
-        return null;
+        return $this->calculate_next_run_from_sets($field_sets, $now);
     }
 
     public static function analyze_custom_cron_expression($expression) {
@@ -1638,12 +1559,16 @@ class BJLG_Scheduler {
         }
 
         $now = $this->get_current_time();
-        $runs = $this->compute_next_custom_runs($sanitized, $now, 5);
+        $diagnostics = [];
+        $runs = $this->compute_next_custom_runs($sanitized, $now, 5, $diagnostics);
 
         if (empty($runs)) {
+            $details = isset($diagnostics['errors']) && is_array($diagnostics['errors']) ? $diagnostics['errors'] : [];
+
             return new \WP_Error(
                 'invalid_schedule_cron',
-                __('Impossible de déterminer la prochaine exécution pour cette expression Cron.', 'backup-jlg')
+                __('Impossible de déterminer la prochaine exécution pour cette expression Cron.', 'backup-jlg'),
+                ['details' => $details]
             );
         }
 
@@ -1662,14 +1587,16 @@ class BJLG_Scheduler {
         $min_interval = !empty($intervals) ? min($intervals) : null;
         $max_interval = !empty($intervals) ? max($intervals) : null;
 
-        $warnings = [];
-        $errors = [];
+        $warnings = $diagnostics['warnings'] ?? [];
+        $errors = $diagnostics['errors'] ?? [];
 
         if ($min_interval !== null && $min_interval < self::MIN_CUSTOM_CRON_INTERVAL) {
+            $suggestion = $this->suggest_cron_interval($min_interval);
             $errors[] = sprintf(
-                __('L’expression Cron lance une sauvegarde toutes les %1$s. Choisissez un intervalle d’au moins %2$s.', 'backup-jlg'),
+                __('L’expression Cron lance une sauvegarde toutes les %1$s. Choisissez un intervalle d’au moins %2$s (ex. “%3$s”).', 'backup-jlg'),
                 $this->format_interval_label($min_interval),
-                $this->format_interval_label(self::MIN_CUSTOM_CRON_INTERVAL)
+                $this->format_interval_label(self::MIN_CUSTOM_CRON_INTERVAL),
+                $suggestion
             );
         }
 
@@ -1678,18 +1605,31 @@ class BJLG_Scheduler {
             'runs' => $runs,
             'min_interval' => $min_interval,
             'max_interval' => $max_interval,
-            'warnings' => $warnings,
-            'errors' => $errors,
+            'warnings' => array_values(array_unique($warnings)),
+            'errors' => array_values(array_unique($errors)),
         ];
     }
 
-    private function compute_next_custom_runs($expression, \DateTimeImmutable $now, int $limit = 5) {
+    private function compute_next_custom_runs($expression, \DateTimeImmutable $now, int $limit = 5, array &$diagnostics = null) {
         $runs = [];
         $search_from = $now;
         $previous_timestamp = null;
 
+        $warnings = [];
+        $errors = [];
+        $field_sets = $this->extract_cron_field_sets($expression, $warnings, $errors);
+
+        if (is_array($diagnostics)) {
+            $diagnostics['warnings'] = $warnings;
+            $diagnostics['errors'] = $errors;
+        }
+
+        if ($field_sets === null) {
+            return [];
+        }
+
         for ($i = 0; $i < $limit; $i++) {
-            $next = $this->calculate_custom_cron_next_run($expression, $search_from);
+            $next = $this->calculate_next_run_from_sets($field_sets, $search_from);
             if (!$next instanceof \DateTimeImmutable) {
                 break;
             }
@@ -1705,6 +1645,262 @@ class BJLG_Scheduler {
         }
 
         return $runs;
+    }
+
+    private function calculate_next_run_from_sets(array $sets, \DateTimeImmutable $now) {
+        $minutes = isset($sets['minutes']) ? (array) $sets['minutes'] : [];
+        $hours = isset($sets['hours']) ? (array) $sets['hours'] : [];
+        $months = isset($sets['months']) ? (array) $sets['months'] : [];
+        $dom_values = isset($sets['dom_values']) ? (array) $sets['dom_values'] : [];
+        $dow_values = isset($sets['dow_values']) ? (array) $sets['dow_values'] : [];
+        $dom_any = !empty($sets['dom_any']);
+        $dow_any = !empty($sets['dow_any']);
+
+        if (empty($minutes) || empty($hours) || empty($months)) {
+            return null;
+        }
+
+        if (!$dom_any && empty($dom_values)) {
+            return null;
+        }
+
+        if (!$dow_any && empty($dow_values)) {
+            return null;
+        }
+
+        $candidate = $now->setTime((int) $now->format('H'), (int) $now->format('i'), 0)->modify('+1 minute');
+
+        for ($i = 0; $i < 525600; $i++) {
+            $minute = (int) $candidate->format('i');
+            if (!in_array($minute, $minutes, true)) {
+                $candidate = $candidate->modify('+1 minute');
+                continue;
+            }
+
+            $hour = (int) $candidate->format('H');
+            if (!in_array($hour, $hours, true)) {
+                $candidate = $candidate->modify('+1 minute');
+                continue;
+            }
+
+            $month = (int) $candidate->format('n');
+            if (!in_array($month, $months, true)) {
+                $candidate = $candidate->modify('+1 minute');
+                continue;
+            }
+
+            if ($this->cron_day_matches($candidate, $dom_values, $dow_values, $dom_any, $dow_any)) {
+                return $candidate;
+            }
+
+            $candidate = $candidate->modify('+1 minute');
+        }
+
+        return null;
+    }
+
+    private function extract_cron_field_sets($expression, array &$warnings = null, array &$errors = null) {
+        $expression = trim((string) $expression);
+        if ($expression === '') {
+            $this->add_diagnostic_message($errors, __('L’expression Cron doit contenir cinq segments.', 'backup-jlg'));
+            return null;
+        }
+
+        $parts = preg_split('/\s+/', $expression);
+        if (!is_array($parts) || count($parts) !== 5) {
+            $this->add_diagnostic_message($errors, __('L’expression Cron doit comporter exactement cinq segments (minute heure jour-du-mois mois jour-de-semaine).', 'backup-jlg'));
+            return null;
+        }
+
+        list($minute_field, $hour_field, $dom_field, $month_field, $dow_field) = $parts;
+
+        $labels = [
+            'minute' => __('minutes', 'backup-jlg'),
+            'hour' => __('heures', 'backup-jlg'),
+            'dom' => __('jour du mois', 'backup-jlg'),
+            'month' => __('mois', 'backup-jlg'),
+            'dow' => __('jour de semaine', 'backup-jlg'),
+        ];
+
+        $month_names = [
+            'jan' => 1,
+            'feb' => 2,
+            'mar' => 3,
+            'apr' => 4,
+            'may' => 5,
+            'jun' => 6,
+            'jul' => 7,
+            'aug' => 8,
+            'sep' => 9,
+            'oct' => 10,
+            'nov' => 11,
+            'dec' => 12,
+        ];
+
+        $dow_names = [
+            'sun' => 0,
+            'mon' => 1,
+            'tue' => 2,
+            'wed' => 3,
+            'thu' => 4,
+            'fri' => 5,
+            'sat' => 6,
+        ];
+
+        $minutes = $this->parse_cron_field($minute_field, 0, 59, [], $labels['minute'], $warnings, $errors);
+        $hours = $this->parse_cron_field($hour_field, 0, 23, [], $labels['hour'], $warnings, $errors);
+        $months = $this->parse_cron_field($month_field, 1, 12, $month_names, $labels['month'], $warnings, $errors);
+
+        $dom_any = $this->is_cron_field_wildcard($dom_field);
+        $dow_any = $this->is_cron_field_wildcard($dow_field);
+
+        $dom_values = $dom_any ? [] : $this->parse_cron_field($dom_field, 1, 31, [], $labels['dom'], $warnings, $errors);
+        $dow_values = $dow_any ? [] : $this->parse_cron_field($dow_field, 0, 6, $dow_names, $labels['dow'], $warnings, $errors);
+
+        if (empty($minutes)) {
+            $this->add_diagnostic_message($errors, sprintf(__('Aucune minute valide trouvée. Utilisez des valeurs entre %1$d et %2$d.', 'backup-jlg'), 0, 59));
+        }
+
+        if (empty($hours)) {
+            $this->add_diagnostic_message($errors, sprintf(__('Aucune heure valide trouvée. Utilisez des valeurs entre %1$d et %2$d.', 'backup-jlg'), 0, 23));
+        }
+
+        if (empty($months)) {
+            $this->add_diagnostic_message($errors, __('Aucun mois valide trouvé. Utilisez 1–12 ou les abréviations jan–dec.', 'backup-jlg'));
+        }
+
+        if (!$dom_any && empty($dom_values)) {
+            $this->add_diagnostic_message($errors, __('Le champ « jour du mois » ne contient aucune valeur exploitable.', 'backup-jlg'));
+        }
+
+        if (!$dow_any && empty($dow_values)) {
+            $this->add_diagnostic_message($errors, __('Le champ « jour de semaine » ne contient aucune valeur exploitable.', 'backup-jlg'));
+        }
+
+        if (!$dom_any && !$dow_any) {
+            $this->add_diagnostic_message($warnings, __('Jour du mois et jour de semaine sont définis : Cron applique un OU logique entre les deux segments.', 'backup-jlg'));
+        }
+
+        if (!empty($errors)) {
+            return null;
+        }
+
+        return [
+            'minutes' => array_values(array_unique($minutes)),
+            'hours' => array_values(array_unique($hours)),
+            'months' => array_values(array_unique($months)),
+            'dom_values' => array_values(array_unique($dom_values)),
+            'dow_values' => array_values(array_unique($dow_values)),
+            'dom_any' => $dom_any,
+            'dow_any' => $dow_any,
+        ];
+    }
+
+    private function suggest_cron_interval($interval_seconds) {
+        if ($interval_seconds <= 300) {
+            return '*/5 * * * *';
+        }
+
+        if ($interval_seconds <= 900) {
+            return '*/15 * * * *';
+        }
+
+        if ($interval_seconds <= 1800) {
+            return '*/30 * * * *';
+        }
+
+        if ($interval_seconds <= 3600) {
+            return '0 * * * *';
+        }
+
+        return '0 0 * * *';
+    }
+
+    private function add_diagnostic_message(?array &$bucket, $message): void
+    {
+        if (!is_array($bucket)) {
+            $bucket = [];
+        }
+
+        $normalized = trim((string) $message);
+        if ($normalized === '') {
+            return;
+        }
+
+        if (!in_array($normalized, $bucket, true)) {
+            $bucket[] = $normalized;
+        }
+    }
+
+    /**
+     * Fournit un résumé lisible pour une macro de planification.
+     */
+    public static function describe_schedule_macro(array $macro): array
+    {
+        $instance = self::instance();
+        $expression = isset($macro['expression']) ? (string) $macro['expression'] : '';
+        $analysis = $instance->analyze_custom_cron_expression_internal($expression);
+
+        if (is_wp_error($analysis)) {
+            $details = $analysis->get_error_data();
+
+            return [
+                'expression' => $expression,
+                'errors' => [$analysis->get_error_message()],
+                'details' => isset($details['details']) ? (array) $details['details'] : [],
+                'warnings' => [],
+                'next_run' => null,
+                'next_run_formatted' => '',
+                'next_run_relative' => '',
+                'frequency_label' => '',
+                'interval_seconds' => null,
+                'runs_per_day' => null,
+                'timezone' => wp_timezone_string(),
+            ];
+        }
+
+        $runs = isset($analysis['runs']) && is_array($analysis['runs']) ? $analysis['runs'] : [];
+        $next_run = null;
+        if (!empty($runs)) {
+            foreach ($runs as $run) {
+                if ($run instanceof \DateTimeImmutable) {
+                    $next_run = $run;
+                    break;
+                }
+            }
+        }
+
+        $current = $instance->get_current_time();
+        $timezone = wp_timezone_string();
+        $next_run_timestamp = $next_run instanceof \DateTimeImmutable ? $next_run->getTimestamp() : null;
+        $formatted = '';
+        $relative = '';
+
+        if ($next_run_timestamp) {
+            $formatted = wp_date(get_option('date_format') . ' ' . get_option('time_format'), $next_run_timestamp);
+            $relative = sprintf(__('dans %s', 'backup-jlg'), human_time_diff($current->getTimestamp(), $next_run_timestamp));
+        }
+
+        $impact = $instance->generate_cron_impact_summary($expression, [], $analysis);
+        $min_interval = isset($analysis['min_interval']) ? (int) $analysis['min_interval'] : null;
+        $frequency_label = '';
+        if ($min_interval && $min_interval > 0) {
+            $frequency_label = sprintf(__('Toutes les %s', 'backup-jlg'), $instance->format_interval_label($min_interval));
+        }
+
+        return [
+            'expression' => $expression,
+            'next_run' => $next_run_timestamp,
+            'next_run_formatted' => $formatted,
+            'next_run_relative' => $relative,
+            'frequency_label' => $frequency_label,
+            'interval_seconds' => $min_interval,
+            'runs_per_day' => isset($impact['runs_per_day']) ? $impact['runs_per_day'] : null,
+            'warnings' => $analysis['warnings'],
+            'errors' => $analysis['errors'],
+            'timezone' => $timezone,
+            'impact' => $impact,
+        ];
     }
 
     private function format_interval_label($seconds) {
@@ -1737,7 +1933,7 @@ class BJLG_Scheduler {
         return new \DateTimeImmutable('now', wp_timezone());
     }
 
-    private function parse_cron_field($field, $min, $max, array $names = []) {
+    private function parse_cron_field($field, $min, $max, array $names = [], $field_label = '', array &$warnings = null, array &$errors = null) {
         $field = strtolower(trim((string) $field));
         if ($field === '' || $field === '*' || $field === '?') {
             return range($min, $max);
@@ -1755,7 +1951,17 @@ class BJLG_Scheduler {
             $step = 1;
             if (strpos($segment, '/') !== false) {
                 list($segment, $step_part) = explode('/', $segment, 2);
-                $step = max(1, (int) $step_part);
+                $step_part = trim((string) $step_part);
+                if ($step_part === '' || !is_numeric($step_part)) {
+                    $this->add_diagnostic_message($errors, sprintf(__('Le pas « /%1$s » n’est pas valide pour le champ %2$s. Utilisez un entier positif (ex. /5).', 'backup-jlg'), $step_part === '' ? '0' : $step_part, $field_label));
+                    continue;
+                }
+
+                $step = (int) $step_part;
+                if ($step <= 0) {
+                    $this->add_diagnostic_message($errors, sprintf(__('Le pas « /%1$s » n’est pas valide pour le champ %2$s. Utilisez un entier positif (ex. /5).', 'backup-jlg'), $step_part, $field_label));
+                    continue;
+                }
             }
 
             if ($segment === '' || $segment === '*' || $segment === '?') {
@@ -1763,8 +1969,8 @@ class BJLG_Scheduler {
                 $end = $max;
             } elseif (strpos($segment, '-') !== false) {
                 list($start_token, $end_token) = explode('-', $segment, 2);
-                $start = $this->cron_value_from_token($start_token, $names, $min, $max);
-                $end = $this->cron_value_from_token($end_token, $names, $min, $max);
+                $start = $this->cron_value_from_token($start_token, $names, $min, $max, $field_label, $errors);
+                $end = $this->cron_value_from_token($end_token, $names, $min, $max, $field_label, $errors);
                 if ($start === null || $end === null) {
                     continue;
                 }
@@ -1774,7 +1980,7 @@ class BJLG_Scheduler {
                     $end = $tmp;
                 }
             } else {
-                $start = $this->cron_value_from_token($segment, $names, $min, $max);
+                $start = $this->cron_value_from_token($segment, $names, $min, $max, $field_label, $errors);
                 if ($start === null) {
                     continue;
                 }
@@ -1793,7 +1999,7 @@ class BJLG_Scheduler {
         return array_values($values);
     }
 
-    private function cron_value_from_token($token, array $names, $min, $max) {
+    private function cron_value_from_token($token, array $names, $min, $max, $field_label = '', array &$errors = null) {
         $token = strtolower(trim((string) $token));
         if ($token === '') {
             return null;
@@ -1804,6 +2010,9 @@ class BJLG_Scheduler {
         } elseif (preg_match('/^-?\d+$/', $token)) {
             $value = (int) $token;
         } else {
+            if ($field_label !== '') {
+                $this->add_diagnostic_message($errors, sprintf(__('Le segment « %1$s » n’est pas reconnu pour le champ %2$s.', 'backup-jlg'), $token, $field_label));
+            }
             return null;
         }
 
@@ -1812,6 +2021,9 @@ class BJLG_Scheduler {
         }
 
         if ($value < $min || $value > $max) {
+            if ($field_label !== '') {
+                $this->add_diagnostic_message($errors, sprintf(__('La valeur %1$s dépasse la plage autorisée pour le champ %2$s (%3$d–%4$d).', 'backup-jlg'), $token, $field_label, $min, $max));
+            }
             return null;
         }
 
@@ -2599,6 +2811,97 @@ class BJLG_Scheduler {
         }
 
         return $collection;
+    }
+
+    /**
+     * Retourne les réglages de planification pour les validations sandbox.
+     */
+    public function get_sandbox_schedule_settings(): array
+    {
+        $stored = \bjlg_get_option(self::SANDBOX_SCHEDULE_OPTION, []);
+        $sanitized = $this->sanitize_sandbox_schedule_settings($stored);
+
+        if (!is_array($stored) || $stored !== $sanitized) {
+            $this->save_sandbox_schedule_settings($sanitized);
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * Enregistre les réglages de validation sandbox.
+     *
+     * @param array<string,mixed> $settings
+     */
+    private function save_sandbox_schedule_settings(array $settings): void
+    {
+        \bjlg_update_option(self::SANDBOX_SCHEDULE_OPTION, $settings, null, null, false);
+    }
+
+    /**
+     * Valeurs par défaut pour la planification sandbox.
+     *
+     * @return array<string,mixed>
+     */
+    private function get_sandbox_defaults(): array
+    {
+        return [
+            'enabled' => false,
+            'recurrence' => 'weekly',
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'sandbox_path' => '',
+            'last_run' => null,
+            'last_status' => '',
+        ];
+    }
+
+    /**
+     * Nettoie les réglages sandbox.
+     *
+     * @param mixed $settings
+     * @return array<string,mixed>
+     */
+    private function sanitize_sandbox_schedule_settings($settings): array
+    {
+        $defaults = $this->get_sandbox_defaults();
+        $sanitized = $defaults;
+        $input = is_array($settings) ? $settings : [];
+
+        $sanitized['enabled'] = !empty($input['enabled']);
+
+        $requested_recurrence = isset($input['recurrence']) ? (string) $input['recurrence'] : $defaults['recurrence'];
+        $allowed = wp_get_schedules();
+        if ($requested_recurrence === 'disabled') {
+            $sanitized['enabled'] = false;
+            $sanitized['recurrence'] = 'disabled';
+        } elseif (isset($allowed[$requested_recurrence])) {
+            $sanitized['recurrence'] = $requested_recurrence;
+        } else {
+            $sanitized['recurrence'] = $defaults['recurrence'];
+        }
+
+        if (!empty($input['components']) && is_array($input['components'])) {
+            $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+            $components = array_map('sanitize_key', $input['components']);
+            $components = array_values(array_intersect($components, $allowed_components));
+            if (!empty($components)) {
+                $sanitized['components'] = $components;
+            }
+        }
+
+        if (isset($input['sandbox_path']) && is_string($input['sandbox_path'])) {
+            $sanitized['sandbox_path'] = trim($input['sandbox_path']);
+        }
+
+        if (isset($input['last_run'])) {
+            $sanitized['last_run'] = is_numeric($input['last_run']) ? (int) $input['last_run'] : null;
+        }
+
+        if (isset($input['last_status']) && is_string($input['last_status'])) {
+            $sanitized['last_status'] = substr($input['last_status'], 0, 20);
+        }
+
+        return $sanitized;
     }
 
     private function normalize_schedule_settings($settings) {

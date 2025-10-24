@@ -68,6 +68,12 @@ class BJLG_Update_Guard {
             return null;
         }
 
+        if (!$this->is_target_enabled($context['type'] ?? '', $settings)) {
+            $this->maybe_trigger_reminder($settings, $context, $hook_extra, 'ignored_type');
+            BJLG_Debug::log('Sauvegarde pré-update ignorée : type ' . ($context['type'] ?? 'inconnu') . ' désactivé dans les réglages.');
+            return null;
+        }
+
         $signature = $context['signature'];
         if (isset($this->processed_signatures[$signature])) {
             return null;
@@ -229,9 +235,18 @@ class BJLG_Update_Guard {
         $defaults = [
             'enabled' => true,
             'components' => BJLG_Settings::get_default_backup_components(),
+            'targets' => [
+                'core' => true,
+                'plugin' => true,
+                'theme' => true,
+            ],
             'reminder' => [
                 'enabled' => false,
                 'message' => 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.',
+                'channels' => [
+                    'notification' => ['enabled' => false],
+                    'email' => ['enabled' => false, 'recipients' => ''],
+                ],
             ],
         ];
 
@@ -258,6 +273,19 @@ class BJLG_Update_Guard {
         $settings['components'] = $components;
         $settings['enabled'] = !empty($settings['enabled']);
 
+        $target_defaults = $defaults['targets'];
+        $targets = [];
+        if (isset($settings['targets']) && is_array($settings['targets'])) {
+            foreach ($settings['targets'] as $target_key => $target_value) {
+                $key = sanitize_key((string) $target_key);
+                if ($key === '' || !array_key_exists($key, $target_defaults)) {
+                    continue;
+                }
+                $targets[$key] = !empty($target_value);
+            }
+        }
+        $settings['targets'] = array_merge($target_defaults, $targets);
+
         if (!isset($settings['reminder']) || !is_array($settings['reminder'])) {
             $settings['reminder'] = $defaults['reminder'];
         }
@@ -266,6 +294,24 @@ class BJLG_Update_Guard {
         $settings['reminder']['message'] = isset($settings['reminder']['message'])
             ? (string) $settings['reminder']['message']
             : $defaults['reminder']['message'];
+
+        $channels = isset($settings['reminder']['channels']) && is_array($settings['reminder']['channels'])
+            ? $settings['reminder']['channels']
+            : [];
+        foreach ($defaults['reminder']['channels'] as $channel_key => $channel_defaults) {
+            if (!isset($channels[$channel_key]) || !is_array($channels[$channel_key])) {
+                $channels[$channel_key] = $channel_defaults;
+            } else {
+                $channels[$channel_key] = array_merge($channel_defaults, $channels[$channel_key]);
+            }
+            $channels[$channel_key]['enabled'] = !empty($channels[$channel_key]['enabled']);
+            if ($channel_key === 'email') {
+                $channels[$channel_key]['recipients'] = isset($channels[$channel_key]['recipients'])
+                    ? (string) $channels[$channel_key]['recipients']
+                    : '';
+            }
+        }
+        $settings['reminder']['channels'] = $channels;
 
         $this->settings = $settings;
 
@@ -325,11 +371,151 @@ class BJLG_Update_Guard {
             BJLG_History::log(
                 'pre_update_backup_reminder',
                 'info',
-                sprintf('%s (%s)', $message, $context['items_label'] ?? 'mise à jour')
+                sprintf('%s (%s) – %s', $message, $context['items_label'] ?? 'mise à jour', $this->format_reminder_reason($reason))
             );
         }
 
+        $reminder_settings = isset($settings['reminder']) && is_array($settings['reminder'])
+            ? $settings['reminder']
+            : ['channels' => []];
+
+        $this->dispatch_reminder_notification($reminder_settings, $context, $message, $reason);
+        $this->dispatch_reminder_email($reminder_settings, $context, $message, $reason);
+
         \do_action('bjlg_pre_update_backup_reminder', $context, $reason, $settings['reminder'], $hook_extra);
+    }
+
+    private function is_target_enabled($type, array $settings): bool {
+        $type = sanitize_key((string) $type);
+        if ($type === '') {
+            return true;
+        }
+
+        $targets = isset($settings['targets']) && is_array($settings['targets'])
+            ? $settings['targets']
+            : [];
+
+        if (!isset($targets[$type])) {
+            return true;
+        }
+
+        return !empty($targets[$type]);
+    }
+
+    private function dispatch_reminder_email(array $reminder_settings, array $context, string $message, string $reason) {
+        if (empty($reminder_settings['channels']['email']['enabled'])) {
+            return;
+        }
+
+        $recipients = $this->parse_email_recipients($reminder_settings['channels']['email']['recipients'] ?? '');
+        if (empty($recipients)) {
+            $admin_email = function_exists('get_option') ? get_option('admin_email') : '';
+            if (is_string($admin_email) && $admin_email !== '') {
+                $recipients[] = $admin_email;
+            }
+        }
+
+        if (empty($recipients) || !function_exists('wp_mail')) {
+            return;
+        }
+
+        $subject = sprintf('[Backup JLG] %s', sprintf(__('Snapshot pré-update requis pour %s', 'backup-jlg'), $context['label'] ?? __('la mise à jour', 'backup-jlg')));
+        $lines = [
+            $message,
+            '',
+            sprintf(__('Type : %s', 'backup-jlg'), $this->translate_context_type($context['type'] ?? 'update')),
+            sprintf(__('Éléments : %s', 'backup-jlg'), $context['items_label'] ?? __('site complet', 'backup-jlg')),
+            sprintf(__('Raison : %s', 'backup-jlg'), $this->format_reminder_reason($reason)),
+        ];
+
+        $body = implode("\n", array_filter(array_map('strval', $lines)));
+        wp_mail($recipients, $subject, $body);
+    }
+
+    private function dispatch_reminder_notification(array $reminder_settings, array $context, string $message, string $reason) {
+        if (empty($reminder_settings['channels']['notification']['enabled']) || !class_exists(__NAMESPACE__ . '\\BJLG_Notification_Queue')) {
+            return;
+        }
+
+        $title = sprintf(__('Snapshot pré-update requis pour %s', 'backup-jlg'), $context['label'] ?? __('la mise à jour', 'backup-jlg'));
+        $lines = [
+            $message,
+            sprintf(__('Type : %s', 'backup-jlg'), $this->translate_context_type($context['type'] ?? 'update')),
+            sprintf(__('Éléments : %s', 'backup-jlg'), $context['items_label'] ?? __('site complet', 'backup-jlg')),
+            sprintf(__('Raison : %s', 'backup-jlg'), $this->format_reminder_reason($reason)),
+        ];
+
+        BJLG_Notification_Queue::enqueue([
+            'event' => 'pre_update_snapshot_reminder',
+            'title' => $title,
+            'subject' => $title,
+            'lines' => array_map('strval', $lines),
+            'body' => implode("\n", array_map('strval', $lines)),
+            'context' => [
+                'type' => $context['type'] ?? '',
+                'items' => $context['items'] ?? [],
+                'reason' => $reason,
+                'message' => $message,
+            ],
+            'severity' => $reason === 'disabled' ? 'info' : 'warning',
+            'channels' => [
+                'internal' => [
+                    'enabled' => true,
+                    'status' => 'pending',
+                    'attempts' => 0,
+                ],
+            ],
+        ]);
+    }
+
+    private function parse_email_recipients($value): array {
+        if (!is_string($value)) {
+            return [];
+        }
+
+        $parts = preg_split('/[,;\r\n]+/', $value) ?: [];
+        $emails = [];
+        foreach ($parts as $email) {
+            $email = trim((string) $email);
+            if ($email === '') {
+                continue;
+            }
+            $is_valid = function_exists('is_email') ? is_email($email) : (bool) filter_var($email, FILTER_VALIDATE_EMAIL);
+            if (!$is_valid) {
+                continue;
+            }
+            if (!in_array($email, $emails, true)) {
+                $emails[] = $email;
+            }
+        }
+
+        return $emails;
+    }
+
+    private function translate_context_type($type): string {
+        switch ($type) {
+            case 'plugin':
+                return __('extension', 'backup-jlg');
+            case 'theme':
+                return __('thème', 'backup-jlg');
+            case 'core':
+                return __('cœur WordPress', 'backup-jlg');
+            default:
+                return __('mise à jour', 'backup-jlg');
+        }
+    }
+
+    private function format_reminder_reason($reason): string {
+        switch ($reason) {
+            case 'disabled':
+                return __('Snapshots automatiques désactivés', 'backup-jlg');
+            case 'no_components':
+                return __('Aucun composant sélectionné', 'backup-jlg');
+            case 'ignored_type':
+                return __('Type de mise à jour exclu par la configuration', 'backup-jlg');
+            default:
+                return __('Rappel manuel requis', 'backup-jlg');
+        }
     }
 
     /**

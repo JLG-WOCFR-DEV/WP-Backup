@@ -3,6 +3,8 @@ namespace BJLG;
 
 use WP_Error;
 
+require_once __DIR__ . '/class-bjlg-history.php';
+
 if (!defined('ABSPATH')) {
     exit;
 }
@@ -33,6 +35,7 @@ class BJLG_Notifications {
             'storage_warning' => true,
             'remote_purge_failed' => true,
             'remote_purge_delayed' => true,
+            'remote_storage_capacity_forecast' => true,
             'restore_self_test_passed' => false,
             'restore_self_test_failed' => true,
             'sandbox_restore_validation_passed' => false,
@@ -143,6 +146,7 @@ class BJLG_Notifications {
         'storage_warning' => 'warning',
         'remote_purge_failed' => 'critical',
         'remote_purge_delayed' => 'critical',
+        'remote_storage_capacity_forecast' => 'warning',
         'restore_self_test_passed' => 'info',
         'restore_self_test_failed' => 'critical',
         'sandbox_restore_validation_passed' => 'info',
@@ -227,7 +231,7 @@ class BJLG_Notifications {
         add_action('bjlg_storage_warning', [$this, 'handle_storage_warning'], 15, 1);
         add_action('bjlg_remote_purge_permanent_failure', [$this, 'handle_remote_purge_failed'], 15, 3);
         add_action('bjlg_remote_purge_delayed', [$this, 'handle_remote_purge_delayed'], 15, 2);
-        add_action('bjlg_remote_purge_metrics_updated', [$this, 'handle_remote_purge_metrics_updated'], 15, 3);
+        add_action('bjlg_remote_storage_capacity_forecast', [$this, 'handle_remote_storage_capacity_forecast'], 15, 1);
         add_action('bjlg_restore_self_test_passed', [$this, 'handle_restore_self_test_passed'], 15, 1);
         add_action('bjlg_restore_self_test_failed', [$this, 'handle_restore_self_test_failed'], 15, 1);
         add_action('bjlg_sandbox_restore_validation_passed', [$this, 'handle_sandbox_validation_passed'], 15, 1);
@@ -476,6 +480,17 @@ class BJLG_Notifications {
         }
 
         $this->notify('storage_warning', $context);
+    }
+
+    /**
+     * Prépare le contexte d'une projection de saturation distante.
+     *
+     * @param array<string,mixed> $data
+     */
+    public function handle_remote_storage_capacity_forecast($data) {
+        $data = is_array($data) ? $data : [];
+
+        $this->notify('remote_storage_capacity_forecast', $data);
     }
 
     /**
@@ -1086,9 +1101,10 @@ class BJLG_Notifications {
             $components = array_map('strval', $report['components']);
         }
 
-        $sanitized_issues = $this->sanitize_validation_issues($issues);
-        $health_report = $this->sanitize_health_report($health);
-        $issue_summary = $this->summarize_validation_issues($sanitized_issues);
+        $log_excerpt = [];
+        if (isset($report['log_excerpt']) && is_array($report['log_excerpt'])) {
+            $log_excerpt = array_map('strval', array_slice($report['log_excerpt'], -20));
+        }
 
         return [
             'status' => $status,
@@ -1291,6 +1307,14 @@ class BJLG_Notifications {
             $entry['escalation'] = $escalation['meta'];
         }
 
+        if (!empty($entry['resolution']['summary'])) {
+            $entry['resolution_summary'] = (string) $entry['resolution']['summary'];
+
+            if (!empty($entry['escalation']) && is_array($entry['escalation'])) {
+                $entry['escalation']['resolution_summary'] = $entry['resolution']['summary'];
+            }
+        }
+
         $entry = $this->apply_quiet_hours_constraints($event, $entry);
 
         $queued = BJLG_Notification_Queue::enqueue($entry);
@@ -1310,16 +1334,23 @@ class BJLG_Notifications {
             ? __('Notification de test enregistrée.', 'backup-jlg')
             : sprintf(__('Notification générée pour "%s".', 'backup-jlg'), $title);
 
-        return [
+        $steps = [[
+            'timestamp' => $timestamp,
+            'actor' => __('Système', 'backup-jlg'),
+            'summary' => $summary,
+            'type' => 'created',
+        ]];
+
+        $resolution = [
             'acknowledged_at' => null,
             'resolved_at' => null,
-            'steps' => [[
-                'timestamp' => $timestamp,
-                'actor' => __('Système', 'backup-jlg'),
-                'summary' => $summary,
-                'type' => 'created',
-            ]],
+            'steps' => $steps,
+            'summary' => class_exists(__NAMESPACE__ . '\\BJLG_Notification_Queue')
+                ? BJLG_Notification_Queue::summarize_resolution_steps($steps)
+                : $summary,
         ];
+
+        return $resolution;
     }
 
     /**
@@ -1339,6 +1370,8 @@ class BJLG_Notifications {
                 return __('Purge distante en échec', 'backup-jlg');
             case 'remote_purge_delayed':
                 return __('Purge distante en retard', 'backup-jlg');
+            case 'remote_storage_capacity_forecast':
+                return __('Projection de saturation distante', 'backup-jlg');
             case 'restore_self_test_passed':
                 return __('Test de restauration réussi', 'backup-jlg');
             case 'restore_self_test_failed':
@@ -1560,6 +1593,72 @@ class BJLG_Notifications {
                 }
                 if (!empty($context['last_error'])) {
                     $lines[] = __('Dernier message : ', 'backup-jlg') . $context['last_error'];
+                }
+                break;
+            case 'remote_storage_capacity_forecast':
+                $lines[] = __('Projection proactive : la capacité distante se rapproche du seuil défini.', 'backup-jlg');
+                $destination = '';
+                if (!empty($context['destination_label'])) {
+                    $destination = (string) $context['destination_label'];
+                } elseif (!empty($context['destination_id'])) {
+                    $destination = (string) $context['destination_id'];
+                }
+                if ($destination !== '') {
+                    $lines[] = __('Destination : ', 'backup-jlg') . $destination;
+                }
+                if (!empty($context['projection_label'])) {
+                    $lines[] = (string) $context['projection_label'];
+                }
+                if (isset($context['seconds_remaining']) && is_numeric($context['seconds_remaining'])) {
+                    $lines[] = sprintf(
+                        __('Temps restant estimé : %s', 'backup-jlg'),
+                        $this->format_duration_seconds((float) $context['seconds_remaining'])
+                    );
+                }
+                if (isset($context['threshold_percent'])) {
+                    $percent = (float) $context['threshold_percent'];
+                    $percent_label = function_exists('number_format_i18n')
+                        ? number_format_i18n((int) round($percent))
+                        : number_format((int) round($percent));
+                    $lines[] = sprintf(__('Seuil de remplissage surveillé : %s%%', 'backup-jlg'), $percent_label);
+                }
+                if (isset($context['warning_hours']) || isset($context['critical_hours'])) {
+                    $warning = isset($context['warning_hours']) ? (int) $context['warning_hours'] : null;
+                    $critical = isset($context['critical_hours']) ? (int) $context['critical_hours'] : null;
+                    $parts = [];
+                    if ($critical !== null) {
+                        $parts[] = sprintf(
+                            __('Critique sous %s', 'backup-jlg'),
+                            $this->format_duration_seconds($critical * HOUR_IN_SECONDS)
+                        );
+                    }
+                    if ($warning !== null) {
+                        $parts[] = sprintf(
+                            __('Avertissement sous %s', 'backup-jlg'),
+                            $this->format_duration_seconds($warning * HOUR_IN_SECONDS)
+                        );
+                    }
+                    if (!empty($parts)) {
+                        $lines[] = implode(' • ', $parts);
+                    }
+                }
+                if (!empty($context['risk_level'])) {
+                    $risk_label = __('Niveau de risque : ', 'backup-jlg');
+                    switch ((string) $context['risk_level']) {
+                        case 'critical':
+                            $risk_label .= __('Critique', 'backup-jlg');
+                            break;
+                        case 'warning':
+                            $risk_label .= __('Avertissement', 'backup-jlg');
+                            break;
+                        case 'watch':
+                            $risk_label .= __('Surveillance', 'backup-jlg');
+                            break;
+                        default:
+                            $risk_label .= __('Inconnu', 'backup-jlg');
+                            break;
+                    }
+                    $lines[] = $risk_label;
                 }
                 break;
             case 'restore_self_test_passed':
