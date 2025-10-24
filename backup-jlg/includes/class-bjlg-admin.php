@@ -40,6 +40,8 @@ class BJLG_Admin {
         add_action('wp_ajax_bjlg_update_onboarding_progress', [$this, 'ajax_update_onboarding_progress']);
         add_action('wp_ajax_bjlg_notification_ack', [$this, 'ajax_acknowledge_notification']);
         add_action('wp_ajax_bjlg_notification_resolve', [$this, 'ajax_resolve_notification']);
+        add_action('admin_post_bjlg_save_sandbox_schedule', [$this, 'handle_save_sandbox_schedule']);
+        add_action('admin_post_bjlg_download_sandbox_report', [$this, 'handle_download_sandbox_report']);
     }
 
     /**
@@ -444,6 +446,202 @@ class BJLG_Admin {
                         <p><?php esc_html_e('Aucun site réseau disponible ou données indisponibles.', 'backup-jlg'); ?></p>
                     <?php endif; ?>
                 </div>
+            </div>
+        </div>
+        <?php
+    }
+
+    private function get_sandbox_schedule_notice(): array
+    {
+        if (!isset($_GET['sandbox_schedule_status'])) {
+            return [];
+        }
+
+        $status = sanitize_key((string) wp_unslash($_GET['sandbox_schedule_status']));
+        $message = '';
+        $class = 'notice';
+
+        if ($status === 'saved') {
+            $class .= ' notice-success';
+            $message = __('Planification sandbox enregistrée.', 'backup-jlg');
+        } elseif ($status === 'error') {
+            $class .= ' notice-error';
+            $raw = isset($_GET['sandbox_schedule_message'])
+                ? (string) wp_unslash($_GET['sandbox_schedule_message'])
+                : '';
+            $message = $raw !== ''
+                ? sanitize_text_field($raw)
+                : __('Erreur lors de l’enregistrement de la planification sandbox.', 'backup-jlg');
+        } else {
+            return [];
+        }
+
+        return ['class' => $class, 'message' => $message];
+    }
+
+    private function render_sandbox_schedule_panel(array $settings, array $summary, ?array $latest_report, array $notice): void
+    {
+        $enabled = !empty($settings['enabled']);
+        $recurrence = isset($settings['recurrence']) ? (string) $settings['recurrence'] : 'weekly';
+        $components = isset($settings['components']) && is_array($settings['components'])
+            ? array_map('strval', $settings['components'])
+            : [];
+        $custom_interval_minutes = (int) max(5, round((isset($settings['custom_interval']) ? (int) $settings['custom_interval'] : DAY_IN_SECONDS) / MINUTE_IN_SECONDS));
+        $initial_delay_minutes = (int) max(5, round((isset($settings['initial_delay']) ? (int) $settings['initial_delay'] : HOUR_IN_SECONDS) / MINUTE_IN_SECONDS));
+        $sandbox_path = isset($settings['sandbox_path']) ? (string) $settings['sandbox_path'] : '';
+
+        $frequency_label = isset($summary['frequency_label']) && $summary['frequency_label'] !== ''
+            ? (string) $summary['frequency_label']
+            : __('Non défini', 'backup-jlg');
+        $next_run_label = !empty($summary['next_run_formatted'])
+            ? (string) $summary['next_run_formatted']
+            : __('Non planifié', 'backup-jlg');
+        if (!empty($summary['next_run_relative'])) {
+            $next_run_label .= ' (' . esc_html($summary['next_run_relative']) . ')';
+        }
+
+        $last_run_label = isset($summary['last_run_at']) && $summary['last_run_at']
+            ? date_i18n(get_option('date_format') . ' ' . get_option('time_format'), (int) $summary['last_run_at'])
+            : __('Jamais exécuté', 'backup-jlg');
+        $last_status_label = isset($summary['last_status']) && $summary['last_status'] === 'success'
+            ? __('Succès', 'backup-jlg')
+            : (isset($summary['last_status']) && $summary['last_status'] === 'failure'
+                ? __('Échec', 'backup-jlg')
+                : __('—', 'backup-jlg'));
+
+        $component_labels = [
+            'db' => __('Base de données', 'backup-jlg'),
+            'plugins' => __('Extensions', 'backup-jlg'),
+            'themes' => __('Thèmes', 'backup-jlg'),
+            'uploads' => __('Médias', 'backup-jlg'),
+        ];
+
+        $recurrence_options = [
+            'hourly' => __('Toutes les heures', 'backup-jlg'),
+            'twice_daily' => __('Deux fois par jour', 'backup-jlg'),
+            'daily' => __('Quotidienne', 'backup-jlg'),
+            'weekly' => __('Hebdomadaire', 'backup-jlg'),
+            'monthly' => __('Mensuelle', 'backup-jlg'),
+            'custom' => __('Intervalle personnalisé', 'backup-jlg'),
+        ];
+
+        $latest_summary = '';
+        $latest_buttons = '';
+
+        if (is_array($latest_report) && !empty($latest_report)) {
+            $status_text = ($latest_report['status'] ?? '') === 'success'
+                ? __('Succès', 'backup-jlg')
+                : __('Échec', 'backup-jlg');
+            $created_at = isset($latest_report['created_at']) && $latest_report['created_at']
+                ? date_i18n(get_option('date_format') . ' ' . get_option('time_format'), (int) $latest_report['created_at'])
+                : '';
+            $rto = '';
+            if (!empty($latest_report['objectives']['rto_human'])) {
+                $rto = (string) $latest_report['objectives']['rto_human'];
+            } elseif (!empty($latest_report['timings']['duration_human'])) {
+                $rto = (string) $latest_report['timings']['duration_human'];
+            }
+
+            $parts = array_filter([$status_text, $created_at, $rto !== '' ? sprintf(__('RTO %s', 'backup-jlg'), $rto) : '']);
+            $latest_summary = implode(' · ', $parts);
+
+            if (!empty($latest_report['id'])) {
+                $json_url = $this->get_sandbox_report_download_url((string) $latest_report['id'], 'json');
+                $log_url = $this->get_sandbox_report_download_url((string) $latest_report['id'], 'log');
+
+                if ($json_url !== '' || $log_url !== '') {
+                    ob_start();
+                    ?>
+                    <p class="bjlg-sandbox-latest-links">
+                        <?php if ($json_url !== '') : ?>
+                            <a class="button button-secondary button-small" href="<?php echo esc_url($json_url); ?>"><?php esc_html_e('Rapport JSON', 'backup-jlg'); ?></a>
+                        <?php endif; ?>
+                        <?php if ($log_url !== '') : ?>
+                            <a class="button button-secondary button-small" href="<?php echo esc_url($log_url); ?>"><?php esc_html_e('Journal NDJSON', 'backup-jlg'); ?></a>
+                        <?php endif; ?>
+                    </p>
+                    <?php
+                    $latest_buttons = ob_get_clean();
+                }
+            }
+        }
+
+        ?>
+        <div class="bjlg-section bjlg-sandbox-schedule">
+            <h3><?php esc_html_e('Validation sandbox planifiée', 'backup-jlg'); ?></h3>
+            <p class="description"><?php esc_html_e('Planifiez des restaurations sandbox automatisées pour mesurer vos objectifs RTO/RPO dans un environnement isolé.', 'backup-jlg'); ?></p>
+            <?php if (!empty($notice)) : ?>
+                <div class="<?php echo esc_attr($notice['class']); ?>"><p><?php echo esc_html($notice['message']); ?></p></div>
+            <?php endif; ?>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="bjlg-sandbox-schedule-form">
+                <?php wp_nonce_field('bjlg_save_sandbox_schedule', 'bjlg_sandbox_schedule_nonce'); ?>
+                <input type="hidden" name="action" value="bjlg_save_sandbox_schedule">
+                <table class="form-table">
+                    <tbody>
+                        <tr>
+                            <th scope="row"><?php esc_html_e('Activation', 'backup-jlg'); ?></th>
+                            <td>
+                                <label>
+                                    <input type="checkbox" name="sandbox_schedule_enabled" value="1" <?php checked($enabled); ?>>
+                                    <?php esc_html_e('Activer la validation sandbox planifiée', 'backup-jlg'); ?>
+                                </label>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="bjlg-sandbox-recurrence"><?php esc_html_e('Fréquence', 'backup-jlg'); ?></label></th>
+                            <td>
+                                <select name="sandbox_schedule_recurrence" id="bjlg-sandbox-recurrence">
+                                    <?php foreach ($recurrence_options as $value => $label) : ?>
+                                        <option value="<?php echo esc_attr($value); ?>" <?php selected($recurrence, $value); ?>><?php echo esc_html($label); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <p class="description"><?php echo esc_html(sprintf(__('Fréquence actuelle : %s', 'backup-jlg'), $frequency_label)); ?></p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="bjlg-sandbox-custom-interval"><?php esc_html_e('Intervalle personnalisé (minutes)', 'backup-jlg'); ?></label></th>
+                            <td>
+                                <input type="number" min="5" step="5" name="sandbox_schedule_custom_interval" id="bjlg-sandbox-custom-interval" value="<?php echo esc_attr($custom_interval_minutes); ?>">
+                                <p class="description"><?php esc_html_e('Utilisé lorsque la fréquence est définie sur un intervalle personnalisé.', 'backup-jlg'); ?></p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="bjlg-sandbox-initial-delay"><?php esc_html_e('Délai initial (minutes)', 'backup-jlg'); ?></label></th>
+                            <td>
+                                <input type="number" min="5" step="5" name="sandbox_schedule_initial_delay" id="bjlg-sandbox-initial-delay" value="<?php echo esc_attr($initial_delay_minutes); ?>">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><?php esc_html_e('Composants à restaurer', 'backup-jlg'); ?></th>
+                            <td>
+                                <?php foreach ($component_labels as $component_key => $label) : ?>
+                                    <label style="display:inline-block;margin-right:12px;">
+                                        <input type="checkbox" name="sandbox_schedule_components[]" value="<?php echo esc_attr($component_key); ?>" <?php checked(in_array($component_key, $components, true)); ?>>
+                                        <?php echo esc_html($label); ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="bjlg-sandbox-path"><?php esc_html_e('Chemin sandbox', 'backup-jlg'); ?></label></th>
+                            <td>
+                                <input type="text" class="regular-text" name="sandbox_schedule_path" id="bjlg-sandbox-path" value="<?php echo esc_attr($sandbox_path); ?>">
+                                <p class="description"><?php esc_html_e('Laisser vide pour utiliser le répertoire sandbox géré automatiquement.', 'backup-jlg'); ?></p>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p class="submit">
+                    <button type="submit" class="button button-primary"><?php esc_html_e('Enregistrer la planification sandbox', 'backup-jlg'); ?></button>
+                </p>
+            </form>
+            <div class="bjlg-sandbox-schedule-summary">
+                <p><strong><?php esc_html_e('Prochaine exécution', 'backup-jlg'); ?> :</strong> <?php echo esc_html($next_run_label); ?></p>
+                <p><strong><?php esc_html_e('Dernière exécution', 'backup-jlg'); ?> :</strong> <?php echo esc_html($last_run_label); ?> (<?php echo esc_html($last_status_label); ?>)</p>
+                <?php if ($latest_summary !== '') : ?>
+                    <p><strong><?php esc_html_e('Dernier rapport', 'backup-jlg'); ?> :</strong> <?php echo esc_html($latest_summary); ?></p>
+                    <?php echo $latest_buttons; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                <?php endif; ?>
             </div>
         </div>
         <?php
@@ -1615,6 +1813,28 @@ class BJLG_Admin {
                     <canvas class="bjlg-chart-card__canvas" id="bjlg-storage-trend" aria-hidden="true"></canvas>
                     <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Aucune mesure d’utilisation disponible.', 'backup-jlg'); ?></p>
                 </article>
+
+                <article class="bjlg-chart-card" data-chart="remote-purge-forecast">
+                    <header class="bjlg-chart-card__header">
+                        <h3 class="bjlg-chart-card__title"><?php esc_html_e('Projection de saturation distante', 'backup-jlg'); ?></h3>
+                        <p class="bjlg-chart-card__subtitle" data-field="chart_remote_forecast_subtitle">
+                            <?php esc_html_e('Heures restantes avant franchissement des seuils d’alerte.', 'backup-jlg'); ?>
+                        </p>
+                    </header>
+                    <canvas class="bjlg-chart-card__canvas" id="bjlg-remote-purge-forecast" aria-hidden="true"></canvas>
+                    <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Aucune projection de capacité disponible.', 'backup-jlg'); ?></p>
+                </article>
+
+                <article class="bjlg-chart-card" data-chart="remote-purge-duration">
+                    <header class="bjlg-chart-card__header">
+                        <h3 class="bjlg-chart-card__title"><?php esc_html_e('Durées moyennes de purge', 'backup-jlg'); ?></h3>
+                        <p class="bjlg-chart-card__subtitle" data-field="chart_remote_duration_subtitle">
+                            <?php esc_html_e('Temps moyen, P95 et pic observés par destination.', 'backup-jlg'); ?>
+                        </p>
+                    </header>
+                    <canvas class="bjlg-chart-card__canvas" id="bjlg-remote-purge-duration" aria-hidden="true"></canvas>
+                    <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Aucune mesure de purge disponible.', 'backup-jlg'); ?></p>
+                </article>
             </div>
 
             <?php if (!empty($queues)): ?>
@@ -1814,6 +2034,9 @@ class BJLG_Admin {
                                                     <?php if ($attempt_label !== ''): ?>
                                                         <span><?php echo esc_html($attempt_label); ?></span>
                                                     <?php endif; ?>
+                                                    <?php if (!empty($details['resolution_status_label'])): ?>
+                                                        <span><?php echo esc_html($details['resolution_status_label']); ?></span>
+                                                    <?php endif; ?>
                                                 </p>
 
                                                 <p class="bjlg-queue-card__entry-meta" data-field="timestamps">
@@ -1880,8 +2103,30 @@ class BJLG_Admin {
                                                     <p class="bjlg-queue-card__entry-message"><?php echo esc_html($entry['message']); ?></p>
                                                 <?php endif; ?>
 
+                                                <?php if (!empty($details['resolution_summary'])): ?>
+                                                    <div class="bjlg-queue-card__entry-summary" data-field="resolution-summary">
+                                                        <strong class="bjlg-queue-card__entry-summary-label"><?php esc_html_e('Chronologie des actions', 'backup-jlg'); ?></strong>
+                                                        <ul>
+                                                            <?php foreach (explode("\n", (string) $details['resolution_summary']) as $summary_line):
+                                                                $summary_line = trim($summary_line);
+                                                                if ($summary_line === '') {
+                                                                    continue;
+                                                                }
+                                                                ?>
+                                                                <li><?php echo esc_html($summary_line); ?></li>
+                                                            <?php endforeach; ?>
+                                                        </ul>
+                                                    </div>
+                                                <?php endif; ?>
+
                                                 <div class="bjlg-queue-card__entry-actions">
                                                     <?php if ($queue_key === 'notifications' && $entry_id !== ''): ?>
+                                                        <button type="button" class="button button-secondary button-small" data-queue-action="acknowledge-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>" <?php disabled(!empty($entry['acknowledged'])); ?>>
+                                                            <?php esc_html_e('Accuser réception', 'backup-jlg'); ?>
+                                                        </button>
+                                                        <button type="button" class="button button-secondary button-small" data-queue-action="resolve-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>" <?php disabled(!empty($entry['resolved'])); ?>>
+                                                            <?php esc_html_e('Clore', 'backup-jlg'); ?>
+                                                        </button>
                                                         <button type="button" class="button button-secondary button-small" data-queue-action="retry-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>">
                                                             <?php esc_html_e('Relancer', 'backup-jlg'); ?>
                                                         </button>
@@ -2790,47 +3035,31 @@ class BJLG_Admin {
     }
 
     private function get_cron_assistant_scenarios(): array {
-        return [
-            [
-                'id' => 'pre_deploy',
-                'label' => __('Snapshot pré-déploiement', 'backup-jlg'),
-                'description' => __('Rafraîchit la base, les extensions et les thèmes toutes les 10 minutes pendant une fenêtre de changement.', 'backup-jlg'),
-                'expression' => '*/10 * * * *',
-                'adjustments' => [
-                    'label' => __('Snapshot pré-déploiement', 'backup-jlg'),
-                    'components' => ['db', 'plugins', 'themes'],
-                    'incremental' => false,
-                    'encrypt' => true,
-                    'post_checks' => ['checksum', 'dry_run'],
-                ],
-            ],
-            [
-                'id' => 'nightly_full',
-                'label' => __('Archive complète nocturne', 'backup-jlg'),
-                'description' => __('Capture intégrale chaque nuit à 02:30 avec chiffrement et vérification.', 'backup-jlg'),
-                'expression' => '30 2 * * *',
-                'adjustments' => [
-                    'label' => __('Archive nocturne', 'backup-jlg'),
-                    'components' => ['db', 'plugins', 'themes', 'uploads'],
-                    'incremental' => false,
-                    'encrypt' => true,
-                    'post_checks' => ['checksum'],
-                ],
-            ],
-            [
-                'id' => 'weekly_media',
-                'label' => __('Médias hebdomadaires', 'backup-jlg'),
-                'description' => __('Synchronise spécifiquement les médias chaque dimanche à 04:00 en incrémental.', 'backup-jlg'),
-                'expression' => '0 4 * * sun',
-                'adjustments' => [
-                    'label' => __('Médias hebdomadaires', 'backup-jlg'),
-                    'components' => ['uploads'],
-                    'incremental' => true,
-                    'encrypt' => false,
-                    'post_checks' => [],
-                ],
-            ],
-        ];
+        $catalog = BJLG_Settings::get_schedule_macro_catalog();
+        $scenarios = [];
+
+        foreach ($catalog as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $analysis = [];
+            if (class_exists(BJLG_Scheduler::class) && method_exists(BJLG_Scheduler::class, 'describe_schedule_macro')) {
+                $analysis = BJLG_Scheduler::describe_schedule_macro($entry);
+            }
+
+            $scenarios[] = [
+                'id' => $entry['id'] ?? '',
+                'label' => $entry['label'] ?? '',
+                'description' => $entry['description'] ?? '',
+                'expression' => $entry['expression'] ?? '',
+                'category' => $entry['category'] ?? '',
+                'adjustments' => $entry['adjustments'] ?? [],
+                'analysis' => $analysis,
+            ];
+        }
+
+        return $scenarios;
     }
 
     private function render_schedule_section() {
@@ -2857,6 +3086,33 @@ class BJLG_Admin {
         }
         $timezone_offset = get_option('gmt_offset', 0);
         $current_timestamp = current_time('timestamp');
+
+        $scheduler = class_exists(BJLG_Scheduler::class) ? BJLG_Scheduler::instance() : null;
+        $sandbox_settings = BJLG_Scheduler::get_default_sandbox_schedule_settings();
+        $sandbox_summary = [
+            'enabled' => false,
+            'frequency_label' => '',
+            'next_run_formatted' => '',
+            'next_run_relative' => '',
+            'last_run_at' => null,
+            'last_status' => null,
+            'last_report_id' => null,
+        ];
+
+        if ($scheduler) {
+            if (method_exists($scheduler, 'get_sandbox_schedule_settings')) {
+                $sandbox_settings = $scheduler->get_sandbox_schedule_settings();
+            }
+            if (method_exists($scheduler, 'get_sandbox_next_run_summary')) {
+                $sandbox_summary = wp_parse_args(
+                    $scheduler->get_sandbox_next_run_summary(),
+                    $sandbox_summary
+                );
+            }
+        }
+
+        $latest_sandbox_report = BJLG_Restore::get_latest_sandbox_report();
+        $sandbox_notice = $this->get_sandbox_schedule_notice();
         ?>
         <div class="bjlg-section bjlg-schedule-section">
             <h2>Planification des sauvegardes</h2>
@@ -3025,6 +3281,7 @@ class BJLG_Admin {
                     <p class="bjlg-schedule-timeline__empty" data-role="timeline-empty" hidden>Enregistrez ou activez une planification pour afficher la timeline.</p>
                 </div>
             </div>
+            <?php $this->render_sandbox_schedule_panel($sandbox_settings, $sandbox_summary, $latest_sandbox_report, $sandbox_notice); ?>
         </div>
         <?php
     }
@@ -3158,10 +3415,17 @@ class BJLG_Admin {
      */
     private function render_history_section() {
         $history = class_exists(BJLG_History::class) ? BJLG_History::get_history(50) : [];
-        $report_links = $this->get_self_test_report_links();
+        $report_links = array_merge(
+            $this->get_sandbox_report_links(),
+            $this->get_self_test_report_links()
+        );
         ?>
         <div class="bjlg-section">
             <h2>Historique des 50 dernières actions</h2>
+            <?php if ($schedule_notice): ?>
+                <div class="notice notice-success is-dismissible"><p><?php esc_html_e('Planification des validations sandbox mise à jour.', 'backup-jlg'); ?></p></div>
+            <?php endif; ?>
+            <?php $this->render_sandbox_validation_summary($sandbox_settings, $sandbox_summary); ?>
             <?php if (!empty($report_links)): ?>
                 <div class="bjlg-history-report-actions">
                     <?php foreach ($report_links as $link): ?>
@@ -3198,7 +3462,7 @@ class BJLG_Admin {
                                 <td class="bjlg-card-cell" data-label="Date"><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($entry['timestamp'])); ?></td>
                                 <td class="bjlg-card-cell" data-label="Action"><strong><?php echo esc_html(str_replace('_', ' ', ucfirst($entry['action_type']))); ?></strong></td>
                                 <td class="bjlg-card-cell" data-label="Statut"><span class="bjlg-status <?php echo esc_attr($status_class); ?>"><?php echo $status_icon . ' ' . esc_html(ucfirst($entry['status'])); ?></span></td>
-                                <td class="bjlg-card-cell" data-label="Détails"><?php echo esc_html($entry['details']); ?></td>
+                                <td class="bjlg-card-cell" data-label="Détails"><?php echo $this->render_history_details($entry); ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -3209,6 +3473,163 @@ class BJLG_Admin {
             <p class="description" style="margin-top: 20px;">L'historique est conservé pendant 30 jours. Les entrées plus anciennes sont automatiquement supprimées.</p>
         </div>
         <?php
+    }
+
+    private function render_sandbox_validation_summary(array $settings, array $summary): void
+    {
+        $enabled = !empty($settings['enabled']);
+        $current_recurrence = $enabled ? ($settings['recurrence'] ?? 'weekly') : 'disabled';
+        $options = [
+            'disabled' => __('Désactivée', 'backup-jlg'),
+            'every_fifteen_minutes' => __('Toutes les 15 minutes', 'backup-jlg'),
+            'hourly' => __('Toutes les heures', 'backup-jlg'),
+            'twice_daily' => __('Deux fois par jour', 'backup-jlg'),
+            'daily' => __('Quotidienne', 'backup-jlg'),
+            'weekly' => __('Hebdomadaire', 'backup-jlg'),
+            'monthly' => __('Mensuelle', 'backup-jlg'),
+        ];
+
+        $redirect = admin_url('admin.php?page=backup-jlg');
+        if (function_exists('menu_page_url')) {
+            $maybe = menu_page_url('backup-jlg', false);
+            if (is_string($maybe) && $maybe !== '') {
+                $redirect = $maybe;
+            }
+        }
+        $redirect = remove_query_arg('sandbox_schedule_updated', $redirect);
+
+        $total_runs = isset($summary['total']) ? (int) $summary['total'] : 0;
+        $average_rto = isset($summary['average_rto_human']) ? (string) $summary['average_rto_human'] : '';
+        $average_rpo = isset($summary['average_rpo_human']) ? (string) $summary['average_rpo_human'] : '';
+        $success = isset($summary['success']) ? (int) $summary['success'] : 0;
+        $failure = isset($summary['failure']) ? (int) $summary['failure'] : 0;
+        $last_report = isset($summary['last_report']) && is_array($summary['last_report']) ? $summary['last_report'] : null;
+        $last_links = $last_report ? $this->build_sandbox_report_links($last_report['report_files'] ?? [], (int) ($last_report['id'] ?? 0)) : [];
+
+        ?>
+        <div class="bjlg-card bjlg-sandbox-card">
+            <h3><?php esc_html_e('Validations sandbox planifiées', 'backup-jlg'); ?></h3>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="bjlg-sandbox-form">
+                <?php if (function_exists('wp_nonce_field')) { wp_nonce_field('bjlg_save_sandbox_schedule'); } ?>
+                <input type="hidden" name="action" value="bjlg_save_sandbox_schedule">
+                <input type="hidden" name="redirect_to" value="<?php echo esc_url($redirect); ?>">
+                <label class="bjlg-toggle">
+                    <input type="checkbox" name="bjlg_sandbox_enabled" value="1" <?php checked($enabled); ?>>
+                    <span><?php esc_html_e('Activer les validations sandbox automatiques', 'backup-jlg'); ?></span>
+                </label>
+                <label for="bjlg-sandbox-recurrence" class="bjlg-sandbox-recurrence-label"><?php esc_html_e('Fréquence', 'backup-jlg'); ?></label>
+                <select id="bjlg-sandbox-recurrence" name="bjlg_sandbox_recurrence" <?php disabled(!$enabled); ?>>
+                    <?php foreach ($options as $value => $label): ?>
+                        <option value="<?php echo esc_attr($value); ?>" <?php selected($current_recurrence, $value); ?>><?php echo esc_html($label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <button type="submit" class="button button-secondary"><?php esc_html_e('Enregistrer la planification', 'backup-jlg'); ?></button>
+            </form>
+            <div class="bjlg-sandbox-metrics">
+                <ul>
+                    <li><?php esc_html_e('Validations consignées', 'backup-jlg'); ?> : <?php echo esc_html(number_format_i18n($total_runs)); ?></li>
+                    <li><?php esc_html_e('Réussites', 'backup-jlg'); ?> : <?php echo esc_html(number_format_i18n($success)); ?></li>
+                    <li><?php esc_html_e('Échecs', 'backup-jlg'); ?> : <?php echo esc_html(number_format_i18n($failure)); ?></li>
+                    <?php if ($average_rto !== ''): ?>
+                        <li><?php esc_html_e('RTO moyen', 'backup-jlg'); ?> : <?php echo esc_html($average_rto); ?></li>
+                    <?php endif; ?>
+                    <?php if ($average_rpo !== ''): ?>
+                        <li><?php esc_html_e('RPO moyen', 'backup-jlg'); ?> : <?php echo esc_html($average_rpo); ?></li>
+                    <?php endif; ?>
+                </ul>
+            </div>
+            <div class="bjlg-sandbox-last-report">
+                <?php if ($last_report): ?>
+                    <p>
+                        <strong><?php esc_html_e('Dernière validation', 'backup-jlg'); ?> :</strong>
+                        <?php echo esc_html($this->format_history_timestamp(isset($last_report['report_summary']['completed_at']) ? (int) $last_report['report_summary']['completed_at'] : null)); ?>
+                        — <?php echo esc_html(ucfirst($last_report['status'] ?? 'info')); ?>
+                    </p>
+                    <?php if (!empty($last_report['report_summary']['objectives']['rto_human'])): ?>
+                        <p><?php esc_html_e('RTO', 'backup-jlg'); ?> : <?php echo esc_html($last_report['report_summary']['objectives']['rto_human']); ?></p>
+                    <?php endif; ?>
+                    <?php if (!empty($last_report['report_summary']['objectives']['rpo_human'])): ?>
+                        <p><?php esc_html_e('RPO', 'backup-jlg'); ?> : <?php echo esc_html($last_report['report_summary']['objectives']['rpo_human']); ?></p>
+                    <?php endif; ?>
+                    <?php if (!empty($last_links)): ?>
+                        <div class="bjlg-history-report-actions bjlg-history-report-actions--inline">
+                            <?php foreach ($last_links as $link): ?>
+                                <a class="button button-secondary" href="<?php echo esc_url($link['url']); ?>"><?php echo esc_html($link['label']); ?></a>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <p><?php esc_html_e('Aucune validation sandbox n’a encore été réalisée.', 'backup-jlg'); ?></p>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php
+    }
+
+    private function get_sandbox_report_links_from_entry(array $entry): array
+    {
+        $metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+        $files = isset($metadata['report_files']) && is_array($metadata['report_files'])
+            ? BJLG_History::sanitize_report_files($metadata['report_files'])
+            : [];
+
+        return $this->build_sandbox_report_links($files, isset($entry['id']) ? (int) $entry['id'] : 0);
+    }
+
+    private function build_sandbox_report_links(array $files, int $entry_id): array
+    {
+        if ($entry_id <= 0) {
+            return [];
+        }
+
+        $types = [
+            'markdown' => __('Rapport Markdown', 'backup-jlg'),
+            'json' => __('Rapport JSON', 'backup-jlg'),
+            'log' => __('Journaux', 'backup-jlg'),
+        ];
+
+        $links = [];
+        foreach ($types as $type => $label) {
+            if (empty($files[$type]['path'])) {
+                continue;
+            }
+
+            $url = add_query_arg(
+                [
+                    'action' => 'bjlg_download_sandbox_report',
+                    'entry_id' => $entry_id,
+                    'type' => $type,
+                ],
+                admin_url('admin-post.php')
+            );
+
+            if (function_exists('wp_nonce_url')) {
+                $url = wp_nonce_url($url, 'bjlg_download_sandbox_report');
+            }
+
+            $links[] = [
+                'type' => $type,
+                'label' => $label,
+                'url' => $url,
+            ];
+        }
+
+        return $links;
+    }
+
+    private function format_history_timestamp(?int $timestamp): string
+    {
+        if ($timestamp === null || $timestamp <= 0) {
+            return '';
+        }
+
+        $format = get_option('date_format') . ' ' . get_option('time_format');
+
+        if (function_exists('date_i18n')) {
+            return date_i18n($format, $timestamp);
+        }
+
+        return date('Y-m-d H:i:s', $timestamp);
     }
 
     private function get_self_test_report_links(): array {
@@ -3248,6 +3669,58 @@ class BJLG_Admin {
             $links[] = [
                 'type' => $type,
                 'label' => $label,
+                'url' => $url,
+            ];
+        }
+
+        return $links;
+    }
+
+    private function get_sandbox_report_links(): array
+    {
+        $latest = BJLG_Restore::get_latest_sandbox_report();
+
+        if (!is_array($latest) || empty($latest['id']) || empty($latest['files'])) {
+            return [];
+        }
+
+        $status_text = ($latest['status'] ?? '') === 'success'
+            ? __('succès', 'backup-jlg')
+            : __('échec', 'backup-jlg');
+        $created_at = isset($latest['created_at']) && $latest['created_at']
+            ? date_i18n(get_option('date_format') . ' ' . get_option('time_format'), (int) $latest['created_at'])
+            : '';
+
+        $links = [];
+        $targets = [
+            'json' => __('Télécharger le rapport JSON', 'backup-jlg'),
+            'log' => __('Télécharger le journal NDJSON', 'backup-jlg'),
+        ];
+
+        foreach ($targets as $type => $label) {
+            if (empty($latest['files'][$type]['path'])) {
+                continue;
+            }
+
+            $url = $this->get_sandbox_report_download_url((string) $latest['id'], $type);
+
+            if ($url === '') {
+                continue;
+            }
+
+            $full_label = sprintf(
+                __('Validation sandbox (%1$s) – %2$s', 'backup-jlg'),
+                $status_text,
+                $label
+            );
+
+            if ($created_at !== '') {
+                $full_label .= ' · ' . $created_at;
+            }
+
+            $links[] = [
+                'type' => $type,
+                'label' => $full_label,
                 'url' => $url,
             ];
         }
@@ -3310,6 +3783,209 @@ class BJLG_Admin {
         if (function_exists('nocache_headers')) {
             nocache_headers();
         }
+        header('Content-Type: ' . $mime_type);
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Content-Length: ' . filesize($real_path));
+
+        $sent = readfile($real_path);
+        if ($sent === false) {
+            wp_die(__('Impossible de transmettre le rapport.', 'backup-jlg'), '', ['response' => 500]);
+        }
+
+        exit;
+    }
+
+    private function get_sandbox_report_download_url(string $report_id, string $type): string
+    {
+        $report_id = trim($report_id);
+        $type = sanitize_key($type);
+
+        if ($report_id === '' || !in_array($type, ['json', 'log'], true)) {
+            return '';
+        }
+
+        $url = add_query_arg(
+            [
+                'action' => 'bjlg_download_sandbox_report',
+                'report_id' => $report_id,
+                'type' => $type,
+            ],
+            admin_url('admin-post.php')
+        );
+
+        return function_exists('wp_nonce_url')
+            ? wp_nonce_url($url, 'bjlg_download_sandbox_report')
+            : add_query_arg('_wpnonce', wp_create_nonce('bjlg_download_sandbox_report'), $url);
+    }
+
+    private function render_history_details(array $entry): string
+    {
+        $details = isset($entry['details']) ? (string) $entry['details'] : '';
+        $metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+
+        ob_start();
+        ?>
+        <div class="bjlg-history-details-main"><?php echo esc_html($details); ?></div>
+        <?php if (($entry['action_type'] ?? '') === 'sandbox_restore_validation' && !empty($metadata)) : ?>
+            <div class="bjlg-history-details-meta">
+                <?php if (!empty($metadata['components']) && is_array($metadata['components'])) : ?>
+                    <p><strong><?php esc_html_e('Composants', 'backup-jlg'); ?> :</strong> <?php echo esc_html(implode(', ', array_map('strval', $metadata['components']))); ?></p>
+                <?php endif; ?>
+                <?php if (!empty($metadata['objectives']['rto_human'])) : ?>
+                    <p><strong><?php esc_html_e('RTO observé', 'backup-jlg'); ?> :</strong> <?php echo esc_html($metadata['objectives']['rto_human']); ?></p>
+                <?php endif; ?>
+                <?php if (!empty($metadata['objectives']['rpo_human'])) : ?>
+                    <p><strong><?php esc_html_e('RPO estimé', 'backup-jlg'); ?> :</strong> <?php echo esc_html($metadata['objectives']['rpo_human']); ?></p>
+                <?php endif; ?>
+                <?php if (!empty($metadata['report']['id'])) :
+                    $json_url = $this->get_sandbox_report_download_url((string) $metadata['report']['id'], 'json');
+                    $log_url = $this->get_sandbox_report_download_url((string) $metadata['report']['id'], 'log');
+                    ?>
+                    <p class="bjlg-history-report-links">
+                        <?php if ($json_url !== '') : ?>
+                            <a class="button button-small" href="<?php echo esc_url($json_url); ?>"><?php esc_html_e('Rapport JSON', 'backup-jlg'); ?></a>
+                        <?php endif; ?>
+                        <?php if ($log_url !== '') : ?>
+                            <a class="button button-small" href="<?php echo esc_url($log_url); ?>"><?php esc_html_e('Journal NDJSON', 'backup-jlg'); ?></a>
+                        <?php endif; ?>
+                    </p>
+                <?php endif; ?>
+                <?php if (!empty($metadata['log_excerpt']) && is_array($metadata['log_excerpt'])) :
+                    $log_entries = array_slice($metadata['log_excerpt'], -5);
+                    ?>
+                    <div class="bjlg-history-log-excerpt">
+                        <strong><?php esc_html_e('Extrait du journal', 'backup-jlg'); ?> :</strong>
+                        <ul>
+                            <?php foreach ($log_entries as $log_entry) :
+                                if (!is_array($log_entry) || empty($log_entry['message'])) {
+                                    continue;
+                                }
+                                $timestamp = isset($log_entry['timestamp']) ? (int) $log_entry['timestamp'] : 0;
+                                $prefix = $timestamp > 0
+                                    ? date_i18n(get_option('time_format'), $timestamp) . ' — '
+                                    : '';
+                                ?>
+                                <li><?php echo esc_html($prefix . (string) $log_entry['message']); ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
+        <?php
+
+        return (string) ob_get_clean();
+    }
+
+    public function handle_save_sandbox_schedule()
+    {
+        if (!bjlg_can_manage_backups()) {
+            wp_die(__('Permission refusée.', 'backup-jlg'), '', ['response' => 403]);
+        }
+
+        check_admin_referer('bjlg_save_sandbox_schedule', 'bjlg_sandbox_schedule_nonce');
+
+        $posted = wp_unslash($_POST);
+        $payload = [
+            'enabled' => !empty($posted['sandbox_schedule_enabled']),
+            'recurrence' => isset($posted['sandbox_schedule_recurrence']) ? sanitize_key((string) $posted['sandbox_schedule_recurrence']) : '',
+            'custom_interval_minutes' => isset($posted['sandbox_schedule_custom_interval']) ? (int) $posted['sandbox_schedule_custom_interval'] : null,
+            'initial_delay_minutes' => isset($posted['sandbox_schedule_initial_delay']) ? (int) $posted['sandbox_schedule_initial_delay'] : null,
+            'components' => isset($posted['sandbox_schedule_components'])
+                ? array_map('sanitize_key', (array) $posted['sandbox_schedule_components'])
+                : [],
+            'sandbox_path' => isset($posted['sandbox_schedule_path']) ? sanitize_text_field((string) $posted['sandbox_schedule_path']) : '',
+        ];
+
+        $status = 'saved';
+        $message = '';
+
+        try {
+            $scheduler = BJLG_Scheduler::instance();
+            if ($scheduler && method_exists($scheduler, 'save_sandbox_schedule_settings')) {
+                $scheduler->save_sandbox_schedule_settings($payload);
+            } else {
+                throw new \RuntimeException(__('Le planificateur sandbox est indisponible.', 'backup-jlg'));
+            }
+        } catch (\Throwable $throwable) {
+            $status = 'error';
+            $message = $throwable->getMessage();
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('[Sandbox schedule] ' . $throwable->getMessage(), 'error');
+            }
+        }
+
+        $redirect_args = [
+            'page' => 'backup-jlg',
+            'section' => 'schedule',
+            'sandbox_schedule_status' => $status,
+        ];
+
+        if ($message !== '') {
+            $redirect_args['sandbox_schedule_message'] = rawurlencode($message);
+        }
+
+        $redirect = add_query_arg($redirect_args, admin_url('admin.php'));
+
+        wp_safe_redirect($redirect);
+        exit;
+    }
+
+    public function handle_download_sandbox_report()
+    {
+        if (!bjlg_can_manage_backups()) {
+            wp_die(__('Permission refusée.', 'backup-jlg'), '', ['response' => 403]);
+        }
+
+        $nonce = isset($_GET['_wpnonce']) ? (string) $_GET['_wpnonce'] : '';
+        if (function_exists('wp_verify_nonce') && !wp_verify_nonce($nonce, 'bjlg_download_sandbox_report')) {
+            wp_die(__('Jeton de sécurité invalide.', 'backup-jlg'), '', ['response' => 403]);
+        }
+
+        $report_id = isset($_GET['report_id']) ? sanitize_text_field((string) wp_unslash($_GET['report_id'])) : '';
+        $type = isset($_GET['type']) ? sanitize_key((string) wp_unslash($_GET['type'])) : 'json';
+        if (!in_array($type, ['json', 'log'], true)) {
+            $type = 'json';
+        }
+
+        $record = BJLG_Restore::find_sandbox_report($report_id);
+        if (!is_array($record)) {
+            wp_die(__('Rapport sandbox introuvable.', 'backup-jlg'), '', ['response' => 404]);
+        }
+
+        $files = isset($record['files']) && is_array($record['files']) ? $record['files'] : [];
+        $entry = isset($files[$type]) && is_array($files[$type]) ? $files[$type] : null;
+
+        if (!$entry || empty($entry['path'])) {
+            wp_die(__('Le fichier demandé est introuvable.', 'backup-jlg'), '', ['response' => 404]);
+        }
+
+        $path = (string) $entry['path'];
+        $real_path = realpath($path);
+        if ($real_path === false || !is_readable($real_path)) {
+            wp_die(__('Impossible de lire le rapport demandé.', 'backup-jlg'), '', ['response' => 404]);
+        }
+
+        $base_path = isset($record['base_path']) ? (string) $record['base_path'] : dirname($real_path);
+        $normalized_base = realpath($base_path);
+        if ($normalized_base !== false) {
+            $normalized_base = rtrim(str_replace('\\', '/', $normalized_base), '/') . '/';
+            $normalized_target = str_replace('\\', '/', $real_path);
+            if (strpos($normalized_target, $normalized_base) !== 0) {
+                wp_die(__('Accès au rapport refusé.', 'backup-jlg'), '', ['response' => 403]);
+            }
+        }
+
+        $mime_type = isset($entry['mime_type']) && $entry['mime_type'] !== '' ? (string) $entry['mime_type'] : 'application/octet-stream';
+        $filename = isset($entry['filename']) && $entry['filename'] !== ''
+            ? sanitize_file_name($entry['filename'])
+            : basename($real_path);
+
+        if (function_exists('nocache_headers')) {
+            nocache_headers();
+        }
+
         header('Content-Type: ' . $mime_type);
         header('Content-Disposition: attachment; filename="' . $filename . '"');
         header('Content-Length: ' . filesize($real_path));
@@ -3402,6 +4078,23 @@ class BJLG_Admin {
             : $event_defaults;
         $event_triggers_json = esc_attr(wp_json_encode($event_triggers));
         $event_defaults_json = esc_attr(wp_json_encode($event_defaults));
+        $restore_check = isset($schedule_collection['restore_check']) && is_array($schedule_collection['restore_check'])
+            ? $schedule_collection['restore_check']
+            : [
+                'settings' => BJLG_Scheduler::sanitize_restore_check_settings([]),
+                'state' => [
+                    'last_run' => null,
+                    'last_status' => null,
+                    'last_message' => '',
+                    'last_report' => null,
+                ],
+                'schedule' => [
+                    'next_run' => null,
+                    'next_run_formatted' => null,
+                    'next_run_relative' => null,
+                ],
+            ];
+        $restore_check_json = esc_attr(wp_json_encode($restore_check));
         $event_trigger_labels = [
             'filesystem' => [
                 'title' => __('Fichiers & médias', 'backup-jlg'),
@@ -3462,6 +4155,64 @@ class BJLG_Admin {
             $update_guard_components = $update_guard_settings['components'];
         }
         $update_guard_settings['components'] = $update_guard_components;
+
+        $target_defaults = [
+            'core' => true,
+            'plugin' => true,
+            'theme' => true,
+        ];
+        $current_targets = [];
+        if (isset($update_guard_settings['targets']) && is_array($update_guard_settings['targets'])) {
+            foreach ($update_guard_settings['targets'] as $target_key => $enabled) {
+                $key = sanitize_key((string) $target_key);
+                if ($key === '' || !array_key_exists($key, $target_defaults)) {
+                    continue;
+                }
+                $current_targets[$key] = !empty($enabled);
+            }
+        }
+        $update_guard_settings['targets'] = array_merge($target_defaults, $current_targets);
+
+        $reminder_defaults = $update_guard_defaults['reminder'];
+        $reminder_settings = isset($update_guard_settings['reminder']) && is_array($update_guard_settings['reminder'])
+            ? $update_guard_settings['reminder']
+            : $reminder_defaults;
+
+        $reminder_settings['enabled'] = !empty($reminder_settings['enabled']);
+        $reminder_settings['message'] = isset($reminder_settings['message']) && $reminder_settings['message'] !== ''
+            ? (string) $reminder_settings['message']
+            : $reminder_defaults['message'];
+
+        $channel_defaults = $reminder_defaults['channels'];
+        $channels = isset($reminder_settings['channels']) && is_array($reminder_settings['channels'])
+            ? $reminder_settings['channels']
+            : [];
+
+        foreach ($channel_defaults as $channel_key => $channel_default) {
+            if (!isset($channels[$channel_key]) || !is_array($channels[$channel_key])) {
+                $channels[$channel_key] = $channel_default;
+                continue;
+            }
+
+            $channels[$channel_key] = wp_parse_args($channels[$channel_key], $channel_default);
+            $channels[$channel_key]['enabled'] = !empty($channels[$channel_key]['enabled']);
+            if ($channel_key === 'email') {
+                $channels[$channel_key]['recipients'] = isset($channels[$channel_key]['recipients'])
+                    ? (string) $channels[$channel_key]['recipients']
+                    : '';
+            }
+        }
+
+        $reminder_settings['channels'] = $channels;
+        $update_guard_settings['reminder'] = $reminder_settings;
+        $update_guard_email_recipients_display = '';
+        if (!empty($channels['email']['recipients'])) {
+            $emails = preg_split('/[,;\r\n]+/', (string) $channels['email']['recipients']);
+            if (is_array($emails)) {
+                $emails = array_filter(array_map('trim', $emails));
+                $update_guard_email_recipients_display = implode("\n", $emails);
+            }
+        }
         $default_next_run_summary = [
             'next_run_formatted' => 'Non planifié',
             'next_run_relative' => '',
@@ -3718,6 +4469,7 @@ class BJLG_Admin {
                 data-schedules="<?php echo $schedules_json; ?>"
                 data-event-triggers="<?php echo $event_triggers_json; ?>"
                 data-event-defaults="<?php echo $event_defaults_json; ?>"
+                data-restore-check="<?php echo $restore_check_json; ?>"
             >
                 <div id="bjlg-schedule-feedback" class="notice" role="status" aria-live="polite" style="display:none;"></div>
                 <div class="bjlg-schedule-list">
@@ -3821,7 +4573,164 @@ class BJLG_Admin {
                 </p>
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les planifications</button></p>
             </form>
-            
+
+            <h3><span class="dashicons dashicons-shield" aria-hidden="true"></span> Snapshot pré-update</h3>
+            <form class="bjlg-settings-form bjlg-update-guard-form"
+                  data-success-message="Paramètres du snapshot pré-update sauvegardés."
+                  data-error-message="Impossible de mettre à jour le snapshot pré-update.">
+                <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">Protection automatique</th>
+                        <td>
+                            <label for="bjlg-update-guard-enabled" class="bjlg-toggle">
+                                <input type="checkbox"
+                                       id="bjlg-update-guard-enabled"
+                                       name="update_guard_enabled"
+                                       value="1"
+                                       <?php checked(!empty($update_guard_settings['enabled'])); ?>
+                                       aria-describedby="bjlg-update-guard-enabled-description">
+                                <span><?php esc_html_e('Déclencher un snapshot avant chaque mise à jour', 'backup-jlg'); ?></span>
+                            </label>
+                            <p id="bjlg-update-guard-enabled-description" class="description">
+                                <?php esc_html_e('Lorsque cette option est active, un point de restauration est créé avant l’exécution des mises à jour correspondantes.', 'backup-jlg'); ?>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr class="bjlg-update-guard-fields">
+                        <th scope="row"><?php esc_html_e('Composants à inclure', 'backup-jlg'); ?></th>
+                        <td>
+                            <fieldset class="bjlg-update-guard-fieldset" aria-describedby="bjlg-update-guard-components-help">
+                                <legend class="screen-reader-text"><?php esc_html_e('Sélectionner les composants à sauvegarder', 'backup-jlg'); ?></legend>
+                                <ul class="bjlg-checkbox-list" role="list">
+                                    <?php foreach ($components_labels as $component_key => $component_label): ?>
+                                        <li>
+                                            <label for="bjlg-update-guard-component-<?php echo esc_attr($component_key); ?>">
+                                                <input type="checkbox"
+                                                       id="bjlg-update-guard-component-<?php echo esc_attr($component_key); ?>"
+                                                       name="update_guard_components[]"
+                                                       value="<?php echo esc_attr($component_key); ?>"
+                                                       <?php checked(in_array($component_key, $update_guard_settings['components'], true)); ?>>
+                                                <span><?php echo esc_html($component_label); ?></span>
+                                            </label>
+                                        </li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            </fieldset>
+                            <p id="bjlg-update-guard-components-help" class="description">
+                                <?php esc_html_e('Conservez au minimum la base de données et les extensions pour les mises à jour critiques ; ajoutez les médias et thèmes lors des fenêtres de maintenance planifiées.', 'backup-jlg'); ?>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr class="bjlg-update-guard-fields">
+                        <th scope="row"><?php esc_html_e('Types de mise à jour', 'backup-jlg'); ?></th>
+                        <td>
+                            <?php $update_guard_target_labels = [
+                                'core' => __('Cœur WordPress', 'backup-jlg'),
+                                'plugin' => __('Extensions', 'backup-jlg'),
+                                'theme' => __('Thèmes', 'backup-jlg'),
+                            ]; ?>
+                            <fieldset class="bjlg-update-guard-fieldset" aria-describedby="bjlg-update-guard-targets-help">
+                                <legend class="screen-reader-text"><?php esc_html_e('Choisir les mises à jour surveillées', 'backup-jlg'); ?></legend>
+                                <ul class="bjlg-checkbox-list" role="list">
+                                    <?php foreach ($update_guard_target_labels as $target_key => $target_label): ?>
+                                        <li>
+                                            <label for="bjlg-update-guard-target-<?php echo esc_attr($target_key); ?>">
+                                                <input type="checkbox"
+                                                       id="bjlg-update-guard-target-<?php echo esc_attr($target_key); ?>"
+                                                       name="update_guard_targets[]"
+                                                       value="<?php echo esc_attr($target_key); ?>"
+                                                       <?php checked(!empty($update_guard_settings['targets'][$target_key])); ?>>
+                                                <span><?php echo esc_html($target_label); ?></span>
+                                            </label>
+                                        </li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            </fieldset>
+                            <p id="bjlg-update-guard-targets-help" class="description">
+                                <?php esc_html_e('Désactivez les snapshots pour les mises à jour mineures afin d’accélérer les correctifs ; conservez-les pour les évolutions majeures ou à fort impact.', 'backup-jlg'); ?>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr class="bjlg-update-guard-fields">
+                        <th scope="row"><?php esc_html_e('Rappels', 'backup-jlg'); ?></th>
+                        <td>
+                            <label for="bjlg-update-guard-reminder-enabled" class="bjlg-toggle">
+                                <input type="checkbox"
+                                       id="bjlg-update-guard-reminder-enabled"
+                                       name="update_guard_reminder_enabled"
+                                       value="1"
+                                       <?php checked(!empty($update_guard_settings['reminder']['enabled'])); ?>
+                                       aria-describedby="bjlg-update-guard-reminder-help">
+                                <span><?php esc_html_e('Notifier lorsqu’un snapshot est ignoré', 'backup-jlg'); ?></span>
+                            </label>
+                            <p id="bjlg-update-guard-reminder-help" class="description">
+                                <?php esc_html_e('Les rappels informent votre équipe qu’un snapshot est requis ou a été omis selon les règles ci-dessus.', 'backup-jlg'); ?>
+                            </p>
+                            <div class="bjlg-update-guard-reminder-fields">
+                                <label for="bjlg-update-guard-reminder-message" class="bjlg-label-block bjlg-fw-600">
+                                    <?php esc_html_e('Message affiché', 'backup-jlg'); ?>
+                                </label>
+                                <textarea id="bjlg-update-guard-reminder-message"
+                                          name="update_guard_reminder_message"
+                                          class="large-text"
+                                          rows="3"
+                                          aria-describedby="bjlg-update-guard-reminder-message-help"><?php echo esc_textarea($update_guard_settings['reminder']['message']); ?></textarea>
+                                <p id="bjlg-update-guard-reminder-message-help" class="description">
+                                    <?php esc_html_e('Décrivez les étapes à suivre (tests, validation, sauvegarde manuelle) pour que le rappel soit immédiatement exploitable.', 'backup-jlg'); ?>
+                                </p>
+                                <fieldset class="bjlg-update-guard-reminder-channels" aria-describedby="bjlg-update-guard-reminder-channels-help">
+                                    <legend class="bjlg-fw-600"><?php esc_html_e('Canaux à utiliser', 'backup-jlg'); ?></legend>
+                                    <ul class="bjlg-checkbox-list" role="list">
+                                        <li>
+                                            <label for="bjlg-update-guard-reminder-channel-notification">
+                                                <input type="checkbox"
+                                                       id="bjlg-update-guard-reminder-channel-notification"
+                                                       name="update_guard_reminder_channel_notification"
+                                                       value="1"
+                                                       <?php checked(!empty($update_guard_settings['reminder']['channels']['notification']['enabled'])); ?>>
+                                                <span><?php esc_html_e('Notification interne (journal & centre d’alertes)', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                        <li>
+                                            <label for="bjlg-update-guard-reminder-channel-email">
+                                                <input type="checkbox"
+                                                       id="bjlg-update-guard-reminder-channel-email"
+                                                       name="update_guard_reminder_channel_email"
+                                                       value="1"
+                                                       <?php checked(!empty($update_guard_settings['reminder']['channels']['email']['enabled'])); ?>>
+                                                <span><?php esc_html_e('E-mail dédié', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                    </ul>
+                                    <p id="bjlg-update-guard-reminder-channels-help" class="description">
+                                        <?php esc_html_e('Activez uniquement les canaux pertinents pour éviter la lassitude : privilégiez l’e-mail pour les équipes d’astreinte, l’alerte interne pour le suivi quotidien.', 'backup-jlg'); ?>
+                                    </p>
+                                </fieldset>
+                                <div class="bjlg-update-guard-reminder-email-fields">
+                                    <label for="bjlg-update-guard-reminder-email-recipients" class="bjlg-label-block bjlg-fw-600">
+                                        <?php esc_html_e('Destinataires e-mail', 'backup-jlg'); ?>
+                                    </label>
+                                    <textarea id="bjlg-update-guard-reminder-email-recipients"
+                                              name="update_guard_reminder_email_recipients"
+                                              class="large-text code"
+                                              rows="3"
+                                              placeholder="admin@example.com&#10;ops@example.com"
+                                              aria-describedby="bjlg-update-guard-reminder-email-help"><?php echo esc_textarea($update_guard_email_recipients_display); ?></textarea>
+                                    <p id="bjlg-update-guard-reminder-email-help" class="description">
+                                        <?php esc_html_e('Une adresse par ligne ou séparée par une virgule. L’adresse e-mail d’administration du site est utilisée par défaut si cette liste est vide.', 'backup-jlg'); ?>
+                                    </p>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+                <p class="description">
+                    <?php esc_html_e('Ces réglages sont disponibles via l’API REST afin de synchroniser votre politique de snapshots avec vos pipelines de déploiement.', 'backup-jlg'); ?>
+                </p>
+                <p class="submit"><button type="submit" class="button button-primary"><?php esc_html_e('Enregistrer la section Snapshot', 'backup-jlg'); ?></button></p>
+            </form>
+
             <h3><span class="dashicons dashicons-admin-links" aria-hidden="true"></span> Webhook</h3>
             <form id="bjlg-webhook-tools" class="bjlg-webhook-form" aria-labelledby="bjlg-webhook-tools-title">
                 <p id="bjlg-webhook-tools-title">Utilisez ce point de terminaison pour déclencher une sauvegarde à distance en toute sécurité :</p>
@@ -5321,12 +6230,57 @@ class BJLG_Admin {
             }
         }
 
+        $restore_defaults = BJLG_Scheduler::sanitize_restore_check_settings([]);
+        $restore_state_defaults = [
+            'last_run' => null,
+            'last_status' => null,
+            'last_message' => '',
+            'last_report' => null,
+        ];
+
+        $restore_settings = $restore_defaults;
+        $restore_state = $restore_state_defaults;
+
+        if (isset($scheduler) && $scheduler) {
+            if (method_exists($scheduler, 'get_restore_check_settings')) {
+                $restore_settings = wp_parse_args($scheduler->get_restore_check_settings(), $restore_defaults);
+            }
+
+            if (method_exists($scheduler, 'get_restore_check_state')) {
+                $restore_state = wp_parse_args($scheduler->get_restore_check_state(), $restore_state_defaults);
+            }
+        } else {
+            $stored_restore = \bjlg_get_option('bjlg_restore_check_settings', []);
+            $restore_settings = BJLG_Scheduler::sanitize_restore_check_settings($stored_restore);
+
+            $stored_state = \bjlg_get_option('bjlg_restore_check_state', []);
+            if (is_array($stored_state)) {
+                $restore_state = wp_parse_args($stored_state, $restore_state_defaults);
+            }
+        }
+
+        $restore_next_run = wp_next_scheduled(BJLG_Scheduler::RESTORE_CHECK_HOOK);
+        $restore_schedule = [
+            'next_run' => $restore_next_run ?: null,
+            'next_run_formatted' => $restore_next_run
+                ? get_date_from_gmt(gmdate('Y-m-d H:i:s', $restore_next_run), 'd/m/Y H:i:s')
+                : null,
+            'next_run_relative' => ($restore_next_run && function_exists('human_time_diff'))
+                ? human_time_diff(time(), $restore_next_run)
+                : null,
+        ];
+
         return [
             'schedules' => $schedules,
             'next_runs' => $next_runs,
             'default' => $default_schedule,
             'event_triggers' => $event_triggers,
             'event_defaults' => $event_defaults,
+            'restore_check' => [
+                'settings' => $restore_settings,
+                'state' => $restore_state,
+                'schedule' => $restore_schedule,
+            ],
         ];
     }
 
@@ -5594,6 +6548,10 @@ class BJLG_Admin {
                    data-field="previous_recurrence"
                    name="schedules[<?php echo esc_attr($field_prefix); ?>][previous_recurrence]"
                    value="<?php echo esc_attr($previous_recurrence); ?>">
+            <input type="hidden"
+                   data-field="macro"
+                   name="schedules[<?php echo esc_attr($field_prefix); ?>][macro]"
+                   value="<?php echo esc_attr($schedule['macro'] ?? ''); ?>">
             <header class="bjlg-schedule-item__header">
                 <div class="bjlg-schedule-item__title">
                     <span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span>

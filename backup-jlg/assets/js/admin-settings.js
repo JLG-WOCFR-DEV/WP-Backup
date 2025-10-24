@@ -2,6 +2,58 @@ jQuery(function($) {
     'use strict';
 
     const STORAGE_THRESHOLD_SELECTOR = 'input[name="storage_quota_warning_threshold"]';
+    const UPDATE_GUARD_TOGGLE = '#bjlg-update-guard-enabled';
+    const UPDATE_GUARD_FIELDS = '.bjlg-update-guard-fields';
+    const REMINDER_TOGGLE = '#bjlg-update-guard-reminder-enabled';
+    const REMINDER_FIELDS = '.bjlg-update-guard-reminder-fields';
+    const REMINDER_EMAIL_TOGGLE = '#bjlg-update-guard-reminder-channel-email';
+    const REMINDER_EMAIL_FIELDS = '.bjlg-update-guard-reminder-email-fields';
+
+    function toggleFieldGroup($container, disabled) {
+        if (!$container || !$container.length) {
+            return;
+        }
+
+        $container.toggleClass('bjlg-is-disabled', disabled);
+        $container.find('input, select, textarea, button').prop('disabled', disabled);
+    }
+
+    function refreshReminderEmailState(reminderEnabled) {
+        const $emailFields = $(REMINDER_EMAIL_FIELDS);
+        const emailEnabled = reminderEnabled && $(REMINDER_EMAIL_TOGGLE).is(':checked');
+        toggleFieldGroup($emailFields, !emailEnabled);
+    }
+
+    function refreshReminderState() {
+        const snapshotEnabled = $(UPDATE_GUARD_TOGGLE).is(':checked');
+        const reminderEnabled = snapshotEnabled && $(REMINDER_TOGGLE).is(':checked');
+        const $reminderFields = $(REMINDER_FIELDS);
+        toggleFieldGroup($reminderFields, !reminderEnabled);
+        refreshReminderEmailState(reminderEnabled);
+    }
+
+    function refreshUpdateGuardState() {
+        const enabled = $(UPDATE_GUARD_TOGGLE).is(':checked');
+        const $groups = $(UPDATE_GUARD_FIELDS);
+
+        $groups.each(function() {
+            const $group = $(this);
+            // Avoid disabling the master toggle itself.
+            const $inputs = $group.find('input, select, textarea, button').not(UPDATE_GUARD_TOGGLE);
+            $group.toggleClass('bjlg-is-disabled', !enabled);
+            $inputs.prop('disabled', !enabled);
+        });
+
+        refreshReminderState();
+    }
+
+    $(document).on('change', UPDATE_GUARD_TOGGLE, refreshUpdateGuardState);
+    $(document).on('change', REMINDER_TOGGLE, refreshReminderState);
+    $(document).on('change', REMINDER_EMAIL_TOGGLE, function() {
+        const snapshotEnabled = $(UPDATE_GUARD_TOGGLE).is(':checked');
+        const reminderEnabled = snapshotEnabled && $(REMINDER_TOGGLE).is(':checked');
+        refreshReminderEmailState(reminderEnabled);
+    });
 
     function sanitizeStorageThreshold($input, clampValue) {
         if (!$input || !$input.length) {
@@ -53,6 +105,8 @@ jQuery(function($) {
     $(STORAGE_THRESHOLD_SELECTOR).each(function() {
         sanitizeStorageThreshold($(this), true);
     });
+
+    refreshUpdateGuardState();
 
 // --- TEST DE CONNEXION GOOGLE DRIVE ---
 $(document).on('click', '.bjlg-gdrive-test-connection', function(e) {

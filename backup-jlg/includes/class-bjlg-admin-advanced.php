@@ -280,6 +280,18 @@ class BJLG_Admin_Advanced {
         return $queues;
     }
 
+    private function get_remote_purge_metrics_snapshot(): array {
+        if (function_exists('bjlg_get_option')) {
+            $raw = \bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
+        } elseif (function_exists('get_option')) {
+            $raw = get_option('bjlg_remote_purge_sla_metrics', []);
+        } else {
+            $raw = [];
+        }
+
+        return is_array($raw) ? $raw : [];
+    }
+
     private function format_notification_queue_metrics(int $now): array {
         $metrics = [
             'key' => 'notifications',
@@ -351,6 +363,9 @@ class BJLG_Admin_Advanced {
         $incremental = new BJLG_Incremental();
         $queue = $incremental->get_remote_purge_queue();
         if (!is_array($queue) || empty($queue)) {
+            $snapshot = $this->get_remote_purge_metrics_snapshot();
+            $metrics['sla'] = $this->format_remote_purge_sla_metrics($now, $snapshot);
+
             return $metrics;
         }
 
@@ -359,6 +374,11 @@ class BJLG_Admin_Advanced {
         $next_attempt = null;
         $oldest = null;
         $entries = [];
+        $snapshot = $this->get_remote_purge_metrics_snapshot();
+        $saturation_context = [];
+        if (isset($snapshot['saturation']['destinations']) && is_array($snapshot['saturation']['destinations'])) {
+            $saturation_context = $snapshot['saturation']['destinations'];
+        }
 
         foreach ($queue as $entry) {
             if (!is_array($entry)) {
@@ -432,11 +452,14 @@ class BJLG_Admin_Advanced {
             return $a_time <=> $b_time;
         });
 
-        $metrics['entries'] = $this->format_remote_purge_entries(array_slice($entries, 0, 5), $now);
+        $metrics['sla'] = $this->format_remote_purge_sla_metrics($now, $snapshot);
+        $metrics['entries'] = $this->format_remote_purge_entries(
+            array_slice($entries, 0, 5),
+            $now,
+            $metrics['sla']['saturation_destinations_map'] ?? $saturation_context
+        );
         [$metrics['next_attempt_formatted'], $metrics['next_attempt_relative']] = $this->format_timestamp_pair($next_attempt, $now);
         [$metrics['oldest_entry_formatted'], $metrics['oldest_entry_relative']] = $this->format_timestamp_pair($oldest, $now);
-
-        $metrics['sla'] = $this->format_remote_purge_sla_metrics($now);
 
         return $metrics;
     }
@@ -634,12 +657,26 @@ class BJLG_Admin_Advanced {
             $details['resolution_status'] = $resolution_status;
             $details['resolution_status_label'] = $this->get_resolution_status_label($resolution_status);
 
+            if (!empty($entry['resolution_summary'])) {
+                $details['resolution_summary'] = function_exists('sanitize_textarea_field')
+                    ? sanitize_textarea_field((string) $entry['resolution_summary'])
+                    : sanitize_text_field((string) $entry['resolution_summary']);
+            }
+
             if ($resolution_payload) {
                 $details['acknowledged_relative'] = $resolution_payload['acknowledged_relative'] ?? '';
                 $details['acknowledged_formatted'] = $resolution_payload['acknowledged_formatted'] ?? '';
                 $details['resolved_relative'] = $resolution_payload['resolved_relative'] ?? '';
                 $details['resolved_formatted'] = $resolution_payload['resolved_formatted'] ?? '';
                 $details['resolution_steps'] = $resolution_payload['steps'] ?? [];
+                if (empty($details['resolution_summary']) && !empty($resolution_payload['steps']) && is_array($resolution_payload['steps'])) {
+                    $summary = BJLG_Notification_Queue::summarize_resolution_steps($resolution_payload['steps']);
+                    if ($summary !== '') {
+                        $details['resolution_summary'] = function_exists('sanitize_textarea_field')
+                            ? sanitize_textarea_field($summary)
+                            : sanitize_text_field($summary);
+                    }
+                }
             } elseif (!empty($entry['resolution']) && is_array($entry['resolution'])) {
                 $acknowledged = isset($entry['resolution']['acknowledged_at']) ? (int) $entry['resolution']['acknowledged_at'] : 0;
                 $resolved = isset($entry['resolution']['resolved_at']) ? (int) $entry['resolution']['resolved_at'] : 0;
@@ -687,12 +724,11 @@ class BJLG_Admin_Advanced {
         return $formatted;
     }
 
-    private function format_remote_purge_sla_metrics(int $now): array {
-        if (!function_exists('get_option')) {
-            return [];
+    private function format_remote_purge_sla_metrics(int $now, ?array $raw = null): array {
+        if ($raw === null) {
+            $raw = $this->get_remote_purge_metrics_snapshot();
         }
 
-        $raw = \bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
         if (!is_array($raw) || empty($raw)) {
             return [];
         }
@@ -702,14 +738,15 @@ class BJLG_Admin_Advanced {
         $pending = isset($raw['pending']) && is_array($raw['pending']) ? $raw['pending'] : [];
         $throughput = isset($raw['throughput']) && is_array($raw['throughput']) ? $raw['throughput'] : [];
         $failures = isset($raw['failures']) && is_array($raw['failures']) ? $raw['failures'] : [];
-        $durations = isset($raw['durations']) && is_array($raw['durations']) ? $raw['durations'] : [];
-        $backlog = isset($raw['backlog']) && is_array($raw['backlog']) ? $raw['backlog'] : [];
-        $projections = isset($raw['projections']) && is_array($raw['projections']) ? $raw['projections'] : [];
-        $quotas = isset($raw['quotas']) && is_array($raw['quotas']) ? $raw['quotas'] : [];
-
         $forecast = isset($raw['forecast']) && is_array($raw['forecast']) ? $raw['forecast'] : [];
+        $durations = isset($raw['durations']) && is_array($raw['durations']) ? $raw['durations'] : [];
+        $saturation = isset($raw['saturation']) && is_array($raw['saturation']) ? $raw['saturation'] : [];
+        $backlog = isset($raw['backlog']) && is_array($raw['backlog']) ? $raw['backlog'] : [];
+
         $overall_forecast = isset($forecast['overall']) && is_array($forecast['overall']) ? $forecast['overall'] : [];
-        $forecast_destinations = isset($forecast['destinations']) && is_array($forecast['destinations']) ? $forecast['destinations'] : [];
+        $forecast_destinations = isset($forecast['destinations']) && is_array($forecast['destinations'])
+            ? $forecast['destinations']
+            : [];
 
         $formatted = [
             'updated_relative' => $updated_relative,
@@ -720,6 +757,7 @@ class BJLG_Admin_Advanced {
             'pending_over_threshold' => isset($pending['over_threshold']) ? (int) $pending['over_threshold'] : 0,
             'pending_destinations' => '',
             'throughput_average' => '',
+            'throughput_attempts_average' => '',
             'throughput_last_completion' => '',
             'throughput_last_completion_relative' => '',
             'failures_total' => isset($failures['total']) ? (int) $failures['total'] : 0,
@@ -730,10 +768,18 @@ class BJLG_Admin_Advanced {
             'forecast_destinations' => $this->format_forecast_destinations($forecast_destinations, $now),
             'forecast_projected_relative' => '',
             'forecast_projected_formatted' => '',
+            'duration_average' => '',
+            'duration_peak' => '',
+            'duration_last' => '',
+            'duration_p95' => '',
+            'duration_series' => [],
+            'capacity_projections' => [],
+            'capacity_thresholds' => [],
+            'threshold_summary' => '',
         ];
 
         if (!empty($pending['average_seconds'])) {
-            $formatted['pending_average'] = $this->format_duration_label((int) $pending['average_seconds']);
+            $formatted['pending_average'] = $this->format_duration_label((int) round($pending['average_seconds']));
         }
 
         if (!empty($pending['oldest_seconds'])) {
@@ -745,11 +791,15 @@ class BJLG_Admin_Advanced {
         }
 
         if (!empty($throughput['average_completion_seconds'])) {
-            $formatted['throughput_average'] = $this->format_duration_label((int) $throughput['average_completion_seconds']);
+            $formatted['throughput_average'] = $this->format_duration_label((int) round($throughput['average_completion_seconds']));
+        }
+
+        if (!empty($throughput['average_attempts'])) {
+            $formatted['throughput_attempts_average'] = number_format_i18n((float) $throughput['average_attempts'], 2);
         }
 
         if (!empty($throughput['last_completion_seconds'])) {
-            $formatted['throughput_last_completion'] = $this->format_duration_label((int) $throughput['last_completion_seconds']);
+            $formatted['throughput_last_completion'] = $this->format_duration_label((int) round($throughput['last_completion_seconds']));
         }
 
         if (!empty($throughput['last_completed_at'])) {
@@ -768,6 +818,29 @@ class BJLG_Admin_Advanced {
             );
             $formatted['last_failure_relative'] = $failure_relative;
             $formatted['last_failure_formatted'] = $failure_formatted;
+        }
+
+        $duration_data = $this->format_duration_series($durations, $now);
+        $formatted['duration_series'] = $duration_data['destinations'];
+        $overall_duration = $duration_data['overall'];
+        if (!empty($overall_duration['average_label'])) {
+            $formatted['duration_average'] = $overall_duration['average_label'];
+        }
+        if (!empty($overall_duration['peak_label'])) {
+            $formatted['duration_peak'] = $overall_duration['peak_label'];
+        }
+        if (!empty($overall_duration['last_label'])) {
+            $formatted['duration_last'] = $overall_duration['last_label'];
+        }
+        if (!empty($overall_duration['p95_label'])) {
+            $formatted['duration_p95'] = $overall_duration['p95_label'];
+        }
+
+        $capacity_data = $this->format_capacity_projections($projections, $now);
+        $formatted['capacity_projections'] = $capacity_data['destinations'];
+        $formatted['capacity_thresholds'] = $capacity_data['thresholds'];
+        if (!empty($capacity_data['summary'])) {
+            $formatted['threshold_summary'] = $capacity_data['summary'];
         }
 
         if (!empty($overall_forecast['projected_clearance'])) {
@@ -824,6 +897,193 @@ class BJLG_Admin_Advanced {
         }
 
         return $formatted;
+    }
+
+    private function format_duration_series(array $durations, int $now): array {
+        $destinations = isset($durations['destinations']) && is_array($durations['destinations'])
+            ? $durations['destinations']
+            : [];
+        $formatted = [];
+
+        foreach ($destinations as $destination_id => $data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $label = (string) $destination_id;
+            if (class_exists(__NAMESPACE__ . '\\BJLG_Settings')) {
+                $candidate = BJLG_Settings::get_destination_label($destination_id);
+                if (is_string($candidate) && $candidate !== '') {
+                    $label = $candidate;
+                }
+            }
+
+            $average_seconds = isset($data['average_seconds']) ? (float) $data['average_seconds'] : null;
+            $p95_seconds = isset($data['p95_seconds']) ? (float) $data['p95_seconds'] : null;
+            $max_seconds = isset($data['max_seconds']) ? (int) $data['max_seconds'] : null;
+            $last_seconds = isset($data['last_seconds']) ? (int) $data['last_seconds'] : null;
+
+            $formatted[] = [
+                'id' => sanitize_key((string) $destination_id),
+                'label' => sanitize_text_field($label),
+                'average_seconds' => $average_seconds,
+                'average_label' => $average_seconds !== null ? $this->format_duration_label((int) round($average_seconds)) : '',
+                'p95_seconds' => $p95_seconds,
+                'p95_label' => $p95_seconds !== null ? $this->format_duration_label((int) round($p95_seconds)) : '',
+                'max_seconds' => $max_seconds,
+                'max_label' => $max_seconds !== null ? $this->format_duration_label($max_seconds) : '',
+                'last_seconds' => $last_seconds,
+                'last_label' => $last_seconds !== null ? $this->format_duration_label($last_seconds) : '',
+                'sample_count' => isset($data['sample_count']) ? (int) $data['sample_count'] : (isset($data['samples']) && is_array($data['samples']) ? count($data['samples']) : 0),
+            ];
+        }
+
+        $overall = isset($durations['overall']) && is_array($durations['overall']) ? $durations['overall'] : [];
+        $overall_average = isset($overall['average_seconds']) ? (float) $overall['average_seconds'] : null;
+        $overall_p95 = isset($overall['p95_seconds']) ? (float) $overall['p95_seconds'] : null;
+        $overall_peak = isset($overall['max_seconds']) ? (int) $overall['max_seconds'] : null;
+        $overall_last = isset($overall['last_seconds']) ? (int) $overall['last_seconds'] : null;
+
+        return [
+            'destinations' => $formatted,
+            'overall' => [
+                'average_seconds' => $overall_average,
+                'average_label' => $overall_average !== null ? $this->format_duration_label((int) round($overall_average)) : '',
+                'p95_seconds' => $overall_p95,
+                'p95_label' => $overall_p95 !== null ? $this->format_duration_label((int) round($overall_p95)) : '',
+                'max_seconds' => $overall_peak,
+                'peak_label' => $overall_peak !== null ? $this->format_duration_label($overall_peak) : '',
+                'last_seconds' => $overall_last,
+                'last_label' => $overall_last !== null ? $this->format_duration_label($overall_last) : '',
+            ],
+        ];
+    }
+
+    private function format_capacity_projections(array $projections, int $now): array {
+        $destinations = isset($projections['destinations']) && is_array($projections['destinations'])
+            ? $projections['destinations']
+            : [];
+        $formatted = [];
+
+        foreach ($destinations as $destination_id => $data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $label = (string) $destination_id;
+            if (class_exists(__NAMESPACE__ . '\\BJLG_Settings')) {
+                $candidate = BJLG_Settings::get_destination_label($destination_id);
+                if (is_string($candidate) && $candidate !== '') {
+                    $label = $candidate;
+                }
+            }
+
+            $hours_remaining = isset($data['hours_remaining']) ? (float) $data['hours_remaining'] : null;
+            $seconds_remaining = isset($data['seconds_remaining']) ? (int) $data['seconds_remaining'] : null;
+            [$projected_formatted, $projected_relative] = $this->format_timestamp_pair($data['projected_timestamp'] ?? null, $now);
+
+            $trend_label = '';
+            switch ($data['trend_direction'] ?? '') {
+                case 'up':
+                    $trend_label = __('Consommation en hausse', 'backup-jlg');
+                    break;
+                case 'down':
+                    $trend_label = __('Consommation en baisse', 'backup-jlg');
+                    break;
+                default:
+                    $trend_label = __('Consommation stable', 'backup-jlg');
+                    break;
+            }
+
+            $risk_level = isset($data['risk_level']) ? (string) $data['risk_level'] : 'unknown';
+            $risk_label = '';
+            $risk_intent = 'info';
+            switch ($risk_level) {
+                case 'critical':
+                    $risk_label = __('Critique', 'backup-jlg');
+                    $risk_intent = 'error';
+                    break;
+                case 'warning':
+                    $risk_label = __('Avertissement', 'backup-jlg');
+                    $risk_intent = 'warning';
+                    break;
+                case 'watch':
+                    $risk_label = __('Surveillance', 'backup-jlg');
+                    $risk_intent = 'info';
+                    break;
+                case 'ok':
+                    $risk_label = __('Nominal', 'backup-jlg');
+                    $risk_intent = 'success';
+                    break;
+                default:
+                    $risk_label = __('Inconnu', 'backup-jlg');
+                    $risk_intent = 'info';
+                    break;
+            }
+
+            $usage_ratio = isset($data['usage_ratio']) && is_numeric($data['usage_ratio']) ? (float) $data['usage_ratio'] : null;
+            $usage_label = '';
+            if ($usage_ratio !== null) {
+                $percent = $usage_ratio * 100;
+                $usage_label = function_exists('number_format_i18n')
+                    ? number_format_i18n($percent, $percent >= 10 ? 0 : 1)
+                    : number_format($percent, $percent >= 10 ? 0 : 1);
+            }
+
+            $formatted[] = [
+                'id' => sanitize_key((string) $destination_id),
+                'label' => sanitize_text_field($label),
+                'risk_level' => $risk_level,
+                'risk_label' => $risk_label,
+                'risk_intent' => $risk_intent,
+                'hours_remaining' => $hours_remaining,
+                'hours_label' => $hours_remaining !== null ? $this->format_duration_label((int) round($hours_remaining * HOUR_IN_SECONDS)) : '',
+                'seconds_remaining' => $seconds_remaining,
+                'projection_label' => isset($data['projection_label']) ? sanitize_text_field((string) $data['projection_label']) : '',
+                'projected_formatted' => $projected_formatted,
+                'projected_relative' => $projected_relative,
+                'trend_label' => $trend_label,
+                'usage_percent_label' => $usage_label !== '' ? $usage_label . '%' : '',
+            ];
+        }
+
+        $thresholds = isset($projections['thresholds']) && is_array($projections['thresholds'])
+            ? $projections['thresholds']
+            : [];
+        $warning_hours = isset($thresholds['warning_hours']) ? (int) $thresholds['warning_hours'] : 72;
+        $critical_hours = isset($thresholds['critical_hours']) ? (int) $thresholds['critical_hours'] : 24;
+        $threshold_percent = isset($thresholds['threshold_percent'])
+            ? (float) $thresholds['threshold_percent']
+            : (isset($thresholds['threshold_ratio']) ? (float) $thresholds['threshold_ratio'] * 100 : 85.0);
+
+        $summary_parts = [];
+        if ($critical_hours > 0) {
+            $summary_parts[] = sprintf(
+                __('Critique < %s', 'backup-jlg'),
+                $this->format_duration_label($critical_hours * HOUR_IN_SECONDS)
+            );
+        }
+        if ($warning_hours > 0) {
+            $summary_parts[] = sprintf(
+                __('Avertissement < %s', 'backup-jlg'),
+                $this->format_duration_label($warning_hours * HOUR_IN_SECONDS)
+            );
+        }
+        $percent_label = function_exists('number_format_i18n')
+            ? number_format_i18n((int) round($threshold_percent))
+            : number_format((int) round($threshold_percent));
+        $summary_parts[] = sprintf(__('Seuil de remplissage %s%%', 'backup-jlg'), $percent_label);
+
+        return [
+            'destinations' => $formatted,
+            'thresholds' => [
+                'warning_hours' => $warning_hours,
+                'critical_hours' => $critical_hours,
+                'threshold_percent' => $threshold_percent,
+                'threshold_ratio' => isset($thresholds['threshold_ratio']) ? (float) $thresholds['threshold_ratio'] : ($threshold_percent / 100),
+            ],
+            'summary' => implode(' • ', $summary_parts),
+        ];
     }
 
     private function format_destination_counts(array $counts): string {
@@ -1044,7 +1304,7 @@ class BJLG_Admin_Advanced {
     /**
      * @param array<int,array<string,mixed>> $entries
      */
-    private function format_remote_purge_entries(array $entries, int $now): array {
+    private function format_remote_purge_entries(array $entries, int $now, array $saturation_context = []): array {
         $formatted = [];
 
         foreach ($entries as $entry) {
@@ -1054,9 +1314,33 @@ class BJLG_Admin_Advanced {
             $status = isset($entry['status']) ? (string) $entry['status'] : 'pending';
             $destinations_label = $this->format_destination_label($entry['destinations'] ?? []);
 
+            $destination_alerts = [];
+            if (!empty($entry['destinations']) && is_array($entry['destinations'])) {
+                foreach ($entry['destinations'] as $destination_id) {
+                    $key = sanitize_key((string) $destination_id);
+                    if (isset($saturation_context[$key]) && is_array($saturation_context[$key])) {
+                        $destination_alerts[] = $saturation_context[$key];
+                    }
+                }
+            }
+
             $title = isset($entry['title']) && $entry['title'] !== ''
                 ? $entry['title']
                 : __('Archive inconnue', 'backup-jlg');
+
+            $severity = 'info';
+            if (!empty($entry['is_delayed']) || $status === 'failed') {
+                $severity = 'critical';
+            } elseif ($status === 'retry') {
+                $severity = 'warning';
+            }
+
+            foreach ($destination_alerts as $alert_context) {
+                if (!empty($alert_context['breach_imminent'])) {
+                    $severity = 'critical';
+                    break;
+                }
+            }
 
             $formatted[] = [
                 'file' => sanitize_text_field($title),
@@ -1066,6 +1350,9 @@ class BJLG_Admin_Advanced {
                 'status_intent' => $this->get_queue_status_intent($status),
                 'attempts' => isset($entry['attempts']) ? (int) $entry['attempts'] : 0,
                 'attempt_label' => $this->format_attempt_label(isset($entry['attempts']) ? (int) $entry['attempts'] : 0),
+                'severity' => $severity,
+                'severity_label' => $this->get_notification_severity_label($severity),
+                'severity_intent' => $this->get_notification_severity_intent($severity),
                 'next_attempt_relative' => $next_relative,
                 'next_attempt_formatted' => $next_formatted,
                 'created_relative' => $registered_relative,
@@ -1074,6 +1361,7 @@ class BJLG_Admin_Advanced {
                 'details' => [
                     'destinations' => $destinations_label,
                     'delay' => $this->format_duration_label(isset($entry['max_delay']) ? (int) $entry['max_delay'] : 0),
+                    'saturation' => $destination_alerts,
                 ],
                 'delayed' => !empty($entry['is_delayed']),
                 'delay_label' => $this->format_duration_label(isset($entry['max_delay']) ? (int) $entry['max_delay'] : 0),

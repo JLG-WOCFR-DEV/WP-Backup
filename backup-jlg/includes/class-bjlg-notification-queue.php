@@ -240,6 +240,10 @@ class BJLG_Notification_Queue {
                 'resolved_at' => $resolved_at,
                 'resolved' => $resolved_at > 0,
                 'resolution_notes' => $resolution_notes,
+                'resolution_status' => isset($entry['resolution_status'])
+                    ? sanitize_key((string) $entry['resolution_status'])
+                    : 'pending',
+                'resolution_summary' => self::sanitize_notes_value($entry['resolution_summary'] ?? ''),
             ];
         }
 
@@ -421,7 +425,15 @@ class BJLG_Notification_Queue {
                     $entry['acknowledged_by'] = $actor_label;
                 }
 
+                if (!isset($entry['resolution']) || !is_array($entry['resolution'])) {
+                    $entry['resolution'] = self::normalize_resolution([]);
+                }
+                if (empty($entry['resolution']['acknowledged_at'])) {
+                    $entry['resolution']['acknowledged_at'] = $now;
+                }
+
                 $entry['updated_at'] = $now;
+                self::refresh_resolution_metadata($entry);
                 $updated = true;
                 break 2;
             }
@@ -481,7 +493,15 @@ class BJLG_Notification_Queue {
                 unset($channel);
             }
 
+            if (!isset($entry['resolution']) || !is_array($entry['resolution'])) {
+                $entry['resolution'] = self::normalize_resolution([]);
+            }
+            if (empty($entry['resolution']['acknowledged_at'])) {
+                $entry['resolution']['acknowledged_at'] = $now;
+            }
+
             $entry['updated_at'] = $now;
+            self::refresh_resolution_metadata($entry);
             $updated = true;
             break;
         }
@@ -564,7 +584,16 @@ class BJLG_Notification_Queue {
                     );
                 }
 
+                if (!isset($entry['resolution']) || !is_array($entry['resolution'])) {
+                    $entry['resolution'] = self::normalize_resolution([]);
+                }
+                if (empty($entry['resolution']['acknowledged_at'])) {
+                    $entry['resolution']['acknowledged_at'] = $now;
+                }
+                $entry['resolution']['resolved_at'] = $now;
+
                 $entry['updated_at'] = $now;
+                self::refresh_resolution_metadata($entry);
                 $updated = true;
                 break;
             }
@@ -658,7 +687,16 @@ class BJLG_Notification_Queue {
                 unset($channel);
             }
 
+            if (!isset($entry['resolution']) || !is_array($entry['resolution'])) {
+                $entry['resolution'] = self::normalize_resolution([]);
+            }
+            if (empty($entry['resolution']['acknowledged_at'])) {
+                $entry['resolution']['acknowledged_at'] = $now;
+            }
+            $entry['resolution']['resolved_at'] = $now;
+
             $entry['updated_at'] = $now;
+            self::refresh_resolution_metadata($entry);
             $entry_reference = $entry;
             $updated = true;
             break;
@@ -874,6 +912,8 @@ class BJLG_Notification_Queue {
             case 'sms':
                 $webhook = isset($channel['webhook_url']) ? (string) $channel['webhook_url'] : '';
                 return BJLG_Notification_Transport::send_sms($webhook, $title, $lines);
+            case 'internal':
+                return ['success' => true];
         }
 
         return [
@@ -1131,6 +1171,9 @@ class BJLG_Notification_Queue {
         $normalized['resolution'] = self::normalize_resolution(
             isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : []
         );
+
+        self::refresh_resolution_metadata($normalized);
+
         $normalized['reminders'] = self::normalize_reminders($entry, $normalized['severity'], $now);
 
         if (isset($entry['quiet_until'])) {
@@ -1235,6 +1278,7 @@ class BJLG_Notification_Queue {
             'acknowledged_at' => null,
             'resolved_at' => null,
             'steps' => [],
+            'summary' => '',
         ];
 
         if (isset($source['acknowledged_at']) && (int) $source['acknowledged_at'] > 0) {
@@ -1253,6 +1297,8 @@ class BJLG_Notification_Queue {
                 $normalized['steps'][] = self::sanitize_resolution_step($step);
             }
         }
+
+        $normalized['summary'] = self::summarize_resolution_steps($normalized['steps']);
 
         return $normalized;
     }
@@ -1279,6 +1325,66 @@ class BJLG_Notification_Queue {
         ];
     }
 
+    /**
+     * Builds a concise summary of resolution steps suitable for history/escalation payloads.
+     *
+     * @param array<int,array<string,mixed>> $steps
+     */
+    public static function summarize_resolution_steps(array $steps): string {
+        if (empty($steps)) {
+            return '';
+        }
+
+        $lines = [];
+
+        foreach ($steps as $step) {
+            if (!is_array($step)) {
+                continue;
+            }
+
+            $timestamp = isset($step['timestamp']) ? (int) $step['timestamp'] : 0;
+            $formatted_time = $timestamp > 0 ? self::format_resolution_timestamp($timestamp) : '';
+            $actor = isset($step['actor']) ? self::sanitize_actor_label($step['actor']) : '';
+            if ($actor === '') {
+                $actor = __('Système', 'backup-jlg');
+            }
+
+            $summary = isset($step['summary']) ? trim((string) $step['summary']) : '';
+            if ($summary === '') {
+                continue;
+            }
+
+            if ($formatted_time !== '') {
+                $lines[] = sprintf('%1$s — %2$s : %3$s', $formatted_time, $actor, $summary);
+            } else {
+                $lines[] = sprintf('%1$s : %2$s', $actor, $summary);
+            }
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private static function format_resolution_timestamp($timestamp) {
+        $timestamp = (int) $timestamp;
+        if ($timestamp <= 0) {
+            return '';
+        }
+
+        $date_format = function_exists('get_option') ? get_option('date_format', 'Y-m-d') : 'Y-m-d';
+        $time_format = function_exists('get_option') ? get_option('time_format', 'H:i') : 'H:i';
+        $format = trim($date_format . ' ' . $time_format);
+
+        if (function_exists('wp_date')) {
+            return wp_date($format, $timestamp);
+        }
+
+        if (function_exists('date_i18n')) {
+            return date_i18n($format, $timestamp);
+        }
+
+        return date($format, $timestamp);
+    }
+
     private static function normalize_reminders(array $entry, $severity, $now) {
         $reminders = isset($entry['reminders']) && is_array($entry['reminders']) ? $entry['reminders'] : [];
         $base = isset($reminders['base_interval']) && (int) $reminders['base_interval'] > 0
@@ -1297,6 +1403,12 @@ class BJLG_Notification_Queue {
             'next_at' => $next,
             'last_triggered_at' => isset($reminders['last_triggered_at']) ? (int) $reminders['last_triggered_at'] : 0,
             'active' => isset($reminders['active']) ? (bool) $reminders['active'] : true,
+            'backoff_multiplier' => isset($reminders['backoff_multiplier']) && (float) $reminders['backoff_multiplier'] > 0
+                ? (float) $reminders['backoff_multiplier']
+                : 2.0,
+            'max_interval' => isset($reminders['max_interval']) && (int) $reminders['max_interval'] > 0
+                ? (int) $reminders['max_interval']
+                : self::MAX_REMINDER_INTERVAL,
         ];
     }
 
@@ -1336,9 +1448,17 @@ class BJLG_Notification_Queue {
             ? (int) $reminders['base_interval']
             : self::get_base_reminder_interval($entry['severity'] ?? 'info', $entry);
 
-        $multiplier = max(1, pow(2, $attempt));
-        $delay = (int) round($base * $multiplier);
-        $delay = min(self::MAX_REMINDER_INTERVAL, max($base, $delay));
+        $reminder_config = isset($entry['reminders']) && is_array($entry['reminders']) ? $entry['reminders'] : [];
+        $multiplier_value = isset($reminder_config['backoff_multiplier']) && (float) $reminder_config['backoff_multiplier'] > 0
+            ? (float) $reminder_config['backoff_multiplier']
+            : 2.0;
+        $max_interval = isset($reminder_config['max_interval']) && (int) $reminder_config['max_interval'] > 0
+            ? (int) $reminder_config['max_interval']
+            : self::MAX_REMINDER_INTERVAL;
+
+        $growth = max(1.0, $multiplier_value);
+        $delay = (int) round($base * ($growth ** $attempt));
+        $delay = min($max_interval, max($base, $delay));
 
         $delay = apply_filters('bjlg_notification_reminder_backoff', $delay, $attempt, $entry);
         if (!is_int($delay)) {
@@ -1350,6 +1470,33 @@ class BJLG_Notification_Queue {
         }
 
         return max(60, $delay);
+    }
+
+    private static function refresh_resolution_metadata(array &$entry) {
+        if (!isset($entry['resolution']) || !is_array($entry['resolution'])) {
+            $entry['resolution'] = self::normalize_resolution([]);
+        }
+
+        if (!isset($entry['resolution']['summary']) || !is_string($entry['resolution']['summary'])) {
+            $entry['resolution']['summary'] = self::summarize_resolution_steps($entry['resolution']['steps'] ?? []);
+        }
+
+        $entry['resolution_status'] = self::derive_resolution_status($entry['resolution']);
+        $entry['resolution_summary'] = trim((string) ($entry['resolution']['summary'] ?? ''));
+    }
+
+    private static function derive_resolution_status(array $resolution) {
+        $resolved_at = isset($resolution['resolved_at']) ? (int) $resolution['resolved_at'] : 0;
+        if ($resolved_at > 0) {
+            return 'resolved';
+        }
+
+        $acknowledged_at = isset($resolution['acknowledged_at']) ? (int) $resolution['acknowledged_at'] : 0;
+        if ($acknowledged_at > 0) {
+            return 'acknowledged';
+        }
+
+        return 'pending';
     }
 
     private static function schedule_entry_reminder(array $entry, $attempt) {
@@ -1425,6 +1572,7 @@ class BJLG_Notification_Queue {
 
             $entry['resolution'] = self::normalize_resolution($resolution, isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : []);
             $entry['updated_at'] = time();
+            self::refresh_resolution_metadata($entry);
             if (!empty($entry['resolution']['acknowledged_at']) || !empty($entry['resolution']['resolved_at'])) {
                 if (!isset($entry['reminders']) || !is_array($entry['reminders'])) {
                     $entry['reminders'] = [];
@@ -1664,6 +1812,25 @@ class BJLG_Notification_Queue {
             $actor_label = __('un opérateur', 'backup-jlg');
         }
 
+        $summary = '';
+
+        if (class_exists(BJLG_Notification_Receipts::class) && !empty($entry['id'])) {
+            $receipt = BJLG_Notification_Receipts::get($entry['id']);
+            if (is_array($receipt) && !empty($receipt['steps'])) {
+                $summary = self::summarize_resolution_steps($receipt['steps']);
+            }
+        }
+
+        if ($summary === '' && !empty($entry['resolution_summary'])) {
+            $summary = (string) $entry['resolution_summary'];
+        }
+
+        if ($summary === '' && $notes !== '') {
+            $summary = $notes;
+        }
+
+        $summary = self::sanitize_notes_value($summary);
+
         if (class_exists(BJLG_History::class)) {
             $message = sprintf(
                 __('Notification « %s » résolue par %s.', 'backup-jlg'),
@@ -1671,8 +1838,8 @@ class BJLG_Notification_Queue {
                 $actor_label
             );
 
-            if ($notes !== '') {
-                $message .= ' ' . sprintf(__('Notes : %s', 'backup-jlg'), $notes);
+            if ($summary !== '') {
+                $message .= ' ' . sprintf(__('Résumé : %s', 'backup-jlg'), $summary);
             }
 
             BJLG_History::log('notification_resolved', 'info', $message);

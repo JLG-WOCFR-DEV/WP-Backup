@@ -65,6 +65,7 @@ jQuery(function($) {
             label: 'Snapshot pré-déploiement',
             description: 'Rafraîchit la base, les extensions et les thèmes toutes les 10 minutes pendant une fenêtre de changement.',
             expression: '*/10 * * * *',
+            analysis: {},
             adjustments: {
                 label: 'Snapshot pré-déploiement',
                 components: ['db', 'plugins', 'themes'],
@@ -78,6 +79,7 @@ jQuery(function($) {
             label: 'Archive complète nocturne',
             description: 'Capture intégrale chaque nuit à 02:30 avec chiffrement et vérification.',
             expression: '30 2 * * *',
+            analysis: {},
             adjustments: {
                 label: 'Archive nocturne',
                 components: ['db', 'plugins', 'themes', 'uploads'],
@@ -91,6 +93,7 @@ jQuery(function($) {
             label: 'Médias hebdomadaires',
             description: 'Synchronise spécifiquement les médias chaque dimanche à 04:00 en incrémental.',
             expression: '0 4 * * sun',
+            analysis: {},
             adjustments: {
                 label: 'Médias hebdomadaires',
                 components: ['uploads'],
@@ -1631,20 +1634,63 @@ jQuery(function($) {
         }
     }
 
-    function markActiveScenario(helper, expression) {
+    function markActiveScenario(helper, expression, $item) {
         if (!helper || !helper.scenarios || !helper.scenarios.length) {
             return;
         }
         const trimmed = (expression || '').toString().trim();
+        const selectedMacro = $item && $item.length ? ($item.data('bjlgSelectedMacro') || '').toString() : '';
         helper.scenarios.find('[data-cron-scenario]').each(function() {
             const $button = $(this);
             const scenarioExpression = ($button.attr('data-cron-scenario-expression') || '').toString();
-            if (trimmed && trimmed === scenarioExpression) {
+            const scenarioId = ($button.attr('data-cron-scenario') || '').toString();
+            const isMatch = (selectedMacro && scenarioId === selectedMacro) || (trimmed && trimmed === scenarioExpression);
+            if (isMatch) {
                 $button.addClass('is-active');
             } else {
                 $button.removeClass('is-active');
             }
         });
+    }
+
+    function matchScenarioByExpression(expression) {
+        const trimmed = (expression || '').toString().trim();
+        if (!trimmed || !Array.isArray(cronScenarios)) {
+            return null;
+        }
+        for (let index = 0; index < cronScenarios.length; index += 1) {
+            const scenario = cronScenarios[index];
+            if (!scenario || typeof scenario !== 'object') {
+                continue;
+            }
+            if ((scenario.expression || '').toString().trim() === trimmed) {
+                return scenario;
+            }
+        }
+        return null;
+    }
+
+    function setScheduleMacro($item, macroId) {
+        const value = (macroId || '').toString();
+        const $macroField = $item.find('[data-field="macro"]');
+        if ($macroField.length) {
+            $macroField.val(value);
+        }
+        if (value) {
+            $item.data('bjlgSelectedMacro', value);
+        } else {
+            $item.removeData('bjlgSelectedMacro');
+        }
+    }
+
+    function syncMacroFromExpression($item, expression) {
+        const scenario = matchScenarioByExpression(expression);
+        const macroId = scenario && scenario.id ? scenario.id.toString() : '';
+        setScheduleMacro($item, macroId);
+        const helper = ensureCronAssistant($item);
+        if (helper) {
+            markActiveScenario(helper, (expression || '').toString().trim(), $item);
+        }
     }
 
     function markRecommendedScenario(helper, scenarioId) {
@@ -1686,6 +1732,7 @@ jQuery(function($) {
         }
 
         const expression = (scenario.expression || '').toString();
+        const analysis = scenario.analysis && typeof scenario.analysis === 'object' ? scenario.analysis : null;
         if (expression) {
             $input.val(expression).trigger('input').trigger('change');
         }
@@ -1739,12 +1786,27 @@ jQuery(function($) {
             }).trigger('change');
         }
 
+        setScheduleMacro($item, scenario.id || '');
         const helper = ensureCronAssistant($item);
         if (helper) {
-            markActiveScenario(helper, expression);
+            markActiveScenario(helper, expression, $item);
             const elements = getCronFieldElements($input);
             if (elements) {
                 setCronPanelVisibility(elements, true);
+            }
+            if (helper.status && helper.status.length && analysis) {
+                const infoParts = [];
+                if (analysis.frequency_label) {
+                    infoParts.push((analysis.frequency_label || '').toString());
+                }
+                if (analysis.next_run_relative) {
+                    infoParts.push((analysis.next_run_relative || '').toString());
+                } else if (analysis.next_run_formatted) {
+                    infoParts.push((analysis.next_run_formatted || '').toString());
+                }
+                if (infoParts.length) {
+                    helper.status.text(infoParts.join(' • '));
+                }
             }
         }
 
@@ -1769,6 +1831,16 @@ jQuery(function($) {
             const expression = (scenario.expression || '').toString();
             const label = (scenario.label || expression).toString();
             const description = (scenario.description || '').toString();
+            const analysis = scenario.analysis && typeof scenario.analysis === 'object' ? scenario.analysis : {};
+            const metaParts = [];
+            if (analysis.frequency_label) {
+                metaParts.push(analysis.frequency_label.toString());
+            }
+            if (analysis.next_run_relative) {
+                metaParts.push(analysis.next_run_relative.toString());
+            } else if (analysis.next_run_formatted) {
+                metaParts.push(analysis.next_run_formatted.toString());
+            }
             const $button = $('<button/>', {
                 type: 'button',
                 class: 'bjlg-cron-scenario',
@@ -1778,6 +1850,9 @@ jQuery(function($) {
             $('<span/>', { class: 'bjlg-cron-scenario__title', text: label }).appendTo($button);
             if (description) {
                 $('<span/>', { class: 'bjlg-cron-scenario__description', text: description }).appendTo($button);
+            }
+            if (metaParts.length) {
+                $('<span/>', { class: 'bjlg-cron-scenario__meta', text: metaParts.join(' • ') }).appendTo($button);
             }
             $button.on('click', function(event) {
                 event.preventDefault();
@@ -1802,7 +1877,7 @@ jQuery(function($) {
         const activeIndex = getCronFieldIndexFromCaret($input);
         renderCronFieldGuidance(helper, expression, activeIndex, $input);
         highlightCronTokenGroups(helper, activeIndex);
-        markActiveScenario(helper, expression);
+        markActiveScenario(helper, expression, $item);
     }
 
     function isWildcardCronField(value) {
@@ -3601,6 +3676,7 @@ jQuery(function($) {
 
         const customCronValue = recurrence === 'custom' ? customCronRaw.toString() : '';
         const trimmedCron = customCronValue.trim();
+        const macro = recurrence === 'custom' ? ($item.find('[data-field="macro"]').val() || '').toString() : '';
 
         const data = {
             id: id,
@@ -3611,6 +3687,7 @@ jQuery(function($) {
             day_of_month: dayOfMonth,
             time: time,
             custom_cron: recurrence === 'custom' ? (forSummary ? trimmedCron : customCronValue) : '',
+            macro: macro,
             components: components,
             encrypt: encrypt,
             incremental: incremental,
@@ -3649,6 +3726,13 @@ jQuery(function($) {
         $item.find('[data-field="day"]').val(schedule && schedule.day ? schedule.day : 'sunday');
         $item.find('[data-field="time"]').val(schedule && schedule.time ? schedule.time : '23:59');
         $item.find('[data-field="custom_cron"]').val(schedule && schedule.custom_cron ? schedule.custom_cron : '');
+        const macroValue = schedule && schedule.macro ? schedule.macro : '';
+        $item.find('[data-field="macro"]').val(macroValue);
+        if (macroValue) {
+            $item.data('bjlgSelectedMacro', macroValue);
+        } else {
+            $item.removeData('bjlgSelectedMacro');
+        }
         $item.find('[data-field="day_of_month"]').val(getScheduleDayOfMonth(schedule));
 
         const components = Array.isArray(schedule && schedule.components) ? schedule.components : (defaultScheduleData.components || []);
@@ -4088,8 +4172,15 @@ jQuery(function($) {
     // Gestion des événements de champ
     $scheduleForm.on('change', '.bjlg-schedule-item [data-field="recurrence"]', function() {
         const $item = $(this).closest('.bjlg-schedule-item');
+        const value = ($(this).val() || '').toString();
         toggleScheduleRows($item);
         refreshCronInsights($item);
+        if (value !== 'custom') {
+            setScheduleMacro($item, '');
+        } else {
+            const expression = ($item.find('[data-field="custom_cron"]').val() || '').toString();
+            syncMacroFromExpression($item, expression);
+        }
         updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
         scheduleRecommendationRefresh($item, false);
@@ -4098,6 +4189,8 @@ jQuery(function($) {
     $scheduleForm.on('change', '.bjlg-schedule-item [data-field="components"], .bjlg-schedule-item [data-field="encrypt"], .bjlg-schedule-item [data-field="incremental"], .bjlg-schedule-item [data-field="day"], .bjlg-schedule-item [data-field="day_of_month"], .bjlg-schedule-item [data-field="time"], .bjlg-schedule-item [data-field="custom_cron"], .bjlg-schedule-item [data-field="post_checks"], .bjlg-schedule-item [data-field="secondary_destinations"]', function() {
         const $item = $(this).closest('.bjlg-schedule-item');
         if ($(this).is('[data-field="custom_cron"]')) {
+            const expression = ($(this).val() || '').toString();
+            syncMacroFromExpression($item, expression);
             refreshCronAssistant($item, true);
             refreshCronInsights($item, null);
         } else {
@@ -4111,6 +4204,8 @@ jQuery(function($) {
     $scheduleForm.on('input', '.bjlg-schedule-item [data-field="label"], .bjlg-schedule-item textarea[data-field], .bjlg-schedule-item [data-field="custom_cron"]', function() {
         const $item = $(this).closest('.bjlg-schedule-item');
         if ($(this).is('[data-field="custom_cron"]')) {
+            const expression = ($(this).val() || '').toString();
+            syncMacroFromExpression($item, expression);
             refreshCronAssistant($item, false);
             refreshCronInsights($item, null);
         } else {
@@ -4122,7 +4217,10 @@ jQuery(function($) {
     });
 
     scheduleItems().each(function() {
-        setupCronAssistantForItem($(this));
+        const $item = $(this);
+        setupCronAssistantForItem($item);
+        const expression = ($item.find('[data-field="custom_cron"]').val() || '').toString();
+        syncMacroFromExpression($item, expression);
     });
 
     setEventTriggerState(state.eventTriggers);
@@ -4326,6 +4424,189 @@ jQuery(function($) {
             renderTimeline();
         });
     }
+
+    (function setupRestoreCheckForm() {
+        const $form = $('#bjlg-restore-check-form');
+        if (!$form.length || typeof bjlg_ajax !== 'object') {
+            return;
+        }
+
+        const $feedback = $('#bjlg-restore-check-feedback');
+        const defaults = {
+            settings: {
+                enabled: false,
+                recurrence: 'weekly',
+                day: 'sunday',
+                day_of_month: 1,
+                time: '02:00',
+                components: ['db', 'plugins', 'themes', 'uploads'],
+                sandbox_path: ''
+            },
+            state: {
+                last_run: null,
+                last_status: null,
+                last_message: '',
+                last_report: null
+            },
+            schedule: {
+                next_run: null,
+                next_run_formatted: null,
+                next_run_relative: null
+            }
+        };
+
+        let restoreData = $.extend(true, {}, defaults, $form.data('restore-check') || {});
+
+        function setNotice(type, message) {
+            if (!$feedback.length) {
+                return;
+            }
+
+            if (!message) {
+                $feedback.hide().removeClass('notice-error notice-success notice-info');
+                return;
+            }
+
+            const classes = {
+                error: 'notice-error',
+                success: 'notice-success',
+                info: 'notice-info'
+            };
+            const className = classes[type] || 'notice-info';
+            $feedback.removeClass('notice-error notice-success notice-info')
+                .addClass('notice ' + className)
+                .text(message)
+                .show();
+        }
+
+        function refreshVisibility() {
+            const recurrence = ($form.find('[data-restore-field="recurrence"]').val() || '').toString();
+            const weekly = recurrence === 'weekly';
+            const monthly = recurrence === 'monthly';
+
+            $form.find('.bjlg-restore-check-weekly').attr('aria-hidden', weekly ? 'false' : 'true')
+                .toggle(weekly);
+            $form.find('.bjlg-restore-check-monthly').attr('aria-hidden', monthly ? 'false' : 'true')
+                .toggle(monthly);
+        }
+
+        function populateForm(data) {
+            const settings = data.settings || defaults.settings;
+
+            $form.find('[data-restore-field="enabled"]').prop('checked', !!settings.enabled);
+            $form.find('[data-restore-field="recurrence"]').val(settings.recurrence || 'weekly');
+            $form.find('[data-restore-field="day"]').val(settings.day || 'sunday');
+            $form.find('[data-restore-field="day_of_month"]').val(settings.day_of_month || 1);
+            $form.find('[data-restore-field="time"]').val(settings.time || '02:00');
+            $form.find('[data-restore-field="sandbox_path"]').val(settings.sandbox_path || '');
+
+            const components = Array.isArray(settings.components) ? settings.components : [];
+            $form.find('[data-restore-component]').prop('checked', false);
+            components.forEach(function(component) {
+                $form.find('[data-restore-component="' + component + '"]').prop('checked', true);
+            });
+
+            refreshVisibility();
+            renderSchedule(data.schedule || defaults.schedule);
+            renderLastState(data.state || defaults.state);
+        }
+
+        function renderSchedule(schedule) {
+            const nextRun = schedule && typeof schedule === 'object' ? schedule : {};
+            const formatted = nextRun.next_run_formatted || '—';
+            const relative = nextRun.next_run_relative || '';
+            const $value = $form.find('[data-restore-next-run]');
+            const $relative = $form.find('[data-restore-next-run-relative]');
+
+            $value.text(formatted || '—');
+            if (relative) {
+                $relative.text('(' + relative + ')');
+            } else {
+                $relative.text('');
+            }
+        }
+
+        function renderLastState(state) {
+            const status = state.last_status || '';
+            const message = state.last_message || '';
+
+            const labelMap = {
+                success: '✅ ' + __('Succès', 'backup-jlg'),
+                failure: '❌ ' + __('Échec', 'backup-jlg'),
+                warning: '⚠️ ' + __('Avertissement', 'backup-jlg')
+            };
+
+            const display = labelMap[status] || (status ? status : '—');
+            $form.find('[data-restore-last-status]').text(display);
+            $form.find('[data-restore-last-message]').text(message);
+        }
+
+        function collectFormData() {
+            const recurrence = ($form.find('[data-restore-field="recurrence"]').val() || 'weekly').toString();
+            const settings = {
+                enabled: $form.find('[data-restore-field="enabled"]').is(':checked'),
+                recurrence: recurrence,
+                day: ($form.find('[data-restore-field="day"]').val() || 'sunday').toString(),
+                day_of_month: parseInt($form.find('[data-restore-field="day_of_month"]').val() || '1', 10) || 1,
+                time: ($form.find('[data-restore-field="time"]').val() || '02:00').toString(),
+                sandbox_path: ($form.find('[data-restore-field="sandbox_path"]').val() || '').toString(),
+                components: []
+            };
+
+            $form.find('[data-restore-component]:checked').each(function() {
+                settings.components.push(($(this).val() || '').toString());
+            });
+
+            return settings;
+        }
+
+        $form.on('change', '[data-restore-field="recurrence"]', function() {
+            refreshVisibility();
+        });
+
+        $form.on('submit', function(event) {
+            event.preventDefault();
+            setNotice(null, '');
+
+            const payload = collectFormData();
+
+            $.ajax({
+                url: bjlg_ajax.ajax_url,
+                method: 'POST',
+                data: {
+                    action: 'bjlg_save_restore_check_settings',
+                    nonce: bjlg_ajax.nonce,
+                    settings: JSON.stringify(payload)
+                }
+            }).done(function(response) {
+                const data = response && typeof response === 'object' ? response.data || {} : {};
+
+                if (response && response.success) {
+                    restoreData = $.extend(true, {}, restoreData, {
+                        settings: data.settings || payload,
+                        schedule: {
+                            next_run: data.next_run || null,
+                            next_run_formatted: data.next_run_formatted || null,
+                            next_run_relative: data.next_run_relative || null
+                        },
+                        state: data.state || restoreData.state
+                    });
+
+                    populateForm(restoreData);
+                    setNotice('success', data.message || __('Validation programmée mise à jour.', 'backup-jlg'));
+                } else {
+                    const message = data && typeof data.message === 'string'
+                        ? data.message
+                        : __('Impossible d’enregistrer la validation automatique.', 'backup-jlg');
+                    setNotice('error', message);
+                }
+            }).fail(function() {
+                setNotice('error', __('Erreur de communication avec le serveur.', 'backup-jlg'));
+            });
+        });
+
+        populateForm(restoreData);
+    })();
 
 })();
 });

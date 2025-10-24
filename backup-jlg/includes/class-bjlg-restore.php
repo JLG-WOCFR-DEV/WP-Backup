@@ -12,6 +12,7 @@ if (!defined('ABSPATH')) {
 
 require_once __DIR__ . '/class-bjlg-backup.php';
 require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
+require_once __DIR__ . '/class-bjlg-health-check.php';
 
 /**
  * Gère tout le processus de restauration, y compris la pré-sauvegarde de sécurité.
@@ -20,6 +21,8 @@ class BJLG_Restore {
 
     public const ENV_PRODUCTION = 'production';
     public const ENV_SANDBOX = 'sandbox';
+
+    private const SANDBOX_REPORT_REGISTRY_OPTION = 'bjlg_sandbox_validation_reports';
 
     /**
      * Instance du gestionnaire de sauvegarde.
@@ -63,18 +66,28 @@ class BJLG_Restore {
         $task_state = [];
         $sandbox_context = null;
         $cleanup_result = ['performed' => false, 'error' => null];
+        $health_report = null;
+        $issues = [];
         $backup_file = '';
         $status = 'failure';
         $message = '';
 
         $components = [];
+        $execution_log = [];
+
+        $this->append_sandbox_log($execution_log, 'Initialisation de la validation sandbox.');
 
         try {
             if (!self::user_can_use_sandbox()) {
                 throw new RuntimeException(__('La sandbox de restauration n’est pas disponible pour cette installation.', 'backup-jlg'));
             }
 
+            $this->append_sandbox_log($execution_log, 'Sandbox disponible pour la validation.');
+
             $backup_file = $this->resolve_validation_backup($args);
+            $this->append_sandbox_log($execution_log, 'Archive sélectionnée pour la validation.', [
+                'backup_file' => basename($backup_file),
+            ]);
 
             $password = null;
             if (isset($args['password']) && is_string($args['password'])) {
@@ -86,6 +99,9 @@ class BJLG_Restore {
             }
 
             $components = self::normalize_requested_components($args['components'] ?? null);
+            $this->append_sandbox_log($execution_log, 'Composants demandés pour la restauration.', [
+                'components' => $components,
+            ]);
 
             $environment = self::prepare_environment(self::ENV_SANDBOX, [
                 'sandbox_path' => isset($args['sandbox_path']) && is_string($args['sandbox_path'])
@@ -94,6 +110,10 @@ class BJLG_Restore {
             ]);
 
             $sandbox_context = $environment['sandbox'];
+            $this->append_sandbox_log($execution_log, 'Environnement sandbox préparé.', [
+                'base_path' => isset($sandbox_context['base_path']) ? (string) $sandbox_context['base_path'] : '',
+            ]);
+
             $task_id = 'bjlg_sandbox_validation_' . md5(uniqid('sandbox', true));
 
             $password_encrypted = null;
@@ -129,24 +149,73 @@ class BJLG_Restore {
 
             BJLG_Backup::release_task_slot($task_id);
 
+            $this->append_sandbox_log($execution_log, 'Tâche sandbox initialisée.', [
+                'task_id' => $task_id,
+            ]);
+
             $this->run_restore_task($task_id);
 
             $task_state = get_transient($task_id);
+            $task_status = is_array($task_state) && isset($task_state['status'])
+                ? (string) $task_state['status']
+                : 'unknown';
+            $this->append_sandbox_log($execution_log, 'Résultat de la tâche sandbox.', [
+                'task_status' => $task_status,
+                'progress' => isset($task_state['progress']) ? $task_state['progress'] : null,
+            ]);
 
-            if (is_array($task_state) && isset($task_state['status']) && $task_state['status'] === 'complete') {
+            if ($task_status === 'complete') {
                 $status = 'success';
                 $message = __('Validation sandbox terminée avec succès.', 'backup-jlg');
+
+                $health_report = $this->run_validation_health_check(
+                    is_array($sandbox_context) ? $sandbox_context : []
+                );
+
+                if (is_array($health_report) && !empty($health_report['issues']) && is_array($health_report['issues'])) {
+                    foreach ($health_report['issues'] as $issue) {
+                        if (!is_array($issue)) {
+                            continue;
+                        }
+
+                        $issues[] = [
+                            'type' => isset($issue['status']) ? (string) $issue['status'] : 'info',
+                            'component' => isset($issue['component']) ? (string) $issue['component'] : '',
+                            'message' => isset($issue['message']) ? (string) $issue['message'] : '',
+                        ];
+                    }
+                }
             } else {
                 $status = 'failure';
                 $message = __('La validation sandbox ne s’est pas terminée correctement.', 'backup-jlg');
+
+                if (is_array($task_state)) {
+                    $issues[] = [
+                        'type' => isset($task_state['status']) ? (string) $task_state['status'] : 'failure',
+                        'component' => 'task',
+                        'message' => isset($task_state['status_text'])
+                            ? (string) $task_state['status_text']
+                            : $message,
+                    ];
+                }
             }
         } catch (Throwable $throwable) {
             $status = 'failure';
             $message = sprintf(__('Validation sandbox échouée : %s', 'backup-jlg'), $throwable->getMessage());
 
+            $this->append_sandbox_log($execution_log, 'Erreur durant la validation sandbox.', [
+                'error' => $throwable->getMessage(),
+            ]);
+
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log('[Sandbox validation] ' . $throwable->getMessage(), 'error');
             }
+
+            $issues[] = [
+                'type' => 'exception',
+                'component' => 'runtime',
+                'message' => $throwable->getMessage(),
+            ];
         } finally {
             if ($task_id !== '') {
                 $cleanup_result = $this->cleanup_validation_sandbox(
@@ -155,8 +224,21 @@ class BJLG_Restore {
                         : ''
                 );
 
+                $this->append_sandbox_log($execution_log, 'Nettoyage sandbox effectué.', [
+                    'performed' => !empty($cleanup_result['performed']),
+                    'error' => $cleanup_result['error'],
+                ]);
+
                 delete_transient($task_id);
             }
+        }
+
+        if (is_array($cleanup_result) && !empty($cleanup_result['error'])) {
+            $issues[] = [
+                'type' => 'cleanup',
+                'component' => 'sandbox',
+                'message' => (string) $cleanup_result['error'],
+            ];
         }
 
         $completed_at = time();
@@ -167,7 +249,12 @@ class BJLG_Restore {
         $rpo_seconds = ($backup_mtime !== false) ? max(0, $started_at - (int) $backup_mtime) : null;
         $rpo_human = $rpo_seconds !== null ? $this->format_duration_for_report($rpo_seconds) : null;
 
-        return [
+        $this->append_sandbox_log($execution_log, 'Durées calculées pour la validation sandbox.', [
+            'duration_seconds' => $duration_seconds,
+            'rpo_seconds' => $rpo_seconds,
+        ]);
+
+        $result = [
             'status' => $status,
             'message' => $message,
             'backup_file' => $backup_file,
@@ -194,7 +281,24 @@ class BJLG_Restore {
                 'id' => $task_id,
                 'state' => is_array($task_state) ? $task_state : [],
             ],
+            'health' => is_array($health_report) ? $health_report : null,
+            'issues' => $this->normalize_validation_issues($issues),
         ];
+
+        $result['log'] = $execution_log;
+        $result['log_excerpt'] = array_slice($execution_log, -10);
+
+        $report_meta = $this->persist_sandbox_report($result, $execution_log);
+        if (!empty($report_meta)) {
+            $result['report'] = $report_meta;
+            $this->append_sandbox_log($execution_log, 'Rapport sandbox enregistré.', [
+                'report_id' => $report_meta['id'] ?? '',
+            ]);
+            $result['log'] = $execution_log;
+            $result['log_excerpt'] = array_slice($execution_log, -10);
+        }
+
+        return $result;
     }
 
     /**
@@ -311,6 +415,431 @@ class BJLG_Restore {
         return $result;
     }
 
+    private function get_debug_log_index(): int
+    {
+        if (class_exists(BJLG_Debug::class) && is_array(BJLG_Debug::$logs)) {
+            return count(BJLG_Debug::$logs);
+        }
+
+        return 0;
+    }
+
+    /**
+     * @param int $offset
+     * @return array<int,string>
+     */
+    private function collect_debug_logs_since($offset): array
+    {
+        if (!class_exists(BJLG_Debug::class) || !is_array(BJLG_Debug::$logs)) {
+            return [];
+        }
+
+        $offset = max(0, (int) $offset);
+        $logs = array_map('strval', BJLG_Debug::$logs);
+        if ($offset >= count($logs)) {
+            return [];
+        }
+
+        $entries = array_slice($logs, $offset);
+        if (count($entries) > 200) {
+            $entries = array_slice($entries, -200);
+        }
+
+        return $entries;
+    }
+
+    /**
+     * @param array<string,mixed> $report
+     * @param array<int,string>   $log_entries
+     * @return array<string,mixed>
+     */
+    private function persist_sandbox_report_files(array $report, array $log_entries): array
+    {
+        $storage = $this->get_sandbox_report_storage();
+        $base_dir = $storage['path'];
+        $base_url = $storage['url'];
+
+        if ($base_dir === '') {
+            return [];
+        }
+
+        if (!is_dir($base_dir)) {
+            self::ensure_directory_exists_static($base_dir);
+        }
+
+        $writable = function_exists('wp_is_writable') ? wp_is_writable($base_dir) : is_writable($base_dir);
+        if (!is_dir($base_dir) || !$writable) {
+            return [];
+        }
+
+        $base_dir = function_exists('trailingslashit') ? trailingslashit($base_dir) : rtrim($base_dir, '/\\') . '/';
+        $base_url = $base_url !== ''
+            ? (function_exists('trailingslashit') ? trailingslashit($base_url) : rtrim($base_url, '/\\') . '/')
+            : '';
+
+        $slug = $this->build_sandbox_report_slug($report);
+        $timestamp = isset($report['completed_at']) ? (int) $report['completed_at'] : time();
+        $files = [];
+
+        $json_report = $report;
+        if (isset($json_report['report_files'])) {
+            unset($json_report['report_files']);
+        }
+
+        $json_path = $base_dir . $slug . '.json';
+        $json_payload = function_exists('wp_json_encode')
+            ? wp_json_encode($json_report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
+            : json_encode($json_report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+        if (is_string($json_payload) && $json_payload !== '') {
+            $written = @file_put_contents($json_path, $json_payload);
+            if ($written !== false) {
+                $files['json'] = [
+                    'filename' => basename($json_path),
+                    'path' => $json_path,
+                    'url' => $base_url !== '' ? $base_url . basename($json_path) : '',
+                    'mime_type' => 'application/json',
+                    'generated_at' => $timestamp,
+                ];
+            }
+        }
+
+        $markdown = $this->build_sandbox_markdown_report($report);
+        if ($markdown !== '') {
+            $markdown_path = $base_dir . $slug . '.md';
+            $written = @file_put_contents($markdown_path, $markdown);
+            if ($written !== false) {
+                $files['markdown'] = [
+                    'filename' => basename($markdown_path),
+                    'path' => $markdown_path,
+                    'url' => $base_url !== '' ? $base_url . basename($markdown_path) : '',
+                    'mime_type' => 'text/markdown',
+                    'generated_at' => $timestamp,
+                ];
+            }
+        }
+
+        if (!empty($log_entries)) {
+            $log_path = $base_dir . $slug . '.log';
+            $log_written = @file_put_contents($log_path, implode("\n", $log_entries));
+            if ($log_written !== false) {
+                $files['log'] = [
+                    'filename' => basename($log_path),
+                    'path' => $log_path,
+                    'url' => $base_url !== '' ? $base_url . basename($log_path) : '',
+                    'mime_type' => 'text/plain',
+                    'generated_at' => $timestamp,
+                ];
+            }
+        }
+
+        if (!empty($files)) {
+            $files['base_path'] = $base_dir;
+            $files['base_url'] = $base_url;
+        }
+
+        return $files;
+    }
+
+    /**
+     * @return array{path:string,url:string}
+     */
+    private function get_sandbox_report_storage(): array
+    {
+        if (!function_exists('wp_upload_dir')) {
+            return ['path' => '', 'url' => ''];
+        }
+
+        $uploads = wp_upload_dir();
+        if (!empty($uploads['error'])) {
+            return ['path' => '', 'url' => ''];
+        }
+
+        $base_dir = isset($uploads['basedir']) ? (string) $uploads['basedir'] : '';
+        $base_url = isset($uploads['baseurl']) ? (string) $uploads['baseurl'] : '';
+
+        if ($base_dir === '') {
+            return ['path' => '', 'url' => ''];
+        }
+
+        $reports_dir = (function_exists('trailingslashit') ? trailingslashit($base_dir) : rtrim($base_dir, '/\\') . '/') . 'bjlg-sandbox-reports/';
+        $reports_url = $base_url !== ''
+            ? (function_exists('trailingslashit') ? trailingslashit($base_url) : rtrim($base_url, '/\\') . '/') . 'bjlg-sandbox-reports/'
+            : '';
+
+        return ['path' => $reports_dir, 'url' => $reports_url];
+    }
+
+    /**
+     * @param array<string,mixed> $report
+     */
+    private function build_sandbox_report_slug(array $report): string
+    {
+        $timestamp = isset($report['completed_at']) ? (int) $report['completed_at'] : time();
+        $date = gmdate('Ymd-His', $timestamp);
+        $suffix = function_exists('wp_generate_uuid4') ? substr(wp_generate_uuid4(), 0, 8) : substr(md5(uniqid('', true)), 0, 8);
+        $base = isset($report['backup_file']) && is_string($report['backup_file']) ? basename($report['backup_file']) : 'sandbox';
+        if (function_exists('sanitize_file_name')) {
+            $base = sanitize_file_name($base);
+        }
+        if ($base === '') {
+            $base = 'sandbox';
+        }
+
+        return strtolower($base . '-' . $date . '-' . $suffix);
+    }
+
+    /**
+     * @param array<string,mixed> $report
+     */
+    private function build_sandbox_markdown_report(array $report): string
+    {
+        $lines = [];
+        $lines[] = '# ' . __('Rapport de validation sandbox', 'backup-jlg');
+        $lines[] = '';
+
+        $status = isset($report['status']) ? (string) $report['status'] : 'failure';
+        $status_label = $status === 'success'
+            ? __('Réussi', 'backup-jlg')
+            : ($status === 'failure' ? __('Échec', 'backup-jlg') : ucfirst($status));
+        $lines[] = '- ' . __('Statut', 'backup-jlg') . ' : ' . $status_label;
+
+        if (!empty($report['message'])) {
+            $lines[] = '- ' . __('Résumé', 'backup-jlg') . ' : ' . (string) $report['message'];
+        }
+
+        if (!empty($report['backup_file'])) {
+            $lines[] = '- ' . __('Archive utilisée', 'backup-jlg') . ' : ' . basename((string) $report['backup_file']);
+        }
+
+        $objectives = isset($report['objectives']) && is_array($report['objectives']) ? $report['objectives'] : [];
+        if (!empty($objectives['rto_human'])) {
+            $lines[] = '- ' . __('RTO mesuré', 'backup-jlg') . ' : ' . $objectives['rto_human'];
+        }
+        if (!empty($objectives['rpo_human'])) {
+            $lines[] = '- ' . __('RPO estimé', 'backup-jlg') . ' : ' . $objectives['rpo_human'];
+        }
+
+        $started_at = isset($report['started_at']) ? (int) $report['started_at'] : null;
+        $completed_at = isset($report['completed_at']) ? (int) $report['completed_at'] : null;
+
+        if ($started_at) {
+            $lines[] = '- ' . __('Début', 'backup-jlg') . ' : ' . $this->format_report_timestamp($started_at);
+        }
+        if ($completed_at) {
+            $lines[] = '- ' . __('Fin', 'backup-jlg') . ' : ' . $this->format_report_timestamp($completed_at);
+        }
+
+        if (!empty($report['components']) && is_array($report['components'])) {
+            $lines[] = '';
+            $lines[] = __('## Composants restaurés', 'backup-jlg');
+            foreach ($report['components'] as $component) {
+                $lines[] = '- ' . (string) $component;
+            }
+        }
+
+        if (!empty($report['log_excerpt']) && is_array($report['log_excerpt'])) {
+            $lines[] = '';
+            $lines[] = __('## Extrait des journaux', 'backup-jlg');
+            $lines[] = '```';
+            foreach ($report['log_excerpt'] as $entry) {
+                $lines[] = (string) $entry;
+            }
+            $lines[] = '```';
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function format_report_timestamp(int $timestamp): string
+    {
+        if (function_exists('date_i18n')) {
+            return date_i18n('Y-m-d H:i:s', $timestamp);
+        }
+
+        return date('Y-m-d H:i:s', $timestamp);
+    }
+
+    /**
+     * Exécute le bilan de santé après une restauration sandbox.
+     *
+     * @param array<string,mixed> $sandbox_context
+     * @return array<string,mixed>
+     */
+    private function run_validation_health_check(array $sandbox_context): array
+    {
+        $result = [
+            'status' => 'unavailable',
+            'summary' => __('Module de diagnostic indisponible.', 'backup-jlg'),
+            'checks' => [],
+            'issues' => [],
+            'checked_at' => time(),
+            'sandbox_path' => isset($sandbox_context['base_path']) ? (string) $sandbox_context['base_path'] : '',
+        ];
+
+        if (!class_exists(BJLG_Health_Check::class)) {
+            return $result;
+        }
+
+        try {
+            $health_checker = new BJLG_Health_Check();
+            $checks = $health_checker->get_all_checks();
+
+            $normalized_checks = [];
+            $issues = [];
+            $has_error = false;
+            $has_warning = false;
+
+            if (is_array($checks)) {
+                foreach ($checks as $key => $check) {
+                    if (!is_array($check)) {
+                        continue;
+                    }
+
+                    $status = isset($check['status']) ? (string) $check['status'] : 'info';
+                    $message = isset($check['message']) ? (string) $check['message'] : '';
+
+                    $normalized_checks[$key] = [
+                        'status' => $status,
+                        'message' => $message,
+                    ];
+
+                    if ($status === 'error') {
+                        $has_error = true;
+                    }
+
+                    if ($status === 'warning') {
+                        $has_warning = true;
+                    }
+
+                    if (in_array($status, ['error', 'warning'], true)) {
+                        $issues[] = [
+                            'component' => is_string($key) ? $key : '',
+                            'status' => $status,
+                            'message' => $message,
+                        ];
+                    }
+                }
+            }
+
+            $result['checks'] = $normalized_checks;
+            $result['issues'] = $issues;
+            $result['status'] = $has_error ? 'error' : ($has_warning ? 'warning' : 'success');
+            $result['summary'] = $this->summarize_health_check($normalized_checks);
+        } catch (Throwable $throwable) {
+            $result['status'] = 'error';
+            $result['summary'] = $throwable->getMessage();
+            $result['issues'][] = [
+                'component' => 'health_check',
+                'status' => 'error',
+                'message' => $throwable->getMessage(),
+            ];
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('[Sandbox health] ' . $throwable->getMessage(), 'error');
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Construit un résumé textuel pour le bilan de santé.
+     *
+     * @param array<string,array<string,string>> $checks
+     */
+    private function summarize_health_check(array $checks): string
+    {
+        if (empty($checks)) {
+            return __('Aucune anomalie détectée.', 'backup-jlg');
+        }
+
+        $counters = [
+            'error' => 0,
+            'warning' => 0,
+            'success' => 0,
+            'info' => 0,
+        ];
+
+        foreach ($checks as $check) {
+            if (!is_array($check)) {
+                continue;
+            }
+
+            $status = isset($check['status']) ? (string) $check['status'] : 'info';
+            if (!isset($counters[$status])) {
+                $counters[$status] = 0;
+            }
+            $counters[$status]++;
+        }
+
+        $parts = [];
+
+        if ($counters['error'] > 0) {
+            $parts[] = sprintf(
+                _n('%s erreur critique', '%s erreurs critiques', $counters['error'], 'backup-jlg'),
+                number_format_i18n($counters['error'])
+            );
+        }
+
+        if ($counters['warning'] > 0) {
+            $parts[] = sprintf(
+                _n('%s avertissement', '%s avertissements', $counters['warning'], 'backup-jlg'),
+                number_format_i18n($counters['warning'])
+            );
+        }
+
+        if (empty($parts) && $counters['success'] > 0) {
+            $parts[] = sprintf(
+                _n('%s contrôle satisfaisant', '%s contrôles satisfaisants', $counters['success'], 'backup-jlg'),
+                number_format_i18n($counters['success'])
+            );
+        }
+
+        if (empty($parts)) {
+            return __('Aucune anomalie détectée.', 'backup-jlg');
+        }
+
+        return implode(' | ', $parts);
+    }
+
+    /**
+     * Assainit la liste des incidents collectés durant la validation.
+     *
+     * @param array<int,array<string,mixed>> $issues
+     * @return array<int,array<string,string>>
+     */
+    private function normalize_validation_issues(array $issues): array
+    {
+        $normalized = [];
+
+        foreach ($issues as $issue) {
+            if (!is_array($issue)) {
+                continue;
+            }
+
+            $type = isset($issue['type']) ? (string) $issue['type'] : 'info';
+            $component = isset($issue['component']) ? (string) $issue['component'] : '';
+            $message = isset($issue['message']) ? (string) $issue['message'] : '';
+
+            if (function_exists('sanitize_key')) {
+                $type = sanitize_key($type);
+                $component = sanitize_key($component);
+            } else {
+                $type = preg_replace('/[^a-z0-9_\-]/i', '', strtolower($type));
+                $component = preg_replace('/[^a-z0-9_\-]/i', '', strtolower($component));
+            }
+
+            $normalized[] = [
+                'type' => $type !== '' ? $type : 'info',
+                'component' => $component,
+                'message' => $message,
+            ];
+        }
+
+        return $normalized;
+    }
+
     /**
      * Formate une durée en chaîne lisible.
      */
@@ -350,6 +879,377 @@ class BJLG_Restore {
         }
 
         return sprintf('%ds', $seconds);
+    }
+
+    private function append_sandbox_log(array &$log, string $message, array $context = []): void
+    {
+        $entry = [
+            'timestamp' => time(),
+            'message' => $this->sanitize_log_message($message),
+        ];
+
+        if (!empty($context)) {
+            $entry['context'] = $this->sanitize_log_context($context);
+        }
+
+        $log[] = $entry;
+
+        if (count($log) > 200) {
+            $log = array_slice($log, -200);
+        }
+    }
+
+    private function sanitize_log_message(string $message): string
+    {
+        if (function_exists('sanitize_text_field')) {
+            return sanitize_text_field($message);
+        }
+
+        return trim(strip_tags($message));
+    }
+
+    private function sanitize_log_context($context, int $depth = 0)
+    {
+        if (!is_array($context) || $depth > 2) {
+            return [];
+        }
+
+        $clean = [];
+
+        foreach ($context as $key => $value) {
+            $normalized_key = is_string($key) ? sanitize_key($key) : ('item_' . (string) $key);
+            if ($normalized_key === '') {
+                $normalized_key = 'context_' . $depth;
+            }
+
+            if (is_scalar($value) || $value === null) {
+                $clean[$normalized_key] = $this->sanitize_log_value($value);
+                continue;
+            }
+
+            if (is_array($value)) {
+                $clean[$normalized_key] = $this->sanitize_log_context($value, $depth + 1);
+                continue;
+            }
+
+            if (is_object($value) && method_exists($value, '__toString')) {
+                $clean[$normalized_key] = $this->sanitize_log_value((string) $value);
+            }
+        }
+
+        return $clean;
+    }
+
+    private function sanitize_log_value($value): string
+    {
+        if ($value === null) {
+            return 'null';
+        }
+
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+
+        if (is_numeric($value)) {
+            return (string) $value;
+        }
+
+        $value = (string) $value;
+
+        if (function_exists('sanitize_text_field')) {
+            return sanitize_text_field($value);
+        }
+
+        return trim(strip_tags($value));
+    }
+
+    private function persist_sandbox_report(array $report, array $execution_log): array
+    {
+        if (!function_exists('wp_upload_dir')) {
+            return [];
+        }
+
+        $uploads = wp_upload_dir(null, false);
+        if (!is_array($uploads) || !empty($uploads['error'])) {
+            return [];
+        }
+
+        $base_dir = isset($uploads['basedir']) ? (string) $uploads['basedir'] : '';
+        $base_url = isset($uploads['baseurl']) ? (string) $uploads['baseurl'] : '';
+
+        if ($base_dir === '' || $base_url === '') {
+            return [];
+        }
+
+        $target_dir = trailingslashit($base_dir) . 'bjlg/sandbox-reports';
+        $target_url = trailingslashit($base_url) . 'bjlg/sandbox-reports';
+
+        if (!wp_mkdir_p($target_dir)) {
+            return [];
+        }
+
+        $report_id = 'sandbox-' . gmdate('YmdHis') . '-' . (
+            function_exists('wp_generate_uuid4')
+                ? wp_generate_uuid4()
+                : md5(uniqid('sandbox-report', true))
+        );
+
+        $json_filename = $report_id . '.json';
+        $log_filename = $report_id . '-log.ndjson';
+        $json_path = trailingslashit($target_dir) . $json_filename;
+        $log_path = trailingslashit($target_dir) . $log_filename;
+
+        $payload = [
+            'report_id' => $report_id,
+            'generated_at' => gmdate('c'),
+            'status' => $report['status'] ?? 'unknown',
+            'message' => $report['message'] ?? '',
+            'backup_file' => $report['backup_file'] ?? '',
+            'started_at' => $report['started_at'] ?? null,
+            'completed_at' => $report['completed_at'] ?? null,
+            'timings' => $report['timings'] ?? [],
+            'objectives' => $report['objectives'] ?? [],
+            'components' => $report['components'] ?? [],
+            'sandbox' => $report['sandbox'] ?? [],
+            'task' => $report['task'] ?? [],
+            'log' => $execution_log,
+        ];
+
+        $encoded_payload = wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if (!is_string($encoded_payload) || file_put_contents($json_path, $encoded_payload) === false) {
+            return [];
+        }
+
+        $log_lines = [];
+        foreach ($execution_log as $entry) {
+            $encoded_entry = wp_json_encode($entry, JSON_UNESCAPED_SLASHES);
+            if (is_string($encoded_entry)) {
+                $log_lines[] = $encoded_entry;
+            }
+        }
+
+        file_put_contents($log_path, implode("\n", $log_lines));
+
+        $files = [
+            'json' => [
+                'path' => $json_path,
+                'url' => trailingslashit($target_url) . $json_filename,
+                'filename' => $json_filename,
+                'mime_type' => 'application/json',
+                'size' => @filesize($json_path) ?: null,
+            ],
+            'log' => [
+                'path' => $log_path,
+                'url' => trailingslashit($target_url) . $log_filename,
+                'filename' => $log_filename,
+                'mime_type' => 'application/x-ndjson',
+                'size' => @filesize($log_path) ?: null,
+            ],
+        ];
+
+        $sanitized_files = self::sanitize_report_files($files);
+
+        $snapshot = [
+            'id' => $report_id,
+            'created_at' => $report['completed_at'] ?? time(),
+            'status' => $report['status'] ?? 'unknown',
+            'message' => $report['message'] ?? '',
+            'objectives' => $report['objectives'] ?? [],
+            'timings' => $report['timings'] ?? [],
+            'files' => $sanitized_files,
+            'base_path' => $target_dir,
+            'log_excerpt' => array_slice($execution_log, -10),
+            'backup_file' => $report['backup_file'] ?? '',
+        ];
+
+        self::store_sandbox_report_snapshot($snapshot);
+
+        return [
+            'id' => $report_id,
+            'created_at' => $snapshot['created_at'],
+            'status' => $snapshot['status'],
+            'message' => $snapshot['message'],
+            'files' => $sanitized_files,
+            'base_path' => $target_dir,
+            'log_excerpt' => $snapshot['log_excerpt'],
+            'backup_file' => $snapshot['backup_file'],
+        ];
+    }
+
+    private static function store_sandbox_report_snapshot(array $snapshot): void
+    {
+        $registry = self::get_sandbox_report_registry();
+        $filtered = [];
+        foreach ($registry as $entry) {
+            if (!is_array($entry) || !isset($entry['id'])) {
+                continue;
+            }
+            if ($entry['id'] === ($snapshot['id'] ?? null)) {
+                continue;
+            }
+            $filtered[] = $entry;
+        }
+
+        $filtered[] = self::sanitize_report_snapshot($snapshot);
+
+        usort($filtered, static function ($a, $b) {
+            return (($b['created_at'] ?? 0) <=> ($a['created_at'] ?? 0));
+        });
+
+        if (count($filtered) > 10) {
+            $filtered = array_slice($filtered, 0, 10);
+        }
+
+        self::persist_sandbox_report_registry($filtered);
+    }
+
+    private static function persist_sandbox_report_registry(array $registry): void
+    {
+        update_option(self::SANDBOX_REPORT_REGISTRY_OPTION, ['reports' => array_values($registry)], false);
+    }
+
+    private static function sanitize_report_snapshot(array $snapshot): array
+    {
+        $sanitized = [
+            'id' => self::sanitize_report_text($snapshot['id'] ?? ''),
+            'created_at' => isset($snapshot['created_at']) ? (int) $snapshot['created_at'] : time(),
+            'status' => sanitize_key($snapshot['status'] ?? 'unknown'),
+            'message' => self::sanitize_report_text($snapshot['message'] ?? ''),
+            'objectives' => is_array($snapshot['objectives'] ?? null) ? $snapshot['objectives'] : [],
+            'timings' => is_array($snapshot['timings'] ?? null) ? $snapshot['timings'] : [],
+            'files' => self::sanitize_report_files($snapshot['files'] ?? []),
+            'base_path' => self::sanitize_report_path($snapshot['base_path'] ?? ''),
+            'log_excerpt' => is_array($snapshot['log_excerpt'] ?? null) ? $snapshot['log_excerpt'] : [],
+            'history_entry_id' => isset($snapshot['history_entry_id']) ? (int) $snapshot['history_entry_id'] : null,
+            'backup_file' => self::sanitize_report_text($snapshot['backup_file'] ?? ''),
+        ];
+
+        return $sanitized;
+    }
+
+    private static function sanitize_report_files($files): array
+    {
+        if (!is_array($files)) {
+            return [];
+        }
+
+        $sanitized = [];
+
+        foreach ($files as $type => $file_info) {
+            if (!is_array($file_info)) {
+                continue;
+            }
+
+            $sanitized[$type] = [
+                'path' => isset($file_info['path']) ? self::sanitize_report_path($file_info['path']) : '',
+                'url' => isset($file_info['url']) ? esc_url_raw($file_info['url']) : '',
+                'filename' => self::sanitize_report_text($file_info['filename'] ?? ''),
+                'mime_type' => self::sanitize_report_text($file_info['mime_type'] ?? ''),
+                'size' => isset($file_info['size']) ? (int) $file_info['size'] : null,
+            ];
+        }
+
+        return $sanitized;
+    }
+
+    private static function sanitize_report_path($path): string
+    {
+        if (!is_string($path) || $path === '') {
+            return '';
+        }
+
+        $real = realpath($path);
+        if ($real !== false) {
+            $path = $real;
+        }
+
+        $normalized = str_replace('\\', '/', $path);
+
+        return rtrim($normalized, '/');
+    }
+
+    private static function sanitize_report_text($text): string
+    {
+        $text = (string) $text;
+
+        if (function_exists('sanitize_text_field')) {
+            return sanitize_text_field($text);
+        }
+
+        return trim(strip_tags($text));
+    }
+
+    public static function get_sandbox_report_registry(): array
+    {
+        $stored = get_option(self::SANDBOX_REPORT_REGISTRY_OPTION, []);
+        $records = [];
+
+        if (is_array($stored)) {
+            if (isset($stored['reports']) && is_array($stored['reports'])) {
+                $records = $stored['reports'];
+            } elseif (!empty($stored)) {
+                $records = $stored;
+            }
+        }
+
+        $sanitized = [];
+        foreach ($records as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+
+            $sanitized[] = self::sanitize_report_snapshot($record);
+        }
+
+        usort($sanitized, static function ($a, $b) {
+            return (($b['created_at'] ?? 0) <=> ($a['created_at'] ?? 0));
+        });
+
+        return $sanitized;
+    }
+
+    public static function get_latest_sandbox_report(): ?array
+    {
+        $registry = self::get_sandbox_report_registry();
+
+        return $registry[0] ?? null;
+    }
+
+    public static function find_sandbox_report(string $report_id): ?array
+    {
+        $registry = self::get_sandbox_report_registry();
+
+        foreach ($registry as $entry) {
+            if (isset($entry['id']) && $entry['id'] === $report_id) {
+                return $entry;
+            }
+        }
+
+        return null;
+    }
+
+    public static function attach_sandbox_report_to_history(string $report_id, int $entry_id): void
+    {
+        if ($report_id === '' || $entry_id <= 0) {
+            return;
+        }
+
+        $registry = self::get_sandbox_report_registry();
+        $updated = false;
+
+        foreach ($registry as &$entry) {
+            if (!is_array($entry) || ($entry['id'] ?? '') !== $report_id) {
+                continue;
+            }
+
+            $entry['history_entry_id'] = $entry_id;
+            $updated = true;
+            break;
+        }
+
+        if ($updated) {
+            self::persist_sandbox_report_registry($registry);
+        }
     }
 
     /**

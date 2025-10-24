@@ -3,6 +3,8 @@ namespace BJLG;
 
 use WP_Error;
 
+require_once __DIR__ . '/class-bjlg-history.php';
+
 if (!defined('ABSPATH')) {
     exit;
 }
@@ -86,6 +88,8 @@ class BJLG_Notifications {
         ],
         'templates' => [],
     ];
+
+    private const REMOTE_PURGE_PROACTIVE_ALERT_TRANSIENT = 'bjlg_remote_purge_metrics_alerted';
 
     /**
      * Retourne les modèles par défaut utilisés pour chaque gravité.
@@ -476,6 +480,17 @@ class BJLG_Notifications {
         }
 
         $this->notify('storage_warning', $context);
+    }
+
+    /**
+     * Prépare le contexte d'une projection de saturation distante.
+     *
+     * @param array<string,mixed> $data
+     */
+    public function handle_remote_storage_capacity_forecast($data) {
+        $data = is_array($data) ? $data : [];
+
+        $this->notify('remote_storage_capacity_forecast', $data);
     }
 
     /**
@@ -1031,10 +1046,35 @@ class BJLG_Notifications {
         $timings = isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [];
         $sandbox = isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [];
         $cleanup = isset($sandbox['cleanup']) && is_array($sandbox['cleanup']) ? $sandbox['cleanup'] : [];
+        $report_meta = isset($report['report']) && is_array($report['report']) ? $report['report'] : [];
+
+        $log_excerpt = [];
+        $raw_log_excerpt = [];
+        if (isset($report['log_excerpt']) && is_array($report['log_excerpt'])) {
+            $raw_log_excerpt = $report['log_excerpt'];
+        } elseif (isset($report['log']) && is_array($report['log'])) {
+            $raw_log_excerpt = array_slice($report['log'], -5);
+        }
+
+        foreach ($raw_log_excerpt as $entry) {
+            if (!is_array($entry) || empty($entry['message'])) {
+                continue;
+            }
+
+            $log_excerpt[] = [
+                'timestamp' => isset($entry['timestamp']) ? (int) $entry['timestamp'] : null,
+                'message' => (string) $entry['message'],
+            ];
+        }
 
         $components = [];
         if (isset($report['components']) && is_array($report['components'])) {
             $components = array_map('strval', $report['components']);
+        }
+
+        $log_excerpt = [];
+        if (isset($report['log_excerpt']) && is_array($report['log_excerpt'])) {
+            $log_excerpt = array_map('strval', array_slice($report['log_excerpt'], -20));
         }
 
         return [
@@ -1054,8 +1094,103 @@ class BJLG_Notifications {
             'sandbox_path' => isset($sandbox['base_path']) ? (string) $sandbox['base_path'] : '',
             'cleanup_performed' => !empty($cleanup['performed']),
             'cleanup_error' => isset($cleanup['error']) && $cleanup['error'] !== null ? (string) $cleanup['error'] : null,
+            'report_id' => isset($report_meta['id']) ? (string) $report_meta['id'] : '',
+            'report_files' => isset($report_meta['files']) && is_array($report_meta['files']) ? $report_meta['files'] : [],
+            'log_excerpt' => $log_excerpt,
             'raw' => $report,
         ];
+    }
+
+    private function sanitize_health_report($health) {
+        if (!is_array($health)) {
+            return [
+                'status' => '',
+                'summary' => '',
+                'checked_at' => null,
+            ];
+        }
+
+        return [
+            'status' => isset($health['status']) ? (string) $health['status'] : '',
+            'summary' => isset($health['summary']) ? (string) $health['summary'] : '',
+            'checked_at' => isset($health['checked_at']) ? (int) $health['checked_at'] : null,
+        ];
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $issues
+     * @return array<int,array<string,string>>
+     */
+    private function sanitize_validation_issues(array $issues): array
+    {
+        $sanitized = [];
+
+        foreach ($issues as $issue) {
+            if (!is_array($issue)) {
+                continue;
+            }
+
+            $type = isset($issue['type']) ? (string) $issue['type'] : 'info';
+            $component = isset($issue['component']) ? (string) $issue['component'] : '';
+            $message = isset($issue['message']) ? (string) $issue['message'] : '';
+
+            if (function_exists('sanitize_key')) {
+                $type = sanitize_key($type);
+                $component = sanitize_key($component);
+            } else {
+                $type = preg_replace('/[^a-z0-9_\-]/i', '', strtolower($type));
+                $component = preg_replace('/[^a-z0-9_\-]/i', '', strtolower($component));
+            }
+
+            $sanitized[] = [
+                'type' => $type !== '' ? $type : 'info',
+                'component' => $component,
+                'message' => $message,
+            ];
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * @param array<int,array<string,string>> $issues
+     */
+    private function summarize_validation_issues(array $issues): string
+    {
+        if (empty($issues)) {
+            return '';
+        }
+
+        $error_count = 0;
+        $warning_count = 0;
+
+        foreach ($issues as $issue) {
+            $type = isset($issue['type']) ? (string) $issue['type'] : '';
+
+            if (in_array($type, ['error', 'failure', 'exception', 'cleanup'], true)) {
+                $error_count++;
+            } elseif ($type === 'warning') {
+                $warning_count++;
+            }
+        }
+
+        $parts = [];
+
+        if ($error_count > 0) {
+            $parts[] = sprintf(
+                _n('%s critique', '%s critiques', $error_count, 'backup-jlg'),
+                number_format_i18n($error_count)
+            );
+        }
+
+        if ($warning_count > 0) {
+            $parts[] = sprintf(
+                _n('%s avertissement', '%s avertissements', $warning_count, 'backup-jlg'),
+                number_format_i18n($warning_count)
+            );
+        }
+
+        return implode(' | ', $parts);
     }
 
     /**
@@ -1143,6 +1278,14 @@ class BJLG_Notifications {
             $entry['escalation'] = $escalation['meta'];
         }
 
+        if (!empty($entry['resolution']['summary'])) {
+            $entry['resolution_summary'] = (string) $entry['resolution']['summary'];
+
+            if (!empty($entry['escalation']) && is_array($entry['escalation'])) {
+                $entry['escalation']['resolution_summary'] = $entry['resolution']['summary'];
+            }
+        }
+
         $entry = $this->apply_quiet_hours_constraints($event, $entry);
 
         $queued = BJLG_Notification_Queue::enqueue($entry);
@@ -1162,16 +1305,23 @@ class BJLG_Notifications {
             ? __('Notification de test enregistrée.', 'backup-jlg')
             : sprintf(__('Notification générée pour "%s".', 'backup-jlg'), $title);
 
-        return [
+        $steps = [[
+            'timestamp' => $timestamp,
+            'actor' => __('Système', 'backup-jlg'),
+            'summary' => $summary,
+            'type' => 'created',
+        ]];
+
+        $resolution = [
             'acknowledged_at' => null,
             'resolved_at' => null,
-            'steps' => [[
-                'timestamp' => $timestamp,
-                'actor' => __('Système', 'backup-jlg'),
-                'summary' => $summary,
-                'type' => 'created',
-            ]],
+            'steps' => $steps,
+            'summary' => class_exists(__NAMESPACE__ . '\\BJLG_Notification_Queue')
+                ? BJLG_Notification_Queue::summarize_resolution_steps($steps)
+                : $summary,
         ];
+
+        return $resolution;
     }
 
     /**
@@ -1551,12 +1701,42 @@ class BJLG_Notifications {
                     $lines[] = __('Détails : ', 'backup-jlg') . $context['message'];
                 }
 
+                if (!empty($context['health_summary'])) {
+                    $lines[] = __('Health-check : ', 'backup-jlg') . $context['health_summary'];
+                }
+
+                if (!empty($context['issue_summary'])) {
+                    $lines[] = __('Incidents : ', 'backup-jlg') . $context['issue_summary'];
+                }
+
                 if (!empty($context['sandbox_path'])) {
                     $lines[] = __('Sandbox : ', 'backup-jlg') . $context['sandbox_path'];
                 }
 
                 if (!empty($context['cleanup_error'])) {
                     $lines[] = __('Nettoyage sandbox : ', 'backup-jlg') . $context['cleanup_error'];
+                }
+
+                if (!empty($context['report_files']['json']['url'])) {
+                    $lines[] = __('Rapport détaillé : ', 'backup-jlg') . $context['report_files']['json']['url'];
+                }
+
+                if (!empty($context['report_files']['log']['url'])) {
+                    $lines[] = __('Journal NDJSON : ', 'backup-jlg') . $context['report_files']['log']['url'];
+                }
+
+                if (!empty($context['log_excerpt']) && is_array($context['log_excerpt'])) {
+                    $lines[] = __('Extrait du journal :', 'backup-jlg');
+                    $log_lines = array_slice($context['log_excerpt'], -3);
+                    foreach ($log_lines as $log_entry) {
+                        if (!is_array($log_entry) || empty($log_entry['message'])) {
+                            continue;
+                        }
+                        $prefix = !empty($log_entry['timestamp'])
+                            ? $this->format_timestamp((int) $log_entry['timestamp']) . ' — '
+                            : '';
+                        $lines[] = $prefix . $log_entry['message'];
+                    }
                 }
                 break;
             default:
@@ -2698,6 +2878,54 @@ class BJLG_Notifications {
         ];
     }
 
+    private function normalize_saturation_destinations($destinations) {
+        if (!is_array($destinations)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($destinations as $destination_id => $data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $label = $this->get_destination_label($destination_id);
+            $entry = [
+                'id' => (string) $destination_id,
+                'label' => $label,
+                'pending' => isset($data['pending']) ? (int) $data['pending'] : 0,
+                'countdown_label' => '',
+                'projected_relative' => '',
+                'breach_imminent' => !empty($data['breach_imminent']),
+            ];
+
+            if (isset($data['time_to_threshold']) && $data['time_to_threshold'] !== null) {
+                $entry['countdown_label'] = $this->format_duration_seconds((float) max(0, (int) $data['time_to_threshold']));
+            }
+
+            if (!empty($data['projected_breach_at'])) {
+                $entry['projected_relative'] = $this->format_relative_time((int) $data['projected_breach_at']);
+            }
+
+            $normalized[] = $entry;
+        }
+
+        return $normalized;
+    }
+
+    private function get_destination_label($destination_id): string {
+        $label = (string) $destination_id;
+
+        if (class_exists(BJLG_Settings::class)) {
+            $destination_label = BJLG_Settings::get_destination_label($destination_id);
+            if (is_string($destination_label) && $destination_label !== '') {
+                $label = $destination_label;
+            }
+        }
+
+        return $label;
+    }
+
     private function resolve_destination_label($destination_id): string {
         if (!class_exists(BJLG_Settings::class)) {
             return (string) $destination_id;
@@ -2710,6 +2938,72 @@ class BJLG_Notifications {
         }
 
         return $label;
+    }
+
+    private function format_relative_time($timestamp) {
+        $timestamp = (int) $timestamp;
+        if ($timestamp <= 0) {
+            return '';
+        }
+
+        $now = time();
+        if (function_exists('human_time_diff')) {
+            if ($timestamp >= $now) {
+                $diff = human_time_diff($now, $timestamp);
+                if (is_string($diff) && $diff !== '') {
+                    return sprintf(__('dans %s', 'backup-jlg'), $diff);
+                }
+            } else {
+                $diff = human_time_diff($timestamp, $now);
+                if (is_string($diff) && $diff !== '') {
+                    return sprintf(__('il y a %s', 'backup-jlg'), $diff);
+                }
+            }
+        }
+
+        return $this->format_timestamp($timestamp);
+    }
+
+    private function dispatch_remote_purge_worker(array $metrics): bool {
+        $dispatched = false;
+
+        if (function_exists('wp_schedule_single_event')) {
+            $scheduled = wp_schedule_single_event(time() + 5, 'bjlg_process_remote_purge_queue');
+            if ($scheduled) {
+                $dispatched = true;
+            }
+        }
+
+        if (!$dispatched && class_exists(__NAMESPACE__ . '\\BJLG_Remote_Purge_Worker')) {
+            try {
+                (new BJLG_Remote_Purge_Worker())->process_queue();
+                $dispatched = true;
+            } catch (\Throwable $exception) {
+                if (class_exists(__NAMESPACE__ . '\\BJLG_Debug')) {
+                    BJLG_Debug::log('[Notifications] ' . $exception->getMessage());
+                }
+            }
+        }
+
+        if (!$dispatched) {
+            $fallback = apply_filters('bjlg_remote_purge_proactive_fallback', null, $metrics);
+            if (is_callable($fallback)) {
+                try {
+                    call_user_func($fallback, $metrics);
+                    $dispatched = true;
+                } catch (\Throwable $exception) {
+                    if (class_exists(__NAMESPACE__ . '\\BJLG_Debug')) {
+                        BJLG_Debug::log('[Notifications] ' . $exception->getMessage());
+                    }
+                }
+            } else {
+                do_action('bjlg_remote_purge_proactive_fallback', $metrics);
+            }
+        } else {
+            do_action('bjlg_remote_purge_proactive_dispatch', $metrics);
+        }
+
+        return $dispatched;
     }
 
     private function sanitize_components($components) {
