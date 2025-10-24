@@ -48,6 +48,7 @@ namespace BJLG {
 
 namespace BJLG\Tests {
 
+use BJLG\BJLG_Notification_Queue;
 use BJLG\BJLG_Notifications;
 use BJLG\BJLG_Remote_Storage_Metrics;
 use PHPUnit\Framework\TestCase;
@@ -64,7 +65,8 @@ final class BJLG_NotificationsStorageWarningTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        bjlg_update_option('bjlg_notification_queue', []);
+        BJLG_Notification_Queue::create_tables();
+        BJLG_Notification_Queue::seed_queue([]);
         bjlg_update_option(BJLG_Remote_Storage_Metrics::WARNING_DIGEST_OPTION, []);
         bjlg_update_option('bjlg_notification_settings', [
             'enabled' => true,
@@ -112,7 +114,7 @@ final class BJLG_NotificationsStorageWarningTest extends TestCase
             'path' => $path,
         ]);
 
-        $queue = bjlg_get_option('bjlg_notification_queue', []);
+        $queue = BJLG_Notification_Queue::export_queue();
         $this->assertCount(1, $queue);
         $entry = $queue[0];
 
@@ -127,7 +129,7 @@ final class BJLG_NotificationsStorageWarningTest extends TestCase
 
     public function test_handle_storage_warning_falls_back_to_local_channel_when_remote_invalid(): void
     {
-        bjlg_update_option('bjlg_notification_queue', []);
+        BJLG_Notification_Queue::seed_queue([]);
         bjlg_update_option('bjlg_notification_settings', [
             'enabled' => true,
             'email_recipients' => 'ops@example.com',
@@ -151,7 +153,7 @@ final class BJLG_NotificationsStorageWarningTest extends TestCase
             'path' => 's3://critical/backups',
         ]);
 
-        $queue = bjlg_get_option('bjlg_notification_queue', []);
+        $queue = BJLG_Notification_Queue::export_queue();
         $this->assertCount(1, $queue);
         $entry = $queue[0];
 
