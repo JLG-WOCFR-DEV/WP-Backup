@@ -34,6 +34,10 @@ final class BJLG_UpdateGuardTest extends TestCase
         $GLOBALS['bjlg_test_transients'] = [];
         $GLOBALS['bjlg_test_options'] = [];
         $GLOBALS['bjlg_test_filters'] = [];
+        $GLOBALS['bjlg_test_scheduled_events'] = [
+            'single' => [],
+            'recurring' => [],
+        ];
         unset($GLOBALS['bjlg_test_set_transient_mock']);
 
         if (!isset($GLOBALS['bjlg_test_hooks'])) {
@@ -289,5 +293,75 @@ final class BJLG_UpdateGuardTest extends TestCase
         $this->assertSame([$task_id], $backup_stub->task_ids);
         $this->assertArrayHasKey($task_id, $GLOBALS['bjlg_test_transients']);
         $this->assertSame(['db'], $GLOBALS['bjlg_test_transients'][$task_id]['components']);
+    }
+
+    public function test_targeted_mode_selects_components_by_context(): void
+    {
+        bjlg_update_option('bjlg_update_guard_settings', [
+            'enabled' => true,
+            'mode' => 'targeted',
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'reminder' => ['enabled' => false, 'message' => ''],
+        ]);
+
+        $backup_stub = new BJLG_Test_BackupStub();
+        $guard = new BJLG\BJLG_Update_Guard($backup_stub);
+
+        $hook_extra = [
+            'type' => 'plugin',
+            'action' => 'update',
+            'plugin' => 'security/security.php',
+        ];
+
+        $task_id = $guard->maybe_trigger_pre_update_backup($hook_extra);
+
+        $this->assertNotNull($task_id);
+        $this->assertSame(['db', 'plugins'], $GLOBALS['bjlg_test_transients'][$task_id]['components']);
+    }
+
+    public function test_reminder_with_delay_is_scheduled(): void
+    {
+        bjlg_update_option('bjlg_update_guard_settings', [
+            'enabled' => false,
+            'mode' => 'full',
+            'components' => ['db', 'plugins'],
+            'reminder' => [
+                'enabled' => true,
+                'message' => 'Déclenchez un snapshot manuel.',
+                'delay_minutes' => 10,
+                'channels' => [
+                    'notification' => ['enabled' => true],
+                    'email' => ['enabled' => false, 'recipients' => ''],
+                ],
+            ],
+        ]);
+
+        $backup_stub = new BJLG_Test_BackupStub();
+        $guard = new BJLG\BJLG_Update_Guard($backup_stub);
+
+        $reminder_calls = 0;
+        add_action('bjlg_pre_update_backup_reminder', static function () use (&$reminder_calls): void {
+            $reminder_calls++;
+        }, 10, 4);
+
+        $hook_extra = [
+            'type' => 'plugin',
+            'action' => 'update',
+            'plugin' => 'delayed-plugin/delayed.php',
+        ];
+
+        $task_id = $guard->maybe_trigger_pre_update_backup($hook_extra);
+
+        $this->assertNull($task_id);
+        $this->assertSame(0, $reminder_calls);
+        $this->assertNotEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+        $event = $GLOBALS['bjlg_test_scheduled_events']['single'][0];
+        $this->assertSame('bjlg_pre_update_snapshot_reminder_event', $event['hook']);
+        $this->assertGreaterThan(time(), $event['timestamp']);
+
+        $pending = bjlg_get_option('bjlg_update_guard_pending_reminders', []);
+        $this->assertIsArray($pending);
+        $this->assertNotEmpty($pending);
+        $this->assertArrayHasKey($event['args'][0], $pending);
     }
 }

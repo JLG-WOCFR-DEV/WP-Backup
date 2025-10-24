@@ -4229,10 +4229,26 @@ class BJLG_Admin {
         ];
         $update_guard_defaults = [
             'enabled' => true,
+            'mode' => 'full',
             'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'targets' => [
+                'core' => true,
+                'plugin' => true,
+                'theme' => true,
+            ],
             'reminder' => [
                 'enabled' => false,
                 'message' => 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.',
+                'delay_minutes' => 0,
+                'channels' => [
+                    'notification' => [
+                        'enabled' => false,
+                    ],
+                    'email' => [
+                        'enabled' => false,
+                        'recipients' => '',
+                    ],
+                ],
             ],
         ];
         $raw_update_guard_settings = \bjlg_get_option('bjlg_update_guard_settings', []);
@@ -4240,6 +4256,12 @@ class BJLG_Admin {
             $raw_update_guard_settings = [];
         }
         $update_guard_settings = BJLG_Settings::merge_settings_with_defaults($raw_update_guard_settings, $update_guard_defaults);
+        $allowed_modes = ['full', 'targeted'];
+        $mode = isset($raw_update_guard_settings['mode']) ? sanitize_key((string) $raw_update_guard_settings['mode']) : '';
+        if ($mode === '' || !in_array($mode, $allowed_modes, true)) {
+            $mode = $update_guard_defaults['mode'];
+        }
+        $update_guard_settings['mode'] = $mode;
         $explicit_components = [];
         if (isset($raw_update_guard_settings['components']) && is_array($raw_update_guard_settings['components'])) {
             foreach ($raw_update_guard_settings['components'] as $component) {
@@ -4285,6 +4307,9 @@ class BJLG_Admin {
             ? $update_guard_settings['reminder']
             : $reminder_defaults;
 
+        $reminder_settings['delay_minutes'] = isset($reminder_settings['delay_minutes'])
+            ? max(0, min(2880, (int) $reminder_settings['delay_minutes']))
+            : 0;
         $reminder_settings['enabled'] = !empty($reminder_settings['enabled']);
         $reminder_settings['message'] = isset($reminder_settings['message']) && $reminder_settings['message'] !== ''
             ? (string) $reminder_settings['message']
@@ -4705,6 +4730,19 @@ class BJLG_Admin {
                         </td>
                     </tr>
                     <tr class="bjlg-update-guard-fields">
+                        <th scope="row"><?php esc_html_e('Politique de snapshot', 'backup-jlg'); ?></th>
+                        <td>
+                            <label for="bjlg-update-guard-mode" class="screen-reader-text"><?php esc_html_e('Politique de snapshot pré-update', 'backup-jlg'); ?></label>
+                            <select id="bjlg-update-guard-mode" name="update_guard_mode" class="regular-text">
+                                <option value="full" <?php selected($update_guard_settings['mode'], 'full'); ?>><?php esc_html_e('Snapshot complet (tous les composants sélectionnés)', 'backup-jlg'); ?></option>
+                                <option value="targeted" <?php selected($update_guard_settings['mode'], 'targeted'); ?>><?php esc_html_e('Snapshot ciblé selon le type de mise à jour', 'backup-jlg'); ?></option>
+                            </select>
+                            <p class="description">
+                                <?php esc_html_e('Le mode ciblé privilégie la base de données et les composants impactés (plugins, thèmes, médias) selon le type de mise à jour détecté.', 'backup-jlg'); ?>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr class="bjlg-update-guard-fields">
                         <th scope="row"><?php esc_html_e('Composants à inclure', 'backup-jlg'); ?></th>
                         <td>
                             <fieldset class="bjlg-update-guard-fieldset" aria-describedby="bjlg-update-guard-components-help">
@@ -4725,7 +4763,7 @@ class BJLG_Admin {
                                 </ul>
                             </fieldset>
                             <p id="bjlg-update-guard-components-help" class="description">
-                                <?php esc_html_e('Conservez au minimum la base de données et les extensions pour les mises à jour critiques ; ajoutez les médias et thèmes lors des fenêtres de maintenance planifiées.', 'backup-jlg'); ?>
+                                <?php esc_html_e('Sélectionnez les composants autorisés : le mode complet les utilisera tous, tandis que le mode ciblé n’inclura que ceux requis par le type de mise à jour.', 'backup-jlg'); ?>
                             </p>
                         </td>
                     </tr>
@@ -4772,7 +4810,7 @@ class BJLG_Admin {
                                 <span><?php esc_html_e('Notifier lorsqu’un snapshot est ignoré', 'backup-jlg'); ?></span>
                             </label>
                             <p id="bjlg-update-guard-reminder-help" class="description">
-                                <?php esc_html_e('Les rappels informent votre équipe qu’un snapshot est requis ou a été omis selon les règles ci-dessus.', 'backup-jlg'); ?>
+                                <?php esc_html_e('Les rappels informent votre équipe qu’un snapshot est requis ou a été omis selon les règles ci-dessus et peuvent être différés pour préparer l’intervention.', 'backup-jlg'); ?>
                             </p>
                             <div class="bjlg-update-guard-reminder-fields">
                                 <label for="bjlg-update-guard-reminder-message" class="bjlg-label-block bjlg-fw-600">
@@ -4814,6 +4852,23 @@ class BJLG_Admin {
                                         <?php esc_html_e('Activez uniquement les canaux pertinents pour éviter la lassitude : privilégiez l’e-mail pour les équipes d’astreinte, l’alerte interne pour le suivi quotidien.', 'backup-jlg'); ?>
                                     </p>
                                 </fieldset>
+                                <div class="bjlg-update-guard-reminder-delay">
+                                    <label for="bjlg-update-guard-reminder-delay" class="bjlg-label-block bjlg-fw-600">
+                                        <?php esc_html_e('Délai avant rappel (minutes)', 'backup-jlg'); ?>
+                                    </label>
+                                    <input type="number"
+                                           id="bjlg-update-guard-reminder-delay"
+                                           name="update_guard_reminder_delay"
+                                           class="small-text"
+                                           min="0"
+                                           max="2880"
+                                           step="5"
+                                           value="<?php echo esc_attr($reminder_settings['delay_minutes']); ?>"
+                                           aria-describedby="bjlg-update-guard-reminder-delay-help">
+                                    <p id="bjlg-update-guard-reminder-delay-help" class="description">
+                                        <?php esc_html_e('Définissez le temps de préparation avant l’alerte : 0 minute pour un rappel immédiat, sinon le rappel est planifié via WP-Cron.', 'backup-jlg'); ?>
+                                    </p>
+                                </div>
                                 <div class="bjlg-update-guard-reminder-email-fields">
                                     <label for="bjlg-update-guard-reminder-email-recipients" class="bjlg-label-block bjlg-fw-600">
                                         <?php esc_html_e('Destinataires e-mail', 'backup-jlg'); ?>

@@ -40,6 +40,7 @@ class BJLG_Notifications {
             'restore_self_test_failed' => true,
             'sandbox_restore_validation_passed' => false,
             'sandbox_restore_validation_failed' => true,
+            'pre_update_snapshot_reminder' => true,
         ],
         'channels' => [
             'email' => ['enabled' => false],
@@ -154,6 +155,7 @@ class BJLG_Notifications {
         'test_notification' => 'info',
         'managed_vault_latency' => 'warning',
         'managed_vault_replica_degraded' => 'critical',
+        'pre_update_snapshot_reminder' => 'warning',
     ];
 
     /**
@@ -1379,6 +1381,8 @@ class BJLG_Notifications {
                 return __('Validation SLA réussie', 'backup-jlg');
             case 'sandbox_restore_validation_failed':
                 return __('Validation SLA échouée', 'backup-jlg');
+            case 'pre_update_snapshot_reminder':
+                return __('Rappel snapshot pré-update', 'backup-jlg');
             default:
                 return ucfirst(str_replace('_', ' ', $event));
         }
@@ -1788,6 +1792,22 @@ class BJLG_Notifications {
                     }
                 }
                 break;
+            case 'pre_update_snapshot_reminder':
+                $reminder_message = isset($context['message']) && is_string($context['message']) && $context['message'] !== ''
+                    ? $context['message']
+                    : __('Un rappel de snapshot pré-update a été déclenché.', 'backup-jlg');
+                $lines[] = $reminder_message;
+                $lines[] = sprintf(__('Mode : %s', 'backup-jlg'), $this->describe_pre_update_mode($context['mode'] ?? 'full', $context['type'] ?? 'update'));
+                $lines[] = sprintf(__('Type : %s', 'backup-jlg'), $this->translate_pre_update_type($context['type'] ?? 'update'));
+                $lines[] = sprintf(__('Éléments : %s', 'backup-jlg'), $context['items_label'] ?? __('site complet', 'backup-jlg'));
+                $lines[] = sprintf(__('Raison : %s', 'backup-jlg'), $this->format_pre_update_reason($context['reason'] ?? 'manual'));
+                $delay = isset($context['delay_minutes']) ? (int) $context['delay_minutes'] : 0;
+                if ($delay > 0) {
+                    $lines[] = sprintf(__('Déclenché après %d minute(s) de préparation.', 'backup-jlg'), $delay);
+                } elseif (!empty($context['scheduled'])) {
+                    $lines[] = __('Rappel différé exécuté automatiquement.', 'backup-jlg');
+                }
+                break;
             default:
                 foreach ($context as $key => $value) {
                     if (is_scalar($value)) {
@@ -1798,6 +1818,49 @@ class BJLG_Notifications {
         }
 
         return array_filter(array_map('trim', $lines));
+    }
+
+    private function describe_pre_update_mode($mode, $type): string
+    {
+        $mode = sanitize_key((string) $mode);
+
+        if ($mode === 'targeted') {
+            return sprintf(__('Ciblé (%s + composants associés)', 'backup-jlg'), $this->translate_pre_update_type($type));
+        }
+
+        return __('Complet (tous les composants sélectionnés)', 'backup-jlg');
+    }
+
+    private function translate_pre_update_type($type): string
+    {
+        $type = sanitize_key((string) $type);
+
+        switch ($type) {
+            case 'plugin':
+                return __('extension', 'backup-jlg');
+            case 'theme':
+                return __('thème', 'backup-jlg');
+            case 'core':
+                return __('cœur WordPress', 'backup-jlg');
+            default:
+                return __('mise à jour', 'backup-jlg');
+        }
+    }
+
+    private function format_pre_update_reason($reason): string
+    {
+        $reason = sanitize_key((string) $reason);
+
+        switch ($reason) {
+            case 'disabled':
+                return __('Snapshots automatiques désactivés', 'backup-jlg');
+            case 'no_components':
+                return __('Aucun composant sélectionné', 'backup-jlg');
+            case 'ignored_type':
+                return __('Type de mise à jour exclu par la configuration', 'backup-jlg');
+            default:
+                return __('Rappel manuel requis', 'backup-jlg');
+        }
     }
 
     private function get_event_lines($event, $context) {

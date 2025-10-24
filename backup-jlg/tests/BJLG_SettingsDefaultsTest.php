@@ -128,6 +128,8 @@ final class BJLG_SettingsDefaultsTest extends TestCase
         $this->assertIsArray($stored);
         $this->assertArrayHasKey('enabled', $stored);
         $this->assertTrue($stored['enabled']);
+        $this->assertArrayHasKey('mode', $stored);
+        $this->assertSame('full', $stored['mode']);
         $this->assertArrayHasKey('components', $stored);
         $this->assertSame(['db', 'plugins', 'themes', 'uploads'], $stored['components']);
         $this->assertArrayHasKey('targets', $stored);
@@ -139,6 +141,7 @@ final class BJLG_SettingsDefaultsTest extends TestCase
         $this->assertArrayHasKey('reminder', $stored);
         $this->assertFalse($stored['reminder']['enabled']);
         $this->assertNotSame('', $stored['reminder']['message']);
+        $this->assertSame(0, $stored['reminder']['delay_minutes']);
         $this->assertArrayHasKey('channels', $stored['reminder']);
         $this->assertSame([
             'notification' => ['enabled' => false],
