@@ -12,6 +12,7 @@ if (!defined('ABSPATH')) {
 
 require_once __DIR__ . '/class-bjlg-backup.php';
 require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
+require_once __DIR__ . '/class-bjlg-health-check.php';
 
 /**
  * Gère tout le processus de restauration, y compris la pré-sauvegarde de sécurité.
@@ -63,6 +64,8 @@ class BJLG_Restore {
         $task_state = [];
         $sandbox_context = null;
         $cleanup_result = ['performed' => false, 'error' => null];
+        $health_report = null;
+        $issues = [];
         $backup_file = '';
         $status = 'failure';
         $message = '';
@@ -137,9 +140,37 @@ class BJLG_Restore {
             if (is_array($task_state) && isset($task_state['status']) && $task_state['status'] === 'complete') {
                 $status = 'success';
                 $message = __('Validation sandbox terminée avec succès.', 'backup-jlg');
+
+                $health_report = $this->run_validation_health_check(
+                    is_array($sandbox_context) ? $sandbox_context : []
+                );
+
+                if (is_array($health_report) && !empty($health_report['issues']) && is_array($health_report['issues'])) {
+                    foreach ($health_report['issues'] as $issue) {
+                        if (!is_array($issue)) {
+                            continue;
+                        }
+
+                        $issues[] = [
+                            'type' => isset($issue['status']) ? (string) $issue['status'] : 'info',
+                            'component' => isset($issue['component']) ? (string) $issue['component'] : '',
+                            'message' => isset($issue['message']) ? (string) $issue['message'] : '',
+                        ];
+                    }
+                }
             } else {
                 $status = 'failure';
                 $message = __('La validation sandbox ne s’est pas terminée correctement.', 'backup-jlg');
+
+                if (is_array($task_state)) {
+                    $issues[] = [
+                        'type' => isset($task_state['status']) ? (string) $task_state['status'] : 'failure',
+                        'component' => 'task',
+                        'message' => isset($task_state['status_text'])
+                            ? (string) $task_state['status_text']
+                            : $message,
+                    ];
+                }
             }
         } catch (Throwable $throwable) {
             $status = 'failure';
@@ -148,6 +179,12 @@ class BJLG_Restore {
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log('[Sandbox validation] ' . $throwable->getMessage(), 'error');
             }
+
+            $issues[] = [
+                'type' => 'exception',
+                'component' => 'runtime',
+                'message' => $throwable->getMessage(),
+            ];
         } finally {
             if ($task_id !== '') {
                 $cleanup_result = $this->cleanup_validation_sandbox(
@@ -158,6 +195,14 @@ class BJLG_Restore {
 
                 delete_transient($task_id);
             }
+        }
+
+        if (is_array($cleanup_result) && !empty($cleanup_result['error'])) {
+            $issues[] = [
+                'type' => 'cleanup',
+                'component' => 'sandbox',
+                'message' => (string) $cleanup_result['error'],
+            ];
         }
 
         $completed_at = time();
@@ -195,6 +240,8 @@ class BJLG_Restore {
                 'id' => $task_id,
                 'state' => is_array($task_state) ? $task_state : [],
             ],
+            'health' => is_array($health_report) ? $health_report : null,
+            'issues' => $this->normalize_validation_issues($issues),
         ];
 
         $log_entries = $this->collect_debug_logs_since($log_offset);
@@ -571,6 +618,186 @@ class BJLG_Restore {
         }
 
         return date('Y-m-d H:i:s', $timestamp);
+    }
+
+    /**
+     * Exécute le bilan de santé après une restauration sandbox.
+     *
+     * @param array<string,mixed> $sandbox_context
+     * @return array<string,mixed>
+     */
+    private function run_validation_health_check(array $sandbox_context): array
+    {
+        $result = [
+            'status' => 'unavailable',
+            'summary' => __('Module de diagnostic indisponible.', 'backup-jlg'),
+            'checks' => [],
+            'issues' => [],
+            'checked_at' => time(),
+            'sandbox_path' => isset($sandbox_context['base_path']) ? (string) $sandbox_context['base_path'] : '',
+        ];
+
+        if (!class_exists(BJLG_Health_Check::class)) {
+            return $result;
+        }
+
+        try {
+            $health_checker = new BJLG_Health_Check();
+            $checks = $health_checker->get_all_checks();
+
+            $normalized_checks = [];
+            $issues = [];
+            $has_error = false;
+            $has_warning = false;
+
+            if (is_array($checks)) {
+                foreach ($checks as $key => $check) {
+                    if (!is_array($check)) {
+                        continue;
+                    }
+
+                    $status = isset($check['status']) ? (string) $check['status'] : 'info';
+                    $message = isset($check['message']) ? (string) $check['message'] : '';
+
+                    $normalized_checks[$key] = [
+                        'status' => $status,
+                        'message' => $message,
+                    ];
+
+                    if ($status === 'error') {
+                        $has_error = true;
+                    }
+
+                    if ($status === 'warning') {
+                        $has_warning = true;
+                    }
+
+                    if (in_array($status, ['error', 'warning'], true)) {
+                        $issues[] = [
+                            'component' => is_string($key) ? $key : '',
+                            'status' => $status,
+                            'message' => $message,
+                        ];
+                    }
+                }
+            }
+
+            $result['checks'] = $normalized_checks;
+            $result['issues'] = $issues;
+            $result['status'] = $has_error ? 'error' : ($has_warning ? 'warning' : 'success');
+            $result['summary'] = $this->summarize_health_check($normalized_checks);
+        } catch (Throwable $throwable) {
+            $result['status'] = 'error';
+            $result['summary'] = $throwable->getMessage();
+            $result['issues'][] = [
+                'component' => 'health_check',
+                'status' => 'error',
+                'message' => $throwable->getMessage(),
+            ];
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('[Sandbox health] ' . $throwable->getMessage(), 'error');
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Construit un résumé textuel pour le bilan de santé.
+     *
+     * @param array<string,array<string,string>> $checks
+     */
+    private function summarize_health_check(array $checks): string
+    {
+        if (empty($checks)) {
+            return __('Aucune anomalie détectée.', 'backup-jlg');
+        }
+
+        $counters = [
+            'error' => 0,
+            'warning' => 0,
+            'success' => 0,
+            'info' => 0,
+        ];
+
+        foreach ($checks as $check) {
+            if (!is_array($check)) {
+                continue;
+            }
+
+            $status = isset($check['status']) ? (string) $check['status'] : 'info';
+            if (!isset($counters[$status])) {
+                $counters[$status] = 0;
+            }
+            $counters[$status]++;
+        }
+
+        $parts = [];
+
+        if ($counters['error'] > 0) {
+            $parts[] = sprintf(
+                _n('%s erreur critique', '%s erreurs critiques', $counters['error'], 'backup-jlg'),
+                number_format_i18n($counters['error'])
+            );
+        }
+
+        if ($counters['warning'] > 0) {
+            $parts[] = sprintf(
+                _n('%s avertissement', '%s avertissements', $counters['warning'], 'backup-jlg'),
+                number_format_i18n($counters['warning'])
+            );
+        }
+
+        if (empty($parts) && $counters['success'] > 0) {
+            $parts[] = sprintf(
+                _n('%s contrôle satisfaisant', '%s contrôles satisfaisants', $counters['success'], 'backup-jlg'),
+                number_format_i18n($counters['success'])
+            );
+        }
+
+        if (empty($parts)) {
+            return __('Aucune anomalie détectée.', 'backup-jlg');
+        }
+
+        return implode(' | ', $parts);
+    }
+
+    /**
+     * Assainit la liste des incidents collectés durant la validation.
+     *
+     * @param array<int,array<string,mixed>> $issues
+     * @return array<int,array<string,string>>
+     */
+    private function normalize_validation_issues(array $issues): array
+    {
+        $normalized = [];
+
+        foreach ($issues as $issue) {
+            if (!is_array($issue)) {
+                continue;
+            }
+
+            $type = isset($issue['type']) ? (string) $issue['type'] : 'info';
+            $component = isset($issue['component']) ? (string) $issue['component'] : '';
+            $message = isset($issue['message']) ? (string) $issue['message'] : '';
+
+            if (function_exists('sanitize_key')) {
+                $type = sanitize_key($type);
+                $component = sanitize_key($component);
+            } else {
+                $type = preg_replace('/[^a-z0-9_\-]/i', '', strtolower($type));
+                $component = preg_replace('/[^a-z0-9_\-]/i', '', strtolower($component));
+            }
+
+            $normalized[] = [
+                'type' => $type !== '' ? $type : 'info',
+                'component' => $component,
+                'message' => $message,
+            ];
+        }
+
+        return $normalized;
     }
 
     /**

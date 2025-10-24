@@ -19,6 +19,8 @@ class BJLG_Remote_Purge_Worker {
     private const MAX_BACKOFF = 15 * MINUTE_IN_SECONDS;
     private const DELAY_ALERT_THRESHOLD = 10 * MINUTE_IN_SECONDS;
     private const ALERT_ATTEMPT_THRESHOLD = 3;
+    private const METRICS_OPTION = 'bjlg_remote_purge_sla_metrics';
+    private const SATURATION_WARNING_THRESHOLD = 5 * MINUTE_IN_SECONDS;
 
     public function __construct() {
         add_filter('cron_schedules', [$this, 'register_cron_schedule']);
@@ -426,10 +428,6 @@ class BJLG_Remote_Purge_Worker {
 
     /**
      * Agrège les métriques SLA exploitées par le tableau de bord d’observabilité.
-     *
-     * Les délais moyens, les destinations impactées et les dernières purges alimentent
-     * les alertes et le module multi-canal. Prochaine étape : brancher les prédictions
-     * de saturation et déclencher des actions correctives automatisées.
      */
     private function update_metrics(array $queue, array $results, int $now) {
         $pending_total = 0;
@@ -437,6 +435,7 @@ class BJLG_Remote_Purge_Worker {
         $pending_oldest = 0;
         $pending_over_threshold = 0;
         $pending_by_destination = [];
+        $pending_destination_oldest = [];
 
         foreach ($queue as $entry) {
             if (!is_array($entry)) {
@@ -473,20 +472,18 @@ class BJLG_Remote_Purge_Worker {
                         $pending_by_destination[$key] = 0;
                     }
                     $pending_by_destination[$key]++;
+
+                    if (!isset($pending_destination_oldest[$key])) {
+                        $pending_destination_oldest[$key] = 0;
+                    }
+                    $pending_destination_oldest[$key] = max($pending_destination_oldest[$key], $age);
                 }
             }
         }
 
-        $average_age = $pending_total > 0 ? $pending_sum_age / $pending_total : 0;
+        $average_age = $pending_total > 0 ? $pending_sum_age / $pending_total : 0.0;
 
-        if (function_exists('bjlg_get_option')) {
-            $existing = \bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
-        } elseif (function_exists('get_option')) {
-            $existing = get_option('bjlg_remote_purge_sla_metrics', []);
-        } else {
-            $existing = [];
-        }
-        $existing = is_array($existing) ? $existing : [];
+        $existing = $this->get_metrics_snapshot();
 
         $throughput = isset($existing['throughput']) && is_array($existing['throughput']) ? $existing['throughput'] : [];
         $completion_samples = isset($throughput['samples']) ? (int) $throughput['samples'] : 0;
@@ -494,6 +491,7 @@ class BJLG_Remote_Purge_Worker {
         $avg_attempts = isset($throughput['average_attempts']) ? (float) $throughput['average_attempts'] : 0.0;
         $last_completed_at = isset($throughput['last_completed_at']) ? (int) $throughput['last_completed_at'] : 0;
         $last_completion_seconds = isset($throughput['last_completion_seconds']) ? (float) $throughput['last_completion_seconds'] : 0.0;
+        $total_completed = isset($throughput['total_completed']) ? (int) $throughput['total_completed'] : 0;
 
         $failures = isset($existing['failures']) && is_array($existing['failures']) ? $existing['failures'] : [];
         $failures_total = isset($failures['total']) ? (int) $failures['total'] : 0;
@@ -503,6 +501,17 @@ class BJLG_Remote_Purge_Worker {
         $existing_forecast = isset($existing['forecast']) && is_array($existing['forecast']) ? $existing['forecast'] : [];
         $forecast_destinations = isset($existing_forecast['destinations']) && is_array($existing_forecast['destinations'])
             ? $existing_forecast['destinations']
+            : [];
+
+        $duration_stats = isset($existing['durations']) && is_array($existing['durations']) ? $existing['durations'] : [];
+        $duration_samples = isset($duration_stats['samples']) ? (int) $duration_stats['samples'] : 0;
+        $avg_duration = isset($duration_stats['average_seconds']) ? (float) $duration_stats['average_seconds'] : 0.0;
+        $duration_peak = isset($duration_stats['peak_seconds']) ? (float) $duration_stats['peak_seconds'] : 0.0;
+        $last_duration_seconds = isset($duration_stats['last_seconds']) ? (float) $duration_stats['last_seconds'] : 0.0;
+
+        $quota_snapshot = isset($existing['quotas']) && is_array($existing['quotas']) ? $existing['quotas'] : [];
+        $quota_destinations = isset($quota_snapshot['destinations']) && is_array($quota_snapshot['destinations'])
+            ? $quota_snapshot['destinations']
             : [];
 
         foreach ($results as $result) {
@@ -525,8 +534,16 @@ class BJLG_Remote_Purge_Worker {
                     $avg_attempts = $avg_attempts + (($attempts - $avg_attempts) / $completion_samples);
                 }
 
+                $duration_samples++;
+                if ($duration_samples > 0) {
+                    $avg_duration = $avg_duration + (($duration - $avg_duration) / $duration_samples);
+                }
+                $duration_peak = max($duration_peak, $duration);
+                $last_duration_seconds = $duration;
+
                 $last_completed_at = isset($result['timestamp']) ? (int) $result['timestamp'] : $now;
                 $last_completion_seconds = $duration;
+                $total_completed++;
 
                 if (!empty($result['destinations']) && is_array($result['destinations'])) {
                     foreach ($result['destinations'] as $destination_id) {
@@ -545,7 +562,7 @@ class BJLG_Remote_Purge_Worker {
                         $history = isset($forecast_destinations[$key]['history']) && is_array($forecast_destinations[$key]['history'])
                             ? $forecast_destinations[$key]['history']
                             : [];
-                        $total_completed = isset($forecast_destinations[$key]['total_completed'])
+                        $total_destination_completed = isset($forecast_destinations[$key]['total_completed'])
                             ? (int) $forecast_destinations[$key]['total_completed']
                             : 0;
 
@@ -558,10 +575,10 @@ class BJLG_Remote_Purge_Worker {
                             }
                         }
 
-                        $total_completed++;
+                        $total_destination_completed++;
                         $history[] = [
                             'timestamp' => $timestamp,
-                            'total' => $total_completed,
+                            'total' => $total_destination_completed,
                         ];
 
                         if (count($history) > 20) {
@@ -569,7 +586,7 @@ class BJLG_Remote_Purge_Worker {
                         }
 
                         $forecast_destinations[$key]['history'] = $history;
-                        $forecast_destinations[$key]['total_completed'] = $total_completed;
+                        $forecast_destinations[$key]['total_completed'] = $total_destination_completed;
                         $forecast_destinations[$key]['updated_at'] = $now;
                     }
                 }
@@ -586,6 +603,34 @@ class BJLG_Remote_Purge_Worker {
                     }
                 }
             }
+
+            if (!empty($result['quota_samples']) && is_array($result['quota_samples'])) {
+                foreach ($result['quota_samples'] as $destination_id => $sample) {
+                    if (!is_scalar($destination_id) || !is_array($sample)) {
+                        continue;
+                    }
+
+                    $key = (string) $destination_id;
+                    if (!isset($quota_destinations[$key]) || !is_array($quota_destinations[$key])) {
+                        $quota_destinations[$key] = [
+                            'history' => [],
+                        ];
+                    }
+
+                    $history = isset($quota_destinations[$key]['history']) && is_array($quota_destinations[$key]['history'])
+                        ? $quota_destinations[$key]['history']
+                        : [];
+                    $history[] = $sample;
+                    if (count($history) > 20) {
+                        $history = array_slice($history, -20);
+                    }
+
+                    $quota_destinations[$key]['history'] = $history;
+                    $quota_destinations[$key]['last_sample'] = $sample;
+                    $quota_destinations[$key]['ratio'] = isset($sample['ratio']) ? (float) $sample['ratio'] : null;
+                    $quota_destinations[$key]['updated_at'] = isset($sample['captured_at']) ? (int) $sample['captured_at'] : $now;
+                }
+            }
         }
 
         $forecast = $this->build_forecast_metrics(
@@ -595,7 +640,83 @@ class BJLG_Remote_Purge_Worker {
             $forecast_destinations
         );
 
+        $existing_backlog = isset($existing['backlog']) && is_array($existing['backlog']) ? $existing['backlog'] : [];
+        $backlog_history = isset($existing_backlog['history']) && is_array($existing_backlog['history'])
+            ? $existing_backlog['history']
+            : [];
+
+        $backlog_history[] = [
+            'timestamp' => $now,
+            'pending' => $pending_total,
+        ];
+
+        if (count($backlog_history) > 40) {
+            $backlog_history = array_slice($backlog_history, -40);
+        }
+
+        $backlog_points = [];
+        foreach ($backlog_history as $point) {
+            if (!is_array($point)) {
+                continue;
+            }
+
+            $timestamp = isset($point['timestamp']) ? (int) $point['timestamp'] : 0;
+            $pending_value = isset($point['pending']) ? (int) $point['pending'] : null;
+
+            if ($timestamp <= 0 || $pending_value === null) {
+                continue;
+            }
+
+            $backlog_points[] = [
+                'timestamp' => $timestamp,
+                'total' => $pending_value,
+            ];
+        }
+
+        [$backlog_slope, $backlog_intercept] = $this->compute_regression($backlog_points);
+
+        $time_to_threshold = $pending_total > 0 ? max(0, self::DELAY_ALERT_THRESHOLD - $pending_oldest) : null;
+        $projected_breach = $time_to_threshold !== null ? $now + $time_to_threshold : null;
+        $breach_imminent = $time_to_threshold !== null && $time_to_threshold <= self::SATURATION_WARNING_THRESHOLD;
+
+        $saturation_destinations = [];
+        foreach ($pending_by_destination as $destination_id => $count) {
+            $destination_oldest = isset($pending_destination_oldest[$destination_id])
+                ? (int) $pending_destination_oldest[$destination_id]
+                : 0;
+            $destination_time_to_threshold = $count > 0
+                ? max(0, self::DELAY_ALERT_THRESHOLD - $destination_oldest)
+                : null;
+
+            $destination_projection = $destination_time_to_threshold !== null
+                ? $now + $destination_time_to_threshold
+                : null;
+
+            $destination_breach = $destination_time_to_threshold !== null
+                && $destination_time_to_threshold <= self::SATURATION_WARNING_THRESHOLD;
+
+            $saturation_destinations[$destination_id] = [
+                'pending' => (int) $count,
+                'oldest_seconds' => $destination_oldest,
+                'time_to_threshold' => $destination_time_to_threshold,
+                'projected_breach_at' => $destination_projection,
+                'breach_imminent' => $destination_breach,
+            ];
+
+            if (!$breach_imminent && $destination_breach) {
+                $breach_imminent = true;
+            }
+        }
+
+        $processed_total = $total_completed + $failures_total;
+        $failure_rate = $processed_total > 0 ? $failures_total / $processed_total : 0.0;
+        $success_rate = $processed_total > 0 ? $total_completed / $processed_total : 0.0;
+
+        $quota_snapshot['destinations'] = $quota_destinations;
+        $quota_snapshot['updated_at'] = $now;
+
         $metrics = [
+            'version' => 2,
             'updated_at' => $now,
             'pending' => [
                 'total' => $pending_total,
@@ -603,24 +724,73 @@ class BJLG_Remote_Purge_Worker {
                 'oldest_seconds' => $pending_oldest,
                 'over_threshold' => $pending_over_threshold,
                 'destinations' => $pending_by_destination,
+                'destination_oldest' => $pending_destination_oldest,
             ],
             'throughput' => [
-                'average_completion_seconds' => $completion_samples > 0 ? $avg_completion : 0,
-                'average_attempts' => $completion_samples > 0 ? $avg_attempts : 0,
+                'average_completion_seconds' => $completion_samples > 0 ? $avg_completion : 0.0,
+                'average_attempts' => $completion_samples > 0 ? $avg_attempts : 0.0,
                 'samples' => $completion_samples,
                 'last_completed_at' => $last_completed_at,
                 'last_completion_seconds' => $last_completion_seconds,
+                'total_completed' => $total_completed,
+                'failure_rate' => $failure_rate,
+                'success_rate' => $success_rate,
             ],
             'failures' => [
                 'total' => $failures_total,
                 'last_failure_at' => $last_failure_at,
                 'last_message' => $last_failure_message,
             ],
+            'durations' => [
+                'average_seconds' => $duration_samples > 0 ? $avg_duration : 0.0,
+                'samples' => $duration_samples,
+                'peak_seconds' => $duration_peak,
+                'last_seconds' => $last_duration_seconds,
+            ],
             'forecast' => $forecast,
+            'saturation' => [
+                'threshold_seconds' => self::DELAY_ALERT_THRESHOLD,
+                'oldest_seconds' => $pending_oldest,
+                'time_to_threshold' => $time_to_threshold,
+                'projected_breach_at' => $projected_breach,
+                'breach_imminent' => $breach_imminent,
+                'destinations' => $saturation_destinations,
+            ],
+            'backlog' => [
+                'history' => $backlog_history,
+                'slope' => $backlog_slope,
+                'intercept' => $backlog_intercept,
+                'samples' => count($backlog_history),
+            ],
+            'quotas' => $quota_snapshot,
         ];
 
+        $this->save_metrics_snapshot($metrics);
+
+        \do_action('bjlg_remote_purge_metrics_updated', $metrics, $queue, $results);
+    }
+
+    private function get_metrics_snapshot(): array {
+        if (function_exists('bjlg_get_option')) {
+            $snapshot = \bjlg_get_option(self::METRICS_OPTION, []);
+        } elseif (function_exists('get_option')) {
+            $snapshot = get_option(self::METRICS_OPTION, []);
+        } else {
+            $snapshot = [];
+        }
+
+        return is_array($snapshot) ? $snapshot : [];
+    }
+
+    private function save_metrics_snapshot(array $metrics): void {
+        if (function_exists('bjlg_update_option')) {
+            \bjlg_update_option(self::METRICS_OPTION, $metrics);
+
+            return;
+        }
+
         if (function_exists('update_option')) {
-            \bjlg_update_option('bjlg_remote_purge_sla_metrics', $metrics);
+            update_option(self::METRICS_OPTION, $metrics);
         }
     }
 
@@ -812,6 +982,88 @@ class BJLG_Remote_Purge_Worker {
         }
 
         return $relative;
+    }
+
+    private function extract_quota_sample($destination_id, $result, int $now): ?array {
+        if (!is_array($result)) {
+            return null;
+        }
+
+        $candidates = [];
+
+        if (isset($result['quota']) && is_array($result['quota'])) {
+            $candidates[] = $result['quota'];
+        }
+        if (isset($result['usage']) && is_array($result['usage'])) {
+            $candidates[] = $result['usage'];
+        }
+        if (isset($result['storage']) && is_array($result['storage'])) {
+            $candidates[] = $result['storage'];
+        }
+        if (isset($result['metrics']) && is_array($result['metrics'])) {
+            $candidates[] = $result['metrics'];
+        }
+
+        $usage = null;
+        foreach ($candidates as $candidate) {
+            if (!empty($candidate)) {
+                $usage = $candidate;
+                break;
+            }
+        }
+
+        if (!is_array($usage)) {
+            return null;
+        }
+
+        $used = $this->normalize_bytes_field($usage, ['used_bytes', 'used', 'usage_bytes']);
+        $quota = $this->normalize_bytes_field($usage, ['quota_bytes', 'limit', 'capacity_bytes']);
+        $free = $this->normalize_bytes_field($usage, ['free_bytes', 'available']);
+
+        if ($quota !== null && $used !== null && $free === null) {
+            $free = max(0, $quota - $used);
+        }
+
+        if ($quota === null && $used !== null && $free !== null) {
+            $quota = max(0, $used + $free);
+        }
+
+        $ratio = null;
+        if ($quota !== null && $quota > 0 && $used !== null) {
+            $ratio = max(0.0, min(1.0, $used / $quota));
+        }
+
+        return [
+            'destination' => (string) $destination_id,
+            'captured_at' => $now,
+            'used_bytes' => $used,
+            'quota_bytes' => $quota,
+            'free_bytes' => $free,
+            'ratio' => $ratio,
+        ];
+    }
+
+    private function normalize_bytes_field(array $data, array $keys): ?int {
+        foreach ($keys as $key) {
+            if (!isset($data[$key])) {
+                continue;
+            }
+
+            $value = $data[$key];
+
+            if (is_numeric($value)) {
+                return (int) $value;
+            }
+
+            if (is_string($value) && $value !== '') {
+                $normalized = preg_replace('/[^0-9\\.\-]/', '', $value);
+                if ($normalized !== '' && is_numeric($normalized)) {
+                    return (int) round((float) $normalized);
+                }
+            }
+        }
+
+        return null;
     }
 
     /**

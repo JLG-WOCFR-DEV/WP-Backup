@@ -199,8 +199,17 @@ class BJLG_History {
             } else {
                 $entry['user_name'] = 'Système';
             }
+
+            if (
+                isset($entry['action_type'])
+                && $entry['action_type'] === 'sandbox_restore_validation'
+                && isset($entry['metadata'])
+                && is_array($entry['metadata'])
+            ) {
+                $entry['metadata_summary'] = self::format_restore_validation_metadata($entry['metadata']);
+            }
         }
-        
+
         return $results;
     }
 

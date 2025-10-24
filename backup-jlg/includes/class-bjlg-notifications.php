@@ -88,6 +88,8 @@ class BJLG_Notifications {
         'templates' => [],
     ];
 
+    private const REMOTE_PURGE_PROACTIVE_ALERT_TRANSIENT = 'bjlg_remote_purge_metrics_alerted';
+
     /**
      * Retourne les modèles par défaut utilisés pour chaque gravité.
      *
@@ -227,6 +229,7 @@ class BJLG_Notifications {
         add_action('bjlg_storage_warning', [$this, 'handle_storage_warning'], 15, 1);
         add_action('bjlg_remote_purge_permanent_failure', [$this, 'handle_remote_purge_failed'], 15, 3);
         add_action('bjlg_remote_purge_delayed', [$this, 'handle_remote_purge_delayed'], 15, 2);
+        add_action('bjlg_remote_purge_metrics_updated', [$this, 'handle_remote_purge_metrics_updated'], 15, 3);
         add_action('bjlg_restore_self_test_passed', [$this, 'handle_restore_self_test_passed'], 15, 1);
         add_action('bjlg_restore_self_test_failed', [$this, 'handle_restore_self_test_failed'], 15, 1);
         add_action('bjlg_sandbox_restore_validation_passed', [$this, 'handle_sandbox_validation_passed'], 15, 1);
@@ -556,6 +559,95 @@ class BJLG_Notifications {
         ];
 
         $this->notify('remote_purge_delayed', $context);
+    }
+
+    /**
+     * Déclenche une alerte proactive lorsque les projections indiquent un dépassement imminent du SLA.
+     *
+     * @param array<string,mixed> $metrics
+     * @param array<int,mixed>    $queue
+     * @param array<int,mixed>    $results
+     */
+    public function handle_remote_purge_metrics_updated($metrics, $queue, $results) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter
+        $metrics = is_array($metrics) ? $metrics : [];
+
+        $pending = isset($metrics['pending']) && is_array($metrics['pending']) ? $metrics['pending'] : [];
+        $saturation = isset($metrics['saturation']) && is_array($metrics['saturation']) ? $metrics['saturation'] : [];
+
+        if (empty($saturation)) {
+            if (function_exists('delete_transient')) {
+                delete_transient(self::REMOTE_PURGE_PROACTIVE_ALERT_TRANSIENT);
+            }
+
+            return;
+        }
+
+        $breach_imminent = !empty($saturation['breach_imminent']);
+        if (!$breach_imminent && !empty($saturation['destinations']) && is_array($saturation['destinations'])) {
+            foreach ($saturation['destinations'] as $destination) {
+                if (is_array($destination) && !empty($destination['breach_imminent'])) {
+                    $breach_imminent = true;
+                    break;
+                }
+            }
+        }
+
+        if (!$breach_imminent) {
+            if (function_exists('delete_transient')) {
+                delete_transient(self::REMOTE_PURGE_PROACTIVE_ALERT_TRANSIENT);
+            }
+
+            return;
+        }
+
+        if (function_exists('get_transient') && get_transient(self::REMOTE_PURGE_PROACTIVE_ALERT_TRANSIENT)) {
+            return;
+        }
+
+        $threshold_seconds = isset($saturation['threshold_seconds'])
+            ? (int) $saturation['threshold_seconds']
+            : (defined('MINUTE_IN_SECONDS') ? 10 * MINUTE_IN_SECONDS : 600);
+
+        $time_to_threshold = isset($saturation['time_to_threshold']) && $saturation['time_to_threshold'] !== null
+            ? (int) $saturation['time_to_threshold']
+            : null;
+
+        $projection_timestamp = isset($saturation['projected_breach_at']) ? (int) $saturation['projected_breach_at'] : 0;
+
+        $context = [
+            'pending_total' => isset($pending['total']) ? (int) $pending['total'] : 0,
+            'pending_oldest_seconds' => isset($pending['oldest_seconds']) ? (int) $pending['oldest_seconds'] : 0,
+            'threshold_seconds' => $threshold_seconds,
+            'time_to_threshold' => $time_to_threshold,
+            'projection_timestamp' => $projection_timestamp,
+            'threshold_label' => $this->format_duration_seconds($threshold_seconds),
+            'time_to_threshold_label' => $time_to_threshold !== null ? $this->format_duration_seconds($time_to_threshold) : '',
+            'projection_formatted' => $projection_timestamp > 0 ? $this->format_timestamp($projection_timestamp) : '',
+            'projection_relative' => $projection_timestamp > 0 ? $this->format_relative_time($projection_timestamp) : '',
+            'destinations' => $this->normalize_saturation_destinations($saturation['destinations'] ?? []),
+            'proactive' => true,
+        ];
+
+        if (class_exists(__NAMESPACE__ . '\\BJLG_History')) {
+            $history_message = sprintf(
+                /* translators: %d: number of pending purge entries. */
+                __('Projection critique : %d purge(s) risquent de dépasser le SLA.', 'backup-jlg'),
+                $context['pending_total']
+            );
+            BJLG_History::log('remote_purge', 'warning', $history_message);
+        }
+
+        $this->notify('remote_purge_delayed', $context);
+
+        $this->dispatch_remote_purge_worker($metrics);
+
+        if (function_exists('set_transient')) {
+            set_transient(
+                self::REMOTE_PURGE_PROACTIVE_ALERT_TRANSIENT,
+                1,
+                defined('MINUTE_IN_SECONDS') ? 10 * MINUTE_IN_SECONDS : 600
+            );
+        }
     }
 
     /**
@@ -1007,6 +1099,98 @@ class BJLG_Notifications {
         ];
     }
 
+    private function sanitize_health_report($health) {
+        if (!is_array($health)) {
+            return [
+                'status' => '',
+                'summary' => '',
+                'checked_at' => null,
+            ];
+        }
+
+        return [
+            'status' => isset($health['status']) ? (string) $health['status'] : '',
+            'summary' => isset($health['summary']) ? (string) $health['summary'] : '',
+            'checked_at' => isset($health['checked_at']) ? (int) $health['checked_at'] : null,
+        ];
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $issues
+     * @return array<int,array<string,string>>
+     */
+    private function sanitize_validation_issues(array $issues): array
+    {
+        $sanitized = [];
+
+        foreach ($issues as $issue) {
+            if (!is_array($issue)) {
+                continue;
+            }
+
+            $type = isset($issue['type']) ? (string) $issue['type'] : 'info';
+            $component = isset($issue['component']) ? (string) $issue['component'] : '';
+            $message = isset($issue['message']) ? (string) $issue['message'] : '';
+
+            if (function_exists('sanitize_key')) {
+                $type = sanitize_key($type);
+                $component = sanitize_key($component);
+            } else {
+                $type = preg_replace('/[^a-z0-9_\-]/i', '', strtolower($type));
+                $component = preg_replace('/[^a-z0-9_\-]/i', '', strtolower($component));
+            }
+
+            $sanitized[] = [
+                'type' => $type !== '' ? $type : 'info',
+                'component' => $component,
+                'message' => $message,
+            ];
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * @param array<int,array<string,string>> $issues
+     */
+    private function summarize_validation_issues(array $issues): string
+    {
+        if (empty($issues)) {
+            return '';
+        }
+
+        $error_count = 0;
+        $warning_count = 0;
+
+        foreach ($issues as $issue) {
+            $type = isset($issue['type']) ? (string) $issue['type'] : '';
+
+            if (in_array($type, ['error', 'failure', 'exception', 'cleanup'], true)) {
+                $error_count++;
+            } elseif ($type === 'warning') {
+                $warning_count++;
+            }
+        }
+
+        $parts = [];
+
+        if ($error_count > 0) {
+            $parts[] = sprintf(
+                _n('%s critique', '%s critiques', $error_count, 'backup-jlg'),
+                number_format_i18n($error_count)
+            );
+        }
+
+        if ($warning_count > 0) {
+            $parts[] = sprintf(
+                _n('%s avertissement', '%s avertissements', $warning_count, 'backup-jlg'),
+                number_format_i18n($warning_count)
+            );
+        }
+
+        return implode(' | ', $parts);
+    }
+
     /**
      * Envoie la notification sur les canaux configurés.
      *
@@ -1419,6 +1603,14 @@ class BJLG_Notifications {
 
                 if (!empty($context['message'])) {
                     $lines[] = __('Détails : ', 'backup-jlg') . $context['message'];
+                }
+
+                if (!empty($context['health_summary'])) {
+                    $lines[] = __('Health-check : ', 'backup-jlg') . $context['health_summary'];
+                }
+
+                if (!empty($context['issue_summary'])) {
+                    $lines[] = __('Incidents : ', 'backup-jlg') . $context['issue_summary'];
                 }
 
                 if (!empty($context['sandbox_path'])) {
@@ -2578,6 +2770,54 @@ class BJLG_Notifications {
         ];
     }
 
+    private function normalize_saturation_destinations($destinations) {
+        if (!is_array($destinations)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($destinations as $destination_id => $data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $label = $this->get_destination_label($destination_id);
+            $entry = [
+                'id' => (string) $destination_id,
+                'label' => $label,
+                'pending' => isset($data['pending']) ? (int) $data['pending'] : 0,
+                'countdown_label' => '',
+                'projected_relative' => '',
+                'breach_imminent' => !empty($data['breach_imminent']),
+            ];
+
+            if (isset($data['time_to_threshold']) && $data['time_to_threshold'] !== null) {
+                $entry['countdown_label'] = $this->format_duration_seconds((float) max(0, (int) $data['time_to_threshold']));
+            }
+
+            if (!empty($data['projected_breach_at'])) {
+                $entry['projected_relative'] = $this->format_relative_time((int) $data['projected_breach_at']);
+            }
+
+            $normalized[] = $entry;
+        }
+
+        return $normalized;
+    }
+
+    private function get_destination_label($destination_id): string {
+        $label = (string) $destination_id;
+
+        if (class_exists(BJLG_Settings::class)) {
+            $destination_label = BJLG_Settings::get_destination_label($destination_id);
+            if (is_string($destination_label) && $destination_label !== '') {
+                $label = $destination_label;
+            }
+        }
+
+        return $label;
+    }
+
     private function resolve_destination_label($destination_id): string {
         if (!class_exists(BJLG_Settings::class)) {
             return (string) $destination_id;
@@ -2590,6 +2830,72 @@ class BJLG_Notifications {
         }
 
         return $label;
+    }
+
+    private function format_relative_time($timestamp) {
+        $timestamp = (int) $timestamp;
+        if ($timestamp <= 0) {
+            return '';
+        }
+
+        $now = time();
+        if (function_exists('human_time_diff')) {
+            if ($timestamp >= $now) {
+                $diff = human_time_diff($now, $timestamp);
+                if (is_string($diff) && $diff !== '') {
+                    return sprintf(__('dans %s', 'backup-jlg'), $diff);
+                }
+            } else {
+                $diff = human_time_diff($timestamp, $now);
+                if (is_string($diff) && $diff !== '') {
+                    return sprintf(__('il y a %s', 'backup-jlg'), $diff);
+                }
+            }
+        }
+
+        return $this->format_timestamp($timestamp);
+    }
+
+    private function dispatch_remote_purge_worker(array $metrics): bool {
+        $dispatched = false;
+
+        if (function_exists('wp_schedule_single_event')) {
+            $scheduled = wp_schedule_single_event(time() + 5, 'bjlg_process_remote_purge_queue');
+            if ($scheduled) {
+                $dispatched = true;
+            }
+        }
+
+        if (!$dispatched && class_exists(__NAMESPACE__ . '\\BJLG_Remote_Purge_Worker')) {
+            try {
+                (new BJLG_Remote_Purge_Worker())->process_queue();
+                $dispatched = true;
+            } catch (\Throwable $exception) {
+                if (class_exists(__NAMESPACE__ . '\\BJLG_Debug')) {
+                    BJLG_Debug::log('[Notifications] ' . $exception->getMessage());
+                }
+            }
+        }
+
+        if (!$dispatched) {
+            $fallback = apply_filters('bjlg_remote_purge_proactive_fallback', null, $metrics);
+            if (is_callable($fallback)) {
+                try {
+                    call_user_func($fallback, $metrics);
+                    $dispatched = true;
+                } catch (\Throwable $exception) {
+                    if (class_exists(__NAMESPACE__ . '\\BJLG_Debug')) {
+                        BJLG_Debug::log('[Notifications] ' . $exception->getMessage());
+                    }
+                }
+            } else {
+                do_action('bjlg_remote_purge_proactive_fallback', $metrics);
+            }
+        } else {
+            do_action('bjlg_remote_purge_proactive_dispatch', $metrics);
+        }
+
+        return $dispatched;
     }
 
     private function sanitize_components($components) {
