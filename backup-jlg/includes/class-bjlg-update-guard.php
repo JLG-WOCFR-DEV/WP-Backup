@@ -9,6 +9,9 @@ if (!defined('ABSPATH')) {
  * Déclenche automatiquement une sauvegarde avant toute mise à jour de plugin/thème.
  */
 class BJLG_Update_Guard {
+    private const REMINDER_EVENT_HOOK = 'bjlg_pre_update_snapshot_reminder_event';
+    private const PENDING_REMINDERS_OPTION = 'bjlg_update_guard_pending_reminders';
+
     /** @var array<string, bool> */
     private $processed_signatures = [];
 
@@ -24,6 +27,7 @@ class BJLG_Update_Guard {
         }
 
         \add_filter('upgrader_pre_install', [$this, 'handle_pre_install'], 9, 3);
+        \add_action(self::REMINDER_EVENT_HOOK, [$this, 'handle_scheduled_reminder_event'], 10, 3);
     }
 
     /**
@@ -85,13 +89,15 @@ class BJLG_Update_Guard {
         }
 
         $blueprint = $this->resolve_blueprint($context, $hook_extra);
-        $blueprint['components'] = $this->filter_components($blueprint['components'], $settings);
+        $resolved_components = $this->determine_components($blueprint['components'], $settings, $context);
 
-        if (empty($blueprint['components'])) {
+        if (empty($resolved_components)) {
             $this->maybe_trigger_reminder($settings, $context, $hook_extra, 'no_components');
             BJLG_Debug::log('Sauvegarde pré-update ignorée : aucun composant à sauvegarder.');
             return null;
         }
+
+        $blueprint['components'] = $resolved_components;
 
         $task_id = 'bjlg_backup_' . md5(uniqid('preupdate', true));
         $task_data = [
@@ -234,6 +240,7 @@ class BJLG_Update_Guard {
 
         $defaults = [
             'enabled' => true,
+            'mode' => 'full',
             'components' => BJLG_Settings::get_default_backup_components(),
             'targets' => [
                 'core' => true,
@@ -243,6 +250,7 @@ class BJLG_Update_Guard {
             'reminder' => [
                 'enabled' => false,
                 'message' => 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.',
+                'delay_minutes' => 0,
                 'channels' => [
                     'notification' => ['enabled' => false],
                     'email' => ['enabled' => false, 'recipients' => ''],
@@ -271,6 +279,11 @@ class BJLG_Update_Guard {
         }
 
         $settings['components'] = $components;
+        $mode = isset($settings['mode']) ? sanitize_key((string) $settings['mode']) : '';
+        if ($mode === '' || !in_array($mode, ['full', 'targeted'], true)) {
+            $mode = $defaults['mode'];
+        }
+        $settings['mode'] = $mode;
         $settings['enabled'] = !empty($settings['enabled']);
 
         $target_defaults = $defaults['targets'];
@@ -294,6 +307,9 @@ class BJLG_Update_Guard {
         $settings['reminder']['message'] = isset($settings['reminder']['message'])
             ? (string) $settings['reminder']['message']
             : $defaults['reminder']['message'];
+        $settings['reminder']['delay_minutes'] = isset($settings['reminder']['delay_minutes'])
+            ? max(0, min(2880, (int) $settings['reminder']['delay_minutes']))
+            : 0;
 
         $channels = isset($settings['reminder']['channels']) && is_array($settings['reminder']['channels'])
             ? $settings['reminder']['channels']
@@ -316,6 +332,31 @@ class BJLG_Update_Guard {
         $this->settings = $settings;
 
         return $this->settings;
+    }
+
+    /**
+     * Détermine les composants à utiliser selon le mode choisi et le contexte.
+     *
+     * @param array<int,string>      $components
+     * @param array<string,mixed>    $settings
+     * @param array<string,mixed>    $context
+     *
+     * @return array<int,string>
+     */
+    private function determine_components(array $components, array $settings, array $context): array {
+        $filtered = $this->filter_components($components, $settings);
+        if (empty($filtered)) {
+            return $filtered;
+        }
+
+        $mode = isset($settings['mode']) ? sanitize_key((string) $settings['mode']) : 'full';
+        if ($mode !== 'targeted') {
+            return $filtered;
+        }
+
+        $targeted = $this->apply_targeted_component_strategy($filtered, $context);
+
+        return !empty($targeted) ? $targeted : $filtered;
     }
 
     /**
@@ -349,6 +390,45 @@ class BJLG_Update_Guard {
     }
 
     /**
+     * Applique la stratégie ciblée selon le type de mise à jour.
+     *
+     * @param array<int,string> $allowed
+     * @param array<string,mixed> $context
+     *
+     * @return array<int,string>
+     */
+    private function apply_targeted_component_strategy(array $allowed, array $context): array {
+        if (empty($allowed)) {
+            return [];
+        }
+
+        $type = isset($context['type']) ? sanitize_key((string) $context['type']) : '';
+        if ($type === '') {
+            return $allowed;
+        }
+
+        $map = [
+            'plugin' => ['db', 'plugins'],
+            'theme' => ['db', 'themes', 'uploads'],
+            'core' => BJLG_Settings::get_default_backup_components(),
+        ];
+
+        $preferred = $map[$type] ?? $allowed;
+        $selected = [];
+
+        foreach ($preferred as $component) {
+            $component = sanitize_key((string) $component);
+            if ($component === '' || !in_array($component, $allowed, true) || in_array($component, $selected, true)) {
+                continue;
+            }
+
+            $selected[] = $component;
+        }
+
+        return $selected;
+    }
+
+    /**
      * Déclenche un rappel si configuré.
      *
      * @param array<string,mixed> $settings
@@ -361,28 +441,14 @@ class BJLG_Update_Guard {
             return;
         }
 
-        $message = isset($settings['reminder']['message']) && $settings['reminder']['message'] !== ''
-            ? (string) $settings['reminder']['message']
-            : 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.';
+        $message = $this->resolve_reminder_message($settings);
+        $delay = $this->get_reminder_delay($settings);
 
-        BJLG_Debug::log('Rappel pré-update déclenché : ' . $message . ' (raison : ' . $reason . ')');
-
-        if (class_exists(BJLG_History::class)) {
-            BJLG_History::log(
-                'pre_update_backup_reminder',
-                'info',
-                sprintf('%s (%s) – %s', $message, $context['items_label'] ?? 'mise à jour', $this->format_reminder_reason($reason))
-            );
+        if ($delay > 0 && $this->schedule_reminder_event($settings, $context, $reason, $delay)) {
+            return;
         }
 
-        $reminder_settings = isset($settings['reminder']) && is_array($settings['reminder'])
-            ? $settings['reminder']
-            : ['channels' => []];
-
-        $this->dispatch_reminder_notification($reminder_settings, $context, $message, $reason);
-        $this->dispatch_reminder_email($reminder_settings, $context, $message, $reason);
-
-        \do_action('bjlg_pre_update_backup_reminder', $context, $reason, $settings['reminder'], $hook_extra);
+        $this->emit_reminder($settings, $context, $message, $reason, false, $delay, $hook_extra);
     }
 
     private function is_target_enabled($type, array $settings): bool {
@@ -402,7 +468,7 @@ class BJLG_Update_Guard {
         return !empty($targets[$type]);
     }
 
-    private function dispatch_reminder_email(array $reminder_settings, array $context, string $message, string $reason) {
+    private function dispatch_reminder_email(array $settings, array $reminder_settings, array $context, string $message, string $reason, int $delay, bool $scheduled) {
         if (empty($reminder_settings['channels']['email']['enabled'])) {
             return;
         }
@@ -422,17 +488,23 @@ class BJLG_Update_Guard {
         $subject = sprintf('[Backup JLG] %s', sprintf(__('Snapshot pré-update requis pour %s', 'backup-jlg'), $context['label'] ?? __('la mise à jour', 'backup-jlg')));
         $lines = [
             $message,
+            sprintf(__('Mode : %s', 'backup-jlg'), $this->describe_snapshot_mode($settings['mode'] ?? 'full', $context['type'] ?? 'update')),
             '',
             sprintf(__('Type : %s', 'backup-jlg'), $this->translate_context_type($context['type'] ?? 'update')),
             sprintf(__('Éléments : %s', 'backup-jlg'), $context['items_label'] ?? __('site complet', 'backup-jlg')),
             sprintf(__('Raison : %s', 'backup-jlg'), $this->format_reminder_reason($reason)),
         ];
+        if ($delay > 0) {
+            $lines[] = sprintf(__('Rappel planifié dans %d minute(s)', 'backup-jlg'), $delay);
+        } elseif ($scheduled) {
+            $lines[] = __('Rappel planifié exécuté immédiatement.', 'backup-jlg');
+        }
 
         $body = implode("\n", array_filter(array_map('strval', $lines)));
         wp_mail($recipients, $subject, $body);
     }
 
-    private function dispatch_reminder_notification(array $reminder_settings, array $context, string $message, string $reason) {
+    private function dispatch_reminder_notification(array $settings, array $reminder_settings, array $context, string $message, string $reason, int $delay, bool $scheduled) {
         if (empty($reminder_settings['channels']['notification']['enabled']) || !class_exists(__NAMESPACE__ . '\\BJLG_Notification_Queue')) {
             return;
         }
@@ -440,10 +512,16 @@ class BJLG_Update_Guard {
         $title = sprintf(__('Snapshot pré-update requis pour %s', 'backup-jlg'), $context['label'] ?? __('la mise à jour', 'backup-jlg'));
         $lines = [
             $message,
+            sprintf(__('Mode : %s', 'backup-jlg'), $this->describe_snapshot_mode($settings['mode'] ?? 'full', $context['type'] ?? 'update')),
             sprintf(__('Type : %s', 'backup-jlg'), $this->translate_context_type($context['type'] ?? 'update')),
             sprintf(__('Éléments : %s', 'backup-jlg'), $context['items_label'] ?? __('site complet', 'backup-jlg')),
             sprintf(__('Raison : %s', 'backup-jlg'), $this->format_reminder_reason($reason)),
         ];
+        if ($delay > 0) {
+            $lines[] = sprintf(__('Déclenchement prévu dans %d minute(s).', 'backup-jlg'), $delay);
+        } elseif ($scheduled) {
+            $lines[] = __('Ce rappel provient d’une planification différée.', 'backup-jlg');
+        }
 
         BJLG_Notification_Queue::enqueue([
             'event' => 'pre_update_snapshot_reminder',
@@ -456,6 +534,9 @@ class BJLG_Update_Guard {
                 'items' => $context['items'] ?? [],
                 'reason' => $reason,
                 'message' => $message,
+                'mode' => $settings['mode'] ?? 'full',
+                'delay_minutes' => $delay,
+                'scheduled' => $scheduled,
             ],
             'severity' => $reason === 'disabled' ? 'info' : 'warning',
             'channels' => [
@@ -466,6 +547,221 @@ class BJLG_Update_Guard {
                 ],
             ],
         ]);
+    }
+
+    private function resolve_reminder_message(array $settings): string {
+        if (isset($settings['reminder']['message']) && $settings['reminder']['message'] !== '') {
+            return (string) $settings['reminder']['message'];
+        }
+
+        return 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.';
+    }
+
+    private function get_reminder_delay(array $settings): int {
+        if (!isset($settings['reminder']['delay_minutes'])) {
+            return 0;
+        }
+
+        return max(0, min(2880, (int) $settings['reminder']['delay_minutes']));
+    }
+
+    private function schedule_reminder_event(array $settings, array $context, string $reason, int $delay): bool {
+        if (!function_exists('wp_schedule_single_event')) {
+            return false;
+        }
+
+        $signature = isset($context['signature']) ? (string) $context['signature'] : '';
+        if ($signature === '') {
+            return false;
+        }
+
+        $pending = $this->get_pending_reminders();
+        if (isset($pending[$signature]) && isset($pending[$signature]['timestamp']) && (int) $pending[$signature]['timestamp'] > time()) {
+            return true;
+        }
+
+        $timestamp = time() + ($delay * (defined('MINUTE_IN_SECONDS') ? MINUTE_IN_SECONDS : 60));
+        $payload_context = $this->reduce_context_for_storage($context, $signature);
+        $scheduled = wp_schedule_single_event($timestamp, self::REMINDER_EVENT_HOOK, [$signature, $payload_context, $reason]);
+
+        if ($scheduled === false || $scheduled instanceof \WP_Error) {
+            return false;
+        }
+
+        $this->store_pending_reminder($signature, [
+            'timestamp' => $timestamp,
+            'context' => $payload_context,
+            'reason' => $reason,
+            'delay' => $delay,
+        ]);
+
+        BJLG_Debug::log(sprintf('Rappel pré-update planifié dans %d minute(s) pour %s.', $delay, $context['items_label'] ?? 'mise à jour'));
+
+        return true;
+    }
+
+    private function emit_reminder(array $settings, array $context, string $message, string $reason, bool $scheduled, int $delay, $hook_extra) {
+        $mode_label = $this->describe_snapshot_mode($settings['mode'] ?? 'full', $context['type'] ?? 'update');
+        $log_parts = [
+            $scheduled ? 'Rappel pré-update planifié déclenché' : 'Rappel pré-update déclenché',
+            $message,
+            'mode : ' . $mode_label,
+            'raison : ' . $reason,
+        ];
+        if ($delay > 0) {
+            $log_parts[] = sprintf('délai : %d minute(s)', $delay);
+        }
+        BJLG_Debug::log(implode(' – ', array_filter($log_parts)));
+
+        if (class_exists(BJLG_History::class)) {
+            $history_details = sprintf(
+                '%s (%s) – %s – %s',
+                $message,
+                $context['items_label'] ?? 'mise à jour',
+                $this->format_reminder_reason($reason),
+                $mode_label
+            );
+            if ($delay > 0) {
+                $history_details .= sprintf(' – %s', sprintf(__('Différé de %d minute(s)', 'backup-jlg'), $delay));
+            } elseif ($scheduled) {
+                $history_details .= ' – ' . __('Rappel différé exécuté', 'backup-jlg');
+            }
+
+            BJLG_History::log('pre_update_backup_reminder', 'info', $history_details);
+        }
+
+        $reminder_settings = isset($settings['reminder']) && is_array($settings['reminder'])
+            ? $settings['reminder']
+            : ['channels' => []];
+
+        $context_for_channels = $context;
+        $context_for_channels['mode'] = $settings['mode'] ?? 'full';
+        $context_for_channels['delay_minutes'] = $delay;
+        $context_for_channels['scheduled'] = $scheduled;
+
+        $this->dispatch_reminder_notification($settings, $reminder_settings, $context_for_channels, $message, $reason, $delay, $scheduled);
+        $this->dispatch_reminder_email($settings, $reminder_settings, $context_for_channels, $message, $reason, $delay, $scheduled);
+
+        \do_action('bjlg_pre_update_backup_reminder', $context_for_channels, $reason, $settings['reminder'], $hook_extra);
+    }
+
+    private function get_pending_reminders(): array {
+        $stored = \bjlg_get_option(self::PENDING_REMINDERS_OPTION, []);
+
+        return is_array($stored) ? $stored : [];
+    }
+
+    private function store_pending_reminder(string $signature, array $data): void {
+        $pending = $this->get_pending_reminders();
+        $pending[$signature] = $data;
+        \bjlg_update_option(self::PENDING_REMINDERS_OPTION, $pending);
+    }
+
+    private function clear_pending_reminder(string $signature): ?array {
+        $pending = $this->get_pending_reminders();
+        if (!isset($pending[$signature])) {
+            return null;
+        }
+
+        $data = $pending[$signature];
+        unset($pending[$signature]);
+        \bjlg_update_option(self::PENDING_REMINDERS_OPTION, $pending);
+
+        return is_array($data) ? $data : null;
+    }
+
+    private function reduce_context_for_storage(array $context, string $signature): array {
+        $items = [];
+        if (isset($context['items']) && is_array($context['items'])) {
+            foreach ($context['items'] as $item) {
+                if (is_scalar($item)) {
+                    $items[] = sanitize_text_field((string) $item);
+                }
+            }
+        }
+        $items = array_values(array_filter($items));
+
+        $items_label = isset($context['items_label']) ? (string) $context['items_label'] : '';
+        if ($items_label === '' && !empty($items)) {
+            $items_label = implode(', ', $items);
+        } elseif ($items_label === '') {
+            $items_label = __('site complet', 'backup-jlg');
+        }
+
+        $type = isset($context['type']) ? sanitize_key((string) $context['type']) : '';
+        $label = isset($context['label']) ? (string) $context['label'] : $this->describe_target($type, count($items));
+
+        return [
+            'signature' => $signature,
+            'type' => $type,
+            'items' => $items,
+            'items_label' => $items_label,
+            'label' => $label,
+        ];
+    }
+
+    private function restore_context_from_storage($context, string $signature): array {
+        $context = is_array($context) ? $context : [];
+        $type = isset($context['type']) ? sanitize_key((string) $context['type']) : '';
+
+        $items = [];
+        if (isset($context['items']) && is_array($context['items'])) {
+            foreach ($context['items'] as $item) {
+                if (is_scalar($item)) {
+                    $items[] = sanitize_text_field((string) $item);
+                }
+            }
+        }
+        $items = array_values(array_filter($items));
+
+        $items_label = isset($context['items_label']) ? (string) $context['items_label'] : '';
+        if ($items_label === '' && !empty($items)) {
+            $items_label = implode(', ', $items);
+        } elseif ($items_label === '') {
+            $items_label = __('site complet', 'backup-jlg');
+        }
+
+        $label = isset($context['label']) ? (string) $context['label'] : $this->describe_target($type, count($items));
+
+        return [
+            'signature' => $signature,
+            'type' => $type,
+            'items' => $items,
+            'items_label' => $items_label,
+            'label' => $label,
+        ];
+    }
+
+    public function handle_scheduled_reminder_event($signature, $context, $reason) {
+        $signature = is_string($signature) ? $signature : '';
+        if ($signature === '') {
+            return;
+        }
+
+        $stored = $this->clear_pending_reminder($signature);
+        $context = $this->restore_context_from_storage($context, $signature);
+
+        $this->settings = null;
+        $settings = $this->get_settings();
+        if (empty($settings['reminder']['enabled'])) {
+            return;
+        }
+
+        $message = $this->resolve_reminder_message($settings);
+        $delay = isset($stored['delay']) ? max(0, (int) $stored['delay']) : $this->get_reminder_delay($settings);
+        $reason = is_string($reason) ? $reason : 'manual';
+
+        $this->emit_reminder($settings, $context, $message, $reason, true, $delay, null);
+    }
+
+    private function describe_snapshot_mode(string $mode, string $type): string {
+        $mode = sanitize_key($mode);
+
+        if ($mode === 'targeted') {
+            return sprintf(__('Ciblé (%s + composants associés)', 'backup-jlg'), $this->translate_context_type($type ?: 'update'));
+        }
+
+        return __('Complet (tous les composants sélectionnés)', 'backup-jlg');
     }
 
     private function parse_email_recipients($value): array {

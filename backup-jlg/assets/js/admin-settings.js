@@ -8,6 +8,7 @@ jQuery(function($) {
     const REMINDER_FIELDS = '.bjlg-update-guard-reminder-fields';
     const REMINDER_EMAIL_TOGGLE = '#bjlg-update-guard-reminder-channel-email';
     const REMINDER_EMAIL_FIELDS = '.bjlg-update-guard-reminder-email-fields';
+    const REMINDER_DELAY_INPUT = '#bjlg-update-guard-reminder-delay';
 
     function toggleFieldGroup($container, disabled) {
         if (!$container || !$container.length) {
@@ -104,6 +105,56 @@ jQuery(function($) {
 
     $(STORAGE_THRESHOLD_SELECTOR).each(function() {
         sanitizeStorageThreshold($(this), true);
+    });
+
+    function sanitizeReminderDelay($input, clampValue) {
+        if (!$input || !$input.length) {
+            return;
+        }
+
+        const element = $input.get(0);
+        const raw = ($input.val() || '').toString().trim();
+        if (raw === '') {
+            if (element && typeof element.setCustomValidity === 'function') {
+                element.setCustomValidity('');
+            }
+            return;
+        }
+
+        let value = Number(raw.replace(',', '.'));
+        if (!Number.isFinite(value)) {
+            if (element && typeof element.setCustomValidity === 'function') {
+                element.setCustomValidity('Veuillez saisir un délai valide.');
+            }
+            return;
+        }
+
+        value = Math.round(value);
+        if (clampValue) {
+            if (value < 0) {
+                value = 0;
+            } else if (value > 2880) {
+                value = 2880;
+            }
+            $input.val(value.toString());
+        }
+
+        if (element && typeof element.setCustomValidity === 'function') {
+            if (value < 0 || value > 2880) {
+                element.setCustomValidity('Le délai doit être compris entre 0 et 2880 minutes.');
+            } else {
+                element.setCustomValidity('');
+            }
+        }
+    }
+
+    $(document).on('input change blur', REMINDER_DELAY_INPUT, function(event) {
+        const clampValue = event.type === 'change' || event.type === 'blur';
+        sanitizeReminderDelay($(this), clampValue);
+    });
+
+    $(REMINDER_DELAY_INPUT).each(function() {
+        sanitizeReminderDelay($(this), true);
     });
 
     refreshUpdateGuardState();
