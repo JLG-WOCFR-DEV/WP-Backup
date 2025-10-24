@@ -17,7 +17,8 @@ class BJLG_Scheduler {
 
     const SCHEDULE_HOOK = 'bjlg_scheduled_backup_hook';
     const SANDBOX_VALIDATION_HOOK = 'bjlg_sandbox_validation_hook';
-    const RESTORE_CHECK_HOOK = 'bjlg_scheduled_restore_check';
+    private const SANDBOX_SCHEDULE_OPTION = 'bjlg_sandbox_schedule';
+    private const SANDBOX_SNAPSHOT_OPTION = 'bjlg_sandbox_validation_snapshot';
     const MIN_CUSTOM_CRON_INTERVAL = 5 * MINUTE_IN_SECONDS;
     const EVENT_CRON_HOOK = 'bjlg_process_event_triggers';
 
@@ -86,86 +87,7 @@ class BJLG_Scheduler {
             wp_schedule_event($start, $recurrence, $hook);
         }
 
-        $sandbox_hook = self::SANDBOX_VALIDATION_HOOK;
-        if (!wp_next_scheduled($sandbox_hook)) {
-            $start = time() + (int) apply_filters('bjlg_sandbox_validation_delay', DAY_IN_SECONDS);
-            $recurrence = apply_filters('bjlg_sandbox_validation_recurrence', 'daily');
-            if (!is_string($recurrence) || $recurrence === '') {
-                $recurrence = 'daily';
-            }
-
-            wp_schedule_event($start, $recurrence, $sandbox_hook);
-        }
-
-        self::instance()->ensure_restore_check_schedule();
-    }
-
-    private function ensure_restore_check_schedule(): void {
-        $settings = $this->get_restore_check_settings();
-        $this->schedule_restore_check_event($settings, false);
-    }
-
-    private function schedule_restore_check_event(array $settings, bool $force_reschedule): ?int
-    {
-        $hook = self::RESTORE_CHECK_HOOK;
-
-        if (empty($settings['enabled'])) {
-            if ($force_reschedule) {
-                wp_clear_scheduled_hook($hook);
-            }
-
-            return null;
-        }
-
-        if (!$force_reschedule) {
-            $existing = wp_next_scheduled($hook);
-            if ($existing) {
-                return (int) $existing;
-            }
-        } else {
-            wp_clear_scheduled_hook($hook);
-        }
-
-        $next_run = $this->calculate_restore_check_first_run($settings);
-        if (!$next_run) {
-            BJLG_Debug::log('ERREUR : Impossible de planifier la vérification de restauration programmée.');
-
-            return null;
-        }
-
-        $recurrence = $settings['recurrence'] ?? 'weekly';
-        $scheduled = wp_schedule_event($next_run, $recurrence, $hook);
-
-        if (!$scheduled) {
-            BJLG_Debug::log('ERREUR : Impossible de planifier la vérification de restauration programmée.');
-
-            return null;
-        }
-
-        BJLG_Debug::log(sprintf(
-            'Vérification de restauration programmée (%s) pour %s.',
-            $recurrence,
-            get_date_from_gmt($this->format_gmt_datetime($next_run), 'd/m/Y H:i:s')
-        ));
-
-        return $next_run;
-    }
-
-    private function calculate_restore_check_first_run(array $settings): ?int
-    {
-        $recurrence = isset($settings['recurrence']) ? (string) $settings['recurrence'] : 'weekly';
-        if ($recurrence === 'disabled') {
-            return null;
-        }
-
-        $fake_schedule = [
-            'recurrence' => $recurrence,
-            'time' => isset($settings['time']) ? (string) $settings['time'] : '02:00',
-            'day' => isset($settings['day']) ? (string) $settings['day'] : 'monday',
-            'day_of_month' => isset($settings['day_of_month']) ? (int) $settings['day_of_month'] : 1,
-        ];
-
-        return $this->calculate_first_run($fake_schedule) ?: null;
+        self::instance()->sync_sandbox_validation_schedule();
     }
 
     /**
@@ -178,6 +100,70 @@ class BJLG_Scheduler {
     public static function run_scheduled_restore_check_job(): void
     {
         self::instance()->run_scheduled_restore_check();
+    }
+
+    /**
+     * Synchronise la planification de la validation sandbox avec les réglages stockés.
+     */
+    public function sync_sandbox_validation_schedule(?array $settings = null): void
+    {
+        $settings = $settings ?? $this->get_sandbox_schedule_settings();
+        $enabled = !empty($settings['enabled']);
+        $recurrence = $settings['recurrence'] ?? 'disabled';
+
+        if (!$enabled || $recurrence === 'disabled') {
+            $this->unschedule_sandbox_validation();
+
+            return;
+        }
+
+        $available = wp_get_schedules();
+        if (!isset($available[$recurrence])) {
+            $recurrence = 'weekly';
+        }
+
+        $hook = self::SANDBOX_VALIDATION_HOOK;
+        $scheduled = wp_get_scheduled_event($hook);
+
+        if ($scheduled instanceof \stdClass) {
+            if ($scheduled->schedule === $recurrence) {
+                return;
+            }
+
+            wp_unschedule_event($scheduled->timestamp, $hook);
+        }
+
+        $start_delay = (int) apply_filters('bjlg_sandbox_validation_delay', HOUR_IN_SECONDS);
+        $start = time() + max(MINUTE_IN_SECONDS, $start_delay);
+
+        wp_schedule_event($start, $recurrence, $hook);
+    }
+
+    /**
+     * Désenregistre tous les évènements programmés pour la validation sandbox.
+     */
+    private function unschedule_sandbox_validation(): void
+    {
+        $hook = self::SANDBOX_VALIDATION_HOOK;
+        $events = wp_get_ready_cron_jobs();
+
+        if (!is_array($events)) {
+            $events = [];
+        }
+
+        if (isset($events[$hook]) && is_array($events[$hook])) {
+            foreach ($events[$hook] as $timestamp => $event_group) {
+                foreach ($event_group as $event) {
+                    if (isset($event['hook']) && $event['hook'] === $hook) {
+                        wp_unschedule_event($timestamp, $hook, $event['args'] ?? []);
+                    }
+                }
+            }
+        }
+
+        while ($timestamp = wp_next_scheduled($hook)) { // phpcs:ignore Squiz.PHP.DisallowMultipleAssignments
+            wp_unschedule_event($timestamp, $hook);
+        }
     }
 
     /**
@@ -210,16 +196,38 @@ class BJLG_Scheduler {
             return;
         }
 
-        $args = [];
-        if (!empty($settings['components'])) {
-            $args['components'] = $settings['components'];
+        $settings = $this->get_sandbox_schedule_settings();
+
+        if (empty($settings['enabled'])) {
+            $this->unschedule_sandbox_validation();
+
+            return;
         }
 
-        if (!empty($settings['sandbox_path'])) {
-            $args['sandbox_path'] = $settings['sandbox_path'];
-        }
+        $status = 'failure';
+        $history_metadata = [];
 
-        $result = $this->execute_restore_validation_job($args, 'restore_check', ['settings' => $settings]);
+        try {
+            $restore = new BJLG_Restore();
+
+            $args = [];
+            if (!empty($settings['components'])) {
+                $args['components'] = $settings['components'];
+            }
+
+            if (!empty($settings['sandbox_path'])) {
+                $args['sandbox_path'] = $settings['sandbox_path'];
+            }
+
+            $components_override = apply_filters('bjlg_sandbox_validation_components', null);
+            if (is_array($components_override) || is_string($components_override)) {
+                $args['components'] = $components_override;
+            }
+
+            $sandbox_path = apply_filters('bjlg_sandbox_validation_path', $settings['sandbox_path'] ?? '');
+            if (is_string($sandbox_path) && $sandbox_path !== '') {
+                $args['sandbox_path'] = $sandbox_path;
+            }
 
         $this->update_restore_check_state([
             'last_run' => time(),
@@ -244,54 +252,37 @@ class BJLG_Scheduler {
         try {
             $restore = new BJLG_Restore();
             $report = $restore->run_sandbox_validation($args);
-            $result['report'] = $report;
-
-            $metadata = [
-                'report' => $report,
-                'triggered_at' => time(),
-                'source' => $source,
-            ];
-
-            if (!empty($context)) {
-                $metadata['context'] = $context;
-            }
-
             $status = isset($report['status']) ? (string) $report['status'] : 'failure';
-            $result['status'] = $status;
-
+            $history_metadata = $this->build_sandbox_history_metadata($report, $settings);
             $summary = $this->summarize_sandbox_report($report);
             $base_message = isset($report['message']) ? (string) $report['message'] : '';
 
             if ($status === 'success') {
-                $message = $summary !== ''
-                    ? $summary
-                    : ($base_message !== '' ? $base_message : __('Validation sandbox réussie.', 'backup-jlg'));
-
-                $result['message'] = $message;
-                BJLG_History::log('sandbox_restore_validation', 'success', $message, null, null, $metadata);
+                $message = $summary !== '' ? $summary : ($base_message !== '' ? $base_message : __('Validation sandbox réussie.', 'backup-jlg'));
+                BJLG_History::log('sandbox_restore_validation', 'success', $message, null, null, $history_metadata);
+                $this->update_sandbox_snapshot($settings, $history_metadata);
                 do_action('bjlg_sandbox_restore_validation_passed', $report);
             } else {
                 $failure_message = $base_message !== '' ? $base_message : __('Validation sandbox échouée.', 'backup-jlg');
                 $message = $summary !== '' ? $summary . ' | ' . $failure_message : $failure_message;
-                $result['message'] = $message;
-                BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $metadata);
+                BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $history_metadata);
+                $this->update_sandbox_snapshot($settings, $history_metadata);
                 do_action('bjlg_sandbox_restore_validation_failed', $report);
             }
         } catch (Throwable $throwable) {
             $message = 'Validation sandbox échouée : ' . $throwable->getMessage();
-            $result['status'] = 'failure';
-            $result['message'] = $message;
-            $metadata = [
-                'error' => $throwable->getMessage(),
-                'triggered_at' => time(),
-                'source' => $source,
+            $history_metadata = [
+                'report_summary' => [
+                    'status' => 'failure',
+                    'message' => $throwable->getMessage(),
+                    'log_excerpt' => [],
+                    'started_at' => time(),
+                    'components' => $settings['components'] ?? [],
+                ],
+                'source' => 'scheduler',
             ];
-
-            if (!empty($context)) {
-                $metadata['context'] = $context;
-            }
-
-            BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $metadata);
+            BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $history_metadata);
+            $this->update_sandbox_snapshot($settings, $history_metadata);
 
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log('[Sandbox validation job] ' . $throwable->getMessage(), 'error');
@@ -304,7 +295,9 @@ class BJLG_Scheduler {
             ]);
         }
 
-        return $result;
+        $settings['last_run'] = time();
+        $settings['last_status'] = $status;
+        $this->save_sandbox_schedule_settings($this->sanitize_sandbox_schedule_settings($settings));
     }
 
     /**
@@ -380,6 +373,90 @@ class BJLG_Scheduler {
         return implode(' | ', $parts);
     }
 
+    /**
+     * Prépare les métadonnées enregistrées dans l'historique pour une validation sandbox.
+     *
+     * @param array<string,mixed> $report
+     * @param array<string,mixed> $settings
+     * @return array<string,mixed>
+     */
+    private function build_sandbox_history_metadata(array $report, array $settings): array
+    {
+        $objectives = isset($report['objectives']) && is_array($report['objectives']) ? $report['objectives'] : [];
+        $timings = isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [];
+        $sandbox = isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [];
+        $logs = [];
+        if (isset($report['log_entries']) && is_array($report['log_entries'])) {
+            $logs = array_slice(array_map('strval', $report['log_entries']), -20);
+        } elseif (isset($report['logs']) && is_array($report['logs'])) {
+            $logs = array_slice(array_map('strval', $report['logs']), -20);
+        }
+
+        $components = isset($report['components']) && is_array($report['components'])
+            ? array_values(array_map('strval', $report['components']))
+            : ($settings['components'] ?? []);
+
+        $report_files = isset($report['report_files']) && is_array($report['report_files'])
+            ? BJLG_History::sanitize_report_files($report['report_files'])
+            : [];
+
+        return [
+            'report_summary' => [
+                'status' => isset($report['status']) ? (string) $report['status'] : 'failure',
+                'message' => isset($report['message']) ? (string) $report['message'] : '',
+                'objectives' => [
+                    'rto_seconds' => isset($objectives['rto_seconds']) ? (float) $objectives['rto_seconds'] : null,
+                    'rto_human' => isset($objectives['rto_human']) ? (string) $objectives['rto_human'] : ($timings['duration_human'] ?? ''),
+                    'rpo_seconds' => isset($objectives['rpo_seconds']) ? (float) $objectives['rpo_seconds'] : null,
+                    'rpo_human' => isset($objectives['rpo_human']) ? (string) $objectives['rpo_human'] : '',
+                ],
+                'timings' => [
+                    'duration_seconds' => isset($timings['duration_seconds']) ? (float) $timings['duration_seconds'] : null,
+                    'duration_human' => isset($timings['duration_human']) ? (string) $timings['duration_human'] : '',
+                ],
+                'backup_file' => isset($report['backup_file']) ? (string) $report['backup_file'] : '',
+                'started_at' => isset($report['started_at']) ? (int) $report['started_at'] : null,
+                'completed_at' => isset($report['completed_at']) ? (int) $report['completed_at'] : null,
+                'sandbox' => [
+                    'base_path' => isset($sandbox['base_path']) ? (string) $sandbox['base_path'] : '',
+                    'cleanup' => isset($sandbox['cleanup']) && is_array($sandbox['cleanup']) ? $sandbox['cleanup'] : [],
+                ],
+                'components' => $components,
+                'log_excerpt' => $logs,
+                'settings' => [
+                    'recurrence' => isset($settings['recurrence']) ? (string) $settings['recurrence'] : 'weekly',
+                    'enabled' => !empty($settings['enabled']),
+                    'components' => $components,
+                ],
+            ],
+            'report_files' => $report_files,
+            'triggered_at' => time(),
+            'source' => 'scheduler',
+        ];
+    }
+
+    /**
+     * Met à jour l'instantané utilisé par l'interface d'administration.
+     *
+     * @param array<string,mixed> $settings
+     * @param array<string,mixed> $metadata
+     */
+    private function update_sandbox_snapshot(array $settings, array $metadata): void
+    {
+        $snapshot = [
+            'generated_at' => time(),
+            'settings' => [
+                'enabled' => !empty($settings['enabled']),
+                'recurrence' => $settings['recurrence'] ?? 'weekly',
+                'components' => $settings['components'] ?? [],
+            ],
+            'summary' => $metadata['report_summary'] ?? [],
+            'files' => $metadata['report_files'] ?? [],
+        ];
+
+        \bjlg_update_option(self::SANDBOX_SNAPSHOT_OPTION, $snapshot, null, null, false);
+    }
+
     private function __construct() {
         // Actions AJAX
         add_action('wp_ajax_bjlg_save_schedule_settings', [$this, 'handle_save_schedule']);
@@ -394,7 +471,7 @@ class BJLG_Scheduler {
         // Hook Cron pour l'exécution automatique
         add_action(self::SCHEDULE_HOOK, [$this, 'run_scheduled_backup']);
         add_action(self::EVENT_CRON_HOOK, [$this, 'process_event_trigger_queue'], 10, 1);
-        add_action(self::RESTORE_CHECK_HOOK, [$this, 'run_scheduled_restore_check']);
+        add_action('admin_post_bjlg_save_sandbox_schedule', [$this, 'handle_save_sandbox_schedule']);
 
         // Filtres pour les intervalles personnalisés
         add_filter('cron_schedules', [$this, 'add_custom_schedules']);
@@ -599,45 +676,42 @@ class BJLG_Scheduler {
         ]);
     }
 
-    public function handle_save_restore_check() {
+    public function handle_save_sandbox_schedule(): void
+    {
         if (!\bjlg_can_manage_backups()) {
-            wp_send_json_error(['message' => 'Permission refusée.']);
+            wp_die(__('Permission refusée.', 'backup-jlg'), '', ['response' => 403]);
         }
 
-        check_ajax_referer('bjlg_nonce', 'nonce');
-
-        $posted = wp_unslash($_POST);
-        $raw_settings = $posted['settings'] ?? [];
-
-        if (is_string($raw_settings)) {
-            $decoded = json_decode($raw_settings, true);
-            if (is_array($decoded)) {
-                $raw_settings = $decoded;
-            }
+        $nonce = isset($_POST['_wpnonce']) ? (string) $_POST['_wpnonce'] : '';
+        if (function_exists('wp_verify_nonce') && !wp_verify_nonce($nonce, 'bjlg_save_sandbox_schedule')) {
+            wp_die(__('Jeton de sécurité invalide.', 'backup-jlg'), '', ['response' => 403]);
         }
 
-        $settings = self::sanitize_restore_check_settings($raw_settings);
-        $this->save_restore_check_settings($settings);
+        $raw = wp_unslash($_POST);
+        $enabled = !empty($raw['bjlg_sandbox_enabled']);
+        $recurrence = isset($raw['bjlg_sandbox_recurrence'])
+            ? sanitize_key((string) $raw['bjlg_sandbox_recurrence'])
+            : 'weekly';
 
-        $next_run = $this->schedule_restore_check_event($settings, true);
-
-        $next_run_formatted = null;
-        $next_run_relative = null;
-        if ($next_run) {
-            $next_run_formatted = get_date_from_gmt($this->format_gmt_datetime($next_run), 'd/m/Y H:i:s');
-            if (function_exists('human_time_diff')) {
-                $next_run_relative = human_time_diff(time(), $next_run);
-            }
+        if (!$enabled) {
+            $recurrence = 'disabled';
         }
 
-        wp_send_json_success([
-            'message' => __('Planification de validation enregistrée.', 'backup-jlg'),
-            'settings' => $settings,
-            'next_run' => $next_run,
-            'next_run_formatted' => $next_run_formatted,
-            'next_run_relative' => $next_run_relative,
-            'state' => $this->get_restore_check_state(),
-        ]);
+        $settings = $this->get_sandbox_schedule_settings();
+        $settings['enabled'] = $enabled;
+        $settings['recurrence'] = $recurrence;
+
+        $sanitized = $this->sanitize_sandbox_schedule_settings($settings);
+        $this->save_sandbox_schedule_settings($sanitized);
+        $this->sync_sandbox_validation_schedule($sanitized);
+
+        $redirect = isset($raw['redirect_to']) && is_string($raw['redirect_to'])
+            ? esc_url_raw($raw['redirect_to'])
+            : admin_url('admin.php?page=backup-jlg');
+        $redirect = add_query_arg('sandbox_schedule_updated', '1', $redirect);
+
+        wp_safe_redirect($redirect);
+        exit;
     }
     
     /**
@@ -2498,6 +2572,97 @@ class BJLG_Scheduler {
         }
 
         return $collection;
+    }
+
+    /**
+     * Retourne les réglages de planification pour les validations sandbox.
+     */
+    public function get_sandbox_schedule_settings(): array
+    {
+        $stored = \bjlg_get_option(self::SANDBOX_SCHEDULE_OPTION, []);
+        $sanitized = $this->sanitize_sandbox_schedule_settings($stored);
+
+        if (!is_array($stored) || $stored !== $sanitized) {
+            $this->save_sandbox_schedule_settings($sanitized);
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * Enregistre les réglages de validation sandbox.
+     *
+     * @param array<string,mixed> $settings
+     */
+    private function save_sandbox_schedule_settings(array $settings): void
+    {
+        \bjlg_update_option(self::SANDBOX_SCHEDULE_OPTION, $settings, null, null, false);
+    }
+
+    /**
+     * Valeurs par défaut pour la planification sandbox.
+     *
+     * @return array<string,mixed>
+     */
+    private function get_sandbox_defaults(): array
+    {
+        return [
+            'enabled' => false,
+            'recurrence' => 'weekly',
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'sandbox_path' => '',
+            'last_run' => null,
+            'last_status' => '',
+        ];
+    }
+
+    /**
+     * Nettoie les réglages sandbox.
+     *
+     * @param mixed $settings
+     * @return array<string,mixed>
+     */
+    private function sanitize_sandbox_schedule_settings($settings): array
+    {
+        $defaults = $this->get_sandbox_defaults();
+        $sanitized = $defaults;
+        $input = is_array($settings) ? $settings : [];
+
+        $sanitized['enabled'] = !empty($input['enabled']);
+
+        $requested_recurrence = isset($input['recurrence']) ? (string) $input['recurrence'] : $defaults['recurrence'];
+        $allowed = wp_get_schedules();
+        if ($requested_recurrence === 'disabled') {
+            $sanitized['enabled'] = false;
+            $sanitized['recurrence'] = 'disabled';
+        } elseif (isset($allowed[$requested_recurrence])) {
+            $sanitized['recurrence'] = $requested_recurrence;
+        } else {
+            $sanitized['recurrence'] = $defaults['recurrence'];
+        }
+
+        if (!empty($input['components']) && is_array($input['components'])) {
+            $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+            $components = array_map('sanitize_key', $input['components']);
+            $components = array_values(array_intersect($components, $allowed_components));
+            if (!empty($components)) {
+                $sanitized['components'] = $components;
+            }
+        }
+
+        if (isset($input['sandbox_path']) && is_string($input['sandbox_path'])) {
+            $sanitized['sandbox_path'] = trim($input['sandbox_path']);
+        }
+
+        if (isset($input['last_run'])) {
+            $sanitized['last_run'] = is_numeric($input['last_run']) ? (int) $input['last_run'] : null;
+        }
+
+        if (isset($input['last_status']) && is_string($input['last_status'])) {
+            $sanitized['last_status'] = substr($input['last_status'], 0, 20);
+        }
+
+        return $sanitized;
     }
 
     private function normalize_schedule_settings($settings) {
