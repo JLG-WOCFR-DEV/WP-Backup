@@ -19,10 +19,8 @@ class BJLG_Remote_Purge_Worker {
     private const MAX_BACKOFF = 15 * MINUTE_IN_SECONDS;
     private const DELAY_ALERT_THRESHOLD = 10 * MINUTE_IN_SECONDS;
     private const ALERT_ATTEMPT_THRESHOLD = 3;
-    private const MAX_DURATION_SAMPLES = 50;
-    private const MAX_QUOTA_SAMPLES = 30;
-    private const WARNING_RENOTIFY_INTERVAL = HOUR_IN_SECONDS;
-    private const CRITICAL_RENOTIFY_INTERVAL = 30 * MINUTE_IN_SECONDS;
+    private const FORECAST_HISTORY_LIMIT = 20;
+    private const DEFAULT_FORECAST_LEAD_TIME = 3 * DAY_IN_SECONDS;
 
     public function __construct() {
         add_filter('cron_schedules', [$this, 'register_cron_schedule']);
@@ -487,6 +485,14 @@ class BJLG_Remote_Purge_Worker {
 
         $existing = $this->get_metrics_snapshot();
 
+        $durations_existing = isset($existing['durations']) && is_array($existing['durations']) ? $existing['durations'] : [];
+        $destination_stats = isset($durations_existing['destinations']) && is_array($durations_existing['destinations'])
+            ? $durations_existing['destinations']
+            : [];
+
+        $existing_quota_metrics = isset($existing['quotas']) && is_array($existing['quotas']) ? $existing['quotas'] : [];
+        $quota_samples = [];
+
         $throughput = isset($existing['throughput']) && is_array($existing['throughput']) ? $existing['throughput'] : [];
         $completion_samples = isset($throughput['samples']) ? (int) $throughput['samples'] : 0;
         $avg_completion = isset($throughput['average_completion_seconds']) ? (float) $throughput['average_completion_seconds'] : 0.0;
@@ -541,28 +547,62 @@ class BJLG_Remote_Purge_Worker {
             }
 
             $outcome = isset($result['outcome']) ? (string) $result['outcome'] : '';
+            $timestamp = isset($result['timestamp']) ? (int) $result['timestamp'] : $now;
+            $attempts = isset($result['attempts']) ? (int) $result['attempts'] : 1;
+            $duration = isset($result['duration']) ? (int) $result['duration'] : 0;
+
+            if ($duration <= 0 && isset($result['registered_at'])) {
+                $duration = max(0, $timestamp - (int) $result['registered_at']);
+            }
+
+            if (!empty($result['destinations']) && is_array($result['destinations'])) {
+                foreach ($result['destinations'] as $destination_id) {
+                    if (!is_scalar($destination_id)) {
+                        continue;
+                    }
+
+                    $key = (string) $destination_id;
+                    $current_stats = isset($destination_stats[$key]) && is_array($destination_stats[$key])
+                        ? $destination_stats[$key]
+                        : [];
+
+                    $destination_stats[$key] = $this->update_destination_duration_stats(
+                        $current_stats,
+                        $duration,
+                        $attempts,
+                        $outcome,
+                        $timestamp
+                    );
+                }
+            }
+
+            if (!empty($result['quota_samples']) && is_array($result['quota_samples'])) {
+                foreach ($result['quota_samples'] as $destination_id => $sample) {
+                    if (!is_scalar($destination_id) || !is_array($sample)) {
+                        continue;
+                    }
+
+                    $key = (string) $destination_id;
+                    if (!isset($quota_samples[$key])) {
+                        $quota_samples[$key] = [];
+                    }
+
+                    if (!isset($sample['timestamp'])) {
+                        $sample['timestamp'] = $timestamp;
+                    }
+                    $sample['destination_id'] = $key;
+                    $quota_samples[$key][] = $sample;
+                }
+            }
 
             if ($outcome === 'completed') {
-                $duration = isset($result['duration']) ? (int) $result['duration'] : 0;
-                if ($duration <= 0 && isset($result['registered_at'])) {
-                    $duration = max(0, $now - (int) $result['registered_at']);
-                }
-
-                $attempts = isset($result['attempts']) ? (int) $result['attempts'] : 1;
                 $completion_samples++;
                 if ($completion_samples > 0) {
                     $avg_completion = $avg_completion + (($duration - $avg_completion) / $completion_samples);
                     $avg_attempts = $avg_attempts + (($attempts - $avg_attempts) / $completion_samples);
                 }
 
-                $duration_samples++;
-                if ($duration_samples > 0) {
-                    $avg_duration = $avg_duration + (($duration - $avg_duration) / $duration_samples);
-                }
-                $duration_peak = max($duration_peak, $duration);
-                $last_duration_seconds = $duration;
-
-                $last_completed_at = isset($result['timestamp']) ? (int) $result['timestamp'] : $now;
+                $last_completed_at = $timestamp;
                 $last_completion_seconds = $duration;
                 $total_completed++;
 
@@ -587,19 +627,19 @@ class BJLG_Remote_Purge_Worker {
                             ? (int) $forecast_destinations[$key]['total_completed']
                             : 0;
 
-                        $timestamp = isset($result['timestamp']) ? (int) $result['timestamp'] : $now;
+                        $history_timestamp = $timestamp;
                         if (!empty($history)) {
                             $last_point = end($history);
                             $last_timestamp = isset($last_point['timestamp']) ? (int) $last_point['timestamp'] : 0;
-                            if ($timestamp <= $last_timestamp) {
-                                $timestamp = $last_timestamp + 1;
+                            if ($history_timestamp <= $last_timestamp) {
+                                $history_timestamp = $last_timestamp + 1;
                             }
                         }
 
                         $total_destination_completed++;
                         $history[] = [
-                            'timestamp' => $timestamp,
-                            'total' => $total_destination_completed,
+                            'timestamp' => $history_timestamp,
+                            'total' => $total_completed,
                         ];
 
                         if (count($history) > 20) {
@@ -648,7 +688,7 @@ class BJLG_Remote_Purge_Worker {
 
             if ($outcome === 'failed') {
                 $failures_total++;
-                $last_failure_at = isset($result['timestamp']) ? (int) $result['timestamp'] : $now;
+                $last_failure_at = $timestamp;
 
                 if (!empty($result['errors']) && is_array($result['errors'])) {
                     $messages = array_filter(array_map('trim', array_map('strval', array_values($result['errors']))));
@@ -735,34 +775,18 @@ class BJLG_Remote_Purge_Worker {
             $forecast_destinations
         );
 
-        if (count($overall_duration_samples) > self::MAX_DURATION_SAMPLES) {
-            $overall_duration_samples = array_slice($overall_duration_samples, -self::MAX_DURATION_SAMPLES);
-        }
-
-        $duration_metrics = [];
-        foreach ($duration_destinations as $destination_id => $data) {
-            if (!is_array($data)) {
-                continue;
-            }
-
-            $duration_metrics[$destination_id] = $this->compute_duration_statistics($data, $now);
-        }
-
-        $overall_duration_metrics = $this->compute_duration_statistics([
-            'samples' => $overall_duration_samples,
+        $durations_metrics = [
             'updated_at' => $now,
-        ], $now);
+            'destinations' => $destination_stats,
+        ];
 
-        $capacity = $this->compute_capacity_projections(
+        $quota_metrics = $this->build_quota_projections(
             $now,
-            $quota_destinations,
-            $projection_destinations
+            $existing_quota_metrics,
+            $quota_samples
         );
 
-        $quota_destinations = $capacity['quotas'];
-        $projection_destinations = $capacity['projections'];
-        $thresholds = $capacity['thresholds'];
-        $alerts_to_dispatch = array_merge($alerts_to_dispatch, $capacity['alerts']);
+        $quota_metrics = $this->maybe_trigger_proactive_alerts($quota_metrics, $now);
 
         $metrics = [
             'version' => 2,
@@ -797,42 +821,11 @@ class BJLG_Remote_Purge_Worker {
                 'last_seconds' => $last_duration_seconds,
             ],
             'forecast' => $forecast,
-            'durations' => [
-                'destinations' => $duration_metrics,
-                'overall' => $overall_duration_metrics,
-            ],
-            'quotas' => [
-                'destinations' => $quota_destinations,
-            ],
-            'projections' => [
-                'destinations' => $projection_destinations,
-                'thresholds' => $thresholds,
-            ],
+            'durations' => $durations_metrics,
+            'quotas' => $quota_metrics,
         ];
 
-        $this->save_metrics_snapshot($metrics);
-
-        \do_action('bjlg_remote_purge_metrics_updated', $metrics, $queue, $results);
-    }
-
-    private function get_metrics_snapshot(): array {
-        if (function_exists('bjlg_get_option')) {
-            $snapshot = \bjlg_get_option(self::METRICS_OPTION, []);
-        } elseif (function_exists('get_option')) {
-            $snapshot = get_option(self::METRICS_OPTION, []);
-        } else {
-            $snapshot = [];
-        }
-
-        return is_array($snapshot) ? $snapshot : [];
-    }
-
-    private function save_metrics_snapshot(array $metrics): void {
-        if (function_exists('bjlg_update_option')) {
-            \bjlg_update_option(self::METRICS_OPTION, $metrics);
-
-            return;
-        }
+        $this->persist_metrics_audit($metrics);
 
         if (function_exists('update_option')) {
             update_option(self::METRICS_OPTION, $metrics);
@@ -1438,6 +1431,467 @@ class BJLG_Remote_Purge_Worker {
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string,mixed> $stats
+     */
+    private function update_destination_duration_stats(array $stats, int $duration, int $attempts, string $outcome, int $timestamp): array
+    {
+        $duration = max(0, $duration);
+        $attempts = max(1, $attempts);
+
+        $samples = isset($stats['samples']) ? (int) $stats['samples'] : 0;
+        $samples++;
+
+        $average_duration = isset($stats['average_duration_seconds']) ? (float) $stats['average_duration_seconds'] : 0.0;
+        $average_duration = $average_duration + (($duration - $average_duration) / max(1, $samples));
+
+        $average_attempts = isset($stats['average_attempts']) ? (float) $stats['average_attempts'] : 0.0;
+        $average_attempts = $average_attempts + (($attempts - $average_attempts) / max(1, $samples));
+
+        $stats['samples'] = $samples;
+        $stats['average_duration_seconds'] = $average_duration;
+        $stats['average_attempts'] = $average_attempts;
+        $stats['last_duration_seconds'] = $duration;
+        $stats['last_attempts'] = $attempts;
+        $stats['last_outcome'] = $outcome;
+        $stats['last_updated'] = $timestamp;
+        $stats['completed'] = ($stats['completed'] ?? 0) + ($outcome === 'completed' ? 1 : 0);
+
+        return $stats;
+    }
+
+    /**
+     * @param string $destination_id
+     * @param array<string,mixed> $result
+     */
+    private function extract_quota_sample(string $destination_id, array $result, int $timestamp): ?array
+    {
+        $used = $this->sanitize_bytes($result['used_bytes'] ?? null);
+        $quota = $this->sanitize_bytes($result['quota_bytes'] ?? null);
+        $free = $this->sanitize_bytes($result['free_bytes'] ?? null);
+
+        $nested_keys = ['quota', 'usage', 'metrics', 'storage', 'quota_snapshot'];
+        foreach ($nested_keys as $key) {
+            if (!isset($result[$key]) || !is_array($result[$key])) {
+                continue;
+            }
+
+            $payload = $result[$key];
+            if ($used === null) {
+                $used = $this->sanitize_bytes($payload['used_bytes'] ?? $payload['used'] ?? $payload['used_space'] ?? null);
+            }
+            if ($quota === null) {
+                $quota = $this->sanitize_bytes($payload['quota_bytes'] ?? $payload['quota'] ?? $payload['total_bytes'] ?? $payload['capacity'] ?? null);
+            }
+            if ($free === null) {
+                $free = $this->sanitize_bytes($payload['free_bytes'] ?? $payload['free'] ?? $payload['available_bytes'] ?? null);
+            }
+        }
+
+        if ($quota !== null && $used !== null && $free === null) {
+            $free = max(0, $quota - $used);
+        } elseif ($quota !== null && $free !== null && $used === null) {
+            $used = max(0, $quota - $free);
+        }
+
+        if ($used === null && $quota === null && $free === null) {
+            return null;
+        }
+
+        $ratio = null;
+        if ($quota !== null && $quota > 0 && $used !== null) {
+            $ratio = max(0.0, min(1.0, $used / $quota));
+        } elseif ($quota !== null && $quota > 0 && $free !== null) {
+            $ratio = max(0.0, min(1.0, 1 - ($free / $quota)));
+        }
+
+        return [
+            'destination_id' => $destination_id,
+            'timestamp' => $timestamp,
+            'used_bytes' => $used,
+            'quota_bytes' => $quota,
+            'free_bytes' => $free,
+            'ratio' => $ratio,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $existing
+     * @param array<string,array<int,array<string,mixed>>> $new_samples
+     */
+    private function build_quota_projections(int $now, array $existing, array $new_samples): array
+    {
+        $threshold_ratio = 0.85;
+        if (class_exists(BJLG_Settings::class) && method_exists(BJLG_Settings::class, 'get_remote_storage_threshold')) {
+            $threshold_ratio = (float) BJLG_Settings::get_remote_storage_threshold();
+        }
+        $threshold_ratio = max(0.1, min(1.0, $threshold_ratio));
+        $threshold_percent = $threshold_ratio * 100;
+
+        $lead_time = isset($existing['lead_time_seconds']) ? (int) $existing['lead_time_seconds'] : self::DEFAULT_FORECAST_LEAD_TIME;
+
+        $destinations = isset($existing['destinations']) && is_array($existing['destinations'])
+            ? $existing['destinations']
+            : [];
+
+        $destination_ids = array_unique(array_merge(array_keys($destinations), array_keys($new_samples)));
+
+        foreach ($destination_ids as $destination_id) {
+            $entry = isset($destinations[$destination_id]) && is_array($destinations[$destination_id])
+                ? $destinations[$destination_id]
+                : [];
+
+            $history = isset($entry['history']) && is_array($entry['history']) ? $entry['history'] : [];
+
+            if (!empty($new_samples[$destination_id])) {
+                foreach ($new_samples[$destination_id] as $sample) {
+                    if (!is_array($sample)) {
+                        continue;
+                    }
+
+                    $sample_timestamp = isset($sample['timestamp']) ? (int) $sample['timestamp'] : $now;
+                    $used = $this->sanitize_bytes($sample['used_bytes'] ?? null);
+                    $quota = $this->sanitize_bytes($sample['quota_bytes'] ?? null);
+                    $free = $this->sanitize_bytes($sample['free_bytes'] ?? null);
+                    $ratio = null;
+
+                    if (isset($sample['ratio']) && is_numeric($sample['ratio'])) {
+                        $ratio = max(0.0, min(1.0, (float) $sample['ratio']));
+                    }
+
+                    if ($ratio === null && $quota !== null && $quota > 0 && $used !== null) {
+                        $ratio = max(0.0, min(1.0, $used / $quota));
+                    } elseif ($ratio === null && $quota !== null && $free !== null) {
+                        $ratio = max(0.0, min(1.0, 1 - ($free / $quota)));
+                        if ($used === null) {
+                            $used = max(0, $quota - $free);
+                        }
+                    }
+
+                    if ($quota !== null && $used !== null && $free === null) {
+                        $free = max(0, $quota - $used);
+                    }
+
+                    $history[] = [
+                        'timestamp' => $sample_timestamp,
+                        'used_bytes' => $used,
+                        'quota_bytes' => $quota,
+                        'free_bytes' => $free,
+                        'ratio' => $ratio,
+                        'label' => $this->format_history_label($sample_timestamp),
+                    ];
+                }
+            }
+
+            $history = array_values(array_filter($history, static function ($point) {
+                return is_array($point) && isset($point['timestamp']);
+            }));
+
+            usort($history, static function ($a, $b) {
+                return ($a['timestamp'] ?? 0) <=> ($b['timestamp'] ?? 0);
+            });
+
+            if (count($history) > self::FORECAST_HISTORY_LIMIT) {
+                $history = array_slice($history, -self::FORECAST_HISTORY_LIMIT);
+            }
+
+            $current = end($history);
+            if ($current === false) {
+                $current = null;
+            }
+
+            $current_ratio = isset($current['ratio']) && $current['ratio'] !== null ? (float) $current['ratio'] : null;
+            $trend_direction = 'flat';
+            $trend_slope = null;
+            $projected_at = null;
+            $projected_label = '';
+            $lead_seconds = null;
+            $risk_level = 'normal';
+            $threshold_bytes = null;
+
+            $ratio_points = [];
+            foreach ($history as $point) {
+                if (!is_array($point) || !isset($point['ratio']) || $point['ratio'] === null) {
+                    continue;
+                }
+
+                $ratio_points[] = [
+                    'timestamp' => isset($point['timestamp']) ? (float) $point['timestamp'] : 0.0,
+                    'value' => (float) $point['ratio'],
+                ];
+            }
+
+            if (count($ratio_points) >= 2) {
+                [$trend_slope, $trend_intercept] = $this->compute_regression_generic($ratio_points);
+                if ($trend_slope !== null) {
+                    if ($trend_slope > 0) {
+                        $trend_direction = 'up';
+                    } elseif ($trend_slope < 0) {
+                        $trend_direction = 'down';
+                    }
+                }
+            }
+
+            if ($current !== null && isset($current['quota_bytes'])) {
+                $quota_bytes = $this->sanitize_bytes($current['quota_bytes']);
+                if ($quota_bytes !== null) {
+                    $threshold_bytes = (int) floor($quota_bytes * $threshold_ratio);
+                }
+            }
+
+            if ($current_ratio !== null) {
+                if ($current_ratio >= $threshold_ratio) {
+                    $projected_at = $now;
+                    $lead_seconds = 0;
+                    $projected_label = __('Seuil dépassé', 'backup-jlg');
+                    $risk_level = 'critical';
+                } elseif ($trend_slope !== null && $trend_slope > 0) {
+                    $seconds_to_threshold = ($threshold_ratio - $current_ratio) / $trend_slope;
+                    if (is_finite($seconds_to_threshold) && $seconds_to_threshold >= 0) {
+                        $lead_seconds = (int) round($seconds_to_threshold);
+                        $projected_at = $now + $lead_seconds;
+                        $projected_label = sprintf(
+                            __('Seuil atteint estimé dans %s', 'backup-jlg'),
+                            $this->format_delay_label($lead_seconds)
+                        );
+
+                        if ($lead_seconds <= DAY_IN_SECONDS) {
+                            $risk_level = 'critical';
+                        } elseif ($lead_seconds <= 3 * DAY_IN_SECONDS) {
+                            $risk_level = 'warning';
+                        } else {
+                            $risk_level = 'watch';
+                        }
+                    }
+                } elseif ($trend_slope !== null && $trend_slope < 0) {
+                    $projected_label = __('Consommation en baisse', 'backup-jlg');
+                    $risk_level = 'success';
+                } else {
+                    $projected_label = __('Consommation stable', 'backup-jlg');
+                }
+            }
+
+            if ($projected_label === '') {
+                $projected_label = __('Projection indisponible (historique insuffisant)', 'backup-jlg');
+            }
+
+            $destinations[$destination_id] = [
+                'history' => $history,
+                'current_ratio' => $current_ratio,
+                'trend_slope' => $trend_slope,
+                'trend_direction' => $trend_direction,
+                'projected_saturation' => $projected_at,
+                'projected_label' => $projected_label,
+                'lead_time_seconds' => $lead_seconds,
+                'risk_level' => $risk_level,
+                'threshold_percent' => $threshold_percent,
+                'threshold_ratio' => $threshold_ratio,
+                'threshold_bytes' => $threshold_bytes,
+                'last_sample' => $current,
+                'samples' => count($history),
+                'last_alerted_at' => isset($entry['last_alerted_at']) ? (int) $entry['last_alerted_at'] : 0,
+            ];
+        }
+
+        return [
+            'generated_at' => $now,
+            'destinations' => $destinations,
+            'threshold_percent' => $threshold_percent,
+            'threshold_ratio' => $threshold_ratio,
+            'lead_time_seconds' => $lead_time,
+        ];
+    }
+
+    private function format_history_label(int $timestamp): string
+    {
+        if ($timestamp <= 0) {
+            return '';
+        }
+
+        if (function_exists('wp_date')) {
+            $time_format = function_exists('get_option') ? get_option('time_format', 'H:i') : 'H:i';
+            return wp_date($time_format, $timestamp);
+        }
+
+        if (function_exists('date_i18n')) {
+            return date_i18n('H:i', $timestamp);
+        }
+
+        return date('H:i', $timestamp);
+    }
+
+    private function sanitize_bytes($value): ?int
+    {
+        if (is_numeric($value)) {
+            $numeric = (float) $value;
+            if (is_finite($numeric) && $numeric >= 0) {
+                return (int) round($numeric);
+            }
+        }
+
+        return null;
+    }
+
+    private function persist_metrics_audit(array $metrics): void
+    {
+        if (!class_exists(BJLG_History::class)) {
+            return;
+        }
+
+        $quotas = isset($metrics['quotas']) && is_array($metrics['quotas']) ? $metrics['quotas'] : [];
+        $destinations = isset($quotas['destinations']) && is_array($quotas['destinations']) ? $quotas['destinations'] : [];
+
+        if (empty($destinations)) {
+            return;
+        }
+
+        $at_risk = [];
+        foreach ($destinations as $destination_id => $data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $risk_level = isset($data['risk_level']) ? (string) $data['risk_level'] : 'normal';
+            if (!in_array($risk_level, ['warning', 'critical'], true)) {
+                continue;
+            }
+
+            $at_risk[] = [
+                'destination' => $destination_id,
+                'risk' => $risk_level,
+                'current_ratio' => isset($data['current_ratio']) ? (float) $data['current_ratio'] : null,
+                'lead_seconds' => isset($data['lead_time_seconds']) ? (int) $data['lead_time_seconds'] : null,
+                'projected_at' => isset($data['projected_saturation']) ? (int) $data['projected_saturation'] : null,
+            ];
+        }
+
+        if (empty($at_risk)) {
+            return;
+        }
+
+        BJLG_History::log(
+            'remote_storage_forecast',
+            'info',
+            __('Projection de saturation distante mise à jour.', 'backup-jlg'),
+            null,
+            null,
+            [
+                'overall_pending' => $metrics['pending']['total'] ?? 0,
+                'overall_forecast_seconds' => $metrics['forecast']['overall']['forecast_seconds'] ?? null,
+                'destinations' => $at_risk,
+            ]
+        );
+    }
+
+    private function maybe_trigger_proactive_alerts(array $quotas, int $now): array
+    {
+        if (empty($quotas['destinations']) || !is_array($quotas['destinations'])) {
+            return $quotas;
+        }
+
+        $lead_time = (int) apply_filters('bjlg_remote_purge_forecast_lead_time', self::DEFAULT_FORECAST_LEAD_TIME, $quotas);
+        if ($lead_time < 0) {
+            $lead_time = self::DEFAULT_FORECAST_LEAD_TIME;
+        }
+
+        foreach ($quotas['destinations'] as $destination_id => &$data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $projected_at = isset($data['projected_saturation']) ? (int) $data['projected_saturation'] : null;
+            $lead_seconds = isset($data['lead_time_seconds']) ? (int) $data['lead_time_seconds'] : null;
+            $current_ratio = isset($data['current_ratio']) ? (float) $data['current_ratio'] : null;
+            $threshold_ratio = isset($data['threshold_ratio']) ? (float) $data['threshold_ratio'] : null;
+
+            if ($projected_at === null && $current_ratio !== null && $threshold_ratio !== null && $current_ratio >= $threshold_ratio) {
+                $projected_at = $now;
+                $lead_seconds = 0;
+                $data['projected_saturation'] = $projected_at;
+                $data['lead_time_seconds'] = 0;
+            }
+
+            if ($projected_at === null) {
+                continue;
+            }
+
+            if ($lead_seconds === null) {
+                $lead_seconds = max(0, $projected_at - $now);
+                $data['lead_time_seconds'] = $lead_seconds;
+            }
+
+            if ($lead_seconds > $lead_time) {
+                continue;
+            }
+
+            $last_alerted_at = isset($data['last_alerted_at']) ? (int) $data['last_alerted_at'] : 0;
+            if ($last_alerted_at > 0 && ($now - $last_alerted_at) < HOUR_IN_SECONDS) {
+                continue;
+            }
+
+            $history = isset($data['history']) && is_array($data['history']) ? array_slice($data['history'], -5) : [];
+
+            $context = [
+                'destination_id' => $destination_id,
+                'projected_at' => $projected_at,
+                'lead_seconds' => $lead_seconds,
+                'risk_level' => isset($data['risk_level']) ? (string) $data['risk_level'] : 'warning',
+                'current_ratio' => $current_ratio,
+                'threshold_percent' => isset($data['threshold_percent']) ? (float) $data['threshold_percent'] : null,
+                'history' => $history,
+                'used_bytes' => $data['last_sample']['used_bytes'] ?? null,
+                'quota_bytes' => $data['last_sample']['quota_bytes'] ?? null,
+                'free_bytes' => $data['last_sample']['free_bytes'] ?? null,
+                'projected_label' => $data['projected_label'] ?? '',
+            ];
+
+            do_action('bjlg_remote_storage_forecast_warning', $destination_id, $context);
+            $data['last_alerted_at'] = $now;
+        }
+        unset($data);
+
+        $quotas['lead_time_seconds'] = $lead_time;
+
+        return $quotas;
+    }
+
+    /**
+     * @param array<int,array<string,float>> $points
+     *
+     * @return array{0: float|null, 1: float|null}
+     */
+    private function compute_regression_generic(array $points): array
+    {
+        $count = count($points);
+        if ($count < 2) {
+            return [null, null];
+        }
+
+        $sum_x = 0.0;
+        $sum_y = 0.0;
+        $sum_xy = 0.0;
+        $sum_x2 = 0.0;
+
+        foreach ($points as $point) {
+            $x = isset($point['timestamp']) ? (float) $point['timestamp'] : 0.0;
+            $y = isset($point['value']) ? (float) $point['value'] : 0.0;
+            $sum_x += $x;
+            $sum_y += $y;
+            $sum_xy += ($x * $y);
+            $sum_x2 += ($x * $x);
+        }
+
+        $denominator = ($count * $sum_x2) - ($sum_x ** 2);
+        if (abs($denominator) < 0.000001) {
+            return [null, null];
+        }
+
+        $slope = (($count * $sum_xy) - ($sum_x * $sum_y)) / $denominator;
+        $intercept = ($sum_y - ($slope * $sum_x)) / $count;
+
+        return [$slope, $intercept];
     }
 
     /**

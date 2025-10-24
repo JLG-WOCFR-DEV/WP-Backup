@@ -937,86 +937,8 @@ class BJLG_Admin_Advanced {
             $formatted['forecast_projected_formatted'] = $projected_formatted;
         }
 
-        $failure_rate = isset($throughput['failure_rate']) ? (float) $throughput['failure_rate'] : null;
-        if ($failure_rate === null) {
-            $processed_total = (int) ($throughput['total_completed'] ?? 0) + (int) ($failures['total'] ?? 0);
-            if ($processed_total > 0) {
-                $failure_rate = ($failures['total'] ?? 0) / $processed_total;
-            }
-        }
-        if ($failure_rate !== null) {
-            $formatted['failure_rate_percent'] = number_format_i18n(max(0.0, $failure_rate) * 100, 1) . '%';
-        }
-
-        $success_rate = isset($throughput['success_rate']) ? (float) $throughput['success_rate'] : null;
-        if ($success_rate === null && isset($failure_rate)) {
-            $success_rate = max(0.0, 1 - $failure_rate);
-        }
-        if ($success_rate !== null) {
-            $formatted['success_rate_percent'] = number_format_i18n(max(0.0, $success_rate) * 100, 1) . '%';
-        }
-
-        if (!empty($durations['peak_seconds'])) {
-            $formatted['duration_peak'] = $this->format_duration_label((int) round($durations['peak_seconds']));
-        }
-
-        if (!empty($durations['last_seconds'])) {
-            $formatted['duration_last'] = $this->format_duration_label((int) round($durations['last_seconds']));
-        }
-
-        if (!empty($saturation['threshold_seconds'])) {
-            $formatted['threshold_label'] = $this->format_duration_label((int) $saturation['threshold_seconds']);
-        }
-
-        $countdown_seconds = isset($saturation['time_to_threshold']) && $saturation['time_to_threshold'] !== null
-            ? (int) $saturation['time_to_threshold']
-            : null;
-
-        if ($countdown_seconds !== null) {
-            $countdown_label = $this->format_duration_label(max(0, $countdown_seconds));
-            $formatted['saturation_countdown'] = $countdown_label;
-
-            if ($countdown_seconds <= 0) {
-                $formatted['saturation_label'] = __('Seuil SLA dépassé', 'backup-jlg');
-            } else {
-                $formatted['saturation_label'] = sprintf(
-                    __('Dépassement du SLA estimé dans %s', 'backup-jlg'),
-                    $countdown_label
-                );
-            }
-        }
-
-        if (!empty($saturation['projected_breach_at'])) {
-            [$breach_formatted, $breach_relative] = $this->format_timestamp_pair(
-                $saturation['projected_breach_at'],
-                $now
-            );
-            $formatted['saturation_projected_relative'] = $breach_relative;
-            $formatted['saturation_projected_formatted'] = $breach_formatted;
-        }
-
-        $saturation_destinations_map = $this->format_saturation_destinations_map(
-            isset($saturation['destinations']) && is_array($saturation['destinations'])
-                ? $saturation['destinations']
-                : [],
-            $now
-        );
-
-        if (!empty($saturation_destinations_map)) {
-            foreach ($saturation_destinations_map as $destination) {
-                if (!empty($destination['breach_imminent'])) {
-                    $formatted['saturation_warning'] = true;
-                    break;
-                }
-            }
-        }
-
-        $formatted['saturation_destinations_map'] = $saturation_destinations_map;
-        $formatted['saturation_destinations'] = array_values($saturation_destinations_map);
-
-        $history = isset($backlog['history']) && is_array($backlog['history']) ? $backlog['history'] : [];
-        $formatted['backlog_sparkline'] = $this->build_backlog_sparkline($history);
-        $formatted['backlog_trend_direction'] = $this->resolve_trend_direction(isset($backlog['slope']) ? (float) $backlog['slope'] : null);
+        $formatted['destination_durations'] = $this->format_destination_durations($durations);
+        $formatted['quota_forecast'] = $this->format_quota_forecast($quotas, $now);
 
         return $formatted;
     }
@@ -1271,6 +1193,197 @@ class BJLG_Admin_Advanced {
         }
 
         return implode(', ', $formatted);
+    }
+
+    private function format_destination_durations(array $durations): array {
+        $destinations = isset($durations['destinations']) && is_array($durations['destinations'])
+            ? $durations['destinations']
+            : [];
+
+        if (empty($destinations)) {
+            return [];
+        }
+
+        $formatted = [];
+
+        foreach ($destinations as $destination_id => $data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $label = $this->get_destination_label((string) $destination_id);
+
+            $average_seconds = isset($data['average_duration_seconds']) ? (float) $data['average_duration_seconds'] : 0.0;
+            $last_seconds = isset($data['last_duration_seconds']) ? (int) $data['last_duration_seconds'] : null;
+            $samples = isset($data['samples']) ? (int) $data['samples'] : 0;
+            $last_attempts = isset($data['last_attempts']) ? (int) $data['last_attempts'] : 0;
+
+            $average_label = $average_seconds > 0 ? $this->format_duration_label((int) round($average_seconds)) : '';
+            $last_label = ($last_seconds !== null && $last_seconds > 0) ? $this->format_duration_label($last_seconds) : '';
+
+            $summary_parts = [];
+            if ($average_label !== '') {
+                $summary_parts[] = sprintf(__('moyenne %s', 'backup-jlg'), $average_label);
+            }
+            if ($last_label !== '' && $last_label !== $average_label) {
+                $summary_parts[] = sprintf(__('dernière %s', 'backup-jlg'), $last_label);
+            }
+            if ($samples > 0) {
+                $summary_parts[] = sprintf(
+                    _n('%s échantillon', '%s échantillons', $samples, 'backup-jlg'),
+                    number_format_i18n($samples)
+                );
+            }
+            if ($last_attempts > 0) {
+                $summary_parts[] = sprintf(
+                    _n('%s tentative', '%s tentatives', $last_attempts, 'backup-jlg'),
+                    number_format_i18n($last_attempts)
+                );
+            }
+
+            $formatted[] = [
+                'id' => $this->sanitize_key_value((string) $destination_id),
+                'label' => $this->sanitize_text($label),
+                'summary' => implode(' • ', array_filter($summary_parts)),
+                'samples' => $samples,
+            ];
+        }
+
+        usort($formatted, static function ($a, $b) {
+            return ($b['samples'] ?? 0) <=> ($a['samples'] ?? 0);
+        });
+
+        return $formatted;
+    }
+
+    private function format_quota_forecast(array $quotas, int $now): array {
+        $threshold_percent = isset($quotas['threshold_percent']) ? (float) $quotas['threshold_percent'] : 0.0;
+        $threshold_label = $threshold_percent > 0
+            ? sprintf(
+                __('Seuil configuré : %s%%', 'backup-jlg'),
+                number_format_i18n($threshold_percent, $threshold_percent >= 10 ? 0 : 1)
+            )
+            : '';
+
+        $output = [
+            'threshold_percent' => $threshold_percent,
+            'threshold_label' => $threshold_label,
+            'destinations' => [],
+        ];
+
+        $destinations = isset($quotas['destinations']) && is_array($quotas['destinations'])
+            ? $quotas['destinations']
+            : [];
+
+        if (empty($destinations)) {
+            return $output;
+        }
+
+        $formatted = [];
+
+        foreach ($destinations as $destination_id => $data) {
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $label = $this->sanitize_text($this->get_destination_label((string) $destination_id));
+            $current_ratio = isset($data['current_ratio']) ? (float) $data['current_ratio'] : null;
+            $current_ratio_label = '';
+            if ($current_ratio !== null) {
+                $percent = max(0.0, min(100.0, $current_ratio * 100));
+                $current_ratio_label = number_format_i18n($percent, $percent >= 10 ? 1 : 2) . '%';
+            }
+
+            $projected_relative = '';
+            if (!empty($data['projected_saturation'])) {
+                [$projected_formatted, $projected_relative] = $this->format_timestamp_pair($data['projected_saturation'], $now);
+                if ($projected_formatted !== '') {
+                    $projected_relative = $projected_relative !== '' ? $projected_relative : $projected_formatted;
+                }
+            }
+
+            $history = isset($data['history']) && is_array($data['history']) ? $data['history'] : [];
+            $formatted_history = [];
+            foreach ($history as $point) {
+                if (!is_array($point)) {
+                    continue;
+                }
+
+                $timestamp = isset($point['timestamp']) ? (int) $point['timestamp'] : 0;
+                $ratio = isset($point['ratio']) ? (float) $point['ratio'] : null;
+                $label_point = isset($point['label']) ? (string) $point['label'] : '';
+                if ($label_point === '' && $timestamp > 0) {
+                    [$formatted_time] = $this->format_timestamp_pair($timestamp, $now);
+                    $label_point = $formatted_time;
+                }
+
+                $formatted_history[] = [
+                    'timestamp' => $timestamp,
+                    'label' => $label_point,
+                    'ratio' => $ratio !== null ? max(0.0, min(1.0, $ratio)) : null,
+                ];
+            }
+
+            $summary_parts = [];
+            if ($current_ratio_label !== '') {
+                $summary_parts[] = sprintf(__('utilisation %s', 'backup-jlg'), $current_ratio_label);
+            }
+            if (!empty($data['projected_label'])) {
+                $summary_parts[] = $this->sanitize_text((string) $data['projected_label']);
+            }
+            if ($projected_relative !== '') {
+                $summary_parts[] = $projected_relative;
+            }
+
+            $formatted[] = [
+                'id' => $this->sanitize_key_value((string) $destination_id),
+                'label' => $label,
+                'summary' => implode(' • ', array_filter($summary_parts)),
+                'history' => $formatted_history,
+            ];
+        }
+
+        usort($formatted, static function ($a, $b) {
+            $a_summary = $a['summary'] ?? '';
+            $b_summary = $b['summary'] ?? '';
+            return strcmp($b_summary, $a_summary);
+        });
+
+        $output['destinations'] = $formatted;
+
+        return $output;
+    }
+
+    private function get_destination_label(string $destination_id): string
+    {
+        if (class_exists(__NAMESPACE__ . '\\BJLG_Settings')) {
+            $label = BJLG_Settings::get_destination_label($destination_id);
+            if (is_string($label) && $label !== '') {
+                return $label;
+            }
+        }
+
+        $normalized = str_replace(['_', '-'], ' ', $destination_id);
+
+        return ucwords($normalized);
+    }
+
+    private function sanitize_text(string $value): string
+    {
+        if (function_exists('sanitize_text_field')) {
+            return sanitize_text_field($value);
+        }
+
+        return $value;
+    }
+
+    private function sanitize_key_value(string $value): string
+    {
+        if (function_exists('sanitize_key')) {
+            return sanitize_key($value);
+        }
+
+        return strtolower(preg_replace('/[^a-z0-9_\-]/i', '', $value));
     }
 
     /**

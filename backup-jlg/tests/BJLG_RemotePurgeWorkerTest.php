@@ -43,6 +43,7 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
         unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_destination_factory']);
         unset($GLOBALS['bjlg_test_hooks']['actions']['bjlg_remote_purge_completed']);
         unset($GLOBALS['bjlg_test_hooks']['actions']['bjlg_remote_purge_permanent_failure']);
+        unset($GLOBALS['bjlg_test_hooks']['actions']['bjlg_remote_storage_forecast_warning']);
         foreach ($this->createdPaths as $path) {
             if (file_exists($path)) {
                 @unlink($path);
@@ -131,15 +132,16 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
     public function test_update_metrics_computes_forecast_projections(): void
     {
         $worker = new BJLG_Remote_Purge_Worker();
+        $now = time();
         $queue = [
             [
                 'status' => 'pending',
-                'registered_at' => time() - 200,
+                'registered_at' => $now - 200,
                 'destinations' => ['alpha'],
             ],
             [
                 'status' => 'pending',
-                'registered_at' => time() - 120,
+                'registered_at' => $now - 120,
                 'destinations' => ['alpha'],
             ],
         ];
@@ -148,18 +150,33 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
             [
                 'processed' => true,
                 'outcome' => 'completed',
-                'timestamp' => time() - 60,
+                'timestamp' => $now - 60,
                 'destinations' => ['alpha'],
                 'duration' => 100,
-                'registered_at' => time() - 160,
+                'attempts' => 2,
+                'registered_at' => $now - 160,
+                'quota_samples' => [
+                    'alpha' => [
+                        'timestamp' => $now - 160,
+                        'used_bytes' => 400,
+                        'quota_bytes' => 1000,
+                    ],
+                ],
             ],
             [
                 'processed' => true,
                 'outcome' => 'completed',
-                'timestamp' => time() - 10,
+                'timestamp' => $now - 10,
                 'destinations' => ['alpha'],
                 'duration' => 50,
-                'registered_at' => time() - 90,
+                'registered_at' => $now - 90,
+                'quota_samples' => [
+                    'alpha' => [
+                        'timestamp' => $now - 10,
+                        'used_bytes' => 600,
+                        'quota_bytes' => 1000,
+                    ],
+                ],
             ],
         ];
 
@@ -167,7 +184,7 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
 
         $method = (new ReflectionClass(BJLG_Remote_Purge_Worker::class))->getMethod('update_metrics');
         $method->setAccessible(true);
-        $method->invoke($worker, $queue, $results, time());
+        $method->invoke($worker, $queue, $results, $now);
 
         $metrics = bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
         $this->assertArrayHasKey('forecast', $metrics);
@@ -186,6 +203,84 @@ final class BJLG_RemotePurgeWorkerTest extends TestCase
         $this->assertNotNull($alpha['forecast_seconds']);
         $this->assertNotEmpty($alpha['forecast_label']);
         $this->assertNotEmpty($alpha['history']);
+
+        $this->assertArrayHasKey('durations', $metrics);
+        $this->assertArrayHasKey('destinations', $metrics['durations']);
+        $alphaDurations = $metrics['durations']['destinations']['alpha'];
+        $this->assertSame(2, $alphaDurations['samples']);
+        $this->assertSame(2, $alphaDurations['completed']);
+        $this->assertEqualsWithDelta(75.0, $alphaDurations['average_duration_seconds'], 0.1);
+        $this->assertEqualsWithDelta(1.5, $alphaDurations['average_attempts'], 0.1);
+        $this->assertSame(50.0, $alphaDurations['last_duration_seconds']);
+        $this->assertSame('completed', $alphaDurations['last_outcome']);
+
+        $this->assertArrayHasKey('quotas', $metrics);
+        $this->assertArrayHasKey('destinations', $metrics['quotas']);
+        $alphaQuotas = $metrics['quotas']['destinations']['alpha'];
+        $this->assertNotEmpty($alphaQuotas['history']);
+        $this->assertNotNull($alphaQuotas['current_ratio']);
+        $this->assertArrayHasKey('projected_saturation', $alphaQuotas);
+        $this->assertArrayHasKey('risk_level', $alphaQuotas);
+    }
+
+    public function test_update_metrics_triggers_forecast_warning_action(): void
+    {
+        $worker = new BJLG_Remote_Purge_Worker();
+        $now = time();
+
+        bjlg_update_option('bjlg_remote_purge_sla_metrics', [
+            'quotas' => [
+                'destinations' => [
+                    'alpha' => [
+                        'history' => [
+                            [
+                                'timestamp' => $now - 3600,
+                                'used_bytes' => 850,
+                                'quota_bytes' => 1000,
+                                'ratio' => 0.85,
+                            ],
+                        ],
+                        'last_alerted_at' => $now - DAY_IN_SECONDS,
+                    ],
+                ],
+            ],
+        ]);
+
+        $alerts = [];
+        add_action('bjlg_remote_storage_forecast_warning', static function ($destination_id, $context) use (&$alerts) {
+            $alerts[] = [$destination_id, $context];
+        }, 10, 2);
+
+        $results = [
+            [
+                'processed' => true,
+                'outcome' => 'completed',
+                'timestamp' => $now - 5,
+                'destinations' => ['alpha'],
+                'duration' => 45,
+                'registered_at' => $now - 120,
+                'quota_samples' => [
+                    'alpha' => [
+                        'timestamp' => $now - 5,
+                        'used_bytes' => 920,
+                        'quota_bytes' => 1000,
+                    ],
+                ],
+            ],
+        ];
+
+        $method = (new ReflectionClass(BJLG_Remote_Purge_Worker::class))->getMethod('update_metrics');
+        $method->setAccessible(true);
+        $method->invoke($worker, [], $results, $now);
+
+        $this->assertNotEmpty($alerts);
+        $this->assertSame('alpha', $alerts[0][0]);
+        $this->assertArrayHasKey('projected_at', $alerts[0][1]);
+        $this->assertArrayHasKey('lead_seconds', $alerts[0][1]);
+        $this->assertSame(0, $alerts[0][1]['lead_seconds']);
+
+        $metrics = bjlg_get_option('bjlg_remote_purge_sla_metrics', []);
+        $this->assertSame($now, $metrics['quotas']['destinations']['alpha']['last_alerted_at']);
     }
 
     /**

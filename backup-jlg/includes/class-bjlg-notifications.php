@@ -35,7 +35,7 @@ class BJLG_Notifications {
             'storage_warning' => true,
             'remote_purge_failed' => true,
             'remote_purge_delayed' => true,
-            'remote_storage_capacity_forecast' => true,
+            'remote_storage_forecast_warning' => true,
             'restore_self_test_passed' => false,
             'restore_self_test_failed' => true,
             'sandbox_restore_validation_passed' => false,
@@ -146,7 +146,7 @@ class BJLG_Notifications {
         'storage_warning' => 'warning',
         'remote_purge_failed' => 'critical',
         'remote_purge_delayed' => 'critical',
-        'remote_storage_capacity_forecast' => 'warning',
+        'remote_storage_forecast_warning' => 'warning',
         'restore_self_test_passed' => 'info',
         'restore_self_test_failed' => 'critical',
         'sandbox_restore_validation_passed' => 'info',
@@ -231,7 +231,7 @@ class BJLG_Notifications {
         add_action('bjlg_storage_warning', [$this, 'handle_storage_warning'], 15, 1);
         add_action('bjlg_remote_purge_permanent_failure', [$this, 'handle_remote_purge_failed'], 15, 3);
         add_action('bjlg_remote_purge_delayed', [$this, 'handle_remote_purge_delayed'], 15, 2);
-        add_action('bjlg_remote_storage_capacity_forecast', [$this, 'handle_remote_storage_capacity_forecast'], 15, 1);
+        add_action('bjlg_remote_storage_forecast_warning', [$this, 'handle_remote_storage_forecast_warning'], 15, 2);
         add_action('bjlg_restore_self_test_passed', [$this, 'handle_restore_self_test_passed'], 15, 1);
         add_action('bjlg_restore_self_test_failed', [$this, 'handle_restore_self_test_failed'], 15, 1);
         add_action('bjlg_sandbox_restore_validation_passed', [$this, 'handle_sandbox_validation_passed'], 15, 1);
@@ -575,92 +575,63 @@ class BJLG_Notifications {
     }
 
     /**
-     * Déclenche une alerte proactive lorsque les projections indiquent un dépassement imminent du SLA.
+     * Prépare le contexte d'une alerte de projection de saturation distante.
      *
-     * @param array<string,mixed> $metrics
-     * @param array<int,mixed>    $queue
-     * @param array<int,mixed>    $results
+     * @param string              $destination_id
+     * @param array<string,mixed> $payload
      */
-    public function handle_remote_purge_metrics_updated($metrics, $queue, $results) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter
-        $metrics = is_array($metrics) ? $metrics : [];
-
-        $pending = isset($metrics['pending']) && is_array($metrics['pending']) ? $metrics['pending'] : [];
-        $saturation = isset($metrics['saturation']) && is_array($metrics['saturation']) ? $metrics['saturation'] : [];
-
-        if (empty($saturation)) {
-            if (function_exists('delete_transient')) {
-                delete_transient(self::REMOTE_PURGE_PROACTIVE_ALERT_TRANSIENT);
-            }
-
+    public function handle_remote_storage_forecast_warning($destination_id, $payload) {
+        if (!is_scalar($destination_id)) {
             return;
         }
 
-        $breach_imminent = !empty($saturation['breach_imminent']);
-        if (!$breach_imminent && !empty($saturation['destinations']) && is_array($saturation['destinations'])) {
-            foreach ($saturation['destinations'] as $destination) {
-                if (is_array($destination) && !empty($destination['breach_imminent'])) {
-                    $breach_imminent = true;
-                    break;
-                }
+        $destination_id = (string) $destination_id;
+        $payload = is_array($payload) ? $payload : [];
+
+        $projected_at = isset($payload['projected_at']) ? (int) $payload['projected_at'] : null;
+        if ($projected_at !== null && $projected_at <= 0) {
+            $projected_at = null;
+        }
+
+        $lead_seconds = isset($payload['lead_seconds']) ? (int) $payload['lead_seconds'] : null;
+        if ($lead_seconds !== null && $lead_seconds < 0) {
+            $lead_seconds = 0;
+        }
+
+        $threshold_percent = null;
+        if (isset($payload['threshold_percent']) && is_numeric($payload['threshold_percent'])) {
+            $threshold_percent = (float) $payload['threshold_percent'];
+            if (!is_finite($threshold_percent)) {
+                $threshold_percent = null;
             }
         }
 
-        if (!$breach_imminent) {
-            if (function_exists('delete_transient')) {
-                delete_transient(self::REMOTE_PURGE_PROACTIVE_ALERT_TRANSIENT);
-            }
-
-            return;
+        $current_ratio = null;
+        if (isset($payload['current_ratio']) && is_numeric($payload['current_ratio'])) {
+            $current_ratio = max(0.0, min(1.0, (float) $payload['current_ratio']));
         }
 
-        if (function_exists('get_transient') && get_transient(self::REMOTE_PURGE_PROACTIVE_ALERT_TRANSIENT)) {
-            return;
+        $projected_label = isset($payload['projected_label']) ? (string) $payload['projected_label'] : '';
+        if ($projected_label !== '' && function_exists('sanitize_text_field')) {
+            $projected_label = sanitize_text_field($projected_label);
         }
-
-        $threshold_seconds = isset($saturation['threshold_seconds'])
-            ? (int) $saturation['threshold_seconds']
-            : (defined('MINUTE_IN_SECONDS') ? 10 * MINUTE_IN_SECONDS : 600);
-
-        $time_to_threshold = isset($saturation['time_to_threshold']) && $saturation['time_to_threshold'] !== null
-            ? (int) $saturation['time_to_threshold']
-            : null;
-
-        $projection_timestamp = isset($saturation['projected_breach_at']) ? (int) $saturation['projected_breach_at'] : 0;
 
         $context = [
-            'pending_total' => isset($pending['total']) ? (int) $pending['total'] : 0,
-            'pending_oldest_seconds' => isset($pending['oldest_seconds']) ? (int) $pending['oldest_seconds'] : 0,
-            'threshold_seconds' => $threshold_seconds,
-            'time_to_threshold' => $time_to_threshold,
-            'projection_timestamp' => $projection_timestamp,
-            'threshold_label' => $this->format_duration_seconds($threshold_seconds),
-            'time_to_threshold_label' => $time_to_threshold !== null ? $this->format_duration_seconds($time_to_threshold) : '',
-            'projection_formatted' => $projection_timestamp > 0 ? $this->format_timestamp($projection_timestamp) : '',
-            'projection_relative' => $projection_timestamp > 0 ? $this->format_relative_time($projection_timestamp) : '',
-            'destinations' => $this->normalize_saturation_destinations($saturation['destinations'] ?? []),
-            'proactive' => true,
+            'destination_id' => $destination_id,
+            'destination_label' => $this->resolve_destination_label($destination_id),
+            'risk_level' => $this->sanitize_forecast_risk_level($payload['risk_level'] ?? ''),
+            'projected_at' => $projected_at,
+            'lead_seconds' => $lead_seconds,
+            'projected_label' => $projected_label,
+            'threshold_percent' => $threshold_percent,
+            'current_ratio' => $current_ratio,
+            'used_bytes' => $this->sanitize_bytes($payload['used_bytes'] ?? null),
+            'quota_bytes' => $this->sanitize_bytes($payload['quota_bytes'] ?? null),
+            'free_bytes' => $this->sanitize_bytes($payload['free_bytes'] ?? null),
+            'history' => $this->sanitize_forecast_history($payload['history'] ?? []),
         ];
 
-        if (class_exists(__NAMESPACE__ . '\\BJLG_History')) {
-            $history_message = sprintf(
-                /* translators: %d: number of pending purge entries. */
-                __('Projection critique : %d purge(s) risquent de dépasser le SLA.', 'backup-jlg'),
-                $context['pending_total']
-            );
-            BJLG_History::log('remote_purge', 'warning', $history_message);
-        }
-
-        $this->notify('remote_purge_delayed', $context);
-
-        $this->dispatch_remote_purge_worker($metrics);
-
-        if (function_exists('set_transient')) {
-            set_transient(
-                self::REMOTE_PURGE_PROACTIVE_ALERT_TRANSIENT,
-                1,
-                defined('MINUTE_IN_SECONDS') ? 10 * MINUTE_IN_SECONDS : 600
-            );
-        }
+        $this->notify('remote_storage_forecast_warning', $context);
     }
 
     /**
@@ -1398,8 +1369,8 @@ class BJLG_Notifications {
                 return __('Purge distante en échec', 'backup-jlg');
             case 'remote_purge_delayed':
                 return __('Purge distante en retard', 'backup-jlg');
-            case 'remote_storage_capacity_forecast':
-                return __('Projection de saturation distante', 'backup-jlg');
+            case 'remote_storage_forecast_warning':
+                return __('Prévision de saturation du stockage distant', 'backup-jlg');
             case 'restore_self_test_passed':
                 return __('Test de restauration réussi', 'backup-jlg');
             case 'restore_self_test_failed':
@@ -1623,71 +1594,82 @@ class BJLG_Notifications {
                     $lines[] = __('Dernier message : ', 'backup-jlg') . $context['last_error'];
                 }
                 break;
-            case 'remote_storage_capacity_forecast':
-                $lines[] = __('Projection proactive : la capacité distante se rapproche du seuil défini.', 'backup-jlg');
-                $destination = '';
-                if (!empty($context['destination_label'])) {
-                    $destination = (string) $context['destination_label'];
-                } elseif (!empty($context['destination_id'])) {
-                    $destination = (string) $context['destination_id'];
+            case 'remote_storage_forecast_warning':
+                $destination_label = isset($context['destination_label']) && $context['destination_label'] !== ''
+                    ? $context['destination_label']
+                    : ($context['destination_id'] ?? __('Destination distante', 'backup-jlg'));
+
+                $lines[] = sprintf(__('Prévision de saturation pour %s.', 'backup-jlg'), $destination_label);
+
+                if (!empty($context['projected_label'])) {
+                    $lines[] = $context['projected_label'];
                 }
-                if ($destination !== '') {
-                    $lines[] = __('Destination : ', 'backup-jlg') . $destination;
+
+                if (isset($context['risk_level'])) {
+                    $lines[] = __('Niveau de risque : ', 'backup-jlg') . $this->format_forecast_risk_label($context['risk_level']);
                 }
-                if (!empty($context['projection_label'])) {
-                    $lines[] = (string) $context['projection_label'];
+
+                if (isset($context['lead_seconds']) && $context['lead_seconds'] !== null) {
+                    $lines[] = __('Délai avant saturation : ', 'backup-jlg') . ($context['lead_seconds'] <= 0
+                        ? __('immédiat', 'backup-jlg')
+                        : $this->format_duration_seconds((int) $context['lead_seconds']));
                 }
-                if (isset($context['seconds_remaining']) && is_numeric($context['seconds_remaining'])) {
-                    $lines[] = sprintf(
-                        __('Temps restant estimé : %s', 'backup-jlg'),
-                        $this->format_duration_seconds((float) $context['seconds_remaining'])
-                    );
+
+                if (isset($context['projected_at']) && $context['projected_at']) {
+                    $lines[] = __('Saturation estimée le : ', 'backup-jlg') . $this->format_timestamp((int) $context['projected_at']);
                 }
-                if (isset($context['threshold_percent'])) {
-                    $percent = (float) $context['threshold_percent'];
-                    $percent_label = function_exists('number_format_i18n')
-                        ? number_format_i18n((int) round($percent))
-                        : number_format((int) round($percent));
-                    $lines[] = sprintf(__('Seuil de remplissage surveillé : %s%%', 'backup-jlg'), $percent_label);
+
+                if (isset($context['threshold_percent']) && $context['threshold_percent'] !== null) {
+                    $lines[] = __('Seuil configuré : ', 'backup-jlg') . number_format_i18n((float) $context['threshold_percent'], 1) . '%';
                 }
-                if (isset($context['warning_hours']) || isset($context['critical_hours'])) {
-                    $warning = isset($context['warning_hours']) ? (int) $context['warning_hours'] : null;
-                    $critical = isset($context['critical_hours']) ? (int) $context['critical_hours'] : null;
-                    $parts = [];
-                    if ($critical !== null) {
-                        $parts[] = sprintf(
-                            __('Critique sous %s', 'backup-jlg'),
-                            $this->format_duration_seconds($critical * HOUR_IN_SECONDS)
-                        );
+
+                if (isset($context['current_ratio']) && $context['current_ratio'] !== null) {
+                    $lines[] = __('Occupation actuelle : ', 'backup-jlg') . $this->format_ratio_percent((float) $context['current_ratio']);
+                }
+
+                if (isset($context['used_bytes']) && $context['used_bytes'] !== null && function_exists('size_format')) {
+                    $lines[] = __('Volume utilisé : ', 'backup-jlg') . size_format((int) $context['used_bytes']);
+                }
+                if (isset($context['free_bytes']) && $context['free_bytes'] !== null && function_exists('size_format')) {
+                    $lines[] = __('Espace libre : ', 'backup-jlg') . size_format((int) $context['free_bytes']);
+                }
+                if (isset($context['quota_bytes']) && $context['quota_bytes'] !== null && function_exists('size_format')) {
+                    $lines[] = __('Capacité totale : ', 'backup-jlg') . size_format((int) $context['quota_bytes']);
+                }
+
+                if (!empty($context['history']) && is_array($context['history'])) {
+                    $history_points = array_filter($context['history'], static function ($entry) {
+                        return is_array($entry) && (isset($entry['ratio']) || isset($entry['timestamp']) || isset($entry['label']));
+                    });
+                    $recent = array_slice($history_points, -3);
+                    $formatted_points = [];
+                    foreach ($recent as $entry) {
+                        $label = isset($entry['label']) && $entry['label'] !== ''
+                            ? $entry['label']
+                            : ($entry['timestamp'] ?? null);
+                        if (is_int($label)) {
+                            $label = $this->format_timestamp($label);
+                        }
+                        if (!is_string($label) || $label === '') {
+                            $label = __('Échantillon', 'backup-jlg');
+                        }
+
+                        $ratio_text = isset($entry['ratio']) && $entry['ratio'] !== null
+                            ? $this->format_ratio_percent((float) $entry['ratio'])
+                            : '';
+
+                        if ($ratio_text === '') {
+                            $formatted_points[] = $label;
+                        } else {
+                            $formatted_points[] = sprintf('%s (%s)', $label, $ratio_text);
+                        }
                     }
-                    if ($warning !== null) {
-                        $parts[] = sprintf(
-                            __('Avertissement sous %s', 'backup-jlg'),
-                            $this->format_duration_seconds($warning * HOUR_IN_SECONDS)
-                        );
-                    }
-                    if (!empty($parts)) {
-                        $lines[] = implode(' • ', $parts);
+
+                    if (!empty($formatted_points)) {
+                        $lines[] = sprintf(__('Historique récent : %s', 'backup-jlg'), implode(' • ', $formatted_points));
                     }
                 }
-                if (!empty($context['risk_level'])) {
-                    $risk_label = __('Niveau de risque : ', 'backup-jlg');
-                    switch ((string) $context['risk_level']) {
-                        case 'critical':
-                            $risk_label .= __('Critique', 'backup-jlg');
-                            break;
-                        case 'warning':
-                            $risk_label .= __('Avertissement', 'backup-jlg');
-                            break;
-                        case 'watch':
-                            $risk_label .= __('Surveillance', 'backup-jlg');
-                            break;
-                        default:
-                            $risk_label .= __('Inconnu', 'backup-jlg');
-                            break;
-                    }
-                    $lines[] = $risk_label;
-                }
+
                 break;
             case 'restore_self_test_passed':
                 $lines[] = __('Le test de restauration sandbox a réussi.', 'backup-jlg');
@@ -3097,6 +3079,87 @@ class BJLG_Notifications {
         }
 
         return null;
+    }
+
+    private function sanitize_forecast_risk_level($risk) {
+        $risk = is_string($risk) ? strtolower($risk) : '';
+
+        if (function_exists('sanitize_key')) {
+            $risk = sanitize_key($risk);
+        } else {
+            $risk = preg_replace('/[^a-z0-9_\-]/', '', $risk);
+        }
+
+        $allowed = ['normal', 'watch', 'warning', 'critical', 'success'];
+        if (!in_array($risk, $allowed, true)) {
+            return 'warning';
+        }
+
+        return $risk;
+    }
+
+    private function sanitize_forecast_history($history): array {
+        if (!is_array($history)) {
+            return [];
+        }
+
+        $sanitized = [];
+        foreach ($history as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $label = isset($entry['label']) ? (string) $entry['label'] : '';
+            if ($label !== '' && function_exists('sanitize_text_field')) {
+                $label = sanitize_text_field($label);
+            }
+
+            $ratio = null;
+            if (isset($entry['ratio']) && is_numeric($entry['ratio'])) {
+                $ratio = max(0.0, min(1.0, (float) $entry['ratio']));
+            }
+
+            $timestamp = isset($entry['timestamp']) ? (int) $entry['timestamp'] : null;
+            if ($timestamp !== null && $timestamp <= 0) {
+                $timestamp = null;
+            }
+
+            $sanitized[] = [
+                'label' => $label,
+                'ratio' => $ratio,
+                'timestamp' => $timestamp,
+            ];
+        }
+
+        return $sanitized;
+    }
+
+    private function format_forecast_risk_label($risk) {
+        $risk = $this->sanitize_forecast_risk_level($risk);
+
+        switch ($risk) {
+            case 'critical':
+                return __('Critique', 'backup-jlg');
+            case 'warning':
+                return __('Avertissement', 'backup-jlg');
+            case 'watch':
+                return __('Surveillance', 'backup-jlg');
+            case 'success':
+                return __('Stabilisé', 'backup-jlg');
+            case 'normal':
+            default:
+                return __('Nominal', 'backup-jlg');
+        }
+    }
+
+    private function format_ratio_percent($ratio) {
+        if (!is_numeric($ratio)) {
+            return '';
+        }
+
+        $ratio = max(0.0, min(1.0, (float) $ratio));
+
+        return number_format_i18n($ratio * 100, 1) . '%';
     }
 
     /**
