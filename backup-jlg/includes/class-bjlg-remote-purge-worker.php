@@ -21,6 +21,9 @@ class BJLG_Remote_Purge_Worker {
     private const ALERT_ATTEMPT_THRESHOLD = 3;
     private const FORECAST_HISTORY_LIMIT = 20;
     private const DEFAULT_FORECAST_LEAD_TIME = 3 * DAY_IN_SECONDS;
+    private const METRICS_OPTION = 'bjlg_remote_purge_sla_metrics';
+    private const DESTINATION_METRICS_OPTION = 'bjlg_remote_purge_destination_metrics';
+    private const DESTINATION_METRICS_VERSION = 1;
 
     public function __construct() {
         add_filter('cron_schedules', [$this, 'register_cron_schedule']);
@@ -436,6 +439,7 @@ class BJLG_Remote_Purge_Worker {
         $pending_over_threshold = 0;
         $pending_by_destination = [];
         $pending_destination_oldest = [];
+        $storage_destinations_index = [];
 
         foreach ($queue as $entry) {
             if (!is_array($entry)) {
@@ -742,7 +746,53 @@ class BJLG_Remote_Purge_Worker {
                         continue;
                     }
 
+                    $key = (string) $entry['id'];
                     $timestamp = isset($entry['refreshed_at']) ? (int) $entry['refreshed_at'] : ($storage_snapshot['generated_at'] ?? $now);
+
+                    if (!isset($storage_destinations_index[$key])) {
+                        $storage_destinations_index[$key] = [
+                            'id' => $key,
+                            'name' => isset($entry['name']) ? (string) $entry['name'] : $key,
+                            'connected' => isset($entry['connected']) ? (bool) $entry['connected'] : null,
+                            'latency_ms' => isset($entry['latency_ms']) && is_numeric($entry['latency_ms'])
+                                ? (float) $entry['latency_ms']
+                                : null,
+                            'refreshed_at' => $timestamp,
+                            'stale' => !empty($storage_snapshot['stale']),
+                            'ratio' => isset($entry['ratio']) && is_numeric($entry['ratio']) ? (float) $entry['ratio'] : null,
+                            'used_bytes' => $this->sanitize_bytes($entry['used_bytes'] ?? null),
+                            'quota_bytes' => $this->sanitize_bytes($entry['quota_bytes'] ?? null),
+                            'free_bytes' => $this->sanitize_bytes($entry['free_bytes'] ?? null),
+                        ];
+                    } else {
+                        $storage_destinations_index[$key]['refreshed_at'] = $timestamp;
+                        if (isset($entry['name'])) {
+                            $storage_destinations_index[$key]['name'] = (string) $entry['name'];
+                        }
+                        if (isset($entry['connected'])) {
+                            $storage_destinations_index[$key]['connected'] = (bool) $entry['connected'];
+                        }
+                        if (isset($entry['latency_ms']) && is_numeric($entry['latency_ms'])) {
+                            $storage_destinations_index[$key]['latency_ms'] = (float) $entry['latency_ms'];
+                        }
+                        if (isset($entry['ratio']) && is_numeric($entry['ratio'])) {
+                            $storage_destinations_index[$key]['ratio'] = (float) $entry['ratio'];
+                        }
+                        $usedCandidate = $this->sanitize_bytes($entry['used_bytes'] ?? null);
+                        if ($usedCandidate !== null) {
+                            $storage_destinations_index[$key]['used_bytes'] = $usedCandidate;
+                        }
+                        $quotaCandidate = $this->sanitize_bytes($entry['quota_bytes'] ?? null);
+                        if ($quotaCandidate !== null) {
+                            $storage_destinations_index[$key]['quota_bytes'] = $quotaCandidate;
+                        }
+                        $freeCandidate = $this->sanitize_bytes($entry['free_bytes'] ?? null);
+                        if ($freeCandidate !== null) {
+                            $storage_destinations_index[$key]['free_bytes'] = $freeCandidate;
+                        }
+                        $storage_destinations_index[$key]['stale'] = !empty($storage_snapshot['stale']);
+                    }
+
                     $sample = $this->normalize_quota_sample(
                         [
                             'timestamp' => $timestamp,
@@ -757,13 +807,17 @@ class BJLG_Remote_Purge_Worker {
                         continue;
                     }
 
-                    $key = (string) $entry['id'];
                     $quota_destinations[$key] = $this->append_quota_sample(
                         isset($quota_destinations[$key]) && is_array($quota_destinations[$key])
                             ? $quota_destinations[$key]
                             : [],
                         $sample
                     );
+
+                    $storage_destinations_index[$key]['ratio'] = $sample['ratio'];
+                    $storage_destinations_index[$key]['used_bytes'] = $sample['used_bytes'];
+                    $storage_destinations_index[$key]['quota_bytes'] = $sample['quota_bytes'];
+                    $storage_destinations_index[$key]['free_bytes'] = $sample['free_bytes'];
                 }
             }
         }
@@ -775,9 +829,21 @@ class BJLG_Remote_Purge_Worker {
             $forecast_destinations
         );
 
+        $overall_duration = [
+            'average_seconds' => $duration_samples > 0 ? $avg_duration : ($overall_duration_store['average_seconds'] ?? 0.0),
+            'samples' => $duration_samples,
+            'max_seconds' => max(
+                $duration_peak,
+                isset($overall_duration_store['max_seconds']) ? (float) $overall_duration_store['max_seconds'] : 0.0
+            ),
+            'last_seconds' => $last_duration_seconds,
+            'p95_seconds' => $overall_duration_store['p95_seconds'] ?? null,
+        ];
+
         $durations_metrics = [
             'updated_at' => $now,
             'destinations' => $destination_stats,
+            'overall' => $overall_duration,
         ];
 
         $quota_metrics = $this->build_quota_projections(
@@ -786,7 +852,26 @@ class BJLG_Remote_Purge_Worker {
             $quota_samples
         );
 
-        $quota_metrics = $this->maybe_trigger_proactive_alerts($quota_metrics, $now);
+        $destination_overview_entries = $this->build_destination_overview(
+            $now,
+            $pending_by_destination,
+            $pending_destination_oldest,
+            $destination_stats,
+            isset($forecast['destinations']) && is_array($forecast['destinations']) ? $forecast['destinations'] : [],
+            isset($quota_metrics['destinations']) && is_array($quota_metrics['destinations']) ? $quota_metrics['destinations'] : [],
+            $storage_destinations_index
+        );
+
+        $destination_overview = [
+            'updated_at' => $now,
+            'destinations' => $destination_overview_entries,
+        ];
+
+        $quota_metrics = $this->maybe_trigger_proactive_alerts(
+            $quota_metrics,
+            $now,
+            $destination_overview_entries
+        );
 
         $metrics = [
             'version' => 2,
@@ -823,12 +908,21 @@ class BJLG_Remote_Purge_Worker {
             'forecast' => $forecast,
             'durations' => $durations_metrics,
             'quotas' => $quota_metrics,
+            'destinations_overview' => $destination_overview,
         ];
 
         $this->persist_metrics_audit($metrics);
 
         if (function_exists('update_option')) {
             update_option(self::METRICS_OPTION, $metrics);
+            update_option(
+                self::DESTINATION_METRICS_OPTION,
+                [
+                    'version' => self::DESTINATION_METRICS_VERSION,
+                    'updated_at' => $now,
+                    'destinations' => $destination_overview_entries,
+                ]
+            );
         }
 
         foreach ($alerts_to_dispatch as $alert) {
@@ -1785,7 +1879,127 @@ class BJLG_Remote_Purge_Worker {
         );
     }
 
-    private function maybe_trigger_proactive_alerts(array $quotas, int $now): array
+    /**
+     * @param array<string,int> $pending_by_destination
+     * @param array<string,int> $pending_oldest
+     * @param array<string,array<string,mixed>> $duration_stats
+     * @param array<string,array<string,mixed>> $forecast_destinations
+     * @param array<string,array<string,mixed>> $quota_destinations
+     * @param array<string,array<string,mixed>> $storage_destinations
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    private function build_destination_overview(
+        int $now,
+        array $pending_by_destination,
+        array $pending_oldest,
+        array $duration_stats,
+        array $forecast_destinations,
+        array $quota_destinations,
+        array $storage_destinations
+    ): array {
+        $destination_ids = array_unique(array_merge(
+            array_keys($pending_by_destination),
+            array_keys($pending_oldest),
+            array_keys($duration_stats),
+            array_keys($forecast_destinations),
+            array_keys($quota_destinations),
+            array_keys($storage_destinations)
+        ));
+
+        sort($destination_ids);
+
+        $overview = [];
+        foreach ($destination_ids as $destination_id) {
+            $key = (string) $destination_id;
+            $label = $this->get_destination_label($key);
+
+            $pending = isset($pending_by_destination[$key]) ? (int) $pending_by_destination[$key] : 0;
+            $pending_oldest_seconds = isset($pending_oldest[$key]) ? (int) $pending_oldest[$key] : 0;
+
+            $duration_entry = isset($duration_stats[$key]) && is_array($duration_stats[$key]) ? $duration_stats[$key] : [];
+            $avg_duration = isset($duration_entry['average_duration_seconds']) ? (float) $duration_entry['average_duration_seconds'] : null;
+            $avg_attempts = isset($duration_entry['average_attempts']) ? (float) $duration_entry['average_attempts'] : null;
+            $last_duration = isset($duration_entry['last_duration_seconds']) ? (float) $duration_entry['last_duration_seconds'] : null;
+            $last_outcome = isset($duration_entry['last_outcome']) ? (string) $duration_entry['last_outcome'] : '';
+            $duration_samples = isset($duration_entry['samples']) ? (int) $duration_entry['samples'] : 0;
+            $completed_count = isset($duration_entry['completed']) ? (int) $duration_entry['completed'] : 0;
+            $duration_updated_at = isset($duration_entry['last_updated']) ? (int) $duration_entry['last_updated'] : 0;
+
+            $forecast_entry = isset($forecast_destinations[$key]) && is_array($forecast_destinations[$key]) ? $forecast_destinations[$key] : [];
+            $forecast_seconds = isset($forecast_entry['forecast_seconds']) ? (int) $forecast_entry['forecast_seconds'] : null;
+            $forecast_label = isset($forecast_entry['forecast_label']) ? (string) $forecast_entry['forecast_label'] : '';
+            $projected_clearance = isset($forecast_entry['projected_clearance']) ? (int) $forecast_entry['projected_clearance'] : null;
+            $seconds_per_item = isset($forecast_entry['seconds_per_item']) ? (float) $forecast_entry['seconds_per_item'] : null;
+            $trend_direction = isset($forecast_entry['trend_direction']) ? (string) $forecast_entry['trend_direction'] : 'flat';
+            $forecast_samples = isset($forecast_entry['samples']) ? (int) $forecast_entry['samples'] : 0;
+
+            $quota_entry = isset($quota_destinations[$key]) && is_array($quota_destinations[$key]) ? $quota_destinations[$key] : [];
+            $quota_ratio = isset($quota_entry['current_ratio']) ? (float) $quota_entry['current_ratio'] : null;
+            $quota_projected = isset($quota_entry['projected_saturation']) ? (int) $quota_entry['projected_saturation'] : null;
+            $quota_lead = isset($quota_entry['lead_time_seconds']) ? (int) $quota_entry['lead_time_seconds'] : null;
+            $quota_risk = isset($quota_entry['risk_level']) ? (string) $quota_entry['risk_level'] : 'unknown';
+            $quota_label = isset($quota_entry['projected_label']) ? (string) $quota_entry['projected_label'] : '';
+            $quota_threshold = isset($quota_entry['threshold_percent']) ? (float) $quota_entry['threshold_percent'] : null;
+            $quota_history = isset($quota_entry['history']) && is_array($quota_entry['history']) ? $quota_entry['history'] : [];
+            $quota_last_sample = isset($quota_entry['last_sample']) && is_array($quota_entry['last_sample']) ? $quota_entry['last_sample'] : null;
+
+            $storage_entry = isset($storage_destinations[$key]) && is_array($storage_destinations[$key]) ? $storage_destinations[$key] : [];
+            $storage_connected = isset($storage_entry['connected']) ? (bool) $storage_entry['connected'] : null;
+            $storage_latency = isset($storage_entry['latency_ms']) ? (float) $storage_entry['latency_ms'] : null;
+            $storage_refreshed = isset($storage_entry['refreshed_at']) ? (int) $storage_entry['refreshed_at'] : null;
+            $storage_ratio = isset($storage_entry['ratio']) ? (float) $storage_entry['ratio'] : null;
+            $storage_used = $storage_entry['used_bytes'] ?? ($quota_last_sample['used_bytes'] ?? null);
+            $storage_quota = $storage_entry['quota_bytes'] ?? ($quota_last_sample['quota_bytes'] ?? null);
+            $storage_free = $storage_entry['free_bytes'] ?? ($quota_last_sample['free_bytes'] ?? null);
+
+            $overview[$key] = [
+                'id' => $key,
+                'label' => isset($storage_entry['name']) && is_string($storage_entry['name']) && $storage_entry['name'] !== ''
+                    ? (string) $storage_entry['name']
+                    : $label,
+                'pending' => $pending,
+                'pending_oldest_seconds' => $pending_oldest_seconds,
+                'average_duration_seconds' => $avg_duration,
+                'average_attempts' => $avg_attempts,
+                'last_duration_seconds' => $last_duration,
+                'last_outcome' => $last_outcome,
+                'duration_samples' => $duration_samples,
+                'duration_completed' => $completed_count,
+                'duration_updated_at' => $duration_updated_at,
+                'forecast_seconds' => $forecast_seconds,
+                'forecast_label' => $forecast_label,
+                'projected_clearance' => $projected_clearance,
+                'seconds_per_item' => $seconds_per_item,
+                'trend_direction' => $trend_direction,
+                'forecast_samples' => $forecast_samples,
+                'quota' => [
+                    'current_ratio' => $quota_ratio,
+                    'projected_saturation' => $quota_projected,
+                    'lead_time_seconds' => $quota_lead,
+                    'risk_level' => $quota_risk,
+                    'projected_label' => $quota_label,
+                    'threshold_percent' => $quota_threshold,
+                    'history' => $quota_history,
+                    'last_sample' => $quota_last_sample,
+                ],
+                'storage' => [
+                    'connected' => $storage_connected,
+                    'latency_ms' => $storage_latency,
+                    'refreshed_at' => $storage_refreshed,
+                    'ratio' => $storage_ratio,
+                    'used_bytes' => $storage_used,
+                    'quota_bytes' => $storage_quota,
+                    'free_bytes' => $storage_free,
+                ],
+                'updated_at' => $now,
+            ];
+        }
+
+        return $overview;
+    }
+
+    private function maybe_trigger_proactive_alerts(array $quotas, int $now, array $destination_overview = []): array
     {
         if (empty($quotas['destinations']) || !is_array($quotas['destinations'])) {
             return $quotas;
@@ -1846,6 +2060,16 @@ class BJLG_Remote_Purge_Worker {
                 'free_bytes' => $data['last_sample']['free_bytes'] ?? null,
                 'projected_label' => $data['projected_label'] ?? '',
             ];
+
+            if (isset($destination_overview[$destination_id]) && is_array($destination_overview[$destination_id])) {
+                $overview_entry = $destination_overview[$destination_id];
+                $context['pending'] = $overview_entry['pending'] ?? null;
+                $context['pending_oldest_seconds'] = $overview_entry['pending_oldest_seconds'] ?? null;
+                $context['average_duration_seconds'] = $overview_entry['average_duration_seconds'] ?? null;
+                $context['forecast_seconds'] = $overview_entry['forecast_seconds'] ?? null;
+                $context['forecast_label_overview'] = $overview_entry['forecast_label'] ?? '';
+                $context['seconds_per_item'] = $overview_entry['seconds_per_item'] ?? null;
+            }
 
             do_action('bjlg_remote_storage_forecast_warning', $destination_id, $context);
             $data['last_alerted_at'] = $now;

@@ -611,6 +611,22 @@ class BJLG_Notifications {
             $current_ratio = max(0.0, min(1.0, (float) $payload['current_ratio']));
         }
 
+        $pending = isset($payload['pending']) && is_numeric($payload['pending'])
+            ? max(0, (int) $payload['pending'])
+            : null;
+        $pending_oldest = isset($payload['pending_oldest_seconds']) && is_numeric($payload['pending_oldest_seconds'])
+            ? max(0, (int) $payload['pending_oldest_seconds'])
+            : null;
+        $average_duration = isset($payload['average_duration_seconds']) && is_numeric($payload['average_duration_seconds'])
+            ? max(0.0, (float) $payload['average_duration_seconds'])
+            : null;
+        $forecast_seconds = isset($payload['forecast_seconds']) && is_numeric($payload['forecast_seconds'])
+            ? max(0, (int) $payload['forecast_seconds'])
+            : null;
+        $seconds_per_item = isset($payload['seconds_per_item']) && is_numeric($payload['seconds_per_item'])
+            ? max(0.0, (float) $payload['seconds_per_item'])
+            : null;
+
         $projected_label = isset($payload['projected_label']) ? (string) $payload['projected_label'] : '';
         if ($projected_label !== '' && function_exists('sanitize_text_field')) {
             $projected_label = sanitize_text_field($projected_label);
@@ -629,6 +645,11 @@ class BJLG_Notifications {
             'quota_bytes' => $this->sanitize_bytes($payload['quota_bytes'] ?? null),
             'free_bytes' => $this->sanitize_bytes($payload['free_bytes'] ?? null),
             'history' => $this->sanitize_forecast_history($payload['history'] ?? []),
+            'pending' => $pending,
+            'pending_oldest_seconds' => $pending_oldest,
+            'average_duration_seconds' => $average_duration,
+            'forecast_seconds' => $forecast_seconds,
+            'seconds_per_item' => $seconds_per_item,
         ];
 
         $this->notify('remote_storage_forecast_warning', $context);
@@ -1609,14 +1630,39 @@ class BJLG_Notifications {
                     $lines[] = __('Niveau de risque : ', 'backup-jlg') . $this->format_forecast_risk_label($context['risk_level']);
                 }
 
+                if (isset($context['pending']) && $context['pending'] !== null) {
+                    $lines[] = __('Entrées en file : ', 'backup-jlg') . number_format_i18n((int) $context['pending']);
+                }
+
+                if (isset($context['pending_oldest_seconds']) && $context['pending_oldest_seconds']) {
+                    $lines[] = __('Retard maximal observé : ', 'backup-jlg')
+                        . $this->format_duration_seconds((int) $context['pending_oldest_seconds']);
+                }
+
                 if (isset($context['lead_seconds']) && $context['lead_seconds'] !== null) {
                     $lines[] = __('Délai avant saturation : ', 'backup-jlg') . ($context['lead_seconds'] <= 0
                         ? __('immédiat', 'backup-jlg')
                         : $this->format_duration_seconds((int) $context['lead_seconds']));
                 }
 
+                if (isset($context['forecast_seconds']) && $context['forecast_seconds']) {
+                    $lines[] = __('Vidage estimé de la file : ', 'backup-jlg')
+                        . $this->format_duration_seconds((int) $context['forecast_seconds']);
+                }
+
                 if (isset($context['projected_at']) && $context['projected_at']) {
                     $lines[] = __('Saturation estimée le : ', 'backup-jlg') . $this->format_timestamp((int) $context['projected_at']);
+                }
+
+                if (isset($context['average_duration_seconds']) && $context['average_duration_seconds']) {
+                    $lines[] = __('Durée moyenne de purge : ', 'backup-jlg')
+                        . $this->format_duration_seconds((float) $context['average_duration_seconds']);
+                }
+
+                if (isset($context['seconds_per_item']) && $context['seconds_per_item']) {
+                    $lines[] = __('Débit estimé : ', 'backup-jlg')
+                        . $this->format_duration_seconds((float) $context['seconds_per_item'])
+                        . __(' par archive', 'backup-jlg');
                 }
 
                 if (isset($context['threshold_percent']) && $context['threshold_percent'] !== null) {
