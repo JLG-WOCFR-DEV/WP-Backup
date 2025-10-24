@@ -4327,5 +4327,188 @@ jQuery(function($) {
         });
     }
 
+    (function setupRestoreCheckForm() {
+        const $form = $('#bjlg-restore-check-form');
+        if (!$form.length || typeof bjlg_ajax !== 'object') {
+            return;
+        }
+
+        const $feedback = $('#bjlg-restore-check-feedback');
+        const defaults = {
+            settings: {
+                enabled: false,
+                recurrence: 'weekly',
+                day: 'sunday',
+                day_of_month: 1,
+                time: '02:00',
+                components: ['db', 'plugins', 'themes', 'uploads'],
+                sandbox_path: ''
+            },
+            state: {
+                last_run: null,
+                last_status: null,
+                last_message: '',
+                last_report: null
+            },
+            schedule: {
+                next_run: null,
+                next_run_formatted: null,
+                next_run_relative: null
+            }
+        };
+
+        let restoreData = $.extend(true, {}, defaults, $form.data('restore-check') || {});
+
+        function setNotice(type, message) {
+            if (!$feedback.length) {
+                return;
+            }
+
+            if (!message) {
+                $feedback.hide().removeClass('notice-error notice-success notice-info');
+                return;
+            }
+
+            const classes = {
+                error: 'notice-error',
+                success: 'notice-success',
+                info: 'notice-info'
+            };
+            const className = classes[type] || 'notice-info';
+            $feedback.removeClass('notice-error notice-success notice-info')
+                .addClass('notice ' + className)
+                .text(message)
+                .show();
+        }
+
+        function refreshVisibility() {
+            const recurrence = ($form.find('[data-restore-field="recurrence"]').val() || '').toString();
+            const weekly = recurrence === 'weekly';
+            const monthly = recurrence === 'monthly';
+
+            $form.find('.bjlg-restore-check-weekly').attr('aria-hidden', weekly ? 'false' : 'true')
+                .toggle(weekly);
+            $form.find('.bjlg-restore-check-monthly').attr('aria-hidden', monthly ? 'false' : 'true')
+                .toggle(monthly);
+        }
+
+        function populateForm(data) {
+            const settings = data.settings || defaults.settings;
+
+            $form.find('[data-restore-field="enabled"]').prop('checked', !!settings.enabled);
+            $form.find('[data-restore-field="recurrence"]').val(settings.recurrence || 'weekly');
+            $form.find('[data-restore-field="day"]').val(settings.day || 'sunday');
+            $form.find('[data-restore-field="day_of_month"]').val(settings.day_of_month || 1);
+            $form.find('[data-restore-field="time"]').val(settings.time || '02:00');
+            $form.find('[data-restore-field="sandbox_path"]').val(settings.sandbox_path || '');
+
+            const components = Array.isArray(settings.components) ? settings.components : [];
+            $form.find('[data-restore-component]').prop('checked', false);
+            components.forEach(function(component) {
+                $form.find('[data-restore-component="' + component + '"]').prop('checked', true);
+            });
+
+            refreshVisibility();
+            renderSchedule(data.schedule || defaults.schedule);
+            renderLastState(data.state || defaults.state);
+        }
+
+        function renderSchedule(schedule) {
+            const nextRun = schedule && typeof schedule === 'object' ? schedule : {};
+            const formatted = nextRun.next_run_formatted || '—';
+            const relative = nextRun.next_run_relative || '';
+            const $value = $form.find('[data-restore-next-run]');
+            const $relative = $form.find('[data-restore-next-run-relative]');
+
+            $value.text(formatted || '—');
+            if (relative) {
+                $relative.text('(' + relative + ')');
+            } else {
+                $relative.text('');
+            }
+        }
+
+        function renderLastState(state) {
+            const status = state.last_status || '';
+            const message = state.last_message || '';
+
+            const labelMap = {
+                success: '✅ ' + __('Succès', 'backup-jlg'),
+                failure: '❌ ' + __('Échec', 'backup-jlg'),
+                warning: '⚠️ ' + __('Avertissement', 'backup-jlg')
+            };
+
+            const display = labelMap[status] || (status ? status : '—');
+            $form.find('[data-restore-last-status]').text(display);
+            $form.find('[data-restore-last-message]').text(message);
+        }
+
+        function collectFormData() {
+            const recurrence = ($form.find('[data-restore-field="recurrence"]').val() || 'weekly').toString();
+            const settings = {
+                enabled: $form.find('[data-restore-field="enabled"]').is(':checked'),
+                recurrence: recurrence,
+                day: ($form.find('[data-restore-field="day"]').val() || 'sunday').toString(),
+                day_of_month: parseInt($form.find('[data-restore-field="day_of_month"]').val() || '1', 10) || 1,
+                time: ($form.find('[data-restore-field="time"]').val() || '02:00').toString(),
+                sandbox_path: ($form.find('[data-restore-field="sandbox_path"]').val() || '').toString(),
+                components: []
+            };
+
+            $form.find('[data-restore-component]:checked').each(function() {
+                settings.components.push(($(this).val() || '').toString());
+            });
+
+            return settings;
+        }
+
+        $form.on('change', '[data-restore-field="recurrence"]', function() {
+            refreshVisibility();
+        });
+
+        $form.on('submit', function(event) {
+            event.preventDefault();
+            setNotice(null, '');
+
+            const payload = collectFormData();
+
+            $.ajax({
+                url: bjlg_ajax.ajax_url,
+                method: 'POST',
+                data: {
+                    action: 'bjlg_save_restore_check_settings',
+                    nonce: bjlg_ajax.nonce,
+                    settings: JSON.stringify(payload)
+                }
+            }).done(function(response) {
+                const data = response && typeof response === 'object' ? response.data || {} : {};
+
+                if (response && response.success) {
+                    restoreData = $.extend(true, {}, restoreData, {
+                        settings: data.settings || payload,
+                        schedule: {
+                            next_run: data.next_run || null,
+                            next_run_formatted: data.next_run_formatted || null,
+                            next_run_relative: data.next_run_relative || null
+                        },
+                        state: data.state || restoreData.state
+                    });
+
+                    populateForm(restoreData);
+                    setNotice('success', data.message || __('Validation programmée mise à jour.', 'backup-jlg'));
+                } else {
+                    const message = data && typeof data.message === 'string'
+                        ? data.message
+                        : __('Impossible d’enregistrer la validation automatique.', 'backup-jlg');
+                    setNotice('error', message);
+                }
+            }).fail(function() {
+                setNotice('error', __('Erreur de communication avec le serveur.', 'backup-jlg'));
+            });
+        });
+
+        populateForm(restoreData);
+    })();
+
 })();
 });
