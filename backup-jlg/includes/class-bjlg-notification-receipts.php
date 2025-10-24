@@ -26,6 +26,12 @@ class BJLG_Notification_Receipts {
         $receipts = self::load();
         if (!isset($receipts[$entry_id])) {
             $timestamp = isset($entry['created_at']) ? (int) $entry['created_at'] : current_time('timestamp');
+            $resolution = isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : [];
+            $resolution_actions = isset($resolution['actions']) && is_array($resolution['actions'])
+                ? $resolution['actions']
+                : [];
+            $resolution_summary = isset($resolution['summary']) ? (string) $resolution['summary'] : '';
+
             $receipts[$entry_id] = [
                 'id' => $entry_id,
                 'event' => isset($entry['event']) ? (string) $entry['event'] : '',
@@ -40,8 +46,13 @@ class BJLG_Notification_Receipts {
                     'summary' => __('Incident détecté et notification mise en file.', 'backup-jlg'),
                     'type' => 'created',
                 ])],
+                'actions' => self::sanitize_actions($resolution_actions),
+                'summary' => $resolution_summary !== ''
+                    ? self::sanitize_summary($resolution_summary)
+                    : '',
                 'last_updated_at' => $timestamp,
             ];
+            $receipts[$entry_id]['summary'] = self::rebuild_summary($receipts[$entry_id]);
         } else {
             $receipts[$entry_id] = self::normalize_record($receipts[$entry_id]);
         }
@@ -80,6 +91,7 @@ class BJLG_Notification_Receipts {
 
         $receipts[$entry_id]['steps'][] = $step;
         $receipts[$entry_id]['last_updated_at'] = $step['timestamp'];
+        $receipts[$entry_id]['summary'] = self::rebuild_summary($receipts[$entry_id]);
 
         self::save($receipts);
         self::update_queue_resolution($entry_id, $receipts[$entry_id]);
@@ -205,6 +217,8 @@ class BJLG_Notification_Receipts {
             'resolved_formatted' => $resolved_at ? self::format_datetime($resolved_at) : '',
             'resolved_relative' => $resolved_at ? self::format_relative($resolved_at, $now) : '',
             'steps' => $formatted_steps,
+            'summary' => $record['summary'],
+            'actions' => $record['actions'],
         ];
     }
 
@@ -276,6 +290,7 @@ class BJLG_Notification_Receipts {
             return $record;
         }
 
+        $record['summary'] = self::rebuild_summary($record);
         $record['last_updated_at'] = $timestamp;
         $receipts[$entry_id] = $record;
         self::save($receipts);
@@ -341,6 +356,12 @@ class BJLG_Notification_Receipts {
         }
         $record['steps'] = $steps;
 
+        $record['actions'] = self::sanitize_actions($record['actions'] ?? []);
+        $record['summary'] = self::sanitize_summary($record['summary'] ?? '');
+        if ($record['summary'] === '') {
+            $record['summary'] = self::rebuild_summary($record);
+        }
+
         return $record;
     }
 
@@ -365,6 +386,75 @@ class BJLG_Notification_Receipts {
             'summary' => trim($summary),
             'type' => $type !== '' ? $type : 'update',
         ];
+    }
+
+    private static function sanitize_actions($value) {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $actions = [];
+        foreach ($value as $line) {
+            if (!is_string($line)) {
+                continue;
+            }
+
+            $line = self::sanitize_summary($line);
+            if ($line === '') {
+                continue;
+            }
+
+            $actions[] = $line;
+        }
+
+        return $actions;
+    }
+
+    private static function sanitize_summary($value) {
+        if (!is_string($value)) {
+            return '';
+        }
+
+        $value = trim($value);
+        if ($value === '') {
+            return '';
+        }
+
+        if (function_exists('sanitize_textarea_field')) {
+            return sanitize_textarea_field($value);
+        }
+
+        return sanitize_text_field($value);
+    }
+
+    private static function rebuild_summary(array $record) {
+        $steps = isset($record['steps']) && is_array($record['steps']) ? $record['steps'] : [];
+        $actions = isset($record['actions']) && is_array($record['actions']) ? $record['actions'] : [];
+
+        if (class_exists(__NAMESPACE__ . '\\BJLG_Notification_Queue')) {
+            return \BJLG\BJLG_Notification_Queue::render_resolution_summary($steps, $actions);
+        }
+
+        $lines = [];
+        foreach ($steps as $step) {
+            if (!is_array($step)) {
+                continue;
+            }
+
+            $timestamp = isset($step['timestamp']) ? (int) $step['timestamp'] : 0;
+            $actor = isset($step['actor']) ? (string) $step['actor'] : '';
+            $summary = isset($step['summary']) ? (string) $step['summary'] : '';
+            $lines[] = sprintf('[%s] %s — %s', $timestamp, $actor, $summary);
+        }
+
+        if (!empty($actions)) {
+            $lines[] = __('Actions réalisées :', 'backup-jlg');
+            foreach ($actions as $action) {
+                $lines[] = sprintf('• %s', $action);
+            }
+        }
+
+        return implode("\n", array_filter(array_map('trim', $lines)));
     }
 
     private static function build_actor_label($actor) {
@@ -401,6 +491,8 @@ class BJLG_Notification_Receipts {
             'acknowledged_at' => $record['acknowledged_at'],
             'resolved_at' => $record['resolved_at'],
             'steps' => $record['steps'],
+            'actions' => $record['actions'],
+            'summary' => $record['summary'],
         ];
 
         BJLG_Notification_Queue::update_resolution($entry_id, $resolution);

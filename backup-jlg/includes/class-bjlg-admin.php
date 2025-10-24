@@ -1861,6 +1861,14 @@ class BJLG_Admin {
                             $next_relative = isset($queue['next_attempt_relative']) ? (string) $queue['next_attempt_relative'] : '';
                             $oldest_relative = isset($queue['oldest_entry_relative']) ? (string) $queue['oldest_entry_relative'] : '';
                             $entries = isset($queue['entries']) && is_array($queue['entries']) ? $queue['entries'] : [];
+                            $ack_counts = isset($queue['ack_status_counts']) && is_array($queue['ack_status_counts'])
+                                ? $queue['ack_status_counts']
+                                : [];
+                            $ack_pending = isset($ack_counts['pending']) ? (int) $ack_counts['pending'] : 0;
+                            $ack_acknowledged = isset($ack_counts['acknowledged']) ? (int) $ack_counts['acknowledged'] : 0;
+                            $ack_resolved = isset($ack_counts['resolved']) ? (int) $ack_counts['resolved'] : 0;
+                            $next_reminder_relative = isset($queue['next_reminder_relative']) ? (string) $queue['next_reminder_relative'] : '';
+                            $next_reminder_formatted = isset($queue['next_reminder_formatted']) ? (string) $queue['next_reminder_formatted'] : '';
                             ?>
                             <article class="bjlg-queue-card" data-queue="<?php echo esc_attr($queue_key); ?>">
                                 <header class="bjlg-queue-card__header">
@@ -1889,6 +1897,18 @@ class BJLG_Admin {
                                     ?>
                                 </p>
 
+                                <p class="bjlg-queue-card__meta" data-field="ack-status-counts">
+                                    <?php
+                                    printf(
+                                        /* translators: 1: pending acknowledgements, 2: acknowledged incidents, 3: resolved incidents. */
+                                        esc_html__('Accusés en attente : %1$s • Pris en charge : %2$s • Résolus : %3$s', 'backup-jlg'),
+                                        esc_html(number_format_i18n($ack_pending)),
+                                        esc_html(number_format_i18n($ack_acknowledged)),
+                                        esc_html(number_format_i18n($ack_resolved))
+                                    );
+                                    ?>
+                                </p>
+
                                 <p class="bjlg-queue-card__meta" data-field="next">
                                     <?php if ($next_relative !== ''): ?>
                                         <?php printf(esc_html__('Prochain passage %s', 'backup-jlg'), esc_html($next_relative)); ?>
@@ -1900,6 +1920,16 @@ class BJLG_Admin {
                                 <p class="bjlg-queue-card__meta" data-field="oldest">
                                     <?php if ($oldest_relative !== ''): ?>
                                         <?php printf(esc_html__('Entrée la plus ancienne %s', 'backup-jlg'), esc_html($oldest_relative)); ?>
+                                    <?php endif; ?>
+                                </p>
+
+                                <p class="bjlg-queue-card__meta" data-field="next-reminder">
+                                    <?php if ($next_reminder_relative !== ''): ?>
+                                        <?php printf(esc_html__('Prochain rappel %s', 'backup-jlg'), esc_html($next_reminder_relative)); ?>
+                                    <?php elseif ($next_reminder_formatted !== ''): ?>
+                                        <?php printf(esc_html__('Prochain rappel le %s', 'backup-jlg'), esc_html($next_reminder_formatted)); ?>
+                                    <?php else: ?>
+                                        <?php esc_html_e('Aucun rappel planifié.', 'backup-jlg'); ?>
                                     <?php endif; ?>
                                 </p>
 
@@ -1971,6 +2001,8 @@ class BJLG_Admin {
                                             $severity_label = isset($entry['severity_label']) ? (string) $entry['severity_label'] : '';
                                             $severity_intent = isset($entry['severity_intent']) ? (string) $entry['severity_intent'] : 'info';
                                             $severity_value = isset($entry['severity']) ? (string) $entry['severity'] : '';
+                                            $reminders = isset($entry['reminders']) && is_array($entry['reminders']) ? $entry['reminders'] : [];
+                                            $reminder_active = !isset($reminders['active']) || (bool) $reminders['active'];
                                             ?>
                                             <li class="bjlg-queue-card__entry"
                                                 data-status="<?php echo esc_attr($status_intent); ?>"
@@ -2058,6 +2090,32 @@ class BJLG_Admin {
                                                     </p>
                                                 <?php endif; ?>
 
+                                                <?php if (!empty($details['resolution_status_label'])): ?>
+                                                    <p class="bjlg-queue-card__entry-meta" data-field="resolution-status">
+                                                        <?php printf(esc_html__('Suivi : %s', 'backup-jlg'), esc_html($details['resolution_status_label'])); ?>
+                                                    </p>
+                                                <?php endif; ?>
+
+                                                <?php if (!empty($details['reminder_label'])): ?>
+                                                    <p class="bjlg-queue-card__entry-meta" data-field="reminder">
+                                                        <?php echo esc_html($details['reminder_label']); ?>
+                                                    </p>
+                                                <?php endif; ?>
+
+                                                <?php if (!empty($details['resolution_summary'])): ?>
+                                                    <p class="bjlg-queue-card__entry-message" data-field="resolution-summary">
+                                                        <?php echo esc_html($details['resolution_summary']); ?>
+                                                    </p>
+                                                <?php endif; ?>
+
+                                                <?php if (!empty($details['resolution_actions']) && is_array($details['resolution_actions'])): ?>
+                                                    <ul class="bjlg-queue-card__entry-list" data-field="resolution-actions">
+                                                        <?php foreach ($details['resolution_actions'] as $action_line): ?>
+                                                            <li><?php echo esc_html($action_line); ?></li>
+                                                        <?php endforeach; ?>
+                                                    </ul>
+                                                <?php endif; ?>
+
                                                 <?php if (!empty($entry['message'])): ?>
                                                     <p class="bjlg-queue-card__entry-message"><?php echo esc_html($entry['message']); ?></p>
                                                 <?php endif; ?>
@@ -2080,11 +2138,19 @@ class BJLG_Admin {
 
                                                 <div class="bjlg-queue-card__entry-actions">
                                                     <?php if ($queue_key === 'notifications' && $entry_id !== ''): ?>
-                                                        <button type="button" class="button button-secondary button-small" data-queue-action="acknowledge-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>" <?php disabled(!empty($entry['acknowledged'])); ?>>
+                                                        <?php
+                                                        $ack_disabled_attr = !empty($entry['acknowledged']) ? ' disabled="disabled" aria-disabled="true"' : '';
+                                                        $resolve_disabled_attr = !empty($entry['resolved']) ? ' disabled="disabled" aria-disabled="true"' : '';
+                                                        $reminder_disabled_attr = (!empty($entry['resolved']) || !$reminder_active) ? ' disabled="disabled" aria-disabled="true"' : '';
+                                                        ?>
+                                                        <button type="button" class="button button-secondary button-small" data-queue-action="acknowledge-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>"<?php echo $ack_disabled_attr; ?>>
                                                             <?php esc_html_e('Accuser réception', 'backup-jlg'); ?>
                                                         </button>
-                                                        <button type="button" class="button button-secondary button-small" data-queue-action="resolve-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>" <?php disabled(!empty($entry['resolved'])); ?>>
+                                                        <button type="button" class="button button-secondary button-small" data-queue-action="resolve-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>"<?php echo $resolve_disabled_attr; ?>>
                                                             <?php esc_html_e('Clore', 'backup-jlg'); ?>
+                                                        </button>
+                                                        <button type="button" class="button button-secondary button-small" data-queue-action="remind-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>"<?php echo $reminder_disabled_attr; ?>>
+                                                            <?php esc_html_e('Relancer le rappel', 'backup-jlg'); ?>
                                                         </button>
                                                         <button type="button" class="button button-secondary button-small" data-queue-action="retry-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>">
                                                             <?php esc_html_e('Relancer', 'backup-jlg'); ?>
