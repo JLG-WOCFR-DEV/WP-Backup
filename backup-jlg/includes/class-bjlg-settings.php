@@ -2611,6 +2611,7 @@ class BJLG_Settings {
             'day_of_month' => 1,
             'time' => '23:59',
             'custom_cron' => '',
+            'macro' => '',
             'components' => ['db', 'plugins', 'themes', 'uploads'],
             'encrypt' => false,
             'incremental' => false,
@@ -2719,6 +2720,14 @@ class BJLG_Settings {
             $custom_cron = self::sanitize_cron_expression($entry['custom_cron']);
         }
 
+        $macro = '';
+        if (isset($entry['macro'])) {
+            $candidate_macro = sanitize_key((string) $entry['macro']);
+            if ($candidate_macro !== '' && self::get_schedule_macro_by_id($candidate_macro)) {
+                $macro = $candidate_macro;
+            }
+        }
+
         $previous_recurrence = '';
         if (isset($entry['previous_recurrence'])) {
             $maybe_previous = sanitize_key((string) $entry['previous_recurrence']);
@@ -2763,6 +2772,7 @@ class BJLG_Settings {
             'time' => $time,
             'previous_recurrence' => $previous_recurrence,
             'custom_cron' => $recurrence === 'custom' ? $custom_cron : '',
+            'macro' => $recurrence === 'custom' ? $macro : '',
             'components' => array_values($components),
             'encrypt' => self::to_bool_static($entry['encrypt'] ?? $defaults['encrypt']),
             'incremental' => self::to_bool_static($entry['incremental'] ?? $defaults['incremental']),
@@ -2846,6 +2856,136 @@ class BJLG_Settings {
         }
 
         return array_values($sanitized);
+    }
+
+    /**
+     * Retourne la liste normalisée des macros de planification.
+     */
+    public static function get_schedule_macro_catalog(): array {
+        $catalog = [
+            [
+                'id' => 'hourly_guard',
+                'label' => __('Sauvegarde horaire continue', 'backup-jlg'),
+                'description' => __('Capture la base et les extensions à chaque heure pleine pour sécuriser les mises à jour fréquentes.', 'backup-jlg'),
+                'expression' => '0 * * * *',
+                'category' => 'hourly',
+                'adjustments' => [
+                    'label' => __('Sauvegarde horaire', 'backup-jlg'),
+                    'components' => ['db', 'plugins'],
+                    'incremental' => false,
+                    'encrypt' => true,
+                    'post_checks' => ['checksum'],
+                ],
+            ],
+            [
+                'id' => 'pre_deploy',
+                'label' => __('Snapshot pré-déploiement', 'backup-jlg'),
+                'description' => __('Renforce la fenêtre de changement en déclenchant un snapshot toutes les dix minutes.', 'backup-jlg'),
+                'expression' => '*/10 * * * *',
+                'category' => 'change-window',
+                'adjustments' => [
+                    'label' => __('Snapshot pré-déploiement', 'backup-jlg'),
+                    'components' => ['db', 'plugins', 'themes'],
+                    'incremental' => false,
+                    'encrypt' => true,
+                    'post_checks' => ['checksum', 'dry_run'],
+                ],
+            ],
+            [
+                'id' => 'weekend_snapshot',
+                'label' => __('Snapshot week-end', 'backup-jlg'),
+                'description' => __('Capture complète le samedi et le dimanche à l’aube pour sécuriser les contenus publiés.', 'backup-jlg'),
+                'expression' => '0 5 * * sat,sun',
+                'category' => 'weekend',
+                'adjustments' => [
+                    'label' => __('Snapshot week-end', 'backup-jlg'),
+                    'components' => ['db', 'uploads'],
+                    'incremental' => true,
+                    'encrypt' => false,
+                    'post_checks' => ['checksum'],
+                ],
+            ],
+        ];
+
+        $filtered = apply_filters('bjlg_schedule_macros', $catalog);
+
+        $sanitized = [];
+        if (is_array($filtered)) {
+            foreach ($filtered as $entry) {
+                if (!is_array($entry) || empty($entry['id']) || empty($entry['expression'])) {
+                    continue;
+                }
+                $id = sanitize_key((string) $entry['id']);
+                if ($id === '') {
+                    continue;
+                }
+                $expression = self::sanitize_cron_expression($entry['expression']);
+                if ($expression === '') {
+                    continue;
+                }
+                $sanitized[$id] = [
+                    'id' => $id,
+                    'label' => isset($entry['label']) ? sanitize_text_field($entry['label']) : $id,
+                    'description' => isset($entry['description']) ? sanitize_text_field($entry['description']) : '',
+                    'expression' => $expression,
+                    'category' => isset($entry['category']) ? sanitize_key((string) $entry['category']) : 'custom',
+                    'adjustments' => self::sanitize_schedule_macro_adjustments($entry['adjustments'] ?? []),
+                ];
+            }
+        }
+
+        return array_values($sanitized);
+    }
+
+    /**
+     * Retourne la macro correspondant à l’identifiant demandé.
+     */
+    public static function get_schedule_macro_by_id(string $id)
+    {
+        $catalog = self::get_schedule_macro_catalog();
+        foreach ($catalog as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            if (($entry['id'] ?? '') === $id) {
+                return $entry;
+            }
+        }
+
+        return null;
+    }
+
+    private static function sanitize_schedule_macro_adjustments($raw): array
+    {
+        $defaults = [
+            'label' => '',
+            'components' => ['db', 'plugins', 'themes', 'uploads'],
+            'incremental' => false,
+            'encrypt' => false,
+            'post_checks' => self::get_default_backup_post_checks(),
+        ];
+
+        $adjustments = is_array($raw) ? $raw : [];
+
+        $label = isset($adjustments['label']) ? sanitize_text_field($adjustments['label']) : '';
+        $components = self::sanitize_schedule_components($adjustments['components'] ?? $defaults['components']);
+        if (empty($components)) {
+            $components = $defaults['components'];
+        }
+        $incremental = self::to_bool_static($adjustments['incremental'] ?? $defaults['incremental']);
+        $encrypt = self::to_bool_static($adjustments['encrypt'] ?? $defaults['encrypt']);
+        $post_checks = self::sanitize_post_checks(
+            $adjustments['post_checks'] ?? $defaults['post_checks'],
+            self::get_default_backup_post_checks()
+        );
+
+        return [
+            'label' => $label,
+            'components' => array_values($components),
+            'incremental' => $incremental,
+            'encrypt' => $encrypt,
+            'post_checks' => $post_checks,
+        ];
     }
 
     private static function generate_schedule_id(): string {
