@@ -43,13 +43,6 @@ jQuery(function($) {
     const ajaxData = window.bjlg_ajax;
 
     const queueActionMap = {
-        'acknowledge-notification': { action: 'bjlg_notification_ack', param: 'entry_id' },
-        'resolve-notification': {
-            action: 'bjlg_notification_resolve',
-            param: 'entry_id',
-            promptField: 'notes',
-            prompt: __('Ajoutez des notes de résolution (optionnel)', 'backup-jlg')
-        },
         'retry-notification': { action: 'bjlg_notification_queue_retry', param: 'entry_id' },
         'clear-notification': { action: 'bjlg_notification_queue_delete', param: 'entry_id' },
         'acknowledge-notification': { action: 'bjlg_notification_acknowledge', param: 'entry_id', summary: { required: false, prompt: __('Ajouter une note pour l’accusé ?', 'backup-jlg') } },
@@ -191,6 +184,494 @@ jQuery(function($) {
             }
             delete state.charts[key];
         }
+    };
+
+    const renderGenericQueueMetrics = function($container, sla) {
+        if (!$container.length) {
+            return;
+        }
+
+        if (!sla || typeof sla !== 'object') {
+            $container.remove();
+            return;
+        }
+
+        let $caption = $container.find('.bjlg-queue-card__metrics-caption');
+        if (sla.updated_relative) {
+            if ($caption.length) {
+                $caption.text(sprintf(__('Mise à jour %s', 'backup-jlg'), sla.updated_relative));
+            } else {
+                $('<p/>', {
+                    'class': 'bjlg-queue-card__metrics-caption',
+                    text: sprintf(__('Mise à jour %s', 'backup-jlg'), sla.updated_relative)
+                }).prependTo($container);
+            }
+        } else if ($caption.length) {
+            $caption.remove();
+        }
+
+        let $list = $container.find('.bjlg-queue-card__metrics-list');
+        if (!$list.length) {
+            $list = $('<ul/>', { 'class': 'bjlg-queue-card__metrics-list' }).appendTo($container);
+        }
+
+        $list.empty();
+
+        if (sla.pending_average) {
+            $('<li/>', { text: sprintf(__('Âge moyen en file : %s', 'backup-jlg'), sla.pending_average) }).appendTo($list);
+        }
+
+        if (sla.pending_oldest) {
+            $('<li/>', { text: sprintf(__('Plus ancien : %s', 'backup-jlg'), sla.pending_oldest) }).appendTo($list);
+        }
+
+        if (sla.pending_over_threshold) {
+            $('<li/>', { text: sprintf(__('%s entrée(s) au-delà du seuil', 'backup-jlg'), formatNumber(Number(sla.pending_over_threshold))) }).appendTo($list);
+        }
+
+        if (sla.pending_destinations) {
+            $('<li/>', { text: sprintf(__('Destinations impactées : %s', 'backup-jlg'), sla.pending_destinations) }).appendTo($list);
+        }
+
+        if (sla.throughput_average) {
+            $('<li/>', { text: sprintf(__('Durée moyenne de purge : %s', 'backup-jlg'), sla.throughput_average) }).appendTo($list);
+        }
+
+        if (sla.throughput_last_completion_relative) {
+            $('<li/>', { text: sprintf(__('Dernière purge réussie %s', 'backup-jlg'), sla.throughput_last_completion_relative) }).appendTo($list);
+        }
+
+        if (sla.failures_total) {
+            $('<li/>', { text: sprintf(__('Échecs cumulés : %s', 'backup-jlg'), formatNumber(Number(sla.failures_total))) }).appendTo($list);
+        }
+
+        if (sla.last_failure_relative && sla.last_failure_message) {
+            $('<li/>', { text: sprintf(__('Dernier échec %1$s : %2$s', 'backup-jlg'), sla.last_failure_relative, sla.last_failure_message) }).appendTo($list);
+        } else if (sla.last_failure_relative) {
+            $('<li/>', { text: sprintf(__('Dernier échec %s', 'backup-jlg'), sla.last_failure_relative) }).appendTo($list);
+        }
+
+        if (sla.forecast_label) {
+            $('<li/>', { text: sla.forecast_label }).appendTo($list);
+        }
+
+        if (sla.forecast_projected_relative) {
+            $('<li/>', { text: sprintf(__('Projection de vidage %s', 'backup-jlg'), sla.forecast_projected_relative) }).appendTo($list);
+        }
+
+        if (Array.isArray(sla.forecast_destinations) && sla.forecast_destinations.length) {
+            sla.forecast_destinations.forEach(function(destination) {
+                if (!destination || typeof destination !== 'object') {
+                    return;
+                }
+
+                const parts = [destination.label || destination.id || ''];
+                if (destination.forecast_label) {
+                    parts.push(destination.forecast_label);
+                }
+                if (destination.projected_relative) {
+                    parts.push(sprintf(__('vidage %s', 'backup-jlg'), destination.projected_relative));
+                }
+
+                $('<li/>', { text: parts.filter(Boolean).join(' • ') }).appendTo($list);
+            });
+        }
+    };
+
+    const updateRemotePurgeChart = function($card, sla) {
+        const $container = $card.find('[data-role="remote-purge-sparkline"]');
+        const dataset = sla && sla.backlog_sparkline
+            && Array.isArray(sla.backlog_sparkline.timestamps)
+            && Array.isArray(sla.backlog_sparkline.values)
+            && sla.backlog_sparkline.timestamps.length > 1
+            ? sla.backlog_sparkline
+            : null;
+
+        if (!dataset) {
+            destroyChart('remotePurge');
+        }
+
+        let $chartWrapper = $container;
+        if (!$chartWrapper.length) {
+            const $sla = $card.find('[data-field="sla"]');
+            if (!$sla.length) {
+                return;
+            }
+
+            $chartWrapper = $('<div/>', {
+                'class': 'bjlg-queue-card__sparkline',
+                'data-role': 'remote-purge-sparkline'
+            }).appendTo($sla);
+
+            $('<canvas/>', {
+                id: 'bjlg-remote-purge-sparkline',
+                'class': 'bjlg-queue-card__sparkline-canvas'
+            }).appendTo($chartWrapper);
+
+            $('<p/>', {
+                'class': 'bjlg-queue-card__sparkline-empty',
+                'data-role': 'empty-message',
+                text: __('Pas encore de tendance mesurée.', 'backup-jlg')
+            }).appendTo($chartWrapper);
+        }
+
+        const $canvas = $chartWrapper.find('canvas');
+        const $emptyMessage = $chartWrapper.find('[data-role="empty-message"]');
+
+        if (!dataset || typeof window.Chart === 'undefined' || !$canvas.length) {
+            if ($canvas.length) {
+                $canvas.attr('hidden', 'hidden');
+            }
+            if ($emptyMessage.length) {
+                $emptyMessage.removeAttr('hidden').show();
+            }
+            return;
+        }
+
+        const labels = dataset.timestamps.map(function(timestamp) {
+            const date = new Date(Number(timestamp) * 1000);
+            if (!Number.isFinite(date.getTime())) {
+                return '';
+            }
+            return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+        });
+
+        $emptyMessage.attr('hidden', 'hidden').hide();
+        $canvas.removeAttr('hidden');
+
+        const ctx = $canvas[0].getContext('2d');
+        if (!ctx) {
+            return;
+        }
+
+        destroyChart('remotePurge');
+
+        state.charts.remotePurge = new window.Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: __('Entrées en file', 'backup-jlg'),
+                    data: dataset.values,
+                    borderColor: '#007cba',
+                    backgroundColor: 'rgba(0, 124, 186, 0.12)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 2,
+                    pointHoverRadius: 3
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            precision: 0
+                        }
+                    },
+                    x: {
+                        ticks: {
+                            maxRotation: 0,
+                            autoSkip: true
+                        }
+                    }
+                }
+            }
+        });
+    };
+
+    const renderRemotePurgeSLA = function($card, queue, sla) {
+        const $sla = $card.find('[data-field="sla"]');
+        if (!$sla.length) {
+            return;
+        }
+
+        if (!sla || typeof sla !== 'object') {
+            destroyChart('remotePurge');
+            $card.removeAttr('data-saturation-warning');
+            $sla.remove();
+            return;
+        }
+
+        let $caption = $sla.find('.bjlg-queue-card__metrics-caption');
+        if (sla.updated_relative) {
+            if ($caption.length) {
+                $caption.text(sprintf(__('Mise à jour %s', 'backup-jlg'), sla.updated_relative));
+            } else {
+                $('<p/>', {
+                    'class': 'bjlg-queue-card__metrics-caption',
+                    text: sprintf(__('Mise à jour %s', 'backup-jlg'), sla.updated_relative)
+                }).prependTo($sla);
+            }
+        } else if ($caption.length) {
+            $caption.remove();
+        }
+
+        let $list = $sla.find('.bjlg-queue-card__metrics-list');
+        if (!$list.length) {
+            $list = $('<ul/>', { 'class': 'bjlg-queue-card__metrics-list' }).appendTo($sla);
+        }
+
+        $list.empty();
+
+        if (sla.pending_average) {
+            $('<li/>', { text: sprintf(__('Âge moyen en file : %s', 'backup-jlg'), sla.pending_average) }).appendTo($list);
+        }
+
+        if (sla.pending_oldest) {
+            $('<li/>', { text: sprintf(__('Plus ancien : %s', 'backup-jlg'), sla.pending_oldest) }).appendTo($list);
+        }
+
+        if (sla.pending_over_threshold) {
+            $('<li/>', { text: sprintf(__('%s entrée(s) au-delà du seuil', 'backup-jlg'), formatNumber(Number(sla.pending_over_threshold))) }).appendTo($list);
+        }
+
+        if (sla.pending_destinations) {
+            $('<li/>', { text: sprintf(__('Destinations impactées : %s', 'backup-jlg'), sla.pending_destinations) }).appendTo($list);
+        }
+
+        if (sla.throughput_average) {
+            $('<li/>', { text: sprintf(__('Durée moyenne de purge : %s', 'backup-jlg'), sla.throughput_average) }).appendTo($list);
+        }
+
+        if (sla.throughput_attempts_average) {
+            $('<li/>', { text: sprintf(__('Tentatives moyennes : %s', 'backup-jlg'), sla.throughput_attempts_average) }).appendTo($list);
+        }
+
+        if (sla.throughput_last_completion) {
+            $('<li/>', { text: sprintf(__('Dernière purge traitée en %s', 'backup-jlg'), sla.throughput_last_completion) }).appendTo($list);
+        }
+
+        if (sla.throughput_last_completion_relative) {
+            $('<li/>', { text: sprintf(__('Dernière purge réussie %s', 'backup-jlg'), sla.throughput_last_completion_relative) }).appendTo($list);
+        }
+
+        if (sla.failure_rate_percent) {
+            $('<li/>', { text: sprintf(__('Taux d’échec : %s', 'backup-jlg'), sla.failure_rate_percent) }).appendTo($list);
+        }
+
+        if (sla.success_rate_percent) {
+            $('<li/>', { text: sprintf(__('Taux de réussite : %s', 'backup-jlg'), sla.success_rate_percent) }).appendTo($list);
+        }
+
+        if (sla.duration_peak) {
+            $('<li/>', { text: sprintf(__('Durée maximale récente : %s', 'backup-jlg'), sla.duration_peak) }).appendTo($list);
+        }
+
+        if (sla.duration_last) {
+            $('<li/>', { text: sprintf(__('Dernière durée observée : %s', 'backup-jlg'), sla.duration_last) }).appendTo($list);
+        }
+
+        if (sla.failures_total) {
+            $('<li/>', { text: sprintf(__('Échecs cumulés : %s', 'backup-jlg'), formatNumber(Number(sla.failures_total))) }).appendTo($list);
+        }
+
+        if (sla.last_failure_relative && sla.last_failure_message) {
+            $('<li/>', { text: sprintf(__('Dernier échec %1$s : %2$s', 'backup-jlg'), sla.last_failure_relative, sla.last_failure_message) }).appendTo($list);
+        } else if (sla.last_failure_relative) {
+            $('<li/>', { text: sprintf(__('Dernier échec %s', 'backup-jlg'), sla.last_failure_relative) }).appendTo($list);
+        }
+
+        if (sla.threshold_label) {
+            $('<li/>', { text: sprintf(__('Seuil SLA : %s', 'backup-jlg'), sla.threshold_label) }).appendTo($list);
+        }
+
+        if (sla.saturation_label) {
+            $('<li/>', { text: sla.saturation_label }).appendTo($list);
+        }
+
+        if (sla.saturation_projected_relative) {
+            $('<li/>', { text: sprintf(__('Dépassement prévu %s', 'backup-jlg'), sla.saturation_projected_relative) }).appendTo($list);
+        }
+
+        if (Array.isArray(sla.saturation_destinations) && sla.saturation_destinations.length) {
+            sla.saturation_destinations.forEach(function(destination) {
+                if (!destination || typeof destination !== 'object') {
+                    return;
+                }
+
+                const parts = [destination.label || destination.id || ''];
+                if (destination.pending !== undefined) {
+                    parts.push(sprintf(__('en file : %s', 'backup-jlg'), formatNumber(Number(destination.pending))));
+                }
+                if (destination.countdown_label) {
+                    parts.push(sprintf(__('seuil dans %s', 'backup-jlg'), destination.countdown_label));
+                }
+                if (destination.projected_relative) {
+                    parts.push(sprintf(__('alerte %s', 'backup-jlg'), destination.projected_relative));
+                }
+
+                $('<li/>', { text: parts.filter(Boolean).join(' • ') }).appendTo($list);
+            });
+        }
+
+        if (sla.forecast_label) {
+            $('<li/>', { text: sla.forecast_label }).appendTo($list);
+        }
+
+        if (sla.forecast_projected_relative) {
+            $('<li/>', { text: sprintf(__('Projection de vidage %s', 'backup-jlg'), sla.forecast_projected_relative) }).appendTo($list);
+        }
+
+        if (Array.isArray(sla.forecast_destinations) && sla.forecast_destinations.length) {
+            sla.forecast_destinations.forEach(function(destination) {
+                if (!destination || typeof destination !== 'object') {
+                    return;
+                }
+
+                const parts = [destination.label || destination.id || ''];
+                if (destination.forecast_label) {
+                    parts.push(destination.forecast_label);
+                }
+                if (destination.projected_relative) {
+                    parts.push(sprintf(__('vidage %s', 'backup-jlg'), destination.projected_relative));
+                }
+
+                $('<li/>', { text: parts.filter(Boolean).join(' • ') }).appendTo($list);
+            });
+        }
+
+        if (sla.saturation_warning) {
+            $card.attr('data-saturation-warning', 'true');
+        } else {
+            $card.removeAttr('data-saturation-warning');
+        }
+
+        updateRemotePurgeChart($card, sla);
+
+        let $cta = $card.find('[data-role="remote-purge-cta"]');
+        if (sla.saturation_warning) {
+            const message = sla.saturation_label || __('Risque de dépassement du SLA détecté.', 'backup-jlg');
+            if (!$cta.length) {
+                $cta = $('<div/>', {
+                    'class': 'bjlg-queue-card__cta',
+                    'data-role': 'remote-purge-cta'
+                }).appendTo($card);
+
+                $('<p/>', {
+                    'data-role': 'cta-message',
+                    'class': 'bjlg-queue-card__cta-message',
+                    text: message
+                }).appendTo($cta);
+
+                const $actions = $('<div/>', { 'class': 'bjlg-queue-card__cta-actions' }).appendTo($cta);
+                $('<button/>', {
+                    type: 'button',
+                    'class': 'button button-primary button-small',
+                    'data-remote-purge-bulk': 'retry',
+                    text: __('Relancer toutes les purges', 'backup-jlg')
+                }).appendTo($actions);
+                $('<button/>', {
+                    type: 'button',
+                    'class': 'button button-secondary button-small',
+                    'data-remote-purge-bulk': 'purge',
+                    text: __('Purger manuellement', 'backup-jlg')
+                }).appendTo($actions);
+            } else {
+                $cta.find('[data-role="cta-message"]').text(message);
+            }
+        } else if ($cta.length) {
+            $cta.remove();
+        }
+    };
+
+    const executeRemotePurgeBulkAction = function(mode) {
+        if (!ajaxData.ajax_url || !ajaxData.nonce) {
+            announce(__('Impossible de contacter le serveur. Rechargez la page.', 'backup-jlg'), 'assertive');
+            return $.Deferred().reject().promise();
+        }
+
+        const queue = state.metrics.queues && state.metrics.queues.remote_purge;
+        if (!queue) {
+            announce(__('Aucune donnée de purge distante.', 'backup-jlg'), 'assertive');
+            return $.Deferred().resolve().promise();
+        }
+
+        const entries = Array.isArray(queue.entries) ? queue.entries : [];
+        const files = entries
+            .map(function(entry) {
+                return entry && entry.file ? entry.file : null;
+            })
+            .filter(Boolean);
+
+        if (!files.length) {
+            announce(__('Aucune purge à traiter.', 'backup-jlg'), 'polite');
+            return $.Deferred().resolve().promise();
+        }
+
+        const config = mode === 'purge'
+            ? {
+                action: 'bjlg_remote_purge_delete',
+                successMessage: __('Entrées retirées de la file.', 'backup-jlg')
+            }
+            : {
+                action: 'bjlg_remote_purge_retry',
+                successMessage: __('Purges distantes relancées.', 'backup-jlg')
+            };
+
+        let hadError = false;
+        let lastError = '';
+        let lastMetrics = null;
+        const deferred = $.Deferred();
+
+        const process = function(index) {
+            if (index >= files.length) {
+                deferred.resolve({ hadError: hadError, lastError: lastError, lastMetrics: lastMetrics });
+                return;
+            }
+
+            $.ajax({
+                url: ajaxData.ajax_url,
+                method: 'POST',
+                data: {
+                    action: config.action,
+                    nonce: ajaxData.nonce,
+                    file: files[index]
+                }
+            })
+                .done(function(response) {
+                    if (response && response.success && response.data && response.data.metrics) {
+                        lastMetrics = response.data.metrics;
+                    }
+                })
+                .fail(function(response) {
+                    hadError = true;
+                    if (response && response.responseJSON && response.responseJSON.data && response.responseJSON.data.message) {
+                        lastError = response.responseJSON.data.message;
+                    } else {
+                        lastError = __('Erreur lors de l’opération groupée.', 'backup-jlg');
+                    }
+                })
+                .always(function() {
+                    process(index + 1);
+                });
+        };
+
+        process(0);
+
+        return deferred.promise().then(function(result) {
+            if (result.lastMetrics && window.bjlgDashboard && typeof window.bjlgDashboard.updateMetrics === 'function') {
+                window.bjlgDashboard.updateMetrics(result.lastMetrics);
+            }
+
+            if (result.hadError) {
+                announce(result.lastError || __('Certaines opérations ont échoué.', 'backup-jlg'), 'assertive');
+            } else {
+                announce(config.successMessage, 'assertive');
+            }
+        });
     };
 
     const updateSummary = function(summary) {
@@ -660,103 +1141,11 @@ jQuery(function($) {
 
             const sla = queue.sla || null;
             const $sla = $card.find('[data-field="sla"]');
-            if ($sla.length) {
-                if (sla && typeof sla === 'object') {
-                    const $caption = $sla.find('.bjlg-queue-card__metrics-caption');
-                    if (sla.updated_relative) {
-                        if ($caption.length) {
-                            $caption.text(sprintf(__('Mise à jour %s', 'backup-jlg'), sla.updated_relative));
-                        } else {
-                            $('<p/>', {
-                                'class': 'bjlg-queue-card__metrics-caption',
-                                text: sprintf(__('Mise à jour %s', 'backup-jlg'), sla.updated_relative)
-                            }).prependTo($sla);
-                        }
-                    } else if ($caption.length) {
-                        $caption.remove();
-                    }
 
-                    const $list = $sla.find('.bjlg-queue-card__metrics-list');
-                    if ($list.length) {
-                        $list.empty();
-
-                        if (sla.pending_average) {
-                            $('<li/>', { text: sprintf(__('Âge moyen en file : %s', 'backup-jlg'), sla.pending_average) }).appendTo($list);
-                        }
-
-                        if (sla.pending_oldest) {
-                            $('<li/>', { text: sprintf(__('Plus ancien : %s', 'backup-jlg'), sla.pending_oldest) }).appendTo($list);
-                        }
-
-                        if (sla.pending_over_threshold) {
-                            $('<li/>', { text: sprintf(__('%s entrée(s) au-delà du seuil', 'backup-jlg'), formatNumber(Number(sla.pending_over_threshold))) }).appendTo($list);
-                        }
-
-                        if (sla.pending_destinations) {
-                            $('<li/>', { text: sprintf(__('Destinations impactées : %s', 'backup-jlg'), sla.pending_destinations) }).appendTo($list);
-                        }
-
-                        if (sla.throughput_average) {
-                            $('<li/>', { text: sprintf(__('Durée moyenne de purge : %s', 'backup-jlg'), sla.throughput_average) }).appendTo($list);
-                        }
-
-                        if (sla.duration_peak) {
-                            $('<li/>', { text: sprintf(__('Durée maximale récente : %s', 'backup-jlg'), sla.duration_peak) }).appendTo($list);
-                        }
-
-                        if (sla.duration_last) {
-                            $('<li/>', { text: sprintf(__('Dernière purge traitée en %s', 'backup-jlg'), sla.duration_last) }).appendTo($list);
-                        }
-
-                        if (sla.throughput_last_completion_relative) {
-                            $('<li/>', { text: sprintf(__('Dernière purge réussie %s', 'backup-jlg'), sla.throughput_last_completion_relative) }).appendTo($list);
-                        }
-
-                        if (sla.failures_total) {
-                            $('<li/>', { text: sprintf(__('Échecs cumulés : %s', 'backup-jlg'), formatNumber(Number(sla.failures_total))) }).appendTo($list);
-                        }
-
-                        if (sla.last_failure_relative && sla.last_failure_message) {
-                            $('<li/>', { text: sprintf(__('Dernier échec %1$s : %2$s', 'backup-jlg'), sla.last_failure_relative, sla.last_failure_message) }).appendTo($list);
-                        } else if (sla.last_failure_relative) {
-                            $('<li/>', { text: sprintf(__('Dernier échec %s', 'backup-jlg'), sla.last_failure_relative) }).appendTo($list);
-                        }
-
-                        if (sla.forecast_label) {
-                            $('<li/>', { text: sla.forecast_label }).appendTo($list);
-                        }
-
-                        if (sla.forecast_projected_relative) {
-                            $('<li/>', { text: sprintf(__('Projection de vidage %s', 'backup-jlg'), sla.forecast_projected_relative) }).appendTo($list);
-                        }
-
-                        if (Array.isArray(sla.forecast_destinations) && sla.forecast_destinations.length) {
-                            sla.forecast_destinations.forEach(function(destination) {
-                                if (!destination || typeof destination !== 'object') {
-                                    return;
-                                }
-
-                                const parts = [destination.label || destination.id || ''];
-                                if (destination.forecast_label) {
-                                    parts.push(destination.forecast_label);
-                                }
-                                if (destination.projected_relative) {
-                                    parts.push(sprintf(__('vidage %s', 'backup-jlg'), destination.projected_relative));
-                                }
-
-                                $('<li/>', { text: parts.filter(Boolean).join(' • ') }).appendTo($list);
-                            });
-                        }
-                    }
-                } else {
-                    $sla.remove();
-                }
-            }
-
-            if (sla && sla.saturation_warning) {
-                $card.attr('data-saturation-warning', 'true');
+            if (key === 'remote_purge') {
+                renderRemotePurgeSLA($card, queue, sla);
             } else {
-                $card.removeAttr('data-saturation-warning');
+                renderGenericQueueMetrics($sla, sla);
             }
 
             const $entries = $card.find('[data-role="entries"]');
@@ -825,6 +1214,27 @@ jQuery(function($) {
                         'class': 'bjlg-queue-card__entry-meta',
                         text: sprintf(__('Destinations : %s', 'backup-jlg'), entry.details.destinations)
                     }).appendTo($entry);
+                }
+
+                if (entry.details && Array.isArray(entry.details.saturation) && entry.details.saturation.length) {
+                    entry.details.saturation.forEach(function(alert) {
+                        if (!alert || typeof alert !== 'object') {
+                            return;
+                        }
+
+                        const parts = [alert.label || alert.id || ''];
+                        if (alert.countdown_label) {
+                            parts.push(sprintf(__('seuil dans %s', 'backup-jlg'), alert.countdown_label));
+                        }
+                        if (alert.projected_relative) {
+                            parts.push(sprintf(__('alerte %s', 'backup-jlg'), alert.projected_relative));
+                        }
+
+                        $('<p/>', {
+                            'class': 'bjlg-queue-card__entry-flag',
+                            text: parts.filter(Boolean).join(' • ')
+                        }).appendTo($entry);
+                    });
                 }
 
                 if (entry.details && entry.details.quiet_until_relative) {
@@ -1378,6 +1788,24 @@ jQuery(function($) {
                 const errorMessage = __('Erreur de communication avec le serveur.', 'backup-jlg');
                 announce(errorMessage, 'assertive');
             })
+            .always(function() {
+                $button.prop('disabled', false).removeAttr('aria-busy');
+            });
+    });
+
+    $queueDelegateRoot.on('click', '[data-remote-purge-bulk]', function(event) {
+        event.preventDefault();
+
+        const $button = $(this);
+        const mode = $button.data('remotePurgeBulk');
+
+        if (!mode || $button.prop('disabled')) {
+            return;
+        }
+
+        $button.prop('disabled', true).attr('aria-busy', 'true');
+
+        executeRemotePurgeBulkAction(mode)
             .always(function() {
                 $button.prop('disabled', false).removeAttr('aria-busy');
             });
