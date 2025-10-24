@@ -657,12 +657,26 @@ class BJLG_Admin_Advanced {
             $details['resolution_status'] = $resolution_status;
             $details['resolution_status_label'] = $this->get_resolution_status_label($resolution_status);
 
+            if (!empty($entry['resolution_summary'])) {
+                $details['resolution_summary'] = function_exists('sanitize_textarea_field')
+                    ? sanitize_textarea_field((string) $entry['resolution_summary'])
+                    : sanitize_text_field((string) $entry['resolution_summary']);
+            }
+
             if ($resolution_payload) {
                 $details['acknowledged_relative'] = $resolution_payload['acknowledged_relative'] ?? '';
                 $details['acknowledged_formatted'] = $resolution_payload['acknowledged_formatted'] ?? '';
                 $details['resolved_relative'] = $resolution_payload['resolved_relative'] ?? '';
                 $details['resolved_formatted'] = $resolution_payload['resolved_formatted'] ?? '';
                 $details['resolution_steps'] = $resolution_payload['steps'] ?? [];
+                if (empty($details['resolution_summary']) && !empty($resolution_payload['steps']) && is_array($resolution_payload['steps'])) {
+                    $summary = BJLG_Notification_Queue::summarize_resolution_steps($resolution_payload['steps']);
+                    if ($summary !== '') {
+                        $details['resolution_summary'] = function_exists('sanitize_textarea_field')
+                            ? sanitize_textarea_field($summary)
+                            : sanitize_text_field($summary);
+                    }
+                }
             } elseif (!empty($entry['resolution']) && is_array($entry['resolution'])) {
                 $acknowledged = isset($entry['resolution']['acknowledged_at']) ? (int) $entry['resolution']['acknowledged_at'] : 0;
                 $resolved = isset($entry['resolution']['resolved_at']) ? (int) $entry['resolution']['resolved_at'] : 0;

@@ -1773,6 +1773,9 @@ class BJLG_Admin {
                                                     <?php if ($attempt_label !== ''): ?>
                                                         <span><?php echo esc_html($attempt_label); ?></span>
                                                     <?php endif; ?>
+                                                    <?php if (!empty($details['resolution_status_label'])): ?>
+                                                        <span><?php echo esc_html($details['resolution_status_label']); ?></span>
+                                                    <?php endif; ?>
                                                 </p>
 
                                                 <p class="bjlg-queue-card__entry-meta" data-field="timestamps">
@@ -1839,8 +1842,30 @@ class BJLG_Admin {
                                                     <p class="bjlg-queue-card__entry-message"><?php echo esc_html($entry['message']); ?></p>
                                                 <?php endif; ?>
 
+                                                <?php if (!empty($details['resolution_summary'])): ?>
+                                                    <div class="bjlg-queue-card__entry-summary" data-field="resolution-summary">
+                                                        <strong class="bjlg-queue-card__entry-summary-label"><?php esc_html_e('Chronologie des actions', 'backup-jlg'); ?></strong>
+                                                        <ul>
+                                                            <?php foreach (explode("\n", (string) $details['resolution_summary']) as $summary_line):
+                                                                $summary_line = trim($summary_line);
+                                                                if ($summary_line === '') {
+                                                                    continue;
+                                                                }
+                                                                ?>
+                                                                <li><?php echo esc_html($summary_line); ?></li>
+                                                            <?php endforeach; ?>
+                                                        </ul>
+                                                    </div>
+                                                <?php endif; ?>
+
                                                 <div class="bjlg-queue-card__entry-actions">
                                                     <?php if ($queue_key === 'notifications' && $entry_id !== ''): ?>
+                                                        <button type="button" class="button button-secondary button-small" data-queue-action="acknowledge-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>" <?php disabled(!empty($entry['acknowledged'])); ?>>
+                                                            <?php esc_html_e('Accuser réception', 'backup-jlg'); ?>
+                                                        </button>
+                                                        <button type="button" class="button button-secondary button-small" data-queue-action="resolve-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>" <?php disabled(!empty($entry['resolved'])); ?>>
+                                                            <?php esc_html_e('Clore', 'backup-jlg'); ?>
+                                                        </button>
                                                         <button type="button" class="button button-secondary button-small" data-queue-action="retry-notification" data-entry-id="<?php echo esc_attr($entry_id); ?>">
                                                             <?php esc_html_e('Relancer', 'backup-jlg'); ?>
                                                         </button>
