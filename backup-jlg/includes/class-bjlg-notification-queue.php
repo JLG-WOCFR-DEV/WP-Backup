@@ -912,6 +912,8 @@ class BJLG_Notification_Queue {
             case 'sms':
                 $webhook = isset($channel['webhook_url']) ? (string) $channel['webhook_url'] : '';
                 return BJLG_Notification_Transport::send_sms($webhook, $title, $lines);
+            case 'internal':
+                return ['success' => true];
         }
 
         return [

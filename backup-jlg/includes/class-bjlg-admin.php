@@ -3753,6 +3753,64 @@ class BJLG_Admin {
             $update_guard_components = $update_guard_settings['components'];
         }
         $update_guard_settings['components'] = $update_guard_components;
+
+        $target_defaults = [
+            'core' => true,
+            'plugin' => true,
+            'theme' => true,
+        ];
+        $current_targets = [];
+        if (isset($update_guard_settings['targets']) && is_array($update_guard_settings['targets'])) {
+            foreach ($update_guard_settings['targets'] as $target_key => $enabled) {
+                $key = sanitize_key((string) $target_key);
+                if ($key === '' || !array_key_exists($key, $target_defaults)) {
+                    continue;
+                }
+                $current_targets[$key] = !empty($enabled);
+            }
+        }
+        $update_guard_settings['targets'] = array_merge($target_defaults, $current_targets);
+
+        $reminder_defaults = $update_guard_defaults['reminder'];
+        $reminder_settings = isset($update_guard_settings['reminder']) && is_array($update_guard_settings['reminder'])
+            ? $update_guard_settings['reminder']
+            : $reminder_defaults;
+
+        $reminder_settings['enabled'] = !empty($reminder_settings['enabled']);
+        $reminder_settings['message'] = isset($reminder_settings['message']) && $reminder_settings['message'] !== ''
+            ? (string) $reminder_settings['message']
+            : $reminder_defaults['message'];
+
+        $channel_defaults = $reminder_defaults['channels'];
+        $channels = isset($reminder_settings['channels']) && is_array($reminder_settings['channels'])
+            ? $reminder_settings['channels']
+            : [];
+
+        foreach ($channel_defaults as $channel_key => $channel_default) {
+            if (!isset($channels[$channel_key]) || !is_array($channels[$channel_key])) {
+                $channels[$channel_key] = $channel_default;
+                continue;
+            }
+
+            $channels[$channel_key] = wp_parse_args($channels[$channel_key], $channel_default);
+            $channels[$channel_key]['enabled'] = !empty($channels[$channel_key]['enabled']);
+            if ($channel_key === 'email') {
+                $channels[$channel_key]['recipients'] = isset($channels[$channel_key]['recipients'])
+                    ? (string) $channels[$channel_key]['recipients']
+                    : '';
+            }
+        }
+
+        $reminder_settings['channels'] = $channels;
+        $update_guard_settings['reminder'] = $reminder_settings;
+        $update_guard_email_recipients_display = '';
+        if (!empty($channels['email']['recipients'])) {
+            $emails = preg_split('/[,;\r\n]+/', (string) $channels['email']['recipients']);
+            if (is_array($emails)) {
+                $emails = array_filter(array_map('trim', $emails));
+                $update_guard_email_recipients_display = implode("\n", $emails);
+            }
+        }
         $default_next_run_summary = [
             'next_run_formatted' => 'Non planifié',
             'next_run_relative' => '',
@@ -4114,104 +4172,162 @@ class BJLG_Admin {
                 <p class="submit"><button type="submit" class="button button-primary">Enregistrer les planifications</button></p>
             </form>
 
-            <section class="bjlg-restore-check" aria-labelledby="bjlg-restore-check-title">
-                <header class="bjlg-restore-check__header">
-                    <h4 id="bjlg-restore-check-title"><?php esc_html_e('Validation automatique des restaurations', 'backup-jlg'); ?></h4>
-                    <p class="description"><?php esc_html_e('Planifiez une restauration vers une sandbox pour vérifier automatiquement vos sauvegardes et mesurer vos objectifs RTO/RPO.', 'backup-jlg'); ?></p>
-                </header>
-                <form id="bjlg-restore-check-form" data-restore-check="<?php echo $restore_check_json; ?>">
-                    <div id="bjlg-restore-check-feedback" class="notice" role="status" aria-live="polite" style="display:none;"></div>
-                    <table class="form-table">
-                        <tr>
-                            <th scope="row"><?php esc_html_e('Validation programmée', 'backup-jlg'); ?></th>
-                            <td>
-                                <label>
-                                    <input type="checkbox" name="enabled" value="1" data-restore-field="enabled">
-                                    <?php esc_html_e('Activer la validation périodique dans une sandbox isolée', 'backup-jlg'); ?>
+            <h3><span class="dashicons dashicons-shield" aria-hidden="true"></span> Snapshot pré-update</h3>
+            <form class="bjlg-settings-form bjlg-update-guard-form"
+                  data-success-message="Paramètres du snapshot pré-update sauvegardés."
+                  data-error-message="Impossible de mettre à jour le snapshot pré-update.">
+                <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">Protection automatique</th>
+                        <td>
+                            <label for="bjlg-update-guard-enabled" class="bjlg-toggle">
+                                <input type="checkbox"
+                                       id="bjlg-update-guard-enabled"
+                                       name="update_guard_enabled"
+                                       value="1"
+                                       <?php checked(!empty($update_guard_settings['enabled'])); ?>
+                                       aria-describedby="bjlg-update-guard-enabled-description">
+                                <span><?php esc_html_e('Déclencher un snapshot avant chaque mise à jour', 'backup-jlg'); ?></span>
+                            </label>
+                            <p id="bjlg-update-guard-enabled-description" class="description">
+                                <?php esc_html_e('Lorsque cette option est active, un point de restauration est créé avant l’exécution des mises à jour correspondantes.', 'backup-jlg'); ?>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr class="bjlg-update-guard-fields">
+                        <th scope="row"><?php esc_html_e('Composants à inclure', 'backup-jlg'); ?></th>
+                        <td>
+                            <fieldset class="bjlg-update-guard-fieldset" aria-describedby="bjlg-update-guard-components-help">
+                                <legend class="screen-reader-text"><?php esc_html_e('Sélectionner les composants à sauvegarder', 'backup-jlg'); ?></legend>
+                                <ul class="bjlg-checkbox-list" role="list">
+                                    <?php foreach ($components_labels as $component_key => $component_label): ?>
+                                        <li>
+                                            <label for="bjlg-update-guard-component-<?php echo esc_attr($component_key); ?>">
+                                                <input type="checkbox"
+                                                       id="bjlg-update-guard-component-<?php echo esc_attr($component_key); ?>"
+                                                       name="update_guard_components[]"
+                                                       value="<?php echo esc_attr($component_key); ?>"
+                                                       <?php checked(in_array($component_key, $update_guard_settings['components'], true)); ?>>
+                                                <span><?php echo esc_html($component_label); ?></span>
+                                            </label>
+                                        </li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            </fieldset>
+                            <p id="bjlg-update-guard-components-help" class="description">
+                                <?php esc_html_e('Conservez au minimum la base de données et les extensions pour les mises à jour critiques ; ajoutez les médias et thèmes lors des fenêtres de maintenance planifiées.', 'backup-jlg'); ?>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr class="bjlg-update-guard-fields">
+                        <th scope="row"><?php esc_html_e('Types de mise à jour', 'backup-jlg'); ?></th>
+                        <td>
+                            <?php $update_guard_target_labels = [
+                                'core' => __('Cœur WordPress', 'backup-jlg'),
+                                'plugin' => __('Extensions', 'backup-jlg'),
+                                'theme' => __('Thèmes', 'backup-jlg'),
+                            ]; ?>
+                            <fieldset class="bjlg-update-guard-fieldset" aria-describedby="bjlg-update-guard-targets-help">
+                                <legend class="screen-reader-text"><?php esc_html_e('Choisir les mises à jour surveillées', 'backup-jlg'); ?></legend>
+                                <ul class="bjlg-checkbox-list" role="list">
+                                    <?php foreach ($update_guard_target_labels as $target_key => $target_label): ?>
+                                        <li>
+                                            <label for="bjlg-update-guard-target-<?php echo esc_attr($target_key); ?>">
+                                                <input type="checkbox"
+                                                       id="bjlg-update-guard-target-<?php echo esc_attr($target_key); ?>"
+                                                       name="update_guard_targets[]"
+                                                       value="<?php echo esc_attr($target_key); ?>"
+                                                       <?php checked(!empty($update_guard_settings['targets'][$target_key])); ?>>
+                                                <span><?php echo esc_html($target_label); ?></span>
+                                            </label>
+                                        </li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            </fieldset>
+                            <p id="bjlg-update-guard-targets-help" class="description">
+                                <?php esc_html_e('Désactivez les snapshots pour les mises à jour mineures afin d’accélérer les correctifs ; conservez-les pour les évolutions majeures ou à fort impact.', 'backup-jlg'); ?>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr class="bjlg-update-guard-fields">
+                        <th scope="row"><?php esc_html_e('Rappels', 'backup-jlg'); ?></th>
+                        <td>
+                            <label for="bjlg-update-guard-reminder-enabled" class="bjlg-toggle">
+                                <input type="checkbox"
+                                       id="bjlg-update-guard-reminder-enabled"
+                                       name="update_guard_reminder_enabled"
+                                       value="1"
+                                       <?php checked(!empty($update_guard_settings['reminder']['enabled'])); ?>
+                                       aria-describedby="bjlg-update-guard-reminder-help">
+                                <span><?php esc_html_e('Notifier lorsqu’un snapshot est ignoré', 'backup-jlg'); ?></span>
+                            </label>
+                            <p id="bjlg-update-guard-reminder-help" class="description">
+                                <?php esc_html_e('Les rappels informent votre équipe qu’un snapshot est requis ou a été omis selon les règles ci-dessus.', 'backup-jlg'); ?>
+                            </p>
+                            <div class="bjlg-update-guard-reminder-fields">
+                                <label for="bjlg-update-guard-reminder-message" class="bjlg-label-block bjlg-fw-600">
+                                    <?php esc_html_e('Message affiché', 'backup-jlg'); ?>
                                 </label>
-                                <p class="description"><?php esc_html_e('Une restauration de contrôle sera effectuée avec les paramètres ci-dessous.', 'backup-jlg'); ?></p>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row"><?php esc_html_e('Fréquence', 'backup-jlg'); ?></th>
-                            <td>
-                                <select name="recurrence" data-restore-field="recurrence">
-                                    <option value="daily"><?php esc_html_e('Quotidienne', 'backup-jlg'); ?></option>
-                                    <option value="twice_daily"><?php esc_html_e('Deux fois par jour', 'backup-jlg'); ?></option>
-                                    <option value="hourly"><?php esc_html_e('Toutes les heures', 'backup-jlg'); ?></option>
-                                    <option value="weekly"><?php esc_html_e('Hebdomadaire', 'backup-jlg'); ?></option>
-                                    <option value="monthly"><?php esc_html_e('Mensuelle', 'backup-jlg'); ?></option>
-                                </select>
-                            </td>
-                        </tr>
-                        <tr class="bjlg-restore-check-weekly" aria-hidden="true">
-                            <th scope="row"><?php esc_html_e('Jour de la semaine', 'backup-jlg'); ?></th>
-                            <td>
-                                <select name="day" data-restore-field="day">
-                                    <?php
-                                    $days = [
-                                        'monday' => __('Lundi', 'backup-jlg'),
-                                        'tuesday' => __('Mardi', 'backup-jlg'),
-                                        'wednesday' => __('Mercredi', 'backup-jlg'),
-                                        'thursday' => __('Jeudi', 'backup-jlg'),
-                                        'friday' => __('Vendredi', 'backup-jlg'),
-                                        'saturday' => __('Samedi', 'backup-jlg'),
-                                        'sunday' => __('Dimanche', 'backup-jlg'),
-                                    ];
-                                    foreach ($days as $key => $label) {
-                                        printf('<option value="%1$s">%2$s</option>', esc_attr($key), esc_html($label));
-                                    }
-                                    ?>
-                                </select>
-                            </td>
-                        </tr>
-                        <tr class="bjlg-restore-check-monthly" aria-hidden="true">
-                            <th scope="row"><?php esc_html_e('Jour du mois', 'backup-jlg'); ?></th>
-                            <td>
-                                <input type="number" name="day_of_month" min="1" max="31" data-restore-field="day_of_month" class="small-text">
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row"><?php esc_html_e('Heure locale', 'backup-jlg'); ?></th>
-                            <td>
-                                <input type="time" name="time" data-restore-field="time">
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row"><?php esc_html_e('Composants restaurés', 'backup-jlg'); ?></th>
-                            <td>
-                                <label><input type="checkbox" name="components[]" value="db" data-restore-component="db"> <?php esc_html_e('Base de données', 'backup-jlg'); ?></label><br>
-                                <label><input type="checkbox" name="components[]" value="plugins" data-restore-component="plugins"> <?php esc_html_e('Extensions', 'backup-jlg'); ?></label><br>
-                                <label><input type="checkbox" name="components[]" value="themes" data-restore-component="themes"> <?php esc_html_e('Thèmes', 'backup-jlg'); ?></label><br>
-                                <label><input type="checkbox" name="components[]" value="uploads" data-restore-component="uploads"> <?php esc_html_e('Médias', 'backup-jlg'); ?></label>
-                                <p class="description"><?php esc_html_e('Sélectionnez les éléments à vérifier lors de la restauration.', 'backup-jlg'); ?></p>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row"><?php esc_html_e('Chemin sandbox personnalisé', 'backup-jlg'); ?></th>
-                            <td>
-                                <input type="text" class="regular-text" name="sandbox_path" data-restore-field="sandbox_path" placeholder="/tmp/bjlg-sandbox">
-                                <p class="description"><?php esc_html_e('Laissez vide pour utiliser le dossier sandbox par défaut.', 'backup-jlg'); ?></p>
-                            </td>
-                        </tr>
-                        <tr class="bjlg-restore-check-next-run">
-                            <th scope="row"><?php esc_html_e('Prochaine exécution', 'backup-jlg'); ?></th>
-                            <td>
-                                <span class="bjlg-restore-check-next-run-value" data-restore-next-run>—</span>
-                                <span class="description" data-restore-next-run-relative></span>
-                            </td>
-                        </tr>
-                        <tr class="bjlg-restore-check-last-run">
-                            <th scope="row"><?php esc_html_e('Dernier résultat', 'backup-jlg'); ?></th>
-                            <td>
-                                <span class="bjlg-restore-check-last-status" data-restore-last-status>—</span>
-                                <p class="description" data-restore-last-message></p>
-                            </td>
-                        </tr>
-                    </table>
-                    <p class="submit"><button type="submit" class="button button-secondary"><?php esc_html_e('Enregistrer la validation programmée', 'backup-jlg'); ?></button></p>
-                </form>
-            </section>
+                                <textarea id="bjlg-update-guard-reminder-message"
+                                          name="update_guard_reminder_message"
+                                          class="large-text"
+                                          rows="3"
+                                          aria-describedby="bjlg-update-guard-reminder-message-help"><?php echo esc_textarea($update_guard_settings['reminder']['message']); ?></textarea>
+                                <p id="bjlg-update-guard-reminder-message-help" class="description">
+                                    <?php esc_html_e('Décrivez les étapes à suivre (tests, validation, sauvegarde manuelle) pour que le rappel soit immédiatement exploitable.', 'backup-jlg'); ?>
+                                </p>
+                                <fieldset class="bjlg-update-guard-reminder-channels" aria-describedby="bjlg-update-guard-reminder-channels-help">
+                                    <legend class="bjlg-fw-600"><?php esc_html_e('Canaux à utiliser', 'backup-jlg'); ?></legend>
+                                    <ul class="bjlg-checkbox-list" role="list">
+                                        <li>
+                                            <label for="bjlg-update-guard-reminder-channel-notification">
+                                                <input type="checkbox"
+                                                       id="bjlg-update-guard-reminder-channel-notification"
+                                                       name="update_guard_reminder_channel_notification"
+                                                       value="1"
+                                                       <?php checked(!empty($update_guard_settings['reminder']['channels']['notification']['enabled'])); ?>>
+                                                <span><?php esc_html_e('Notification interne (journal & centre d’alertes)', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                        <li>
+                                            <label for="bjlg-update-guard-reminder-channel-email">
+                                                <input type="checkbox"
+                                                       id="bjlg-update-guard-reminder-channel-email"
+                                                       name="update_guard_reminder_channel_email"
+                                                       value="1"
+                                                       <?php checked(!empty($update_guard_settings['reminder']['channels']['email']['enabled'])); ?>>
+                                                <span><?php esc_html_e('E-mail dédié', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                    </ul>
+                                    <p id="bjlg-update-guard-reminder-channels-help" class="description">
+                                        <?php esc_html_e('Activez uniquement les canaux pertinents pour éviter la lassitude : privilégiez l’e-mail pour les équipes d’astreinte, l’alerte interne pour le suivi quotidien.', 'backup-jlg'); ?>
+                                    </p>
+                                </fieldset>
+                                <div class="bjlg-update-guard-reminder-email-fields">
+                                    <label for="bjlg-update-guard-reminder-email-recipients" class="bjlg-label-block bjlg-fw-600">
+                                        <?php esc_html_e('Destinataires e-mail', 'backup-jlg'); ?>
+                                    </label>
+                                    <textarea id="bjlg-update-guard-reminder-email-recipients"
+                                              name="update_guard_reminder_email_recipients"
+                                              class="large-text code"
+                                              rows="3"
+                                              placeholder="admin@example.com&#10;ops@example.com"
+                                              aria-describedby="bjlg-update-guard-reminder-email-help"><?php echo esc_textarea($update_guard_email_recipients_display); ?></textarea>
+                                    <p id="bjlg-update-guard-reminder-email-help" class="description">
+                                        <?php esc_html_e('Une adresse par ligne ou séparée par une virgule. L’adresse e-mail d’administration du site est utilisée par défaut si cette liste est vide.', 'backup-jlg'); ?>
+                                    </p>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+                <p class="description">
+                    <?php esc_html_e('Ces réglages sont disponibles via l’API REST afin de synchroniser votre politique de snapshots avec vos pipelines de déploiement.', 'backup-jlg'); ?>
+                </p>
+                <p class="submit"><button type="submit" class="button button-primary"><?php esc_html_e('Enregistrer la section Snapshot', 'backup-jlg'); ?></button></p>
+            </form>
 
             <h3><span class="dashicons dashicons-admin-links" aria-hidden="true"></span> Webhook</h3>
             <form id="bjlg-webhook-tools" class="bjlg-webhook-form" aria-labelledby="bjlg-webhook-tools-title">
