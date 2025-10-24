@@ -3361,6 +3361,23 @@ class BJLG_Admin {
             : $event_defaults;
         $event_triggers_json = esc_attr(wp_json_encode($event_triggers));
         $event_defaults_json = esc_attr(wp_json_encode($event_defaults));
+        $restore_check = isset($schedule_collection['restore_check']) && is_array($schedule_collection['restore_check'])
+            ? $schedule_collection['restore_check']
+            : [
+                'settings' => BJLG_Scheduler::sanitize_restore_check_settings([]),
+                'state' => [
+                    'last_run' => null,
+                    'last_status' => null,
+                    'last_message' => '',
+                    'last_report' => null,
+                ],
+                'schedule' => [
+                    'next_run' => null,
+                    'next_run_formatted' => null,
+                    'next_run_relative' => null,
+                ],
+            ];
+        $restore_check_json = esc_attr(wp_json_encode($restore_check));
         $event_trigger_labels = [
             'filesystem' => [
                 'title' => __('Fichiers & médias', 'backup-jlg'),
@@ -3735,6 +3752,7 @@ class BJLG_Admin {
                 data-schedules="<?php echo $schedules_json; ?>"
                 data-event-triggers="<?php echo $event_triggers_json; ?>"
                 data-event-defaults="<?php echo $event_defaults_json; ?>"
+                data-restore-check="<?php echo $restore_check_json; ?>"
             >
                 <div id="bjlg-schedule-feedback" class="notice" role="status" aria-live="polite" style="display:none;"></div>
                 <div class="bjlg-schedule-list">
@@ -5489,12 +5507,57 @@ class BJLG_Admin {
             }
         }
 
+        $restore_defaults = BJLG_Scheduler::sanitize_restore_check_settings([]);
+        $restore_state_defaults = [
+            'last_run' => null,
+            'last_status' => null,
+            'last_message' => '',
+            'last_report' => null,
+        ];
+
+        $restore_settings = $restore_defaults;
+        $restore_state = $restore_state_defaults;
+
+        if (isset($scheduler) && $scheduler) {
+            if (method_exists($scheduler, 'get_restore_check_settings')) {
+                $restore_settings = wp_parse_args($scheduler->get_restore_check_settings(), $restore_defaults);
+            }
+
+            if (method_exists($scheduler, 'get_restore_check_state')) {
+                $restore_state = wp_parse_args($scheduler->get_restore_check_state(), $restore_state_defaults);
+            }
+        } else {
+            $stored_restore = \bjlg_get_option('bjlg_restore_check_settings', []);
+            $restore_settings = BJLG_Scheduler::sanitize_restore_check_settings($stored_restore);
+
+            $stored_state = \bjlg_get_option('bjlg_restore_check_state', []);
+            if (is_array($stored_state)) {
+                $restore_state = wp_parse_args($stored_state, $restore_state_defaults);
+            }
+        }
+
+        $restore_next_run = wp_next_scheduled(BJLG_Scheduler::RESTORE_CHECK_HOOK);
+        $restore_schedule = [
+            'next_run' => $restore_next_run ?: null,
+            'next_run_formatted' => $restore_next_run
+                ? get_date_from_gmt(gmdate('Y-m-d H:i:s', $restore_next_run), 'd/m/Y H:i:s')
+                : null,
+            'next_run_relative' => ($restore_next_run && function_exists('human_time_diff'))
+                ? human_time_diff(time(), $restore_next_run)
+                : null,
+        ];
+
         return [
             'schedules' => $schedules,
             'next_runs' => $next_runs,
             'default' => $default_schedule,
             'event_triggers' => $event_triggers,
             'event_defaults' => $event_defaults,
+            'restore_check' => [
+                'settings' => $restore_settings,
+                'state' => $restore_state,
+                'schedule' => $restore_schedule,
+            ],
         ];
     }
 
