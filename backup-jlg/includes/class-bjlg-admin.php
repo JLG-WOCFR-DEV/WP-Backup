@@ -2749,47 +2749,31 @@ class BJLG_Admin {
     }
 
     private function get_cron_assistant_scenarios(): array {
-        return [
-            [
-                'id' => 'pre_deploy',
-                'label' => __('Snapshot pré-déploiement', 'backup-jlg'),
-                'description' => __('Rafraîchit la base, les extensions et les thèmes toutes les 10 minutes pendant une fenêtre de changement.', 'backup-jlg'),
-                'expression' => '*/10 * * * *',
-                'adjustments' => [
-                    'label' => __('Snapshot pré-déploiement', 'backup-jlg'),
-                    'components' => ['db', 'plugins', 'themes'],
-                    'incremental' => false,
-                    'encrypt' => true,
-                    'post_checks' => ['checksum', 'dry_run'],
-                ],
-            ],
-            [
-                'id' => 'nightly_full',
-                'label' => __('Archive complète nocturne', 'backup-jlg'),
-                'description' => __('Capture intégrale chaque nuit à 02:30 avec chiffrement et vérification.', 'backup-jlg'),
-                'expression' => '30 2 * * *',
-                'adjustments' => [
-                    'label' => __('Archive nocturne', 'backup-jlg'),
-                    'components' => ['db', 'plugins', 'themes', 'uploads'],
-                    'incremental' => false,
-                    'encrypt' => true,
-                    'post_checks' => ['checksum'],
-                ],
-            ],
-            [
-                'id' => 'weekly_media',
-                'label' => __('Médias hebdomadaires', 'backup-jlg'),
-                'description' => __('Synchronise spécifiquement les médias chaque dimanche à 04:00 en incrémental.', 'backup-jlg'),
-                'expression' => '0 4 * * sun',
-                'adjustments' => [
-                    'label' => __('Médias hebdomadaires', 'backup-jlg'),
-                    'components' => ['uploads'],
-                    'incremental' => true,
-                    'encrypt' => false,
-                    'post_checks' => [],
-                ],
-            ],
-        ];
+        $catalog = BJLG_Settings::get_schedule_macro_catalog();
+        $scenarios = [];
+
+        foreach ($catalog as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $analysis = [];
+            if (class_exists(BJLG_Scheduler::class) && method_exists(BJLG_Scheduler::class, 'describe_schedule_macro')) {
+                $analysis = BJLG_Scheduler::describe_schedule_macro($entry);
+            }
+
+            $scenarios[] = [
+                'id' => $entry['id'] ?? '',
+                'label' => $entry['label'] ?? '',
+                'description' => $entry['description'] ?? '',
+                'expression' => $entry['expression'] ?? '',
+                'category' => $entry['category'] ?? '',
+                'adjustments' => $entry['adjustments'] ?? [],
+                'analysis' => $analysis,
+            ];
+        }
+
+        return $scenarios;
     }
 
     private function render_schedule_section() {
@@ -5709,6 +5693,10 @@ class BJLG_Admin {
                    data-field="previous_recurrence"
                    name="schedules[<?php echo esc_attr($field_prefix); ?>][previous_recurrence]"
                    value="<?php echo esc_attr($previous_recurrence); ?>">
+            <input type="hidden"
+                   data-field="macro"
+                   name="schedules[<?php echo esc_attr($field_prefix); ?>][macro]"
+                   value="<?php echo esc_attr($schedule['macro'] ?? ''); ?>">
             <header class="bjlg-schedule-item__header">
                 <div class="bjlg-schedule-item__title">
                     <span class="dashicons dashicons-calendar-alt" aria-hidden="true"></span>

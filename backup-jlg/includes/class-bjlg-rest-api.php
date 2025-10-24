@@ -351,6 +351,13 @@ class BJLG_REST_API {
             ]
         ]);
 
+        register_rest_route(self::API_NAMESPACE, '/settings/schedule', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [$this, 'get_schedule_settings_catalog'],
+            'permission_callback' => [$this, 'check_admin_permissions'],
+            'args' => $this->merge_site_args(),
+        ]);
+
         register_rest_route(self::API_NAMESPACE, '/cron/preview', [
             'methods' => 'POST',
             'callback' => [$this, 'preview_cron_expression'],
@@ -2816,6 +2823,58 @@ class BJLG_REST_API {
             ];
 
             return rest_ensure_response($settings);
+        });
+    }
+
+    public function get_schedule_settings_catalog($request) {
+        return $this->with_request_site($request, function () use ($request) {
+            $context = $this->get_requested_context($request);
+            $site_id = $this->get_requested_site_id($request);
+
+            $option_args = [];
+
+            if ($context === 'network') {
+                $option_args['network'] = true;
+            } elseif ($site_id) {
+                $option_args['site_id'] = $site_id;
+            }
+
+            if (!empty($option_args)) {
+                $stored = \bjlg_get_option('bjlg_schedule_settings', [], $option_args);
+            } else {
+                $stored = \bjlg_get_option('bjlg_schedule_settings', []);
+            }
+            $collection = BJLG_Settings::sanitize_schedule_collection($stored);
+
+            $macros = BJLG_Settings::get_schedule_macro_catalog();
+            $described = [];
+            foreach ($macros as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                if (class_exists(BJLG_Scheduler::class) && method_exists(BJLG_Scheduler::class, 'describe_schedule_macro')) {
+                    $entry['analysis'] = BJLG_Scheduler::describe_schedule_macro($entry);
+                } else {
+                    $entry['analysis'] = [];
+                }
+                $described[] = $entry;
+            }
+
+            $next_runs = [];
+            if (class_exists(BJLG_Scheduler::class)) {
+                $scheduler = BJLG_Scheduler::instance();
+                if ($scheduler && method_exists($scheduler, 'get_next_runs_summary')) {
+                    $next_runs = $scheduler->get_next_runs_summary($collection['schedules']);
+                }
+            }
+
+            return rest_ensure_response([
+                'collection' => $collection,
+                'macros' => $described,
+                'next_runs' => $next_runs,
+                'context' => $context,
+                'site_id' => $context === 'site' ? $site_id : null,
+            ]);
         });
     }
     
