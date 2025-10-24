@@ -1108,6 +1108,73 @@ jQuery(function($) {
         return { labels: labels, usage: usage };
     };
 
+    const getRemotePurgeForecastDataset = function() {
+        const queues = state.metrics.queues || {};
+        const remote = queues.remote_purge || {};
+        const sla = remote.sla || {};
+        const forecast = sla.quota_forecast || {};
+        const destinations = Array.isArray(forecast.destinations) ? forecast.destinations : [];
+
+        if (!destinations.length) {
+            return null;
+        }
+
+        const historyCandidates = destinations.filter(function(destination) {
+            return Array.isArray(destination.history) && destination.history.length >= 2;
+        }).slice(0, 3);
+
+        if (!historyCandidates.length) {
+            return null;
+        }
+
+        const labels = [];
+        const datasets = [];
+        const palette = ['#2563eb', '#f97316', '#0ea5e9'];
+
+        historyCandidates.forEach(function(destination, index) {
+            const history = destination.history;
+            const data = [];
+
+            history.forEach(function(point, pointIndex) {
+                const ratio = Number(point.ratio);
+                const normalized = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) * 100 : null;
+                data.push(normalized);
+
+                if (!labels[pointIndex]) {
+                    let label = point.label || '';
+                    const timestamp = Number(point.timestamp || 0);
+                    if (!label && timestamp) {
+                        const date = new Date(timestamp * 1000);
+                        const datePart = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                        const timePart = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+                        label = datePart + ' ' + timePart;
+                    }
+                    if (!label) {
+                        label = sprintf(__('Échantillon %s', 'backup-jlg'), pointIndex + 1);
+                    }
+                    labels[pointIndex] = label;
+                }
+            });
+
+            datasets.push({
+                label: destination.label || destination.id || sprintf(__('Destination %s', 'backup-jlg'), index + 1),
+                data: data,
+                borderColor: palette[index % palette.length],
+                backgroundColor: 'rgba(0,0,0,0)',
+                tension: 0.3,
+                fill: false,
+                pointRadius: 3,
+                spanGaps: true,
+            });
+        });
+
+        return {
+            labels: labels,
+            datasets: datasets,
+            threshold: Number(forecast.threshold_percent || 0),
+        };
+    };
+
     const updateHistoryChart = function() {
         const $card = $overview.find('[data-chart="history-trend"]');
         if (!$card.length) {
@@ -1261,6 +1328,100 @@ jQuery(function($) {
         }
     };
 
+    const updateRemotePurgeForecastChart = function() {
+        const $card = $overview.find('[data-chart="remote-purge-forecast"]');
+        if (!$card.length) {
+            return;
+        }
+
+        const dataset = getRemotePurgeForecastDataset();
+
+        if (typeof window.Chart === 'undefined' || !dataset) {
+            destroyChart('remotePurgeForecast');
+            setChartEmptyState($card, true);
+            return;
+        }
+
+        setChartEmptyState($card, false);
+
+        const canvas = $card.find('canvas')[0];
+        const ctx = canvas ? canvas.getContext('2d') : null;
+        if (!ctx) {
+            return;
+        }
+
+        const thresholdData = dataset.labels.map(function() {
+            return dataset.threshold;
+        });
+
+        const thresholdLabel = sprintf(__('Seuil %s%%', 'backup-jlg'), Number(dataset.threshold).toLocaleString(undefined, { maximumFractionDigits: 1 }));
+
+        if (!state.charts.remotePurgeForecast) {
+            state.charts.remotePurgeForecast = new window.Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dataset.labels,
+                    datasets: dataset.datasets.concat([
+                        {
+                            label: thresholdLabel,
+                            data: thresholdData,
+                            borderColor: '#f97316',
+                            borderDash: [6, 4],
+                            borderWidth: 1,
+                            pointRadius: 0,
+                            fill: false,
+                        }
+                    ]),
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top' },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                label: function(context) {
+                                    if (context.parsed.y === null || Number.isNaN(context.parsed.y)) {
+                                        return '';
+                                    }
+                                    return context.dataset.label + ': ' + context.parsed.y.toLocaleString(undefined, { maximumFractionDigits: 1 }) + '%';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            ticks: {
+                                callback: function(value) {
+                                    return value.toLocaleString(undefined, { maximumFractionDigits: 0 }) + '%';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        } else {
+            const chart = state.charts.remotePurgeForecast;
+            chart.data.labels = dataset.labels;
+            chart.data.datasets = dataset.datasets.concat([
+                {
+                    label: thresholdLabel,
+                    data: thresholdData,
+                    borderColor: '#f97316',
+                    borderDash: [6, 4],
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    fill: false,
+                }
+            ]);
+            chart.update();
+        }
+    };
+
     const ensureChartsReady = typeof window.bjlgEnsureChart === 'function'
         ? window.bjlgEnsureChart
         : function() { return Promise.resolve(); };
@@ -1273,6 +1434,7 @@ jQuery(function($) {
         if (!hasChartTargets()) {
             destroyChart('historyTrend');
             destroyChart('storageTrend');
+            destroyChart('remotePurgeForecast');
             $overview.find('.bjlg-chart-card').each(function() {
                 setChartEmptyState($(this), true);
             });
@@ -1283,10 +1445,12 @@ jQuery(function($) {
             .then(function() {
                 updateHistoryChart();
                 updateStorageChart();
+                updateRemotePurgeForecastChart();
             })
             .catch(function() {
                 destroyChart('historyTrend');
                 destroyChart('storageTrend');
+                destroyChart('remotePurgeForecast');
                 $overview.find('.bjlg-chart-card').each(function() {
                     setChartEmptyState($(this), true);
                 });

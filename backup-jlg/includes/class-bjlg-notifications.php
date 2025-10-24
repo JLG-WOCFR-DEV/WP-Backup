@@ -33,6 +33,7 @@ class BJLG_Notifications {
             'storage_warning' => true,
             'remote_purge_failed' => true,
             'remote_purge_delayed' => true,
+            'remote_storage_forecast_warning' => true,
             'restore_self_test_passed' => false,
             'restore_self_test_failed' => true,
             'sandbox_restore_validation_passed' => false,
@@ -141,6 +142,7 @@ class BJLG_Notifications {
         'storage_warning' => 'warning',
         'remote_purge_failed' => 'critical',
         'remote_purge_delayed' => 'critical',
+        'remote_storage_forecast_warning' => 'warning',
         'restore_self_test_passed' => 'info',
         'restore_self_test_failed' => 'critical',
         'sandbox_restore_validation_passed' => 'info',
@@ -225,6 +227,7 @@ class BJLG_Notifications {
         add_action('bjlg_storage_warning', [$this, 'handle_storage_warning'], 15, 1);
         add_action('bjlg_remote_purge_permanent_failure', [$this, 'handle_remote_purge_failed'], 15, 3);
         add_action('bjlg_remote_purge_delayed', [$this, 'handle_remote_purge_delayed'], 15, 2);
+        add_action('bjlg_remote_storage_forecast_warning', [$this, 'handle_remote_storage_forecast_warning'], 15, 2);
         add_action('bjlg_restore_self_test_passed', [$this, 'handle_restore_self_test_passed'], 15, 1);
         add_action('bjlg_restore_self_test_failed', [$this, 'handle_restore_self_test_failed'], 15, 1);
         add_action('bjlg_sandbox_restore_validation_passed', [$this, 'handle_sandbox_validation_passed'], 15, 1);
@@ -554,6 +557,66 @@ class BJLG_Notifications {
         ];
 
         $this->notify('remote_purge_delayed', $context);
+    }
+
+    /**
+     * Prépare le contexte d'une alerte de projection de saturation distante.
+     *
+     * @param string              $destination_id
+     * @param array<string,mixed> $payload
+     */
+    public function handle_remote_storage_forecast_warning($destination_id, $payload) {
+        if (!is_scalar($destination_id)) {
+            return;
+        }
+
+        $destination_id = (string) $destination_id;
+        $payload = is_array($payload) ? $payload : [];
+
+        $projected_at = isset($payload['projected_at']) ? (int) $payload['projected_at'] : null;
+        if ($projected_at !== null && $projected_at <= 0) {
+            $projected_at = null;
+        }
+
+        $lead_seconds = isset($payload['lead_seconds']) ? (int) $payload['lead_seconds'] : null;
+        if ($lead_seconds !== null && $lead_seconds < 0) {
+            $lead_seconds = 0;
+        }
+
+        $threshold_percent = null;
+        if (isset($payload['threshold_percent']) && is_numeric($payload['threshold_percent'])) {
+            $threshold_percent = (float) $payload['threshold_percent'];
+            if (!is_finite($threshold_percent)) {
+                $threshold_percent = null;
+            }
+        }
+
+        $current_ratio = null;
+        if (isset($payload['current_ratio']) && is_numeric($payload['current_ratio'])) {
+            $current_ratio = max(0.0, min(1.0, (float) $payload['current_ratio']));
+        }
+
+        $projected_label = isset($payload['projected_label']) ? (string) $payload['projected_label'] : '';
+        if ($projected_label !== '' && function_exists('sanitize_text_field')) {
+            $projected_label = sanitize_text_field($projected_label);
+        }
+
+        $context = [
+            'destination_id' => $destination_id,
+            'destination_label' => $this->resolve_destination_label($destination_id),
+            'risk_level' => $this->sanitize_forecast_risk_level($payload['risk_level'] ?? ''),
+            'projected_at' => $projected_at,
+            'lead_seconds' => $lead_seconds,
+            'projected_label' => $projected_label,
+            'threshold_percent' => $threshold_percent,
+            'current_ratio' => $current_ratio,
+            'used_bytes' => $this->sanitize_bytes($payload['used_bytes'] ?? null),
+            'quota_bytes' => $this->sanitize_bytes($payload['quota_bytes'] ?? null),
+            'free_bytes' => $this->sanitize_bytes($payload['free_bytes'] ?? null),
+            'history' => $this->sanitize_forecast_history($payload['history'] ?? []),
+        ];
+
+        $this->notify('remote_storage_forecast_warning', $context);
     }
 
     /**
@@ -1128,6 +1191,8 @@ class BJLG_Notifications {
                 return __('Purge distante en échec', 'backup-jlg');
             case 'remote_purge_delayed':
                 return __('Purge distante en retard', 'backup-jlg');
+            case 'remote_storage_forecast_warning':
+                return __('Prévision de saturation du stockage distant', 'backup-jlg');
             case 'restore_self_test_passed':
                 return __('Test de restauration réussi', 'backup-jlg');
             case 'restore_self_test_failed':
@@ -1350,6 +1415,83 @@ class BJLG_Notifications {
                 if (!empty($context['last_error'])) {
                     $lines[] = __('Dernier message : ', 'backup-jlg') . $context['last_error'];
                 }
+                break;
+            case 'remote_storage_forecast_warning':
+                $destination_label = isset($context['destination_label']) && $context['destination_label'] !== ''
+                    ? $context['destination_label']
+                    : ($context['destination_id'] ?? __('Destination distante', 'backup-jlg'));
+
+                $lines[] = sprintf(__('Prévision de saturation pour %s.', 'backup-jlg'), $destination_label);
+
+                if (!empty($context['projected_label'])) {
+                    $lines[] = $context['projected_label'];
+                }
+
+                if (isset($context['risk_level'])) {
+                    $lines[] = __('Niveau de risque : ', 'backup-jlg') . $this->format_forecast_risk_label($context['risk_level']);
+                }
+
+                if (isset($context['lead_seconds']) && $context['lead_seconds'] !== null) {
+                    $lines[] = __('Délai avant saturation : ', 'backup-jlg') . ($context['lead_seconds'] <= 0
+                        ? __('immédiat', 'backup-jlg')
+                        : $this->format_duration_seconds((int) $context['lead_seconds']));
+                }
+
+                if (isset($context['projected_at']) && $context['projected_at']) {
+                    $lines[] = __('Saturation estimée le : ', 'backup-jlg') . $this->format_timestamp((int) $context['projected_at']);
+                }
+
+                if (isset($context['threshold_percent']) && $context['threshold_percent'] !== null) {
+                    $lines[] = __('Seuil configuré : ', 'backup-jlg') . number_format_i18n((float) $context['threshold_percent'], 1) . '%';
+                }
+
+                if (isset($context['current_ratio']) && $context['current_ratio'] !== null) {
+                    $lines[] = __('Occupation actuelle : ', 'backup-jlg') . $this->format_ratio_percent((float) $context['current_ratio']);
+                }
+
+                if (isset($context['used_bytes']) && $context['used_bytes'] !== null && function_exists('size_format')) {
+                    $lines[] = __('Volume utilisé : ', 'backup-jlg') . size_format((int) $context['used_bytes']);
+                }
+                if (isset($context['free_bytes']) && $context['free_bytes'] !== null && function_exists('size_format')) {
+                    $lines[] = __('Espace libre : ', 'backup-jlg') . size_format((int) $context['free_bytes']);
+                }
+                if (isset($context['quota_bytes']) && $context['quota_bytes'] !== null && function_exists('size_format')) {
+                    $lines[] = __('Capacité totale : ', 'backup-jlg') . size_format((int) $context['quota_bytes']);
+                }
+
+                if (!empty($context['history']) && is_array($context['history'])) {
+                    $history_points = array_filter($context['history'], static function ($entry) {
+                        return is_array($entry) && (isset($entry['ratio']) || isset($entry['timestamp']) || isset($entry['label']));
+                    });
+                    $recent = array_slice($history_points, -3);
+                    $formatted_points = [];
+                    foreach ($recent as $entry) {
+                        $label = isset($entry['label']) && $entry['label'] !== ''
+                            ? $entry['label']
+                            : ($entry['timestamp'] ?? null);
+                        if (is_int($label)) {
+                            $label = $this->format_timestamp($label);
+                        }
+                        if (!is_string($label) || $label === '') {
+                            $label = __('Échantillon', 'backup-jlg');
+                        }
+
+                        $ratio_text = isset($entry['ratio']) && $entry['ratio'] !== null
+                            ? $this->format_ratio_percent((float) $entry['ratio'])
+                            : '';
+
+                        if ($ratio_text === '') {
+                            $formatted_points[] = $label;
+                        } else {
+                            $formatted_points[] = sprintf('%s (%s)', $label, $ratio_text);
+                        }
+                    }
+
+                    if (!empty($formatted_points)) {
+                        $lines[] = sprintf(__('Historique récent : %s', 'backup-jlg'), implode(' • ', $formatted_points));
+                    }
+                }
+
                 break;
             case 'restore_self_test_passed':
                 $lines[] = __('Le test de restauration sandbox a réussi.', 'backup-jlg');
@@ -2594,6 +2736,87 @@ class BJLG_Notifications {
         }
 
         return null;
+    }
+
+    private function sanitize_forecast_risk_level($risk) {
+        $risk = is_string($risk) ? strtolower($risk) : '';
+
+        if (function_exists('sanitize_key')) {
+            $risk = sanitize_key($risk);
+        } else {
+            $risk = preg_replace('/[^a-z0-9_\-]/', '', $risk);
+        }
+
+        $allowed = ['normal', 'watch', 'warning', 'critical', 'success'];
+        if (!in_array($risk, $allowed, true)) {
+            return 'warning';
+        }
+
+        return $risk;
+    }
+
+    private function sanitize_forecast_history($history): array {
+        if (!is_array($history)) {
+            return [];
+        }
+
+        $sanitized = [];
+        foreach ($history as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $label = isset($entry['label']) ? (string) $entry['label'] : '';
+            if ($label !== '' && function_exists('sanitize_text_field')) {
+                $label = sanitize_text_field($label);
+            }
+
+            $ratio = null;
+            if (isset($entry['ratio']) && is_numeric($entry['ratio'])) {
+                $ratio = max(0.0, min(1.0, (float) $entry['ratio']));
+            }
+
+            $timestamp = isset($entry['timestamp']) ? (int) $entry['timestamp'] : null;
+            if ($timestamp !== null && $timestamp <= 0) {
+                $timestamp = null;
+            }
+
+            $sanitized[] = [
+                'label' => $label,
+                'ratio' => $ratio,
+                'timestamp' => $timestamp,
+            ];
+        }
+
+        return $sanitized;
+    }
+
+    private function format_forecast_risk_label($risk) {
+        $risk = $this->sanitize_forecast_risk_level($risk);
+
+        switch ($risk) {
+            case 'critical':
+                return __('Critique', 'backup-jlg');
+            case 'warning':
+                return __('Avertissement', 'backup-jlg');
+            case 'watch':
+                return __('Surveillance', 'backup-jlg');
+            case 'success':
+                return __('Stabilisé', 'backup-jlg');
+            case 'normal':
+            default:
+                return __('Nominal', 'backup-jlg');
+        }
+    }
+
+    private function format_ratio_percent($ratio) {
+        if (!is_numeric($ratio)) {
+            return '';
+        }
+
+        $ratio = max(0.0, min(1.0, (float) $ratio));
+
+        return number_format_i18n($ratio * 100, 1) . '%';
     }
 
     /**

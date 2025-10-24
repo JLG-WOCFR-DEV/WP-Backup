@@ -1691,6 +1691,8 @@ class BJLG_Admin {
 
                                 <?php if ($queue_key === 'remote_purge' && !empty($queue['sla']) && is_array($queue['sla'])):
                                     $sla = $queue['sla'];
+                                    $durations = isset($sla['destination_durations']) && is_array($sla['destination_durations']) ? $sla['destination_durations'] : [];
+                                    $quota_forecast = isset($sla['quota_forecast']) && is_array($sla['quota_forecast']) ? $sla['quota_forecast'] : [];
                                 ?>
                                     <div class="bjlg-queue-card__metrics" data-field="sla">
                                         <?php if (!empty($sla['updated_relative'])): ?>
@@ -1725,10 +1727,49 @@ class BJLG_Admin {
                                             <?php endif; ?>
                                         </ul>
                                     </div>
+                                    <?php if (!empty($durations)): ?>
+                                        <div class="bjlg-queue-card__metrics" data-field="destination-durations">
+                                            <h4 class="bjlg-queue-card__metrics-title"><?php esc_html_e('Temps moyens par destination', 'backup-jlg'); ?></h4>
+                                            <ul class="bjlg-queue-card__metrics-list">
+                                                <?php foreach ($durations as $duration_entry): ?>
+                                                    <li>
+                                                        <strong><?php echo esc_html($duration_entry['label'] ?? ''); ?></strong>
+                                                        <?php if (!empty($duration_entry['summary'])): ?>
+                                                            <span>— <?php echo esc_html($duration_entry['summary']); ?></span>
+                                                        <?php endif; ?>
+                                                    </li>
+                                                <?php endforeach; ?>
+                                            </ul>
+                                        </div>
+                                    <?php endif; ?>
+                                    <div class="bjlg-queue-card__chart" data-field="quota-forecast">
+                                        <article class="bjlg-chart-card" data-chart="remote-purge-forecast">
+                                            <header class="bjlg-chart-card__header">
+                                                <h4 class="bjlg-chart-card__title"><?php esc_html_e('Projection de saturation distante', 'backup-jlg'); ?></h4>
+                                                <?php if (!empty($quota_forecast['threshold_label'])): ?>
+                                                    <span class="bjlg-badge bjlg-badge-bg-amber"><?php echo esc_html($quota_forecast['threshold_label']); ?></span>
+                                                <?php endif; ?>
+                                            </header>
+                                            <canvas class="bjlg-chart-card__canvas" aria-hidden="true"></canvas>
+                                            <p class="bjlg-chart-card__empty" data-role="empty-message"><?php esc_html_e('Historique insuffisant pour tracer la tendance.', 'backup-jlg'); ?></p>
+                                        </article>
+                                    </div>
+                                    <?php if (!empty($quota_forecast['destinations'])): ?>
+                                        <ul class="bjlg-queue-card__metrics-list">
+                                            <?php foreach ($quota_forecast['destinations'] as $forecast_entry): ?>
+                                                <li>
+                                                    <strong><?php echo esc_html($forecast_entry['label'] ?? ''); ?></strong>
+                                                    <?php if (!empty($forecast_entry['summary'])): ?>
+                                                        <span>— <?php echo esc_html($forecast_entry['summary']); ?></span>
+                                                    <?php endif; ?>
+                                                </li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    <?php endif; ?>
                                 <?php endif; ?>
 
                                 <?php if ($queue_key === 'remote_purge'): ?>
-                                    <p class="bjlg-queue-card__note"><?php esc_html_e('Prochaine étape : générer des prédictions de saturation et automatiser les corrections.', 'backup-jlg'); ?></p>
+                                    <p class="bjlg-queue-card__note"><?php esc_html_e('Surveillez les tendances de capacité pour anticiper les saturations.', 'backup-jlg'); ?></p>
                                 <?php endif; ?>
 
                                 <ul class="bjlg-queue-card__entries" data-role="entries">
@@ -4183,6 +4224,12 @@ class BJLG_Admin {
                                             <label for="bjlg-notify-remote-purge-delayed">
                                                 <input type="checkbox" id="bjlg-notify-remote-purge-delayed" name="notify_remote_purge_delayed" <?php checked(!empty($notification_settings['events']['remote_purge_delayed'])); ?>>
                                                 <span><?php esc_html_e('Purge distante en retard critique', 'backup-jlg'); ?></span>
+                                            </label>
+                                        </li>
+                                        <li>
+                                            <label for="bjlg-notify-remote-storage-forecast-warning">
+                                                <input type="checkbox" id="bjlg-notify-remote-storage-forecast-warning" name="notify_remote_storage_forecast_warning" <?php checked(!empty($notification_settings['events']['remote_storage_forecast_warning'])); ?>>
+                                                <span><?php esc_html_e('Saturation distante estimée', 'backup-jlg'); ?></span>
                                             </label>
                                         </li>
                                         <li>
