@@ -2075,10 +2075,11 @@ class BJLG_REST_API {
 
         foreach ($collection['schedules'] as $sanitized_entry) {
             if (($sanitized_entry['recurrence'] ?? '') === 'custom' && empty($sanitized_entry['custom_cron'])) {
+                $context = $this->build_schedule_validation_context($sanitized_entry);
                 return new WP_Error(
                     'invalid_schedule_cron',
                     __('A valid Cron expression is required when using the custom recurrence.', 'backup-jlg'),
-                    ['status' => 400]
+                    array_merge(['status' => 400], $context)
                 );
             }
 
@@ -2086,30 +2087,153 @@ class BJLG_REST_API {
                 $analysis = BJLG_Scheduler::analyze_custom_cron_expression($sanitized_entry['custom_cron']);
                 if (is_wp_error($analysis)) {
                     $details = $analysis->get_error_data();
+                    $context = $this->build_schedule_validation_context($sanitized_entry);
+                    $error_data = array_merge(
+                        ['status' => 400],
+                        $context,
+                        [
+                            'details' => isset($details['details']) ? (array) $details['details'] : [],
+                        ]
+                    );
                     return new WP_Error(
                         'invalid_schedule_cron',
                         $analysis->get_error_message(),
-                        [
-                            'status' => 400,
-                            'details' => isset($details['details']) ? (array) $details['details'] : [],
-                        ]
+                        $error_data
                     );
                 }
 
                 if (!empty($analysis['errors'])) {
+                    $context = $this->build_schedule_validation_context($sanitized_entry, $analysis);
                     return new WP_Error(
                         'invalid_schedule_cron',
                         $analysis['errors'][0],
-                        [
-                            'status' => 400,
-                            'details' => $analysis['errors'],
-                        ]
+                        array_merge(
+                            [
+                                'status' => 400,
+                                'details' => $analysis['errors'],
+                            ],
+                            $context
+                        )
                     );
                 }
             }
         }
 
         return $collection;
+    }
+
+    private function build_schedule_validation_context(array $entry, $analysis = null): array
+    {
+        $context = [];
+
+        if (!empty($entry['custom_cron'])) {
+            $context['expression'] = (string) $entry['custom_cron'];
+        }
+
+        if (!empty($entry['components']) && is_array($entry['components'])) {
+            $context['components'] = array_values(array_map('strval', $entry['components']));
+        }
+
+        if (is_array($analysis)) {
+            if (!empty($analysis['warnings'])) {
+                $context['warnings'] = array_values($analysis['warnings']);
+            }
+            if (isset($analysis['min_interval']) || isset($analysis['max_interval'])) {
+                $context['interval'] = [
+                    'min' => isset($analysis['min_interval']) ? (int) $analysis['min_interval'] : null,
+                    'max' => isset($analysis['max_interval']) ? (int) $analysis['max_interval'] : null,
+                ];
+            }
+        }
+
+        $suggestions = $this->build_schedule_macro_suggestions($entry, $analysis);
+        if (!empty($suggestions)) {
+            $context['suggestions'] = $suggestions;
+        }
+
+        return $context;
+    }
+
+    private function build_schedule_macro_suggestions(array $entry, $analysis = null): array
+    {
+        if (!class_exists(BJLG_Settings::class)) {
+            return [];
+        }
+
+        $catalog = BJLG_Settings::get_schedule_macro_catalog();
+        if (empty($catalog)) {
+            return [];
+        }
+
+        $components = isset($entry['components']) && is_array($entry['components'])
+            ? array_map('strval', $entry['components'])
+            : [];
+
+        $current_interval = null;
+        if (is_array($analysis) && isset($analysis['min_interval'])) {
+            $current_interval = (int) $analysis['min_interval'];
+        }
+
+        $scored = [];
+        foreach ($catalog as $macro) {
+            if (!is_array($macro) || empty($macro['id']) || empty($macro['expression'])) {
+                continue;
+            }
+
+            $score = 0;
+            $macro_components = isset($macro['adjustments']['components']) && is_array($macro['adjustments']['components'])
+                ? array_map('strval', $macro['adjustments']['components'])
+                : [];
+
+            if (!empty($components) && !empty($macro_components)) {
+                $score += count(array_intersect($components, $macro_components));
+            }
+
+            if (!empty($entry['macro']) && $entry['macro'] === $macro['id']) {
+                $score += 5;
+            }
+
+            $macro_analysis = [];
+            if (class_exists(BJLG_Scheduler::class) && method_exists(BJLG_Scheduler::class, 'describe_schedule_macro')) {
+                $macro_analysis = BJLG_Scheduler::describe_schedule_macro($macro);
+                $interval = isset($macro_analysis['interval_seconds']) ? (int) $macro_analysis['interval_seconds'] : null;
+                if ($current_interval && $interval) {
+                    $score += max(0, 3 - abs($interval - $current_interval) / 1800);
+                }
+            }
+
+            $scored[] = [
+                'score' => $score,
+                'macro' => [
+                    'id' => $macro['id'],
+                    'label' => $macro['label'] ?? $macro['id'],
+                    'description' => $macro['description'] ?? '',
+                    'expression' => $macro['expression'],
+                    'category' => $macro['category'] ?? 'custom',
+                    'analysis' => $macro_analysis,
+                ],
+            ];
+        }
+
+        if (empty($scored)) {
+            return [];
+        }
+
+        usort($scored, function ($a, $b) {
+            $first = ($b['score'] ?? 0) <=> ($a['score'] ?? 0);
+            if ($first !== 0) {
+                return $first;
+            }
+
+            return strcmp((string) ($b['macro']['id'] ?? ''), (string) ($a['macro']['id'] ?? ''));
+        });
+
+        $suggestions = [];
+        foreach (array_slice($scored, 0, 3) as $candidate) {
+            $suggestions[] = $candidate['macro'];
+        }
+
+        return $suggestions;
     }
 
     private function interpret_boolean($value) {
