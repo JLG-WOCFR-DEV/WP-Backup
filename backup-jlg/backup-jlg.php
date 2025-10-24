@@ -697,6 +697,7 @@ final class BJLG_Plugin {
             'api' => 'assets/js/admin-api.js',
             'rbac' => 'assets/js/admin-rbac.js',
             'network' => 'assets/js/admin-network.js',
+            'history' => 'assets/js/admin-history.js',
         ];
 
         $module_urls = [];
@@ -708,7 +709,7 @@ final class BJLG_Plugin {
         }
 
         $section_modules = [
-            'monitoring' => ['dashboard', 'logs'],
+            'monitoring' => ['dashboard', 'history', 'logs'],
             'backup' => ['dashboard', 'backup', 'scheduling'],
             'restore' => ['backup'],
             'settings' => ['settings'],

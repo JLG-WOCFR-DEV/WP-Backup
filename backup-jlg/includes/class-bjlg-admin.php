@@ -904,7 +904,7 @@ class BJLG_Admin {
 
     private function get_section_module_mapping(): array {
         return [
-            'monitoring' => ['dashboard', 'logs'],
+            'monitoring' => ['dashboard', 'history', 'logs'],
             'backup' => ['dashboard', 'backup', 'scheduling'],
             'restore' => ['backup'],
             'settings' => ['settings', 'rbac'],
@@ -1040,6 +1040,258 @@ class BJLG_Admin {
         ];
 
         return $steps;
+    }
+
+    private function get_history_status_label(string $status): string {
+        switch ($status) {
+            case 'success':
+                return __('Succès', 'backup-jlg');
+            case 'failure':
+                return __('Échec', 'backup-jlg');
+            case 'warning':
+                return __('Avertissement', 'backup-jlg');
+            case 'info':
+            default:
+                return __('Information', 'backup-jlg');
+        }
+    }
+
+    private function get_history_status_intent(string $status): string {
+        switch ($status) {
+            case 'success':
+                return 'success';
+            case 'failure':
+                return 'danger';
+            case 'warning':
+                return 'warning';
+            default:
+                return 'info';
+        }
+    }
+
+    private function get_history_action_label(string $action): string {
+        $map = [
+            'backup_created' => __('Sauvegarde créée', 'backup-jlg'),
+            'backup_started' => __('Sauvegarde démarrée', 'backup-jlg'),
+            'backup_failed' => __('Échec de sauvegarde', 'backup-jlg'),
+            'backup_disk_space' => __('Espace disque insuffisant', 'backup-jlg'),
+            'backup_upload' => __('Transfert de sauvegarde', 'backup-jlg'),
+            'backup_replication' => __('Réplication de sauvegarde', 'backup-jlg'),
+            'backup_deleted' => __('Suppression de sauvegarde', 'backup-jlg'),
+            'backup_post_check' => __('Vérification post-sauvegarde', 'backup-jlg'),
+            'backup_encrypted' => __('Chiffrement de sauvegarde', 'backup-jlg'),
+            'backup_decrypted' => __('Déchiffrement de sauvegarde', 'backup-jlg'),
+            'scheduled_backup' => __('Planification exécutée', 'backup-jlg'),
+            'sandbox_restore_validation' => __('Validation sandbox', 'backup-jlg'),
+            'restore_run' => __('Restauration', 'backup-jlg'),
+            'restore_cleanup' => __('Nettoyage de restauration', 'backup-jlg'),
+            'restore_sandbox_publish' => __('Promotion sandbox', 'backup-jlg'),
+            'restore_sandbox_cleanup' => __('Nettoyage sandbox', 'backup-jlg'),
+            'notification' => __('Notification', 'backup-jlg'),
+            'notification_resolved' => __('Notification résolue', 'backup-jlg'),
+            'notification_resolution_broadcast' => __('Diffusion résolution', 'backup-jlg'),
+            'settings_updated' => __('Réglages mis à jour', 'backup-jlg'),
+            'settings_reset' => __('Réglages réinitialisés', 'backup-jlg'),
+            'settings_imported' => __('Réglages importés', 'backup-jlg'),
+            'settings_exported' => __('Réglages exportés', 'backup-jlg'),
+            'api_backup_created' => __('Sauvegarde via API', 'backup-jlg'),
+            'support_package' => __('Pack support', 'backup-jlg'),
+            'cleanup_task_started' => __('Nettoyage lancé', 'backup-jlg'),
+            'cleanup_task_finished' => __('Nettoyage terminé', 'backup-jlg'),
+            'cleanup_task_failed' => __('Nettoyage échoué', 'backup-jlg'),
+            'cleanup_remote' => __('Purge distante', 'backup-jlg'),
+            'remote_purge' => __('File de purge distante', 'backup-jlg'),
+            'remote_purge_capacity_forecast' => __('Capacité de purge distante', 'backup-jlg'),
+            'webhook_triggered' => __('Webhook déclenché', 'backup-jlg'),
+            'webhook_backup_failed' => __('Échec webhook', 'backup-jlg'),
+            'webhook_backup_conflict' => __('Conflit webhook', 'backup-jlg'),
+            'webhook_key_regenerated' => __('Clé webhook régénérée', 'backup-jlg'),
+            'webhook_secure_mode' => __('Webhook sécurisé', 'backup-jlg'),
+            'webhook_secure_failed' => __('Webhook sécurisé échoué', 'backup-jlg'),
+            'webhook_rate_limited' => __('Webhook limité', 'backup-jlg'),
+            'incremental_reset' => __('Réinitialisation incrémentale', 'backup-jlg'),
+            'pre_update_backup_reminder' => __('Rappel de sauvegarde pré-mise à jour', 'backup-jlg'),
+            'event_trigger' => __('Déclencheur automatique', 'backup-jlg'),
+            'restore_self_test' => __('Auto-test restauration', 'backup-jlg'),
+            'notification_queue' => __('File de notification', 'backup-jlg'),
+        ];
+
+        if (isset($map[$action])) {
+            return $map[$action];
+        }
+
+        $label = str_replace(['_', '-'], ' ', $action);
+
+        return ucwords($label);
+    }
+
+    private function get_history_site_context(int $blog_id): array {
+        $label = '';
+        $url = '';
+
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return ['label' => $label, 'url' => $url];
+        }
+
+        $current_blog = function_exists('get_current_blog_id') ? (int) get_current_blog_id() : 0;
+
+        if ($blog_id === 0 || $blog_id === $current_blog) {
+            $label = __('Site courant', 'backup-jlg');
+            $url = function_exists('admin_url') ? admin_url() : '';
+
+            return ['label' => $label, 'url' => $url];
+        }
+
+        if (function_exists('get_site')) {
+            $site = get_site($blog_id);
+            if ($site && !is_wp_error($site)) {
+                $label = $site->blogname ?: $site->domain;
+                $url = get_site_url($blog_id);
+
+                return ['label' => $label, 'url' => $url];
+            }
+        }
+
+        $label = sprintf(__('Site #%d', 'backup-jlg'), $blog_id);
+
+        return ['label' => $label, 'url' => $url];
+    }
+
+    private function build_history_timeline_payload(array $history): array {
+        if (empty($history)) {
+            return [
+                'entries' => [],
+                'status_filters' => [],
+                'action_filters' => [],
+            ];
+        }
+
+        $entries = [];
+        $status_counts = ['all' => 0];
+        $action_counts = [];
+        $date_format = function_exists('get_option') ? get_option('date_format') : 'Y-m-d';
+        $time_format = function_exists('get_option') ? get_option('time_format') : 'H:i';
+        $now = function_exists('current_time') ? current_time('timestamp') : time();
+
+        foreach ($history as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $raw_status = isset($entry['status']) ? sanitize_key((string) $entry['status']) : 'info';
+            $status = $raw_status !== '' ? $raw_status : 'info';
+            $status_counts['all'] += 1;
+            if (!isset($status_counts[$status])) {
+                $status_counts[$status] = 0;
+            }
+            $status_counts[$status] += 1;
+
+            $action_key = isset($entry['action_type']) ? sanitize_key((string) $entry['action_type']) : '';
+            if ($action_key === '') {
+                $action_key = 'other';
+            }
+            if (!isset($action_counts[$action_key])) {
+                $action_counts[$action_key] = 0;
+            }
+            $action_counts[$action_key] += 1;
+
+            $timestamp_raw = isset($entry['timestamp']) ? (string) $entry['timestamp'] : '';
+            $timestamp = $timestamp_raw !== '' ? strtotime($timestamp_raw) : null;
+            $timestamp = $timestamp !== false ? $timestamp : null;
+
+            $iso = $timestamp !== null
+                ? (function_exists('wp_date') ? wp_date('c', $timestamp) : date_i18n('c', $timestamp))
+                : '';
+            $day_key = $timestamp !== null ? gmdate('Y-m-d', $timestamp) : '';
+            $day_label = $timestamp !== null
+                ? (function_exists('wp_date') ? wp_date($date_format, $timestamp) : date_i18n($date_format, $timestamp))
+                : '';
+            $time_label = $timestamp !== null
+                ? (function_exists('wp_date') ? wp_date($time_format, $timestamp) : date_i18n($time_format, $timestamp))
+                : '';
+            $relative = ($timestamp !== null && function_exists('human_time_diff'))
+                ? human_time_diff($timestamp, $now)
+                : '';
+            if ($relative !== '') {
+                $relative = sprintf(__('Il y a %s', 'backup-jlg'), $relative);
+            }
+
+            $site_context = $this->get_history_site_context(isset($entry['blog_id']) ? (int) $entry['blog_id'] : 0);
+            $user_label = isset($entry['user_name']) ? sanitize_text_field((string) $entry['user_name']) : __('Système', 'backup-jlg');
+            $ip_address = isset($entry['ip_address']) ? sanitize_text_field((string) $entry['ip_address']) : '';
+            $details_html = $this->render_history_details($entry);
+
+            $entries[] = [
+                'id' => isset($entry['id']) ? (int) $entry['id'] : 0,
+                'status' => $status,
+                'status_label' => $this->get_history_status_label($status),
+                'status_intent' => $this->get_history_status_intent($status),
+                'action' => $this->get_history_action_label($action_key),
+                'action_key' => $action_key,
+                'timestamp' => $iso,
+                'timestamp_unix' => $timestamp,
+                'timestamp_label' => $time_label,
+                'day_key' => $day_key,
+                'day_label' => $day_label,
+                'relative' => $relative,
+                'user' => $user_label,
+                'ip' => $ip_address,
+                'site' => $site_context['label'],
+                'site_url' => $site_context['url'],
+                'details_html' => wp_kses_post($details_html),
+                'details_text' => wp_strip_all_tags($details_html),
+            ];
+        }
+
+        usort($entries, static function ($a, $b) {
+            $time_a = $a['timestamp_unix'] ?? 0;
+            $time_b = $b['timestamp_unix'] ?? 0;
+
+            if ($time_a === $time_b) {
+                return 0;
+            }
+
+            return ($time_a > $time_b) ? -1 : 1;
+        });
+
+        $status_filters = [];
+        $status_filters[] = [
+            'value' => 'all',
+            'label' => __('Tous les statuts', 'backup-jlg'),
+            'count' => $status_counts['all'],
+        ];
+        foreach ($status_counts as $status => $count) {
+            if ($status === 'all') {
+                continue;
+            }
+
+            $status_filters[] = [
+                'value' => $status,
+                'label' => $this->get_history_status_label($status),
+                'count' => $count,
+            ];
+        }
+
+        $action_filters = [];
+        $action_filters[] = [
+            'value' => 'all',
+            'label' => __('Toutes les actions', 'backup-jlg'),
+            'count' => $status_counts['all'],
+        ];
+
+        foreach ($action_counts as $action => $count) {
+            $action_filters[] = [
+                'value' => $action,
+                'label' => $this->get_history_action_label($action),
+                'count' => $count,
+            ];
+        }
+
+        return [
+            'entries' => $entries,
+            'status_filters' => $status_filters,
+            'action_filters' => $action_filters,
+        ];
     }
 
 
@@ -3943,63 +4195,187 @@ class BJLG_Admin {
      */
     private function render_history_section() {
         $history = class_exists(BJLG_History::class) ? BJLG_History::get_history(50) : [];
+        $payload = $this->build_history_timeline_payload($history);
+        $history_json = !empty($payload['entries']) ? wp_json_encode($payload['entries']) : '';
+        $history_json = is_string($history_json) ? $history_json : '';
+        $status_filters_json = !empty($payload['status_filters']) ? wp_json_encode($payload['status_filters']) : '';
+        $status_filters_json = is_string($status_filters_json) ? $status_filters_json : '';
+        $action_filters_json = !empty($payload['action_filters']) ? wp_json_encode($payload['action_filters']) : '';
+        $action_filters_json = is_string($action_filters_json) ? $action_filters_json : '';
+
         $report_links = array_merge(
             $this->get_sandbox_report_links(),
             $this->get_self_test_report_links()
         );
+
+        $schedule_notice = $this->get_sandbox_schedule_notice();
+
+        $sandbox_settings = class_exists(BJLG_Scheduler::class)
+            ? BJLG_Scheduler::get_default_sandbox_schedule_settings()
+            : [];
+        $sandbox_summary = [
+            'enabled' => false,
+            'frequency_label' => '',
+            'next_run_formatted' => '',
+            'next_run_relative' => '',
+            'last_run_at' => null,
+            'last_status' => null,
+            'last_report_id' => null,
+        ];
+
+        if (class_exists(BJLG_Scheduler::class)) {
+            $scheduler = new BJLG_Scheduler();
+            if (method_exists($scheduler, 'get_sandbox_schedule_settings')) {
+                $sandbox_settings = $scheduler->get_sandbox_schedule_settings();
+            }
+            if (method_exists($scheduler, 'get_sandbox_next_run_summary')) {
+                $sandbox_summary = wp_parse_args(
+                    $scheduler->get_sandbox_next_run_summary(),
+                    $sandbox_summary
+                );
+            }
+        }
+
+        $status_insights = array_filter(
+            $payload['status_filters'] ?? [],
+            static function ($filter) {
+                return is_array($filter) && isset($filter['value']) && $filter['value'] !== 'all';
+            }
+        );
+
+        $action_insights = array_slice(array_filter(
+            $payload['action_filters'] ?? [],
+            static function ($filter) {
+                return is_array($filter) && isset($filter['value']) && $filter['value'] !== 'all';
+            }
+        ), 0, 3);
+
         ?>
-        <div class="bjlg-section">
-            <h2>Historique des 50 dernières actions</h2>
-            <?php if ($schedule_notice): ?>
-                <div class="notice notice-success is-dismissible"><p><?php esc_html_e('Planification des validations sandbox mise à jour.', 'backup-jlg'); ?></p></div>
-            <?php endif; ?>
-            <?php $this->render_sandbox_validation_summary($sandbox_settings, $sandbox_summary); ?>
-            <?php if (!empty($report_links)): ?>
-                <div class="bjlg-history-report-actions">
-                    <?php foreach ($report_links as $link): ?>
-                        <a class="button" href="<?php echo esc_url($link['url']); ?>">
-                            <span class="dashicons dashicons-media-default" aria-hidden="true"></span>
-                            <?php echo esc_html($link['label']); ?>
-                        </a>
-                    <?php endforeach; ?>
+        <section class="bjlg-section bjlg-history">
+            <header class="bjlg-history__header">
+                <div class="bjlg-history__intro">
+                    <h2><?php esc_html_e('Historique des actions', 'backup-jlg'); ?></h2>
+                    <p class="description"><?php esc_html_e('Surveillez les 50 derniers événements liés aux sauvegardes, restaurations, notifications et automatisations.', 'backup-jlg'); ?></p>
+                </div>
+                <?php if (!empty($report_links)): ?>
+                    <div class="bjlg-history__actions">
+                        <?php foreach ($report_links as $link): ?>
+                            <a class="button button-secondary" href="<?php echo esc_url($link['url']); ?>">
+                                <span class="dashicons dashicons-media-default" aria-hidden="true"></span>
+                                <?php echo esc_html($link['label']); ?>
+                            </a>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </header>
+
+            <?php if (!empty($schedule_notice)): ?>
+                <div class="<?php echo esc_attr($schedule_notice['class']); ?>">
+                    <p><?php echo esc_html($schedule_notice['message']); ?></p>
                 </div>
             <?php endif; ?>
-            <?php if (!empty($history)): ?>
-                <table class="wp-list-table widefat striped bjlg-responsive-table bjlg-history-table">
-                    <caption class="bjlg-table-caption">
-                        Historique des 50 dernières actions liées aux sauvegardes et restaurations,
-                        incluant leur date, statut et détails.
-                    </caption>
-                    <thead>
-                        <tr>
-                            <th scope="col" style="width: 180px;">Date</th>
-                            <th scope="col">Action</th>
-                            <th scope="col" style="width: 100px;">Statut</th>
-                            <th scope="col">Détails</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($history as $entry):
-                            $status_class = ''; $status_icon = '';
-                            switch ($entry['status']) {
-                                case 'success': $status_class = 'success'; $status_icon = '✅'; break;
-                                case 'failure': $status_class = 'error'; $status_icon = '❌'; break;
-                                case 'info': $status_class = 'info'; $status_icon = 'ℹ️'; break;
-                            } ?>
-                            <tr class="bjlg-card-row">
-                                <td class="bjlg-card-cell" data-label="Date"><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($entry['timestamp'])); ?></td>
-                                <td class="bjlg-card-cell" data-label="Action"><strong><?php echo esc_html(str_replace('_', ' ', ucfirst($entry['action_type']))); ?></strong></td>
-                                <td class="bjlg-card-cell" data-label="Statut"><span class="bjlg-status <?php echo esc_attr($status_class); ?>"><?php echo $status_icon . ' ' . esc_html(ucfirst($entry['status'])); ?></span></td>
-                                <td class="bjlg-card-cell" data-label="Détails"><?php echo $this->render_history_details($entry); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php else: ?>
-                <div class="notice notice-info"><p>Aucun historique trouvé.</p></div>
-            <?php endif; ?>
-            <p class="description" style="margin-top: 20px;">L'historique est conservé pendant 30 jours. Les entrées plus anciennes sont automatiquement supprimées.</p>
-        </div>
+
+            <div class="bjlg-history__layout">
+                <aside class="bjlg-history__sidebar">
+                    <?php $this->render_sandbox_validation_summary($sandbox_settings, $sandbox_summary); ?>
+
+                    <?php if (!empty($status_insights)): ?>
+                        <section class="bjlg-history__insights" aria-label="<?php esc_attr_e('Résumé des statuts', 'backup-jlg'); ?>">
+                            <h3><?php esc_html_e('Statuts récents', 'backup-jlg'); ?></h3>
+                            <ul>
+                                <?php foreach ($status_insights as $status): ?>
+                                    <li>
+                                        <strong><?php echo esc_html($status['label'] ?? ''); ?></strong>
+                                        <span><?php echo esc_html(number_format_i18n((int) ($status['count'] ?? 0))); ?></span>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        </section>
+                    <?php endif; ?>
+
+                    <?php if (!empty($action_insights)): ?>
+                        <section class="bjlg-history__insights" aria-label="<?php esc_attr_e('Actions les plus fréquentes', 'backup-jlg'); ?>">
+                            <h3><?php esc_html_e('Actions fréquentes', 'backup-jlg'); ?></h3>
+                            <ul>
+                                <?php foreach ($action_insights as $action): ?>
+                                    <li>
+                                        <strong><?php echo esc_html($action['label'] ?? ''); ?></strong>
+                                        <span><?php echo esc_html(number_format_i18n((int) ($action['count'] ?? 0))); ?></span>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        </section>
+                    <?php endif; ?>
+                </aside>
+
+                <div class="bjlg-history__timeline-wrapper">
+                    <?php if ($history_json !== ''): ?>
+                        <div
+                            id="bjlg-history-timeline"
+                            class="bjlg-history__timeline"
+                            data-history="<?php echo esc_attr($history_json); ?>"
+                            <?php echo $status_filters_json !== '' ? ' data-status-filters="' . esc_attr($status_filters_json) . '"' : ''; ?>
+                            <?php echo $action_filters_json !== '' ? ' data-action-filters="' . esc_attr($action_filters_json) . '"' : ''; ?>
+                        ></div>
+                    <?php else: ?>
+                        <div class="bjlg-history__empty notice notice-info">
+                            <p><?php esc_html_e('Aucune activité récente détectée pour ce site ou ce réseau.', 'backup-jlg'); ?></p>
+                        </div>
+                    <?php endif; ?>
+
+                    <?php if (!empty($history)): ?>
+                        <noscript>
+                            <table class="wp-list-table widefat striped bjlg-history-table">
+                                <caption class="bjlg-table-caption">
+                                    <?php esc_html_e('Historique des 50 dernières actions liées aux sauvegardes et restaurations.', 'backup-jlg'); ?>
+                                </caption>
+                                <thead>
+                                    <tr>
+                                        <th scope="col" style="width: 180px;">Date</th>
+                                        <th scope="col">Action</th>
+                                        <th scope="col" style="width: 120px;">Statut</th>
+                                        <th scope="col">Détails</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($history as $entry):
+                                        $status_class = '';
+                                        $status_icon = '';
+                                        switch ($entry['status']) {
+                                            case 'success':
+                                                $status_class = 'success';
+                                                $status_icon = '✅';
+                                                break;
+                                            case 'failure':
+                                                $status_class = 'error';
+                                                $status_icon = '❌';
+                                                break;
+                                            case 'warning':
+                                                $status_class = 'warning';
+                                                $status_icon = '⚠️';
+                                                break;
+                                            default:
+                                                $status_class = 'info';
+                                                $status_icon = 'ℹ️';
+                                                break;
+                                        }
+                                        ?>
+                                        <tr class="bjlg-card-row">
+                                            <td class="bjlg-card-cell" data-label="Date"><?php echo esc_html(date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime((string) $entry['timestamp']))); ?></td>
+                                            <td class="bjlg-card-cell" data-label="Action"><strong><?php echo esc_html(str_replace('_', ' ', ucfirst((string) $entry['action_type']))); ?></strong></td>
+                                            <td class="bjlg-card-cell" data-label="Statut"><span class="bjlg-status <?php echo esc_attr($status_class); ?>"><?php echo esc_html($status_icon . ' ' . ucfirst((string) $entry['status'])); ?></span></td>
+                                            <td class="bjlg-card-cell" data-label="Détails"><?php echo $this->render_history_details($entry); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </noscript>
+                    <?php endif; ?>
+
+                    <p class="description bjlg-history__retention"><?php esc_html_e('L’historique est conservé pendant 30 jours. Les entrées plus anciennes sont automatiquement supprimées.', 'backup-jlg'); ?></p>
+                </div>
+            </div>
+        </section>
         <?php
     }
 
