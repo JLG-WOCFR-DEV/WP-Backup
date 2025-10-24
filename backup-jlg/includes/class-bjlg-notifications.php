@@ -3,6 +3,8 @@ namespace BJLG;
 
 use WP_Error;
 
+require_once __DIR__ . '/class-bjlg-history.php';
+
 if (!defined('ABSPATH')) {
     exit;
 }
@@ -968,10 +970,18 @@ class BJLG_Notifications {
         $timings = isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [];
         $sandbox = isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [];
         $cleanup = isset($sandbox['cleanup']) && is_array($sandbox['cleanup']) ? $sandbox['cleanup'] : [];
+        $report_files = isset($report['report_files']) && is_array($report['report_files'])
+            ? BJLG_History::sanitize_report_files($report['report_files'])
+            : [];
 
         $components = [];
         if (isset($report['components']) && is_array($report['components'])) {
             $components = array_map('strval', $report['components']);
+        }
+
+        $log_excerpt = [];
+        if (isset($report['log_excerpt']) && is_array($report['log_excerpt'])) {
+            $log_excerpt = array_map('strval', array_slice($report['log_excerpt'], -20));
         }
 
         return [
@@ -991,6 +1001,8 @@ class BJLG_Notifications {
             'sandbox_path' => isset($sandbox['base_path']) ? (string) $sandbox['base_path'] : '',
             'cleanup_performed' => !empty($cleanup['performed']),
             'cleanup_error' => isset($cleanup['error']) && $cleanup['error'] !== null ? (string) $cleanup['error'] : null,
+            'report_files' => $report_files,
+            'log_excerpt' => $log_excerpt,
             'raw' => $report,
         ];
     }
@@ -1415,6 +1427,16 @@ class BJLG_Notifications {
 
                 if (!empty($context['cleanup_error'])) {
                     $lines[] = __('Nettoyage sandbox : ', 'backup-jlg') . $context['cleanup_error'];
+                }
+
+                if (!empty($context['report_files']['markdown']['url'])) {
+                    $lines[] = __('Rapport (Markdown) : ', 'backup-jlg') . $context['report_files']['markdown']['url'];
+                } elseif (!empty($context['report_files']['json']['url'])) {
+                    $lines[] = __('Rapport (JSON) : ', 'backup-jlg') . $context['report_files']['json']['url'];
+                }
+
+                if (!empty($context['log_excerpt']) && is_array($context['log_excerpt'])) {
+                    $lines[] = __('Journal (extrait) : ', 'backup-jlg') . implode(' | ', array_slice(array_map('strval', $context['log_excerpt']), -5));
                 }
                 break;
             default:

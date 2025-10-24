@@ -203,6 +203,120 @@ class BJLG_History {
         
         return $results;
     }
+
+    /**
+     * Récupère une entrée d'historique précise.
+     *
+     * @param int      $id
+     * @param int|null $blog_id
+     * @return array<string,mixed>|null
+     */
+    public static function get_entry($id, $blog_id = null)
+    {
+        global $wpdb;
+
+        if (!self::wpdb_supports(['prepare', 'get_row'])) {
+            return null;
+        }
+
+        $table_name = self::get_table_name($blog_id);
+        $query = $wpdb->prepare("SELECT * FROM $table_name WHERE id = %d LIMIT 1", (int) $id);
+        $row = $wpdb->get_row($query, ARRAY_A);
+
+        if (!is_array($row)) {
+            return null;
+        }
+
+        $row['metadata'] = self::decode_metadata($row['metadata'] ?? null);
+
+        return $row;
+    }
+
+    /**
+     * Calcule un résumé des validations sandbox stockées.
+     *
+     * @param int $limit
+     * @return array<string,mixed>
+     */
+    public static function summarize_sandbox_history($limit = 10): array
+    {
+        $entries = self::get_history($limit, ['action_type' => 'sandbox_restore_validation']);
+        $summary = [
+            'total' => count($entries),
+            'success' => 0,
+            'failure' => 0,
+            'average_rto_seconds' => null,
+            'average_rpo_seconds' => null,
+            'average_rto_human' => '',
+            'average_rpo_human' => '',
+            'entries' => [],
+            'last_report' => null,
+        ];
+
+        $rto_sum = 0.0;
+        $rto_count = 0;
+        $rpo_sum = 0.0;
+        $rpo_count = 0;
+
+        foreach ($entries as $entry) {
+            $metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+            $report_summary = isset($metadata['report_summary']) && is_array($metadata['report_summary'])
+                ? $metadata['report_summary']
+                : [];
+            $objectives = isset($report_summary['objectives']) && is_array($report_summary['objectives'])
+                ? $report_summary['objectives']
+                : [];
+
+            if ($entry['status'] === 'success') {
+                $summary['success']++;
+            } elseif ($entry['status'] === 'failure') {
+                $summary['failure']++;
+            }
+
+            $rto_seconds = isset($objectives['rto_seconds']) ? (float) $objectives['rto_seconds'] : null;
+            if ($rto_seconds !== null) {
+                $rto_sum += $rto_seconds;
+                $rto_count++;
+            }
+
+            $rpo_seconds = isset($objectives['rpo_seconds']) ? (float) $objectives['rpo_seconds'] : null;
+            if ($rpo_seconds !== null) {
+                $rpo_sum += $rpo_seconds;
+                $rpo_count++;
+            }
+
+            $entry_files = isset($metadata['report_files']) && is_array($metadata['report_files'])
+                ? self::sanitize_report_files($metadata['report_files'])
+                : [];
+
+            $prepared = [
+                'id' => isset($entry['id']) ? (int) $entry['id'] : 0,
+                'timestamp' => $entry['timestamp'] ?? '',
+                'status' => $entry['status'] ?? 'info',
+                'details' => $entry['details'] ?? '',
+                'report_summary' => $report_summary,
+                'report_files' => $entry_files,
+            ];
+
+            if ($summary['last_report'] === null) {
+                $summary['last_report'] = $prepared;
+            }
+
+            $summary['entries'][] = $prepared;
+        }
+
+        if ($rto_count > 0) {
+            $summary['average_rto_seconds'] = $rto_sum / $rto_count;
+            $summary['average_rto_human'] = self::format_duration_human($summary['average_rto_seconds']);
+        }
+
+        if ($rpo_count > 0) {
+            $summary['average_rpo_seconds'] = $rpo_sum / $rpo_count;
+            $summary['average_rpo_human'] = self::format_duration_human($summary['average_rpo_seconds']);
+        }
+
+        return $summary;
+    }
     
     /**
      * Obtient des statistiques sur l'historique
@@ -367,7 +481,7 @@ class BJLG_History {
      */
     public static function export_csv($filters = [], $blog_id = null) {
         $history = self::get_history(9999, $filters, $blog_id);
-        
+
         $csv_data = [];
         $csv_data[] = ['Date', 'Action', 'Statut', 'Détails', 'Utilisateur', 'IP'];
         
@@ -383,6 +497,43 @@ class BJLG_History {
         }
         
         return $csv_data;
+    }
+
+    /**
+     * Nettoie la liste des fichiers de rapport stockés.
+     *
+     * @param array<string,mixed> $files
+     * @return array<string,mixed>
+     */
+    public static function sanitize_report_files(array $files): array
+    {
+        $sanitized = [];
+        $allowed_keys = ['json', 'html', 'markdown', 'log'];
+
+        foreach ($allowed_keys as $key) {
+            if (!isset($files[$key]) || !is_array($files[$key])) {
+                continue;
+            }
+
+            $entry = $files[$key];
+            $sanitized[$key] = [
+                'filename' => isset($entry['filename']) ? (string) $entry['filename'] : '',
+                'path' => isset($entry['path']) ? (string) $entry['path'] : '',
+                'url' => isset($entry['url']) ? (string) $entry['url'] : '',
+                'mime_type' => isset($entry['mime_type']) ? (string) $entry['mime_type'] : '',
+                'generated_at' => isset($entry['generated_at']) ? (int) $entry['generated_at'] : null,
+            ];
+        }
+
+        if (isset($files['base_path'])) {
+            $sanitized['base_path'] = (string) $files['base_path'];
+        }
+
+        if (isset($files['base_url'])) {
+            $sanitized['base_url'] = (string) $files['base_url'];
+        }
+
+        return $sanitized;
     }
     
     /**
@@ -581,5 +732,40 @@ class BJLG_History {
         $decoded = json_decode($metadata, true);
 
         return is_array($decoded) ? $decoded : [];
+    }
+
+    private static function format_duration_human($seconds): string
+    {
+        if ($seconds === null) {
+            return '';
+        }
+
+        $seconds = max(0, (float) $seconds);
+
+        if (function_exists('human_time_diff')) {
+            $now = current_time('timestamp');
+
+            return human_time_diff($now - (int) round($seconds), $now);
+        }
+
+        if ($seconds >= DAY_IN_SECONDS) {
+            $days = floor($seconds / DAY_IN_SECONDS);
+
+            return $days . 'd';
+        }
+
+        if ($seconds >= HOUR_IN_SECONDS) {
+            $hours = floor($seconds / HOUR_IN_SECONDS);
+
+            return $hours . 'h';
+        }
+
+        if ($seconds >= MINUTE_IN_SECONDS) {
+            $minutes = floor($seconds / MINUTE_IN_SECONDS);
+
+            return $minutes . 'm';
+        }
+
+        return (int) round($seconds) . 's';
     }
 }

@@ -40,6 +40,7 @@ class BJLG_Admin {
         add_action('wp_ajax_bjlg_update_onboarding_progress', [$this, 'ajax_update_onboarding_progress']);
         add_action('wp_ajax_bjlg_notification_ack', [$this, 'ajax_acknowledge_notification']);
         add_action('wp_ajax_bjlg_notification_resolve', [$this, 'ajax_resolve_notification']);
+        add_action('admin_post_bjlg_download_sandbox_report', [$this, 'handle_download_sandbox_report']);
     }
 
     /**
@@ -3117,10 +3118,19 @@ class BJLG_Admin {
      */
     private function render_history_section() {
         $history = class_exists(BJLG_History::class) ? BJLG_History::get_history(50) : [];
+        $sandbox_summary = class_exists(BJLG_History::class) ? BJLG_History::summarize_sandbox_history(10) : [];
+        $sandbox_settings = class_exists(BJLG_Scheduler::class)
+            ? BJLG_Scheduler::instance()->get_sandbox_schedule_settings()
+            : [];
         $report_links = $this->get_self_test_report_links();
+        $schedule_notice = isset($_GET['sandbox_schedule_updated']);
         ?>
         <div class="bjlg-section">
             <h2>Historique des 50 dernières actions</h2>
+            <?php if ($schedule_notice): ?>
+                <div class="notice notice-success is-dismissible"><p><?php esc_html_e('Planification des validations sandbox mise à jour.', 'backup-jlg'); ?></p></div>
+            <?php endif; ?>
+            <?php $this->render_sandbox_validation_summary($sandbox_settings, $sandbox_summary); ?>
             <?php if (!empty($report_links)): ?>
                 <div class="bjlg-history-report-actions">
                     <?php foreach ($report_links as $link): ?>
@@ -3157,7 +3167,45 @@ class BJLG_Admin {
                                 <td class="bjlg-card-cell" data-label="Date"><?php echo date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($entry['timestamp'])); ?></td>
                                 <td class="bjlg-card-cell" data-label="Action"><strong><?php echo esc_html(str_replace('_', ' ', ucfirst($entry['action_type']))); ?></strong></td>
                                 <td class="bjlg-card-cell" data-label="Statut"><span class="bjlg-status <?php echo esc_attr($status_class); ?>"><?php echo $status_icon . ' ' . esc_html(ucfirst($entry['status'])); ?></span></td>
-                                <td class="bjlg-card-cell" data-label="Détails"><?php echo esc_html($entry['details']); ?></td>
+                                <td class="bjlg-card-cell" data-label="Détails">
+                                    <?php echo esc_html($entry['details']); ?>
+                                    <?php
+                                    $metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+                                    $report_summary = isset($metadata['report_summary']) && is_array($metadata['report_summary'])
+                                        ? $metadata['report_summary']
+                                        : [];
+                                    $report_links = $this->get_sandbox_report_links_from_entry($entry);
+                                    ?>
+                                    <?php if (!empty($report_summary)): ?>
+                                        <div class="bjlg-history-meta">
+                                            <?php if (!empty($report_summary['objectives']['rto_human'])): ?>
+                                                <div class="bjlg-history-meta__item"><?php esc_html_e('RTO', 'backup-jlg'); ?> : <?php echo esc_html($report_summary['objectives']['rto_human']); ?></div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($report_summary['objectives']['rpo_human'])): ?>
+                                                <div class="bjlg-history-meta__item"><?php esc_html_e('RPO', 'backup-jlg'); ?> : <?php echo esc_html($report_summary['objectives']['rpo_human']); ?></div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($report_summary['started_at'])): ?>
+                                                <div class="bjlg-history-meta__item"><?php esc_html_e('Début', 'backup-jlg'); ?> : <?php echo esc_html($this->format_history_timestamp((int) $report_summary['started_at'])); ?></div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($report_summary['completed_at'])): ?>
+                                                <div class="bjlg-history-meta__item"><?php esc_html_e('Fin', 'backup-jlg'); ?> : <?php echo esc_html($this->format_history_timestamp((int) $report_summary['completed_at'])); ?></div>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($report_links)): ?>
+                                        <div class="bjlg-history-report-actions bjlg-history-report-actions--inline">
+                                            <?php foreach ($report_links as $link): ?>
+                                                <a class="button button-link" href="<?php echo esc_url($link['url']); ?>"><?php echo esc_html($link['label']); ?></a>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($report_summary['log_excerpt']) && is_array($report_summary['log_excerpt'])): ?>
+                                        <details class="bjlg-history-log">
+                                            <summary><?php esc_html_e('Voir l’extrait de journal', 'backup-jlg'); ?></summary>
+                                            <pre><?php echo esc_html(implode("\n", array_map('strval', array_slice($report_summary['log_excerpt'], -20)))); ?></pre>
+                                        </details>
+                                    <?php endif; ?>
+                                </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -3168,6 +3216,163 @@ class BJLG_Admin {
             <p class="description" style="margin-top: 20px;">L'historique est conservé pendant 30 jours. Les entrées plus anciennes sont automatiquement supprimées.</p>
         </div>
         <?php
+    }
+
+    private function render_sandbox_validation_summary(array $settings, array $summary): void
+    {
+        $enabled = !empty($settings['enabled']);
+        $current_recurrence = $enabled ? ($settings['recurrence'] ?? 'weekly') : 'disabled';
+        $options = [
+            'disabled' => __('Désactivée', 'backup-jlg'),
+            'every_fifteen_minutes' => __('Toutes les 15 minutes', 'backup-jlg'),
+            'hourly' => __('Toutes les heures', 'backup-jlg'),
+            'twice_daily' => __('Deux fois par jour', 'backup-jlg'),
+            'daily' => __('Quotidienne', 'backup-jlg'),
+            'weekly' => __('Hebdomadaire', 'backup-jlg'),
+            'monthly' => __('Mensuelle', 'backup-jlg'),
+        ];
+
+        $redirect = admin_url('admin.php?page=backup-jlg');
+        if (function_exists('menu_page_url')) {
+            $maybe = menu_page_url('backup-jlg', false);
+            if (is_string($maybe) && $maybe !== '') {
+                $redirect = $maybe;
+            }
+        }
+        $redirect = remove_query_arg('sandbox_schedule_updated', $redirect);
+
+        $total_runs = isset($summary['total']) ? (int) $summary['total'] : 0;
+        $average_rto = isset($summary['average_rto_human']) ? (string) $summary['average_rto_human'] : '';
+        $average_rpo = isset($summary['average_rpo_human']) ? (string) $summary['average_rpo_human'] : '';
+        $success = isset($summary['success']) ? (int) $summary['success'] : 0;
+        $failure = isset($summary['failure']) ? (int) $summary['failure'] : 0;
+        $last_report = isset($summary['last_report']) && is_array($summary['last_report']) ? $summary['last_report'] : null;
+        $last_links = $last_report ? $this->build_sandbox_report_links($last_report['report_files'] ?? [], (int) ($last_report['id'] ?? 0)) : [];
+
+        ?>
+        <div class="bjlg-card bjlg-sandbox-card">
+            <h3><?php esc_html_e('Validations sandbox planifiées', 'backup-jlg'); ?></h3>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="bjlg-sandbox-form">
+                <?php if (function_exists('wp_nonce_field')) { wp_nonce_field('bjlg_save_sandbox_schedule'); } ?>
+                <input type="hidden" name="action" value="bjlg_save_sandbox_schedule">
+                <input type="hidden" name="redirect_to" value="<?php echo esc_url($redirect); ?>">
+                <label class="bjlg-toggle">
+                    <input type="checkbox" name="bjlg_sandbox_enabled" value="1" <?php checked($enabled); ?>>
+                    <span><?php esc_html_e('Activer les validations sandbox automatiques', 'backup-jlg'); ?></span>
+                </label>
+                <label for="bjlg-sandbox-recurrence" class="bjlg-sandbox-recurrence-label"><?php esc_html_e('Fréquence', 'backup-jlg'); ?></label>
+                <select id="bjlg-sandbox-recurrence" name="bjlg_sandbox_recurrence" <?php disabled(!$enabled); ?>>
+                    <?php foreach ($options as $value => $label): ?>
+                        <option value="<?php echo esc_attr($value); ?>" <?php selected($current_recurrence, $value); ?>><?php echo esc_html($label); ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <button type="submit" class="button button-secondary"><?php esc_html_e('Enregistrer la planification', 'backup-jlg'); ?></button>
+            </form>
+            <div class="bjlg-sandbox-metrics">
+                <ul>
+                    <li><?php esc_html_e('Validations consignées', 'backup-jlg'); ?> : <?php echo esc_html(number_format_i18n($total_runs)); ?></li>
+                    <li><?php esc_html_e('Réussites', 'backup-jlg'); ?> : <?php echo esc_html(number_format_i18n($success)); ?></li>
+                    <li><?php esc_html_e('Échecs', 'backup-jlg'); ?> : <?php echo esc_html(number_format_i18n($failure)); ?></li>
+                    <?php if ($average_rto !== ''): ?>
+                        <li><?php esc_html_e('RTO moyen', 'backup-jlg'); ?> : <?php echo esc_html($average_rto); ?></li>
+                    <?php endif; ?>
+                    <?php if ($average_rpo !== ''): ?>
+                        <li><?php esc_html_e('RPO moyen', 'backup-jlg'); ?> : <?php echo esc_html($average_rpo); ?></li>
+                    <?php endif; ?>
+                </ul>
+            </div>
+            <div class="bjlg-sandbox-last-report">
+                <?php if ($last_report): ?>
+                    <p>
+                        <strong><?php esc_html_e('Dernière validation', 'backup-jlg'); ?> :</strong>
+                        <?php echo esc_html($this->format_history_timestamp(isset($last_report['report_summary']['completed_at']) ? (int) $last_report['report_summary']['completed_at'] : null)); ?>
+                        — <?php echo esc_html(ucfirst($last_report['status'] ?? 'info')); ?>
+                    </p>
+                    <?php if (!empty($last_report['report_summary']['objectives']['rto_human'])): ?>
+                        <p><?php esc_html_e('RTO', 'backup-jlg'); ?> : <?php echo esc_html($last_report['report_summary']['objectives']['rto_human']); ?></p>
+                    <?php endif; ?>
+                    <?php if (!empty($last_report['report_summary']['objectives']['rpo_human'])): ?>
+                        <p><?php esc_html_e('RPO', 'backup-jlg'); ?> : <?php echo esc_html($last_report['report_summary']['objectives']['rpo_human']); ?></p>
+                    <?php endif; ?>
+                    <?php if (!empty($last_links)): ?>
+                        <div class="bjlg-history-report-actions bjlg-history-report-actions--inline">
+                            <?php foreach ($last_links as $link): ?>
+                                <a class="button button-secondary" href="<?php echo esc_url($link['url']); ?>"><?php echo esc_html($link['label']); ?></a>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <p><?php esc_html_e('Aucune validation sandbox n’a encore été réalisée.', 'backup-jlg'); ?></p>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php
+    }
+
+    private function get_sandbox_report_links_from_entry(array $entry): array
+    {
+        $metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+        $files = isset($metadata['report_files']) && is_array($metadata['report_files'])
+            ? BJLG_History::sanitize_report_files($metadata['report_files'])
+            : [];
+
+        return $this->build_sandbox_report_links($files, isset($entry['id']) ? (int) $entry['id'] : 0);
+    }
+
+    private function build_sandbox_report_links(array $files, int $entry_id): array
+    {
+        if ($entry_id <= 0) {
+            return [];
+        }
+
+        $types = [
+            'markdown' => __('Rapport Markdown', 'backup-jlg'),
+            'json' => __('Rapport JSON', 'backup-jlg'),
+            'log' => __('Journaux', 'backup-jlg'),
+        ];
+
+        $links = [];
+        foreach ($types as $type => $label) {
+            if (empty($files[$type]['path'])) {
+                continue;
+            }
+
+            $url = add_query_arg(
+                [
+                    'action' => 'bjlg_download_sandbox_report',
+                    'entry_id' => $entry_id,
+                    'type' => $type,
+                ],
+                admin_url('admin-post.php')
+            );
+
+            if (function_exists('wp_nonce_url')) {
+                $url = wp_nonce_url($url, 'bjlg_download_sandbox_report');
+            }
+
+            $links[] = [
+                'type' => $type,
+                'label' => $label,
+                'url' => $url,
+            ];
+        }
+
+        return $links;
+    }
+
+    private function format_history_timestamp(?int $timestamp): string
+    {
+        if ($timestamp === null || $timestamp <= 0) {
+            return '';
+        }
+
+        $format = get_option('date_format') . ' ' . get_option('time_format');
+
+        if (function_exists('date_i18n')) {
+            return date_i18n($format, $timestamp);
+        }
+
+        return date('Y-m-d H:i:s', $timestamp);
     }
 
     private function get_self_test_report_links(): array {
@@ -3269,6 +3474,85 @@ class BJLG_Admin {
         if (function_exists('nocache_headers')) {
             nocache_headers();
         }
+        header('Content-Type: ' . $mime_type);
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Content-Length: ' . filesize($real_path));
+
+        $sent = readfile($real_path);
+        if ($sent === false) {
+            wp_die(__('Impossible de transmettre le rapport.', 'backup-jlg'), '', ['response' => 500]);
+        }
+
+        exit;
+    }
+
+    public function handle_download_sandbox_report(): void
+    {
+        if (!bjlg_can_manage_backups()) {
+            wp_die(__('Permission refusée.', 'backup-jlg'), '', ['response' => 403]);
+        }
+
+        $nonce = isset($_GET['_wpnonce']) ? $_GET['_wpnonce'] : '';
+        if (function_exists('wp_verify_nonce') && !wp_verify_nonce($nonce, 'bjlg_download_sandbox_report')) {
+            wp_die(__('Jeton de sécurité invalide.', 'backup-jlg'), '', ['response' => 403]);
+        }
+
+        $entry_id = isset($_GET['entry_id']) ? (int) $_GET['entry_id'] : 0;
+        if ($entry_id <= 0) {
+            wp_die(__('Entrée introuvable.', 'backup-jlg'), '', ['response' => 404]);
+        }
+
+        $type = isset($_GET['type']) ? sanitize_key((string) wp_unslash($_GET['type'])) : 'markdown';
+        if (!in_array($type, ['markdown', 'json', 'log'], true)) {
+            $type = 'markdown';
+        }
+
+        $entry = BJLG_History::get_entry($entry_id);
+        if (!is_array($entry)) {
+            wp_die(__('Entrée d’historique introuvable.', 'backup-jlg'), '', ['response' => 404]);
+        }
+
+        $metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+        $files = isset($metadata['report_files']) && is_array($metadata['report_files'])
+            ? BJLG_History::sanitize_report_files($metadata['report_files'])
+            : [];
+
+        if (empty($files[$type]['path'])) {
+            wp_die(__('Le fichier demandé est introuvable.', 'backup-jlg'), '', ['response' => 404]);
+        }
+
+        $path = (string) $files[$type]['path'];
+        $real_path = realpath($path);
+
+        if ($real_path === false || !is_readable($real_path)) {
+            wp_die(__('Impossible de lire le rapport demandé.', 'backup-jlg'), '', ['response' => 404]);
+        }
+
+        $base_path = isset($files['base_path']) ? (string) $files['base_path'] : dirname($real_path);
+        $normalized_base = realpath($base_path);
+        if ($normalized_base !== false) {
+            $normalized_base = rtrim(str_replace('\\', '/', $normalized_base), '/') . '/';
+            $normalized_target = str_replace('\\', '/', $real_path);
+            if (strpos($normalized_target, $normalized_base) !== 0) {
+                wp_die(__('Accès au rapport refusé.', 'backup-jlg'), '', ['response' => 403]);
+            }
+        }
+
+        $mime_type = isset($files[$type]['mime_type']) && $files[$type]['mime_type'] !== ''
+            ? (string) $files[$type]['mime_type']
+            : 'application/octet-stream';
+        if (strpos($mime_type, 'text/') === 0) {
+            $mime_type .= '; charset=utf-8';
+        }
+
+        $filename = isset($files[$type]['filename']) && $files[$type]['filename'] !== ''
+            ? sanitize_file_name($files[$type]['filename'])
+            : basename($real_path);
+
+        if (function_exists('nocache_headers')) {
+            nocache_headers();
+        }
+
         header('Content-Type: ' . $mime_type);
         header('Content-Disposition: attachment; filename="' . $filename . '"');
         header('Content-Length: ' . filesize($real_path));
