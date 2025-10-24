@@ -112,6 +112,18 @@ Ce document positionne Backup JLG face aux offres haut de gamme (UpdraftPlus Pr
 - **Styles figés dans le bloc** : la feuille `block-status.css` impose couleurs, rayons et boutons custom qui ne respectent pas la typographie ni les variables du thème, d’où un rendu potentiellement dissonant côté front ou éditeur visuel. Supporter les presets `color`, `typography` et les variables globales assurerait une meilleure intégration.【F:backup-jlg/assets/css/block-status.css†L1-L86】【F:backup-jlg/block.json†L11-L27】
 - **Éditeur sans prévisualisation dynamique** : le bloc charge un snapshot via `apiFetch` mais n’expose pas de skeleton ni de message clair lors du chargement/erreur, contrairement aux blocs pro qui affichent placeholders et liens de correction. Ajouter un état `Spinner` accessible et des actions de rechargement guiderait l’éditeur.【F:backup-jlg/assets/js/block-status.js†L8-L62】【F:backup-jlg/assets/js/block-status.js†L115-L184】
 
+### Prototypage et design tokens
+
+- **Presets UI prêts à intégrer** : la page de démonstration `docs/ui-presets-demo.html` illustre six presets (Minimal Focus, Modern Contrast, Systemic Elevation, Classy Utility, Vibrant Clarity, Motion Canvas) basés sur des variables CSS communes (`data-preset`), ce qui permettrait de dériver rapidement un thème admin et des composants réactifs sans réécrire les styles existants.【F:docs/ui-presets-demo.html†L1-L207】
+- **Système de tokens centralisé** : la feuille `docs/ui-presets.css` expose déjà les rayons, espacements, ombres et couleurs normalisées (`--color-background`, `--color-accent`, `--preset-shadow-soft`…), offrant une base concrète pour alimenter `@wordpress/components` ou une config Tailwind dédiée et réduire la dispersion des teintes en dur dans `assets/css/admin.css`.【F:docs/ui-presets.css†L1-L120】【F:backup-jlg/assets/css/admin.css†L35-L118】
+- **Plan d’intégration progressif** : amorcer la migration des styles `.bjlg-*` en important les tokens via `enqueue_block_editor_assets`/`admin_enqueue_scripts`, puis brancher les composants critiques (boutons, cartes, modales) sur les variables globales avant d’industrialiser la bascule complète vers `@wordpress/components`.
+
+### Tests utilisateurs & instrumentation UI
+
+- **Scénarios guidés à prototyper** : avant développement, scénariser dans Figma ou Storybook trois parcours critiques (création de plan, diagnostic d’échec, restauration sandbox) en capitalisant sur les composants du prototype HTML/CSS pour aligner produit, design et technique.【F:docs/ui-presets-demo.html†L16-L207】
+- **Instrumentation des interactions** : tirer parti du module JS existant (`assets/js/admin.js`) pour journaliser l’usage des nouveaux panneaux (onboarding, filtres) via des événements `window.dispatchEvent` ou `wp.data` et suivre les zones nécessitant un accompagnement renforcé.【F:backup-jlg/assets/js/admin.js†L4-L205】
+- **Boucle de feedback intégrée** : ajouter un widget « Donnez votre avis » dans la zone latérale (même panneau que les notifications) afin de collecter les retours contextuels sur la refonte ; exploiter `BJLG_History` pour lier ces feedbacks aux actions récentes et identifier les irritants UX avec un minimum de développement backend.【F:backup-jlg/includes/class-bjlg-admin.php†L3290-L3361】【F:backup-jlg/includes/class-bjlg-history.php†L445-L459】
+
 ### Fiabilité opérationnelle & observabilité
 
 - **Contrôles post-sauvegarde incomplets** : les cases « Vérifier l’intégrité (SHA-256) » et « Test de restauration à blanc » ne déclenchent pas de rapport détaillé automatisé, alors que les suites pro publient systématiquement un compte rendu par exécution.【F:backup-jlg/includes/class-bjlg-admin.php†L1258-L1297】【F:backup-jlg/includes/class-bjlg-backup.php†L2087-L2129】
