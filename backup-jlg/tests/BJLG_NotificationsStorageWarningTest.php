@@ -137,7 +137,7 @@ final class BJLG_NotificationsStorageWarningTest extends TestCase
 
     public function test_handle_storage_warning_falls_back_to_local_channel_when_remote_invalid(): void
     {
-        bjlg_update_option('bjlg_notification_queue', []);
+        BJLG_Notification_Queue::seed_queue([]);
         bjlg_update_option('bjlg_notification_settings', [
             'enabled' => true,
             'email_recipients' => 'ops@example.com',

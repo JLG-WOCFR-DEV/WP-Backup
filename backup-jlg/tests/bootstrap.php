@@ -1519,6 +1519,294 @@ if (!function_exists('dbDelta')) {
     }
 }
 
+if (!class_exists('wpdb')) {
+    class wpdb {
+        public $prefix;
+        public $base_prefix;
+        public $insert_id = 0;
+
+        public function __construct() {
+            $this->prefix = 'wp_';
+            $this->base_prefix = 'wp_';
+
+            if (!isset($GLOBALS['bjlg_test_tables'])) {
+                $GLOBALS['bjlg_test_tables'] = [];
+            }
+        }
+
+        private function &get_store(string $table): array {
+            if (!isset($GLOBALS['bjlg_test_tables'][$table])) {
+                $GLOBALS['bjlg_test_tables'][$table] = [
+                    'auto' => 1,
+                    'rows' => [],
+                ];
+            }
+
+            return $GLOBALS['bjlg_test_tables'][$table];
+        }
+
+        public function get_charset_collate() {
+            return 'DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci';
+        }
+
+        public function insert($table, $data) {
+            $store =& $this->get_store($table);
+
+            if (!isset($data['id'])) {
+                $data['id'] = $store['auto']++;
+            } else {
+                $store['auto'] = max($store['auto'], ((int) $data['id']) + 1);
+            }
+
+            $store['rows'][] = $data;
+            $this->insert_id = $data['id'];
+
+            return true;
+        }
+
+        public function update($table, $data, $where) {
+            $store =& $this->get_store($table);
+            $count = 0;
+
+            foreach ($store['rows'] as &$row) {
+                if ($this->row_matches($row, $where)) {
+                    foreach ($data as $key => $value) {
+                        $row[$key] = $value;
+                    }
+                    $count++;
+                }
+            }
+
+            return $count;
+        }
+
+        public function delete($table, $where) {
+            $store =& $this->get_store($table);
+            $updated = [];
+            $count = 0;
+
+            foreach ($store['rows'] as $row) {
+                if ($this->row_matches($row, $where)) {
+                    $count++;
+                    continue;
+                }
+
+                $updated[] = $row;
+            }
+
+            $store['rows'] = $updated;
+
+            return $count;
+        }
+
+        public function get_results($query, $output = ARRAY_A) {
+            return $this->run_select($query);
+        }
+
+        public function get_row($query, $output = ARRAY_A) {
+            $results = $this->run_select($query);
+
+            if (empty($results)) {
+                return null;
+            }
+
+            return $results[0];
+        }
+
+        public function get_var($query) {
+            $results = $this->run_select($query);
+            if (empty($results)) {
+                return null;
+            }
+
+            $row = $results[0];
+            if (is_array($row)) {
+                return reset($row);
+            }
+
+            return null;
+        }
+
+        public function prepare($query, ...$args) {
+            if (!is_string($query)) {
+                return '';
+            }
+
+            if (count($args) === 1 && is_array($args[0])) {
+                $args = $args[0];
+            }
+
+            $query = (string) $query;
+            $index = 0;
+
+            return preg_replace_callback('/%([sdF])/', function ($matches) use (&$args, &$index) {
+                if (!array_key_exists($index, $args)) {
+                    return $matches[0];
+                }
+
+                $value = $args[$index++];
+
+                switch ($matches[1]) {
+                    case 'd':
+                        return (string) (int) $value;
+                    case 'F':
+                        return (string) (float) $value;
+                    default:
+                        return "'" . addslashes((string) $value) . "'";
+                }
+            }, $query);
+        }
+
+        public function query($query) {
+            return true;
+        }
+
+        private function row_matches(array $row, array $where): bool {
+            foreach ($where as $key => $value) {
+                if (!array_key_exists($key, $row)) {
+                    return false;
+                }
+
+                if ((string) $row[$key] !== (string) $value) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private function run_select($query): array {
+            if (!is_string($query)) {
+                return [];
+            }
+
+            $query = trim(str_replace('`', '', $query));
+            if (stripos($query, 'SELECT ') !== 0) {
+                return [];
+            }
+
+            $query_body = substr($query, 7);
+            $from_pos = stripos($query_body, ' FROM ');
+            if ($from_pos === false) {
+                return [];
+            }
+
+            $select_part = substr($query_body, 0, $from_pos);
+            $rest = substr($query_body, $from_pos + 6);
+
+            $limit = null;
+            $order_field = null;
+            $order_direction = 'ASC';
+            $where_part = '';
+
+            $order_split = preg_split('/\s+ORDER\s+BY\s+/i', $rest, 2);
+            if (count($order_split) > 1) {
+                $rest = $order_split[0];
+                $order_clause = $order_split[1];
+                $limit_split = preg_split('/\s+LIMIT\s+/i', $order_clause, 2);
+                $order_tokens = preg_split('/\s+/', trim($limit_split[0]));
+                $order_field = $order_tokens[0] ?? null;
+                if (isset($order_tokens[1])) {
+                    $order_direction = strtoupper($order_tokens[1]) === 'DESC' ? 'DESC' : 'ASC';
+                }
+                if (isset($limit_split[1])) {
+                    $limit = (int) trim($limit_split[1]);
+                }
+            } else {
+                $limit_split = preg_split('/\s+LIMIT\s+/i', $rest, 2);
+                if (isset($limit_split[1])) {
+                    $rest = $limit_split[0];
+                    $limit = (int) trim($limit_split[1]);
+                }
+            }
+
+            $where_split = preg_split('/\s+WHERE\s+/i', $rest, 2);
+            $table = trim($where_split[0]);
+            if (isset($where_split[1])) {
+                $where_part = trim($where_split[1]);
+            }
+
+            $store =& $this->get_store($table);
+            $rows = $store['rows'];
+
+            if ($where_part !== '') {
+                $conditions = preg_split('/\s+AND\s+/i', $where_part);
+                $filtered = [];
+                foreach ($rows as $row) {
+                    $match = true;
+                    foreach ($conditions as $condition) {
+                        $condition = trim($condition);
+                        if ($condition === '') {
+                            continue;
+                        }
+
+                        if (preg_match('/^([A-Za-z0-9_]+)\s*=\s*\'?([^\']*)\'?$/', $condition, $m)) {
+                            $column = $m[1];
+                            $value = stripslashes($m[2]);
+                            if (!array_key_exists($column, $row) || (string) $row[$column] !== $value) {
+                                $match = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if ($match) {
+                        $filtered[] = $row;
+                    }
+                }
+
+                $rows = $filtered;
+            }
+
+            if ($order_field !== null) {
+                usort($rows, function ($a, $b) use ($order_field, $order_direction) {
+                    $valueA = $a[$order_field] ?? null;
+                    $valueB = $b[$order_field] ?? null;
+
+                    if ($valueA == $valueB) { // phpcs:ignore WordPress.PHP.StrictComparisons.LooseComparison
+                        return 0;
+                    }
+
+                    if ($valueA < $valueB) {
+                        return $order_direction === 'ASC' ? -1 : 1;
+                    }
+
+                    return $order_direction === 'ASC' ? 1 : -1;
+                });
+            }
+
+            if ($limit !== null) {
+                $rows = array_slice($rows, 0, $limit);
+            }
+
+            $select_fields = array_map('trim', explode(',', $select_part));
+            $results = [];
+
+            foreach ($rows as $row) {
+                if ($select_part === '*' || $select_part === '*,') {
+                    $results[] = $row;
+                    continue;
+                }
+
+                $result_row = [];
+                foreach ($select_fields as $field) {
+                    if ($field === '') {
+                        continue;
+                    }
+
+                    $result_row[$field] = $row[$field] ?? null;
+                }
+
+                $results[] = $result_row;
+            }
+
+            return $results;
+        }
+    }
+
+    $GLOBALS['wpdb'] = new wpdb();
+}
+
 if (!function_exists('wp_hash_password')) {
     function wp_hash_password($password) {
         return password_hash($password, PASSWORD_DEFAULT);

@@ -697,6 +697,7 @@ final class BJLG_Plugin {
             'api' => 'assets/js/admin-api.js',
             'rbac' => 'assets/js/admin-rbac.js',
             'network' => 'assets/js/admin-network.js',
+            'history' => 'assets/js/admin-history.js',
         ];
 
         $module_urls = [];
@@ -708,7 +709,7 @@ final class BJLG_Plugin {
         }
 
         $section_modules = [
-            'monitoring' => ['dashboard', 'logs'],
+            'monitoring' => ['dashboard', 'history', 'logs'],
             'backup' => ['dashboard', 'backup', 'scheduling'],
             'restore' => ['backup'],
             'settings' => ['settings'],
@@ -806,6 +807,13 @@ final class BJLG_Plugin {
     }
 
     public function activate() {
+        if (!function_exists('dbDelta')) {
+            $upgrade_path = trailingslashit(ABSPATH) . 'wp-admin/includes/upgrade.php';
+            if (is_readable($upgrade_path)) {
+                require_once $upgrade_path;
+            }
+        }
+
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-debug.php';
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-history.php';
         require_once BJLG_INCLUDES_DIR . 'class-bjlg-notification-queue.php';
@@ -829,6 +837,7 @@ final class BJLG_Plugin {
                 }
 
                 BJLG\BJLG_History::create_table(0);
+                BJLG\BJLG_Notification_Queue::create_tables();
                 if (bjlg_get_option('bjlg_required_capability', null, ['network' => true]) === null) {
                     bjlg_update_option('bjlg_required_capability', BJLG_DEFAULT_CAPABILITY, ['network' => true]);
                 }

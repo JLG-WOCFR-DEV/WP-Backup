@@ -21,6 +21,9 @@ class BJLG_Notification_Queue {
     private const VALID_SEVERITIES = ['info', 'warning', 'critical'];
     private const DEFAULT_REMINDER_INTERVAL = 900; // 15 minutes
     private const MAX_REMINDER_INTERVAL = 86400; // 24 hours
+    private const TABLE_NAME = 'bjlg_notification_queue';
+    private const META_TABLE_NAME = 'bjlg_notification_queue_meta';
+    private const MIGRATION_OPTION = 'bjlg_notification_queue_migrated';
 
     /** @var bool|null */
     private static $table_exists = null;
@@ -182,6 +185,118 @@ class BJLG_Notification_Queue {
         if (!wp_next_scheduled(self::HOOK)) {
             wp_schedule_event(time() + MINUTE_IN_SECONDS, 'every_five_minutes', self::HOOK);
         }
+    }
+
+    /**
+     * Creates or upgrades the database tables backing the notification queue.
+     */
+    public static function create_tables(): void {
+        $db = self::db();
+        if (!$db) {
+            return;
+        }
+
+        $charset_collate = '';
+        if (method_exists($db, 'get_charset_collate')) {
+            $charset_collate = (string) $db->get_charset_collate();
+        }
+
+        $queue_table = self::table_name();
+        $meta_table = self::meta_table_name();
+
+        $queue_sql = "CREATE TABLE {$queue_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            entry_id varchar(191) NOT NULL,
+            event varchar(191) NOT NULL DEFAULT '',
+            title text NULL,
+            subject text NULL,
+            severity varchar(20) NOT NULL DEFAULT '',
+            created_at bigint(20) unsigned NOT NULL DEFAULT 0,
+            next_attempt_at bigint(20) unsigned NOT NULL DEFAULT 0,
+            last_attempt_at bigint(20) unsigned NOT NULL DEFAULT 0,
+            updated_at bigint(20) unsigned NOT NULL DEFAULT 0,
+            acknowledged_by varchar(191) NOT NULL DEFAULT '',
+            acknowledged_at bigint(20) unsigned NOT NULL DEFAULT 0,
+            resolved_at bigint(20) unsigned NOT NULL DEFAULT 0,
+            resolution_summary text NULL,
+            resolution_status varchar(50) NOT NULL DEFAULT '',
+            resolution_acknowledged_at bigint(20) unsigned NOT NULL DEFAULT 0,
+            resolution_resolved_at bigint(20) unsigned NOT NULL DEFAULT 0,
+            resolution_notes longtext NULL,
+            reminder_attempts int NOT NULL DEFAULT 0,
+            reminder_next_at bigint(20) unsigned NOT NULL DEFAULT 0,
+            reminder_last_triggered_at bigint(20) unsigned NOT NULL DEFAULT 0,
+            reminder_base_interval int NOT NULL DEFAULT 0,
+            reminder_active tinyint(1) NOT NULL DEFAULT 1,
+            reminder_backoff_multiplier float NOT NULL DEFAULT 0,
+            reminder_max_interval int NOT NULL DEFAULT 0,
+            last_error text NULL,
+            quiet_until bigint(20) unsigned NOT NULL DEFAULT 0,
+            reminders_payload longtext NULL,
+            resolution_payload longtext NULL,
+            escalation_payload longtext NULL,
+            quiet_hours_payload longtext NULL,
+            payload longtext NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY entry_id (entry_id),
+            KEY reminder_next_at (reminder_next_at),
+            KEY resolution_status (resolution_status)
+        ) {$charset_collate};";
+
+        $meta_sql = "CREATE TABLE {$meta_table} (
+            meta_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            entry_id varchar(191) NOT NULL,
+            meta_key varchar(191) NOT NULL,
+            meta_value longtext NULL,
+            meta_order int NOT NULL DEFAULT 0,
+            PRIMARY KEY  (meta_id),
+            KEY entry_id (entry_id),
+            KEY meta_key (meta_key)
+        ) {$charset_collate};";
+
+        if (function_exists('dbDelta')) {
+            dbDelta($queue_sql);
+            dbDelta($meta_sql);
+        } elseif (method_exists($db, 'query')) {
+            $db->query($queue_sql);
+            $db->query($meta_sql);
+        }
+
+        self::maybe_migrate_from_option();
+    }
+
+    /**
+     * Seeds the queue with the provided entries. Intended for tests and migrations.
+     *
+     * @internal
+     *
+     * @param array<int,array<string,mixed>> $entries
+     */
+    public static function seed_queue(array $entries): void {
+        $normalized = [];
+        foreach ($entries as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $normalized_entry = self::normalize_entry($entry);
+            if (!empty($normalized_entry)) {
+                $normalized[] = $normalized_entry;
+            }
+        }
+
+        self::save_queue($normalized);
+    }
+
+    /**
+     * Exports the raw queue entries. Intended for tests and diagnostics.
+     *
+     * @internal
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public static function export_queue(): array {
+        return self::get_queue();
     }
 
     /**
@@ -1350,15 +1465,28 @@ class BJLG_Notification_Queue {
     private static function get_queue_from_option() {
         $queue = bjlg_get_option(self::OPTION, []);
 
-        if (!is_array($queue)) {
+        if (!is_array($rows)) {
             return [];
         }
 
-        $normalized = [];
-        foreach ($queue as $entry) {
-            if (is_array($entry)) {
-                $normalized[] = $entry;
+        $entries = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
             }
+
+            $payload = isset($row['payload']) ? $row['payload'] : '';
+            $entry = self::decode_json($payload);
+            if (!is_array($entry) || empty($entry)) {
+                continue;
+            }
+
+            if (!isset($entry['id']) && isset($row['entry_id'])) {
+                $entry['id'] = (string) $row['entry_id'];
+            }
+
+            $entry = self::hydrate_resolution_from_meta($entry, isset($row['entry_id']) ? (string) $row['entry_id'] : '');
+            $entries[] = $entry;
         }
 
         self::$table_cache = $normalized;
@@ -1604,12 +1732,15 @@ class BJLG_Notification_Queue {
             'context' => isset($entry['context']) && is_array($entry['context']) ? $entry['context'] : [],
             'created_at' => isset($entry['created_at']) ? (int) $entry['created_at'] : $now,
             'next_attempt_at' => isset($entry['next_attempt_at']) ? (int) $entry['next_attempt_at'] : $now,
+            'last_attempt_at' => isset($entry['last_attempt_at']) ? (int) $entry['last_attempt_at'] : 0,
+            'updated_at' => isset($entry['updated_at']) ? (int) $entry['updated_at'] : $now,
             'channels' => [],
             'severity' => self::normalize_severity_value($entry['severity'] ?? ''),
             'acknowledged_by' => self::sanitize_actor_label($entry['acknowledged_by'] ?? ''),
             'acknowledged_at' => isset($entry['acknowledged_at']) ? (int) $entry['acknowledged_at'] : 0,
             'resolved_at' => isset($entry['resolved_at']) ? (int) $entry['resolved_at'] : 0,
             'resolution_notes' => self::sanitize_notes_value($entry['resolution_notes'] ?? ''),
+            'last_error' => isset($entry['last_error']) ? (string) $entry['last_error'] : '',
         ];
 
         $normalized['resolution'] = self::normalize_resolution(
@@ -1706,6 +1837,22 @@ class BJLG_Notification_Queue {
 
             if (!empty($channel['escalation'])) {
                 $normalized['channels'][$key]['escalation'] = true;
+            }
+
+            if (isset($channel['last_error'])) {
+                $normalized['channels'][$key]['last_error'] = self::sanitize_notes_value($channel['last_error']);
+            }
+
+            if (isset($channel['last_error_at'])) {
+                $normalized['channels'][$key]['last_error_at'] = (int) $channel['last_error_at'];
+            }
+
+            if (isset($channel['failed_at'])) {
+                $normalized['channels'][$key]['failed_at'] = (int) $channel['failed_at'];
+            }
+
+            if (isset($channel['completed_at'])) {
+                $normalized['channels'][$key]['completed_at'] = (int) $channel['completed_at'];
             }
         }
 

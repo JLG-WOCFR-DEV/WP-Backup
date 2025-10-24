@@ -98,7 +98,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
     public function test_retry_entry_resets_channels_and_schedules_event(): void
     {
         $created = time() - 600;
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'entry-1',
                 'event' => 'backup_failed',
@@ -152,7 +152,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
     public function test_delete_entry_removes_entry(): void
     {
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'delete-me',
                 'event' => 'backup_complete',
@@ -180,7 +180,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
     public function test_acknowledge_channel_marks_entry_and_channel(): void
     {
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'ack-entry',
                 'event' => 'backup_failed',
@@ -224,7 +224,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
     public function test_acknowledge_entry_marks_all_channels(): void
     {
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'ack-all',
                 'event' => 'backup_failed',
@@ -277,7 +277,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
             $resolvedEntries[] = $entry;
         }, 10, 1);
 
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'resolve-me',
                 'event' => 'backup_failed',
@@ -327,7 +327,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
     public function test_trigger_manual_reminder_schedules_event(): void
     {
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'manual-reminder',
                 'event' => 'backup_failed',
@@ -402,7 +402,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         $resolvedSummary = 'Incident rétabli après redémarrage du service.';
         $now = time();
 
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'resolve-broadcast',
                 'event' => 'backup_failed',

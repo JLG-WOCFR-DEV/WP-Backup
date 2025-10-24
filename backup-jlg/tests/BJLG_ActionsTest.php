@@ -54,6 +54,7 @@ namespace BJLG {
 }
 
 namespace {
+use BJLG\BJLG_Notification_Queue;
 
 use BJLG\BJLG_Notification_Queue;
 use PHPUnit\Framework\TestCase;
@@ -387,7 +388,7 @@ final class BJLG_ActionsTest extends TestCase
     {
         $actions = new BJLG\BJLG_Actions();
 
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'ajax-entry',
                 'event' => 'backup_failed',
@@ -432,7 +433,7 @@ final class BJLG_ActionsTest extends TestCase
     public function test_handle_notification_queue_delete_succeeds(): void
     {
         $actions = new BJLG\BJLG_Actions();
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'ajax-delete',
                 'event' => 'backup_complete',
