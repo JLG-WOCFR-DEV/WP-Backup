@@ -2,11 +2,68 @@
 
 declare(strict_types=1);
 
+namespace BJLG {
+    if (!function_exists(__NAMESPACE__ . '\\wp_http_validate_url')) {
+        function wp_http_validate_url($url)
+        {
+            $url = trim((string) $url);
+
+            return filter_var($url, FILTER_VALIDATE_URL) ? $url : false;
+        }
+    }
+
+    if (!function_exists(__NAMESPACE__ . '\\wp_remote_post')) {
+        function wp_remote_post($url, $args = [])
+        {
+            $GLOBALS['bjlg_test_transports']['remote_post'][] = [
+                'url' => $url,
+                'args' => $args,
+            ];
+
+            return [
+                'response' => [
+                    'code' => 200,
+                    'message' => 'OK',
+                ],
+            ];
+        }
+    }
+
+    if (!function_exists(__NAMESPACE__ . '\\wp_remote_retrieve_response_code')) {
+        function wp_remote_retrieve_response_code($response)
+        {
+            if (is_array($response) && isset($response['response']['code'])) {
+                return (int) $response['response']['code'];
+            }
+
+            return 0;
+        }
+    }
+
+    if (!function_exists(__NAMESPACE__ . '\\wp_mail')) {
+        function wp_mail($recipients, $subject, $body, $headers = [])
+        {
+            $GLOBALS['bjlg_test_transports']['mail'][] = [
+                'recipients' => (array) $recipients,
+                'subject' => $subject,
+                'body' => $body,
+                'headers' => $headers,
+            ];
+
+            return true;
+        }
+    }
+}
+
+namespace {
+
 use BJLG\BJLG_Notification_Queue;
+use BJLG\BJLG_Notifications;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/class-bjlg-notification-queue.php';
 require_once __DIR__ . '/../includes/class-bjlg-notification-receipts.php';
+require_once __DIR__ . '/../includes/class-bjlg-notifications.php';
 
 final class BJLG_NotificationQueueActionsTest extends TestCase
 {
@@ -32,6 +89,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
             unset($GLOBALS['bjlg_test_users'][42]);
         }
 
+        $this->resetNotificationsInstance();
         parent::tearDown();
     }
 
@@ -280,4 +338,133 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         $hooks = array_column($scheduled, 'hook');
         $this->assertContains('bjlg_notification_queue_reminder', $hooks);
     }
+
+    public function test_resolution_broadcast_sends_summary_and_logs_history(): void
+    {
+        $this->resetNotificationsInstance();
+
+        $previous_history_hooks = $GLOBALS['bjlg_test_hooks']['actions']['bjlg_history_logged'] ?? null;
+        $GLOBALS['bjlg_test_hooks']['actions']['bjlg_history_logged'] = [];
+
+        $history = [];
+        add_action('bjlg_history_logged', function ($action, $status, $details) use (&$history) {
+            $history[] = compact('action', 'status', 'details');
+        }, 10, 3);
+
+        $GLOBALS['bjlg_test_transports'] = ['mail' => [], 'remote_post' => []];
+
+        bjlg_update_option('bjlg_notification_settings', [
+            'enabled' => true,
+            'email_recipients' => 'ops@example.com',
+            'events' => [
+                'backup_failed' => true,
+            ],
+            'channels' => [
+                'email' => ['enabled' => true],
+                'slack' => [
+                    'enabled' => true,
+                    'webhook_url' => 'https://example.com/webhooks/slack',
+                ],
+                'sms' => [
+                    'enabled' => true,
+                    'webhook_url' => 'https://example.com/webhooks/sms',
+                ],
+            ],
+        ]);
+
+        $resolvedSummary = 'Incident rétabli après redémarrage du service.';
+        $now = time();
+
+        bjlg_update_option('bjlg_notification_queue', [
+            [
+                'id' => 'resolve-broadcast',
+                'event' => 'backup_failed',
+                'title' => 'Sauvegarde critique échouée',
+                'subject' => 'Incident sauvegarde',
+                'lines' => ['Incident critique détecté.'],
+                'body' => 'Incident critique détecté.',
+                'context' => ['site_name' => 'Site de test'],
+                'channels' => [
+                    'email' => [
+                        'enabled' => true,
+                        'status' => 'completed',
+                        'attempts' => 1,
+                        'recipients' => ['ops@example.com'],
+                    ],
+                    'slack' => [
+                        'enabled' => true,
+                        'status' => 'completed',
+                        'attempts' => 1,
+                        'webhook_url' => 'https://example.com/webhooks/slack',
+                    ],
+                    'sms' => [
+                        'enabled' => true,
+                        'status' => 'completed',
+                        'attempts' => 1,
+                        'webhook_url' => 'https://example.com/webhooks/sms',
+                    ],
+                ],
+                'severity' => 'critical',
+                'resolution' => [
+                    'acknowledged_at' => $now - 300,
+                    'resolved_at' => null,
+                    'summary' => $resolvedSummary,
+                    'steps' => [
+                        [
+                            'timestamp' => $now - 600,
+                            'actor' => 'Alice',
+                            'summary' => 'Diagnostic initial.',
+                            'type' => 'update',
+                        ],
+                        [
+                            'timestamp' => $now - 120,
+                            'actor' => 'Bob',
+                            'summary' => 'Relance du service effectif.',
+                            'type' => 'update',
+                        ],
+                    ],
+                    'actions' => ['Redémarrage du service sauvegarde'],
+                ],
+            ],
+        ]);
+
+        new BJLG_Notifications();
+
+        BJLG_Notification_Queue::resolve_entry('resolve-broadcast', 42, 'Consignation finale');
+
+        $mailLogs = $GLOBALS['bjlg_test_transports']['mail'] ?? [];
+        $remoteLogs = $GLOBALS['bjlg_test_transports']['remote_post'] ?? [];
+
+        $this->assertNotEmpty($mailLogs, 'Le canal e-mail doit être sollicité.');
+
+        $slackCalls = array_filter($remoteLogs, static function ($call) {
+            return isset($call['url']) && $call['url'] === 'https://example.com/webhooks/slack';
+        });
+        $smsCalls = array_filter($remoteLogs, static function ($call) {
+            return isset($call['url']) && $call['url'] === 'https://example.com/webhooks/sms';
+        });
+
+        $this->assertNotEmpty($slackCalls, 'Le canal Slack doit être sollicité.');
+        $this->assertNotEmpty($smsCalls, 'Le canal SMS doit être sollicité.');
+
+        $this->assertNotEmpty($history, 'Un log BJLG_History est attendu.');
+        $this->assertSame('notification_resolution_broadcast', $history[0]['action']);
+        $this->assertSame('info', $history[0]['status']);
+        $this->assertStringContainsString('Résumé', $history[0]['details']);
+
+        if ($previous_history_hooks === null) {
+            unset($GLOBALS['bjlg_test_hooks']['actions']['bjlg_history_logged']);
+        } else {
+            $GLOBALS['bjlg_test_hooks']['actions']['bjlg_history_logged'] = $previous_history_hooks;
+        }
+    }
+
+    private function resetNotificationsInstance(): void
+    {
+        $property = new \ReflectionProperty(BJLG_Notifications::class, 'instance');
+        $property->setAccessible(true);
+        $property->setValue(null, null);
+    }
+}
+
 }

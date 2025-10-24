@@ -173,6 +173,7 @@ class BJLG_Settings {
         ],
         'update_guard' => [
             'enabled' => true,
+            'mode' => 'full',
             'components' => ['db', 'plugins', 'themes', 'uploads'],
             'targets' => [
                 'core' => true,
@@ -182,6 +183,7 @@ class BJLG_Settings {
             'reminder' => [
                 'enabled' => false,
                 'message' => 'Pensez à déclencher une sauvegarde manuelle avant d\'appliquer vos mises à jour.',
+                'delay_minutes' => 0,
                 'channels' => [
                     'notification' => [
                         'enabled' => false,
@@ -663,14 +665,16 @@ class BJLG_Settings {
             // --- Snapshot pré-mise à jour ---
             $update_guard_fields = [
                 'update_guard_enabled',
-                'update_guard_components',
-                'update_guard_targets',
-                'update_guard_reminder_enabled',
-                'update_guard_reminder_message',
-                'update_guard_reminder_channel_notification',
-                'update_guard_reminder_channel_email',
-                'update_guard_reminder_email_recipients',
-            ];
+            'update_guard_mode',
+            'update_guard_components',
+            'update_guard_targets',
+            'update_guard_reminder_enabled',
+            'update_guard_reminder_message',
+            'update_guard_reminder_channel_notification',
+            'update_guard_reminder_channel_email',
+            'update_guard_reminder_email_recipients',
+            'update_guard_reminder_delay',
+        ];
             $update_guard_submitted = false;
             foreach ($update_guard_fields as $field) {
                 if (array_key_exists($field, $_POST)) {
@@ -692,6 +696,14 @@ class BJLG_Settings {
                     $components[] = $key;
                 }
 
+                $raw_mode = isset($_POST['update_guard_mode'])
+                    ? sanitize_key(wp_unslash($_POST['update_guard_mode']))
+                    : 'full';
+                $allowed_modes = ['full', 'targeted'];
+                if (!in_array($raw_mode, $allowed_modes, true)) {
+                    $raw_mode = 'full';
+                }
+
                 $raw_targets = isset($_POST['update_guard_targets']) ? (array) $_POST['update_guard_targets'] : [];
                 $sanitized_targets = array_map('sanitize_key', $raw_targets);
                 $targets = [];
@@ -708,13 +720,24 @@ class BJLG_Settings {
                     ? sanitize_textarea_field(wp_unslash($_POST['update_guard_reminder_email_recipients']))
                     : '';
 
+                $delay_minutes = isset($_POST['update_guard_reminder_delay'])
+                    ? intval(wp_unslash($_POST['update_guard_reminder_delay']))
+                    : 0;
+                if ($delay_minutes < 0) {
+                    $delay_minutes = 0;
+                } elseif ($delay_minutes > 2880) {
+                    $delay_minutes = 2880;
+                }
+
                 $update_guard_settings = [
                     'enabled' => array_key_exists('update_guard_enabled', $_POST) ? $this->to_bool(wp_unslash($_POST['update_guard_enabled'])) : false,
+                    'mode' => $raw_mode,
                     'components' => $components,
                     'targets' => $targets,
                     'reminder' => [
                         'enabled' => array_key_exists('update_guard_reminder_enabled', $_POST) ? $this->to_bool(wp_unslash($_POST['update_guard_reminder_enabled'])) : false,
                         'message' => $reminder_message,
+                        'delay_minutes' => $delay_minutes,
                         'channels' => [
                             'notification' => [
                                 'enabled' => array_key_exists('update_guard_reminder_channel_notification', $_POST)

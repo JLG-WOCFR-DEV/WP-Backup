@@ -40,6 +40,7 @@ class BJLG_Notifications {
             'restore_self_test_failed' => true,
             'sandbox_restore_validation_passed' => false,
             'sandbox_restore_validation_failed' => true,
+            'pre_update_snapshot_reminder' => true,
         ],
         'channels' => [
             'email' => ['enabled' => false],
@@ -154,6 +155,7 @@ class BJLG_Notifications {
         'test_notification' => 'info',
         'managed_vault_latency' => 'warning',
         'managed_vault_replica_degraded' => 'critical',
+        'pre_update_snapshot_reminder' => 'warning',
     ];
 
     /**
@@ -236,6 +238,7 @@ class BJLG_Notifications {
         add_action('bjlg_restore_self_test_failed', [$this, 'handle_restore_self_test_failed'], 15, 1);
         add_action('bjlg_sandbox_restore_validation_passed', [$this, 'handle_sandbox_validation_passed'], 15, 1);
         add_action('bjlg_sandbox_restore_validation_failed', [$this, 'handle_sandbox_validation_failed'], 15, 1);
+        add_action('bjlg_notification_resolved', [$this, 'handle_notification_resolved'], 15, 1);
     }
 
     /**
@@ -611,6 +614,22 @@ class BJLG_Notifications {
             $current_ratio = max(0.0, min(1.0, (float) $payload['current_ratio']));
         }
 
+        $pending = isset($payload['pending']) && is_numeric($payload['pending'])
+            ? max(0, (int) $payload['pending'])
+            : null;
+        $pending_oldest = isset($payload['pending_oldest_seconds']) && is_numeric($payload['pending_oldest_seconds'])
+            ? max(0, (int) $payload['pending_oldest_seconds'])
+            : null;
+        $average_duration = isset($payload['average_duration_seconds']) && is_numeric($payload['average_duration_seconds'])
+            ? max(0.0, (float) $payload['average_duration_seconds'])
+            : null;
+        $forecast_seconds = isset($payload['forecast_seconds']) && is_numeric($payload['forecast_seconds'])
+            ? max(0, (int) $payload['forecast_seconds'])
+            : null;
+        $seconds_per_item = isset($payload['seconds_per_item']) && is_numeric($payload['seconds_per_item'])
+            ? max(0.0, (float) $payload['seconds_per_item'])
+            : null;
+
         $projected_label = isset($payload['projected_label']) ? (string) $payload['projected_label'] : '';
         if ($projected_label !== '' && function_exists('sanitize_text_field')) {
             $projected_label = sanitize_text_field($projected_label);
@@ -629,6 +648,11 @@ class BJLG_Notifications {
             'quota_bytes' => $this->sanitize_bytes($payload['quota_bytes'] ?? null),
             'free_bytes' => $this->sanitize_bytes($payload['free_bytes'] ?? null),
             'history' => $this->sanitize_forecast_history($payload['history'] ?? []),
+            'pending' => $pending,
+            'pending_oldest_seconds' => $pending_oldest,
+            'average_duration_seconds' => $average_duration,
+            'forecast_seconds' => $forecast_seconds,
+            'seconds_per_item' => $seconds_per_item,
         ];
 
         $this->notify('remote_storage_forecast_warning', $context);
@@ -709,6 +733,168 @@ class BJLG_Notifications {
         $context = $this->normalize_sla_validation_report($report, 'failure');
 
         $this->notify('sandbox_restore_validation_failed', $context);
+    }
+
+    /**
+     * Diffuse un message de clôture lorsque tous les canaux d'une notification sont résolus.
+     *
+     * @param array<string,mixed> $entry
+     */
+    public function handle_notification_resolved($entry) {
+        if (!is_array($entry) || empty($entry['channels']) || !is_array($entry['channels'])) {
+            return;
+        }
+
+        if (empty($this->settings['enabled'])) {
+            return;
+        }
+
+        $channels = $entry['channels'];
+        $broadcast_channels = [];
+        foreach ($channels as $key => $channel) {
+            if (!is_array($channel) || empty($channel['enabled'])) {
+                continue;
+            }
+
+            $sanitized_key = is_string($key)
+                ? (function_exists('sanitize_key') ? sanitize_key($key) : strtolower((string) $key))
+                : '';
+            if ($sanitized_key === '' || $sanitized_key === 'internal') {
+                continue;
+            }
+
+            $broadcast_channels[$sanitized_key] = $channel;
+        }
+
+        if (empty($broadcast_channels)) {
+            return;
+        }
+
+        $event = isset($entry['event']) ? (string) $entry['event'] : 'notification_resolved';
+        $title = isset($entry['title']) && $entry['title'] !== ''
+            ? (string) $entry['title']
+            : ($event !== '' ? ucfirst(str_replace('_', ' ', $event)) : __('Notification', 'backup-jlg'));
+        $severity = $this->normalize_severity($entry['severity'] ?? 'info');
+
+        $resolution = isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : [];
+        $steps = [];
+        if (!empty($resolution['steps']) && is_array($resolution['steps'])) {
+            $steps = $resolution['steps'];
+        } elseif (!empty($entry['resolution_steps']) && is_array($entry['resolution_steps'])) {
+            $steps = $entry['resolution_steps'];
+        }
+
+        $actions = [];
+        if (!empty($resolution['actions']) && is_array($resolution['actions'])) {
+            $actions = $resolution['actions'];
+        } elseif (!empty($entry['resolution_actions']) && is_array($entry['resolution_actions'])) {
+            $actions = $entry['resolution_actions'];
+        }
+
+        $summary = '';
+        if (!empty($entry['resolution_summary'])) {
+            $summary = (string) $entry['resolution_summary'];
+        } elseif (!empty($resolution['summary'])) {
+            $summary = (string) $resolution['summary'];
+        }
+        $summary = is_string($summary) ? trim($summary) : '';
+
+        $timeline = '';
+        if (!empty($steps) || !empty($actions)) {
+            $timeline = BJLG_Notification_Queue::render_resolution_summary($steps, $actions);
+        }
+
+        $context = isset($entry['context']) && is_array($entry['context']) ? $entry['context'] : [];
+        if ($summary !== '') {
+            $context['resolution_summary'] = $summary;
+        }
+        if (!empty($entry['acknowledged_by']) && is_string($entry['acknowledged_by'])) {
+            $context['resolution_actor'] = $entry['acknowledged_by'];
+        }
+
+        $body_lines = [
+            sprintf(__('L’incident « %s » est clôturé.', 'backup-jlg'), $title),
+        ];
+
+        if ($summary !== '') {
+            $body_lines[] = sprintf(__('Résumé : %s', 'backup-jlg'), $summary);
+        }
+
+        if ($timeline !== '' && $timeline !== $summary) {
+            $body_lines[] = __('Chronologie de résolution :', 'backup-jlg');
+            foreach (explode("\n", $timeline) as $timeline_line) {
+                $timeline_line = trim((string) $timeline_line);
+                if ($timeline_line === '') {
+                    continue;
+                }
+
+                $body_lines[] = $timeline_line;
+            }
+        }
+
+        $meta = [
+            'event' => $event,
+            'title' => $title,
+            'context' => $context,
+        ];
+
+        $lines = $this->build_severity_lines($severity, $body_lines, $meta);
+        $body = implode("\n", $lines);
+        $subject = sprintf('[Backup JLG] %s', sprintf(__('Résolution : %s', 'backup-jlg'), $title));
+
+        $successful = [];
+        $failed = [];
+
+        foreach ($broadcast_channels as $channel_key => $channel_definition) {
+            $result = $this->dispatch_resolution_channel($channel_key, $channel_definition, $title, $subject, $lines, $body);
+            if ($result === null) {
+                continue;
+            }
+
+            if (!empty($result['success'])) {
+                $successful[] = $channel_key;
+            } else {
+                $failed[$channel_key] = isset($result['message']) ? (string) $result['message'] : '';
+            }
+        }
+
+        if (!class_exists(BJLG_History::class)) {
+            return;
+        }
+
+        if (!empty($successful)) {
+            $labels = array_map([$this, 'format_channel_label'], $successful);
+            $labels = array_filter($labels, 'strlen');
+
+            $message = sprintf(
+                __('Résumé de résolution diffusé pour « %s » via %s.', 'backup-jlg'),
+                $title,
+                implode(', ', $labels)
+            );
+
+            if ($summary !== '') {
+                $message .= ' ' . sprintf(__('Résumé : %s', 'backup-jlg'), $summary);
+            }
+
+            BJLG_History::log('notification_resolution_broadcast', 'info', $message);
+        }
+
+        if (!empty($failed)) {
+            $parts = [];
+            foreach ($failed as $channel_key => $error_message) {
+                $channel_label = $this->format_channel_label($channel_key);
+                $channel_label = $channel_label !== '' ? $channel_label : $channel_key;
+                $parts[] = trim($channel_label . ($error_message !== '' ? ' — ' . $error_message : ''));
+            }
+
+            $message = sprintf(
+                __('Échec de diffusion du résumé pour « %s » (%s).', 'backup-jlg'),
+                $title,
+                implode('; ', $parts)
+            );
+
+            BJLG_History::log('notification_resolution_broadcast', 'warning', $message);
+        }
     }
 
     /**
@@ -1379,6 +1565,8 @@ class BJLG_Notifications {
                 return __('Validation SLA réussie', 'backup-jlg');
             case 'sandbox_restore_validation_failed':
                 return __('Validation SLA échouée', 'backup-jlg');
+            case 'pre_update_snapshot_reminder':
+                return __('Rappel snapshot pré-update', 'backup-jlg');
             default:
                 return ucfirst(str_replace('_', ' ', $event));
         }
@@ -1609,14 +1797,39 @@ class BJLG_Notifications {
                     $lines[] = __('Niveau de risque : ', 'backup-jlg') . $this->format_forecast_risk_label($context['risk_level']);
                 }
 
+                if (isset($context['pending']) && $context['pending'] !== null) {
+                    $lines[] = __('Entrées en file : ', 'backup-jlg') . number_format_i18n((int) $context['pending']);
+                }
+
+                if (isset($context['pending_oldest_seconds']) && $context['pending_oldest_seconds']) {
+                    $lines[] = __('Retard maximal observé : ', 'backup-jlg')
+                        . $this->format_duration_seconds((int) $context['pending_oldest_seconds']);
+                }
+
                 if (isset($context['lead_seconds']) && $context['lead_seconds'] !== null) {
                     $lines[] = __('Délai avant saturation : ', 'backup-jlg') . ($context['lead_seconds'] <= 0
                         ? __('immédiat', 'backup-jlg')
                         : $this->format_duration_seconds((int) $context['lead_seconds']));
                 }
 
+                if (isset($context['forecast_seconds']) && $context['forecast_seconds']) {
+                    $lines[] = __('Vidage estimé de la file : ', 'backup-jlg')
+                        . $this->format_duration_seconds((int) $context['forecast_seconds']);
+                }
+
                 if (isset($context['projected_at']) && $context['projected_at']) {
                     $lines[] = __('Saturation estimée le : ', 'backup-jlg') . $this->format_timestamp((int) $context['projected_at']);
+                }
+
+                if (isset($context['average_duration_seconds']) && $context['average_duration_seconds']) {
+                    $lines[] = __('Durée moyenne de purge : ', 'backup-jlg')
+                        . $this->format_duration_seconds((float) $context['average_duration_seconds']);
+                }
+
+                if (isset($context['seconds_per_item']) && $context['seconds_per_item']) {
+                    $lines[] = __('Débit estimé : ', 'backup-jlg')
+                        . $this->format_duration_seconds((float) $context['seconds_per_item'])
+                        . __(' par archive', 'backup-jlg');
                 }
 
                 if (isset($context['threshold_percent']) && $context['threshold_percent'] !== null) {
@@ -1788,6 +2001,22 @@ class BJLG_Notifications {
                     }
                 }
                 break;
+            case 'pre_update_snapshot_reminder':
+                $reminder_message = isset($context['message']) && is_string($context['message']) && $context['message'] !== ''
+                    ? $context['message']
+                    : __('Un rappel de snapshot pré-update a été déclenché.', 'backup-jlg');
+                $lines[] = $reminder_message;
+                $lines[] = sprintf(__('Mode : %s', 'backup-jlg'), $this->describe_pre_update_mode($context['mode'] ?? 'full', $context['type'] ?? 'update'));
+                $lines[] = sprintf(__('Type : %s', 'backup-jlg'), $this->translate_pre_update_type($context['type'] ?? 'update'));
+                $lines[] = sprintf(__('Éléments : %s', 'backup-jlg'), $context['items_label'] ?? __('site complet', 'backup-jlg'));
+                $lines[] = sprintf(__('Raison : %s', 'backup-jlg'), $this->format_pre_update_reason($context['reason'] ?? 'manual'));
+                $delay = isset($context['delay_minutes']) ? (int) $context['delay_minutes'] : 0;
+                if ($delay > 0) {
+                    $lines[] = sprintf(__('Déclenché après %d minute(s) de préparation.', 'backup-jlg'), $delay);
+                } elseif (!empty($context['scheduled'])) {
+                    $lines[] = __('Rappel différé exécuté automatiquement.', 'backup-jlg');
+                }
+                break;
             default:
                 foreach ($context as $key => $value) {
                     if (is_scalar($value)) {
@@ -1798,6 +2027,49 @@ class BJLG_Notifications {
         }
 
         return array_filter(array_map('trim', $lines));
+    }
+
+    private function describe_pre_update_mode($mode, $type): string
+    {
+        $mode = sanitize_key((string) $mode);
+
+        if ($mode === 'targeted') {
+            return sprintf(__('Ciblé (%s + composants associés)', 'backup-jlg'), $this->translate_pre_update_type($type));
+        }
+
+        return __('Complet (tous les composants sélectionnés)', 'backup-jlg');
+    }
+
+    private function translate_pre_update_type($type): string
+    {
+        $type = sanitize_key((string) $type);
+
+        switch ($type) {
+            case 'plugin':
+                return __('extension', 'backup-jlg');
+            case 'theme':
+                return __('thème', 'backup-jlg');
+            case 'core':
+                return __('cœur WordPress', 'backup-jlg');
+            default:
+                return __('mise à jour', 'backup-jlg');
+        }
+    }
+
+    private function format_pre_update_reason($reason): string
+    {
+        $reason = sanitize_key((string) $reason);
+
+        switch ($reason) {
+            case 'disabled':
+                return __('Snapshots automatiques désactivés', 'backup-jlg');
+            case 'no_components':
+                return __('Aucun composant sélectionné', 'backup-jlg');
+            case 'ignored_type':
+                return __('Type de mise à jour exclu par la configuration', 'backup-jlg');
+            default:
+                return __('Rappel manuel requis', 'backup-jlg');
+        }
     }
 
     private function get_event_lines($event, $context) {
@@ -2391,6 +2663,103 @@ class BJLG_Notifications {
         return array_filter($channels, static function ($channel) {
             return is_array($channel) && !empty($channel['enabled']);
         });
+    }
+
+    /**
+     * @param string   $channel_key
+     * @param string[] $lines
+     *
+     * @return array{success:bool,message?:string}|null
+     */
+    private function dispatch_resolution_channel($channel_key, array $channel_definition, $title, $subject, array $lines, $body) {
+        $channel_key = is_string($channel_key) ? $channel_key : '';
+        if ($channel_key === '') {
+            return null;
+        }
+
+        switch ($channel_key) {
+            case 'email':
+                $recipients = isset($channel_definition['recipients']) && is_array($channel_definition['recipients'])
+                    ? array_filter(array_map('strval', $channel_definition['recipients']))
+                    : [];
+
+                if (empty($recipients)) {
+                    $recipients = BJLG_Notification_Transport::normalize_email_recipients($this->settings['email_recipients'] ?? '');
+                }
+
+                if (empty($recipients)) {
+                    return ['success' => false, 'message' => __('Aucun destinataire e-mail valide.', 'backup-jlg')];
+                }
+
+                return BJLG_Notification_Transport::send_email($recipients, $subject, $body);
+
+            case 'slack':
+                $webhook = isset($channel_definition['webhook_url']) ? (string) $channel_definition['webhook_url'] : '';
+                if ($webhook === '' && isset($this->settings['channels']['slack']['webhook_url'])) {
+                    $webhook = (string) $this->settings['channels']['slack']['webhook_url'];
+                }
+
+                if ($webhook === '') {
+                    return ['success' => false, 'message' => __('URL Slack invalide.', 'backup-jlg')];
+                }
+
+                return BJLG_Notification_Transport::send_slack($webhook, $title, $lines);
+
+            case 'discord':
+                $webhook = isset($channel_definition['webhook_url']) ? (string) $channel_definition['webhook_url'] : '';
+                if ($webhook === '' && isset($this->settings['channels']['discord']['webhook_url'])) {
+                    $webhook = (string) $this->settings['channels']['discord']['webhook_url'];
+                }
+
+                if ($webhook === '') {
+                    return ['success' => false, 'message' => __('URL Discord invalide.', 'backup-jlg')];
+                }
+
+                return BJLG_Notification_Transport::send_discord($webhook, $title, $lines);
+
+            case 'teams':
+                $webhook = isset($channel_definition['webhook_url']) ? (string) $channel_definition['webhook_url'] : '';
+                if ($webhook === '' && isset($this->settings['channels']['teams']['webhook_url'])) {
+                    $webhook = (string) $this->settings['channels']['teams']['webhook_url'];
+                }
+
+                if ($webhook === '') {
+                    return ['success' => false, 'message' => __('URL Teams invalide.', 'backup-jlg')];
+                }
+
+                return BJLG_Notification_Transport::send_teams($webhook, $title, $lines);
+
+            case 'sms':
+                $webhook = isset($channel_definition['webhook_url']) ? (string) $channel_definition['webhook_url'] : '';
+                if ($webhook === '' && isset($this->settings['channels']['sms']['webhook_url'])) {
+                    $webhook = (string) $this->settings['channels']['sms']['webhook_url'];
+                }
+
+                if ($webhook === '') {
+                    return ['success' => false, 'message' => __('URL SMS invalide.', 'backup-jlg')];
+                }
+
+                return BJLG_Notification_Transport::send_sms($webhook, $title, $lines);
+        }
+
+        return null;
+    }
+
+    private function format_channel_label($channel_key) {
+        switch ($channel_key) {
+            case 'email':
+                return __('email', 'backup-jlg');
+            case 'slack':
+                return __('Slack', 'backup-jlg');
+            case 'discord':
+                return __('Discord', 'backup-jlg');
+            case 'teams':
+                return __('Teams', 'backup-jlg');
+            case 'sms':
+                return __('SMS', 'backup-jlg');
+        }
+
+        return is_string($channel_key) ? $channel_key : '';
     }
 
     private function build_channel_payload($channel_key, array $settings, $force = false) {

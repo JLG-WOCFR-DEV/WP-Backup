@@ -22,6 +22,7 @@ Backup JLG est un plugin WordPress complet de sauvegarde et restauration qui com
 - Nettoyage automatique quotidien avec rotation des logs, purge locale/distante, suppression de fichiers temporaires et historique configurable, déclenchable aussi à la demande.【F:backup-jlg/includes/class-bjlg-cleanup.php†L41-L142】
 - Table d’audit dédiée consignant chaque action (succès/échec), intégrée au tableau de bord et exposée via l’API.【F:backup-jlg/includes/class-bjlg-history.php†L16-L117】【F:backup-jlg/includes/class-bjlg-rest-api.php†L233-L284】
 - Escalade multi-niveaux entièrement configurable (email → Slack → SMS, etc.) avec modèles par gravité pour adapter l’introduction, les actions et la conclusion des messages selon la criticité.【F:backup-jlg/includes/class-bjlg-notifications.php†L600-L737】【F:backup-jlg/includes/class-bjlg-admin.php†L3290-L3361】
+- Snapshots pré-update configurables avec choix du mode (complet ou ciblé par type de mise à jour) et rappels différés planifiés via WP-Cron pour alerter l’équipe avant l’installation des mises à jour.【F:backup-jlg/includes/class-bjlg-update-guard.php†L44-L560】【F:backup-jlg/includes/class-bjlg-admin.php†L4684-L4826】【F:backup-jlg/assets/js/admin-settings.js†L1-L120】
 - Bilan de santé complet (Cron, stockage, versions, extensions critiques) pour diagnostiquer l’environnement avant ou après une sauvegarde.【F:backup-jlg/includes/class-bjlg-health-check.php†L17-L152】
 - Gestion fine des téléchargements : génération de liens éphémères sécurisés pour les archives, journalisation et contrôle d’accès frontend/backoffice.【F:backup-jlg/includes/class-bjlg-actions.php†L16-L200】
 
@@ -116,8 +117,8 @@ Vous pouvez toujours demander la génération immédiate d’un lien signé en a
 
 ## ⚠️ Limitations connues
 - Le multi-threading et les benchmarks automatiques nécessitent des fonctions systèmes (`shell_exec`, `proc_open`) souvent désactivées sur les hébergements mutualisés ; le plugin bascule alors en traitement séquentiel.【F:backup-jlg/includes/class-bjlg-performance.php†L57-L109】
-- Les notifications externes disposent désormais de scénarios séquentiels multi-canaux et de modèles par gravité personnalisables ; il reste à automatiser les rapports de résolution et l’accusé de réception pour atteindre les standards des consoles pro.【F:backup-jlg/includes/class-bjlg-notifications.php†L600-L778】【F:backup-jlg/includes/class-bjlg-admin.php†L3290-L3361】【F:backup-jlg/assets/js/admin-dashboard.js†L328-L420】
-- Les environnements WordPress multisite ne sont pas officiellement supportés : réaliser des tests approfondis avant déploiement.
+- L’orchestration multisite (tables dédiées, préfixes, mutualisation API) reste à finaliser ; validez soigneusement chaque déploiement réseau avant production.【F:docs/roadmap-suivi.md†L123-L135】【F:docs/priorites-gaps.md†L17-L24】
+- Les exports SLA consolidés (rapports post-mortem, projections de saturation, recommandations automatiques) sont en cours : les nouvelles métriques de quotas doivent encore alimenter des rapports partageables.【F:docs/roadmap-suivi.md†L19-L122】【F:docs/priorites-gaps.md†L25-L32】
 - Les performances optimales supposent des limites PHP élevées (mémoire, temps d’exécution) ; sur des valeurs faibles les sauvegardes de sites volumineux peuvent échouer.
 
 ## 🔮 Améliorations proposées

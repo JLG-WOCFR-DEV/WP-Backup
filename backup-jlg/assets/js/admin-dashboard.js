@@ -521,6 +521,13 @@ jQuery(function($) {
             $('<li/>', { text: sprintf(__('Dépassement prévu %s', 'backup-jlg'), sla.saturation_projected_relative) }).appendTo($list);
         }
 
+        if (sla.destination_overview_updated_relative) {
+            $('<li/>', {
+                'class': 'bjlg-queue-card__metrics-note',
+                text: sprintf(__('Métriques par destination actualisées %s', 'backup-jlg'), sla.destination_overview_updated_relative)
+            }).appendTo($list);
+        }
+
         if (Array.isArray(sla.saturation_destinations) && sla.saturation_destinations.length) {
             sla.saturation_destinations.forEach(function(destination) {
                 if (!destination || typeof destination !== 'object') {
@@ -562,6 +569,52 @@ jQuery(function($) {
                 }
                 if (destination.projected_relative) {
                     parts.push(sprintf(__('vidage %s', 'backup-jlg'), destination.projected_relative));
+                }
+
+                $('<li/>', { text: parts.filter(Boolean).join(' • ') }).appendTo($list);
+            });
+        }
+
+        if (Array.isArray(sla.destination_overview) && sla.destination_overview.length) {
+            sla.destination_overview.forEach(function(destination) {
+                if (!destination || typeof destination !== 'object') {
+                    return;
+                }
+
+                const parts = [];
+                const label = destination.label || destination.id || '';
+                if (label) {
+                    parts.push(label);
+                }
+
+                if (destination.pending_label) {
+                    parts.push(sprintf(__('file : %s', 'backup-jlg'), destination.pending_label));
+                }
+
+                if (destination.pending_oldest_label) {
+                    parts.push(sprintf(__('ancienneté : %s', 'backup-jlg'), destination.pending_oldest_label));
+                }
+
+                if (destination.average_duration_label) {
+                    parts.push(sprintf(__('durée moy. : %s', 'backup-jlg'), destination.average_duration_label));
+                }
+
+                if (destination.forecast_label) {
+                    parts.push(destination.forecast_label);
+                }
+
+                if (destination.forecast_relative) {
+                    parts.push(sprintf(__('vidage %s', 'backup-jlg'), destination.forecast_relative));
+                }
+
+                if (destination.quota_label) {
+                    parts.push(destination.quota_label);
+                } else if (destination.quota_ratio_label) {
+                    parts.push(sprintf(__('utilisation %s', 'backup-jlg'), destination.quota_ratio_label));
+                }
+
+                if (destination.quota_projected_relative) {
+                    parts.push(sprintf(__('seuil %s', 'backup-jlg'), destination.quota_projected_relative));
                 }
 
                 $('<li/>', { text: parts.filter(Boolean).join(' • ') }).appendTo($list);
@@ -1418,6 +1471,38 @@ jQuery(function($) {
                         'data-field': 'resolution-summary',
                         text: entry.details.resolution_summary
                     }).appendTo($entry);
+                }
+
+                if (entry.details && Array.isArray(entry.details.resolution_steps) && entry.details.resolution_steps.length) {
+                    const $timeline = $('<ol/>', {
+                        'class': 'bjlg-queue-card__timeline',
+                        'data-field': 'resolution-steps'
+                    }).appendTo($entry);
+
+                    entry.details.resolution_steps.forEach(function(step) {
+                        if (!step) {
+                            return;
+                        }
+
+                        const $timelineItem = $('<li/>', { 'class': 'bjlg-queue-card__timeline-item' }).appendTo($timeline);
+                        const $header = $('<div/>', { 'class': 'bjlg-queue-card__timeline-header' }).appendTo($timelineItem);
+
+                        if (step.actor) {
+                            $('<strong/>', { text: step.actor }).appendTo($header);
+                        }
+
+                        const whenLabel = step.relative || step.formatted || '';
+                        if (whenLabel) {
+                            $('<span/>', { text: whenLabel }).appendTo($header);
+                        }
+
+                        if (step.summary) {
+                            $('<p/>', {
+                                'class': 'bjlg-queue-card__timeline-summary',
+                                text: step.summary
+                            }).appendTo($timelineItem);
+                        }
+                    });
                 }
 
                 if (entry.details && Array.isArray(entry.details.resolution_actions) && entry.details.resolution_actions.length) {

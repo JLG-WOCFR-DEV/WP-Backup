@@ -301,6 +301,19 @@ class BJLG_Admin_Advanced {
         return is_array($raw) ? $raw : [];
     }
 
+    private function get_remote_purge_destination_metrics(): array
+    {
+        if (function_exists('bjlg_get_option')) {
+            $raw = \bjlg_get_option('bjlg_remote_purge_destination_metrics', []);
+        } elseif (function_exists('get_option')) {
+            $raw = get_option('bjlg_remote_purge_destination_metrics', []);
+        } else {
+            $raw = [];
+        }
+
+        return is_array($raw) ? $raw : [];
+    }
+
     private function format_notification_queue_metrics(int $now): array {
         $metrics = [
             'key' => 'notifications',
@@ -827,6 +840,13 @@ class BJLG_Admin_Advanced {
         $durations = isset($raw['durations']) && is_array($raw['durations']) ? $raw['durations'] : [];
         $saturation = isset($raw['saturation']) && is_array($raw['saturation']) ? $raw['saturation'] : [];
         $backlog = isset($raw['backlog']) && is_array($raw['backlog']) ? $raw['backlog'] : [];
+        $destinations_overview_raw = isset($raw['destinations_overview']) && is_array($raw['destinations_overview'])
+            ? $raw['destinations_overview']
+            : [];
+
+        if (empty($destinations_overview_raw)) {
+            $destinations_overview_raw = $this->get_remote_purge_destination_metrics();
+        }
 
         $overall_forecast = isset($forecast['overall']) && is_array($forecast['overall']) ? $forecast['overall'] : [];
         $forecast_destinations = isset($forecast['destinations']) && is_array($forecast['destinations'])
@@ -861,6 +881,9 @@ class BJLG_Admin_Advanced {
             'capacity_projections' => [],
             'capacity_thresholds' => [],
             'threshold_summary' => '',
+            'destination_overview' => [],
+            'destination_overview_updated' => '',
+            'destination_overview_updated_relative' => '',
         ];
 
         if (!empty($pending['average_seconds'])) {
@@ -939,6 +962,11 @@ class BJLG_Admin_Advanced {
 
         $formatted['destination_durations'] = $this->format_destination_durations($durations);
         $formatted['quota_forecast'] = $this->format_quota_forecast($quotas, $now);
+
+        $destinations_overview = $this->format_destination_overview($destinations_overview_raw, $now);
+        $formatted['destination_overview'] = $destinations_overview['destinations'];
+        $formatted['destination_overview_updated'] = $destinations_overview['updated_formatted'];
+        $formatted['destination_overview_updated_relative'] = $destinations_overview['updated_relative'];
 
         return $formatted;
     }
@@ -1352,6 +1380,142 @@ class BJLG_Admin_Advanced {
         $output['destinations'] = $formatted;
 
         return $output;
+    }
+
+    /**
+     * @param array<string,mixed> $raw
+     */
+    private function format_destination_overview($raw, int $now): array
+    {
+        $updated_at = null;
+        if (is_array($raw) && isset($raw['updated_at'])) {
+            $updated_at = (int) $raw['updated_at'];
+        }
+
+        $entries = [];
+        if (is_array($raw) && isset($raw['destinations']) && is_array($raw['destinations'])) {
+            $entries = $raw['destinations'];
+        } elseif (is_array($raw)) {
+            $entries = $raw;
+        }
+
+        $formatted = [];
+        foreach ($entries as $destination_id => $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $id = $this->sanitize_key_value((string) $destination_id);
+            $label = isset($entry['label']) && is_string($entry['label']) && $entry['label'] !== ''
+                ? $this->sanitize_text($entry['label'])
+                : $this->sanitize_text($this->get_destination_label((string) $destination_id));
+
+            $pending = isset($entry['pending']) ? (int) $entry['pending'] : 0;
+            $pending_label = $pending > 0
+                ? sprintf(_n('%s entrée', '%s entrées', $pending), number_format_i18n($pending))
+                : __('File vide', 'backup-jlg');
+
+            $pending_oldest_seconds = isset($entry['pending_oldest_seconds']) ? (int) $entry['pending_oldest_seconds'] : 0;
+            $pending_oldest_label = $pending_oldest_seconds > 0
+                ? $this->format_duration_label($pending_oldest_seconds)
+                : '';
+
+            $avg_duration_seconds = isset($entry['average_duration_seconds']) ? (float) $entry['average_duration_seconds'] : null;
+            $avg_duration_label = ($avg_duration_seconds !== null && $avg_duration_seconds > 0)
+                ? $this->format_duration_label((int) round($avg_duration_seconds))
+                : '';
+
+            $forecast_label = isset($entry['forecast_label']) ? $this->sanitize_text((string) $entry['forecast_label']) : '';
+            $forecast_seconds = isset($entry['forecast_seconds']) ? (int) $entry['forecast_seconds'] : null;
+            $forecast_relative = '';
+            if (isset($entry['projected_clearance']) && $entry['projected_clearance']) {
+                [, $forecast_relative] = $this->format_timestamp_pair((int) $entry['projected_clearance'], $now);
+            }
+            if ($forecast_relative === '' && $forecast_seconds !== null && $forecast_seconds > 0) {
+                $forecast_relative = $this->format_duration_label($forecast_seconds);
+            }
+
+            $quota_entry = isset($entry['quota']) && is_array($entry['quota']) ? $entry['quota'] : [];
+            $quota_ratio = isset($quota_entry['current_ratio']) ? (float) $quota_entry['current_ratio'] : null;
+            $ratio_label = '';
+            if ($quota_ratio !== null) {
+                $percent = max(0.0, min(100.0, $quota_ratio * 100));
+                $ratio_label = number_format_i18n($percent, $percent >= 10 ? 0 : 1) . '%';
+            }
+
+            $quota_label = isset($quota_entry['projected_label']) ? $this->sanitize_text((string) $quota_entry['projected_label']) : '';
+            $quota_risk = isset($quota_entry['risk_level']) ? $this->sanitize_key_value((string) $quota_entry['risk_level']) : 'normal';
+            $lead_seconds = isset($quota_entry['lead_time_seconds']) ? (int) $quota_entry['lead_time_seconds'] : null;
+            $lead_label = $lead_seconds !== null ? $this->format_duration_label(max(0, $lead_seconds)) : '';
+            $quota_projected_relative = '';
+            if (isset($quota_entry['projected_saturation']) && $quota_entry['projected_saturation']) {
+                [, $quota_projected_relative] = $this->format_timestamp_pair((int) $quota_entry['projected_saturation'], $now);
+            }
+            if ($quota_projected_relative === '' && $lead_label !== '') {
+                $quota_projected_relative = sprintf(__('dans %s', 'backup-jlg'), $lead_label);
+            }
+
+            $summary_parts = [];
+            if ($ratio_label !== '') {
+                $summary_parts[] = sprintf(__('Utilisation %s', 'backup-jlg'), $ratio_label);
+            }
+            if ($quota_label !== '') {
+                $summary_parts[] = $quota_label;
+            }
+            if ($quota_projected_relative !== '') {
+                $summary_parts[] = sprintf(__('Seuil %s', 'backup-jlg'), $quota_projected_relative);
+            }
+
+            $trend_direction = isset($entry['trend_direction']) ? $this->sanitize_key_value((string) $entry['trend_direction']) : 'flat';
+
+            $formatted[] = [
+                'id' => $id,
+                'label' => $label,
+                'pending' => $pending,
+                'pending_label' => $pending_label,
+                'pending_oldest_label' => $pending_oldest_label,
+                'average_duration_label' => $avg_duration_label,
+                'forecast_label' => $forecast_label,
+                'forecast_relative' => $forecast_relative,
+                'forecast_seconds' => $forecast_seconds,
+                'quota_label' => implode(' • ', array_filter($summary_parts)),
+                'quota_ratio_label' => $ratio_label,
+                'quota_risk' => $quota_risk,
+                'quota_projected_relative' => $quota_projected_relative,
+                'trend_direction' => $trend_direction,
+            ];
+        }
+
+        usort($formatted, static function ($a, $b) {
+            $riskOrder = [
+                'critical' => 3,
+                'warning' => 2,
+                'watch' => 1,
+                'normal' => 0,
+                'success' => 0,
+            ];
+            $aRisk = $riskOrder[$a['quota_risk'] ?? 'normal'] ?? 0;
+            $bRisk = $riskOrder[$b['quota_risk'] ?? 'normal'] ?? 0;
+            if ($aRisk !== $bRisk) {
+                return $bRisk <=> $aRisk;
+            }
+
+            $aPending = $a['pending'] ?? 0;
+            $bPending = $b['pending'] ?? 0;
+            if ($aPending !== $bPending) {
+                return $bPending <=> $aPending;
+            }
+
+            return strcmp($a['label'], $b['label']);
+        });
+
+        [$updated_formatted, $updated_relative] = $this->format_timestamp_pair($updated_at, $now);
+
+        return [
+            'destinations' => $formatted,
+            'updated_formatted' => $updated_formatted,
+            'updated_relative' => $updated_relative,
+        ];
     }
 
     private function get_destination_label(string $destination_id): string

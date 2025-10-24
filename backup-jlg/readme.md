@@ -32,6 +32,7 @@ Une solution professionnelle complète de sauvegarde et restauration pour WordPr
 - **Benchmark intégré** pour tester le système
 - **Historique détaillé** de toutes les actions
 - **Health checks** automatiques
+- **Vue par destination** : temps moyen de purge, projections de vidage et suivi des quotas pour chaque connecteur
 
 ## 📦 Installation
 
@@ -186,6 +187,39 @@ curl -X POST https://site.com/wp-json/backup-jlg/v1/backups \
 curl https://site.com/wp-json/backup-jlg/v1/status \
   -H "X-API-Key: bjlg_xxxxx"
 ```
+
+#### Observer les purges distantes
+
+```bash
+curl https://site.com/wp-json/backup-jlg/v1/monitoring/remote-purge \
+  -H "X-API-Key: bjlg_xxxxx"
+```
+
+Réponse (extrait) :
+
+```json
+{
+  "metrics": {
+    "pending": { "total": 3, "average_seconds": 42 },
+    "throughput": { "average_completion_seconds": 78 }
+  },
+  "destinations_overview": {
+    "updated_at": 1700000000,
+    "destinations": {
+      "google_drive": {
+        "pending": 1,
+        "forecast_seconds": 180,
+        "quota": {
+          "current_ratio": 0.72,
+          "projected_saturation": 1700003600
+        }
+      }
+    }
+  }
+}
+```
+
+Utilisez ce point d’API pour afficher un tableau de bord externe ou automatiser les alertes lorsque la file de purge ou les quotas se rapprochent du seuil configuré.
 
 #### Lister les sauvegardes
 
