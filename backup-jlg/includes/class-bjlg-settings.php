@@ -1151,6 +1151,8 @@ class BJLG_Settings {
                         'backup_complete' => '',
                         'backup_failed' => '',
                         'cleanup_complete' => '',
+                        'storage_capacity' => '',
+                        'sla_validation' => '',
                     ],
                     'secret' => '',
                 ];
@@ -1172,6 +1174,8 @@ class BJLG_Settings {
                     'backup_complete' => 'de sauvegarde terminée',
                     'backup_failed' => "d'échec de sauvegarde",
                     'cleanup_complete' => 'de fin de nettoyage',
+                    'storage_capacity' => 'de capacité de stockage',
+                    'sla_validation' => 'de validation SLA',
                 ];
 
                 foreach ($webhook_labels as $url_key => $label) {
@@ -2139,6 +2143,8 @@ class BJLG_Settings {
                         'backup_complete' => '',
                         'backup_failed' => '',
                         'cleanup_complete' => '',
+                        'storage_capacity' => '',
+                        'sla_validation' => '',
                     ],
                     'secret' => '',
                 ];

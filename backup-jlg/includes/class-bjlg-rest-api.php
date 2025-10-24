@@ -20,6 +20,7 @@ require_once __DIR__ . '/class-bjlg-restore.php';
 require_once __DIR__ . '/class-bjlg-settings.php';
 require_once __DIR__ . '/class-bjlg-history.php';
 require_once __DIR__ . '/class-bjlg-scheduler.php';
+require_once __DIR__ . '/class-bjlg-remote-storage-metrics.php';
 require_once __DIR__ . '/class-bjlg-rbac.php';
 
 class BJLG_REST_API {
@@ -264,6 +265,25 @@ class BJLG_REST_API {
         register_rest_route(self::API_NAMESPACE, '/health', [
             'methods' => 'GET',
             'callback' => [$this, 'get_health'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args(),
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/monitoring/storage', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [$this, 'get_monitoring_storage'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args([
+                'refresh' => [
+                    'required' => false,
+                    'type' => 'boolean',
+                ],
+            ]),
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/monitoring/sla', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [$this, 'get_monitoring_sla'],
             'permission_callback' => [$this, 'check_permissions'],
             'args' => $this->merge_site_args(),
         ]);
@@ -2568,6 +2588,56 @@ class BJLG_REST_API {
         }
 
         return BJLG_Restore::normalize_requested_components($validated_components, false);
+    }
+
+    /**
+     * Endpoint : Monitoring du stockage distant
+     */
+    public function get_monitoring_storage($request) {
+        return $this->with_request_site($request, function () use ($request) {
+            $force_refresh = false;
+
+            if (method_exists($request, 'get_param')) {
+                $refresh_param = $request->get_param('refresh');
+
+                if ($refresh_param !== null && $refresh_param !== '' && $refresh_param !== false) {
+                    if (is_bool($refresh_param)) {
+                        $force_refresh = $refresh_param;
+                    } elseif (is_string($refresh_param)) {
+                        $normalized = strtolower($refresh_param);
+                        $force_refresh = in_array($normalized, ['1', 'true', 'yes', 'on'], true);
+                    } elseif (is_numeric($refresh_param)) {
+                        $force_refresh = ((int) $refresh_param) === 1;
+                    } else {
+                        $force_refresh = (bool) $refresh_param;
+                    }
+                }
+            }
+
+            $snapshot = BJLG_Remote_Storage_Metrics::get_snapshot($force_refresh);
+            $site_id = function_exists('get_current_blog_id') ? (int) get_current_blog_id() : null;
+
+            return rest_ensure_response([
+                'snapshot' => $snapshot,
+                'site_id' => $site_id,
+            ]);
+        });
+    }
+
+    /**
+     * Endpoint : Rapport SLA des restaurations sandbox
+     */
+    public function get_monitoring_sla($request) {
+        return $this->with_request_site($request, function () {
+            $report = BJLG_Restore::get_latest_sandbox_report();
+            $site_id = function_exists('get_current_blog_id') ? (int) get_current_blog_id() : null;
+
+            return rest_ensure_response([
+                'report' => $report,
+                'available' => $report !== null,
+                'site_id' => $site_id,
+            ]);
+        });
     }
 
     /**
