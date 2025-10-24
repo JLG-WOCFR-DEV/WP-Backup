@@ -89,6 +89,9 @@ class BJLG_Admin {
         if (class_exists(BJLG_Managed_Vault::class)) {
             $this->destinations['managed_vault'] = new BJLG_Managed_Vault();
         }
+        if (class_exists(BJLG_Managed_Storage::class)) {
+            $this->destinations['managed_storage'] = new BJLG_Managed_Storage();
+        }
         if (class_exists(BJLG_Dropbox::class)) {
             $this->destinations['dropbox'] = new BJLG_Dropbox();
         }
@@ -1510,10 +1513,13 @@ class BJLG_Admin {
                     }
                 }
                 ?>
-                <article class="bjlg-card bjlg-card--stat" data-metric="remote-storage">
+                <article id="bjlg-managed-storage" class="bjlg-card bjlg-card--stat" data-metric="remote-storage">
                     <span class="bjlg-card__kicker"><?php esc_html_e('Stockage distant', 'backup-jlg'); ?></span>
                     <h3 class="bjlg-card__title"><?php esc_html_e('Capacité hors-site', 'backup-jlg'); ?></h3>
                     <div class="bjlg-card__value" data-field="remote_storage_connected"><?php echo esc_html($remote_summary); ?></div>
+                    <p class="bjlg-card__meta" data-field="remote_network_quota"><?php esc_html_e('Quota réseau non communiqué.', 'backup-jlg'); ?></p>
+                    <p class="bjlg-card__meta" data-field="remote_network_projection"><?php esc_html_e('Projection réseau indisponible.', 'backup-jlg'); ?></p>
+                    <p class="bjlg-card__meta" data-field="remote_network_sla"><?php esc_html_e('Objectifs SLA réseau non renseignés.', 'backup-jlg'); ?></p>
                     <p class="bjlg-card__meta" data-field="remote_storage_caption"><?php echo esc_html($remote_caption); ?></p>
                     <p class="bjlg-card__footnote" data-field="remote_storage_refresh"><?php echo esc_html($remote_refresh_text); ?></p>
                     <ul class="bjlg-card__list" data-field="remote_storage_list">
@@ -4522,6 +4528,7 @@ class BJLG_Admin {
                 'backup_complete' => '',
                 'backup_failed' => '',
                 'cleanup_complete' => '',
+                'sla_alert' => '',
             ],
             'secret' => '',
         ];
@@ -5643,6 +5650,15 @@ class BJLG_Admin {
                         <td>
                             <div class="bjlg-field-control">
                                 <input type="url" name="webhook_cleanup_complete" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['cleanup_complete']); ?>" placeholder="https://exemple.com/webhooks/cleanup">
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Alerte SLA réseau</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <input type="url" name="webhook_sla_alert" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['sla_alert']); ?>" placeholder="https://exemple.com/webhooks/sla-alert">
+                                <p class="description"><?php esc_html_e('Déclenché lors d’un changement d’état des objectifs réseau (RTO/RPO, réplication).', 'backup-jlg'); ?></p>
                             </div>
                         </td>
                     </tr>

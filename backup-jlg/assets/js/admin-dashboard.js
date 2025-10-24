@@ -711,6 +711,25 @@ jQuery(function($) {
         setField('scheduler_success_rate', summary.scheduler_success_rate || '0%');
         setField('storage_total_size_human', summary.storage_total_size_human || '0');
         setField('storage_backup_count', formatNumber(summary.storage_backup_count || 0));
+        const defaultQuotaLabel = __('Quota réseau non communiqué.', 'backup-jlg');
+        const defaultProjectionLabel = __('Projection réseau indisponible.', 'backup-jlg');
+        const defaultSlaLabel = __('Objectifs SLA réseau non renseignés.', 'backup-jlg');
+        setField('remote_network_quota', summary.network_quota_summary || defaultQuotaLabel);
+        setField('remote_network_projection', summary.network_projection_summary || defaultProjectionLabel);
+        setField('remote_network_sla', summary.network_sla_summary || defaultSlaLabel);
+
+        const $quotaField = $overview.find('[data-field="remote_network_quota"]');
+        if ($quotaField.length) {
+            $quotaField.attr('data-intent', (summary.network_quota_intent || 'info').toString());
+        }
+        const $projectionField = $overview.find('[data-field="remote_network_projection"]');
+        if ($projectionField.length) {
+            $projectionField.attr('data-intent', (summary.network_projection_intent || 'info').toString());
+        }
+        const $slaField = $overview.find('[data-field="remote_network_sla"]');
+        if ($slaField.length) {
+            $slaField.attr('data-intent', (summary.network_sla_intent || 'info').toString());
+        }
     };
 
     const updateActions = function(metrics) {
@@ -776,6 +795,42 @@ jQuery(function($) {
         const refreshStale = !!storage.remote_refresh_stale;
         const refreshDetail = refreshRelative || refreshFormatted;
         let refreshText = '';
+
+        const network = state.metrics.network || {};
+        const summary = state.metrics.summary || {};
+        const quotaLabel = summary.network_quota_summary || (network.quotas && network.quotas.label) || __('Quota réseau non communiqué.', 'backup-jlg');
+        const projectionLabel = summary.network_projection_summary || (network.projections && network.projections.label) || __('Projection réseau indisponible.', 'backup-jlg');
+        const slaLabel = summary.network_sla_summary || (network.sla && network.sla.label) || __('Objectifs SLA réseau non renseignés.', 'backup-jlg');
+
+        const $quotaField = $card.find('[data-field="remote_network_quota"]');
+        if ($quotaField.length) {
+            $quotaField.text(quotaLabel);
+            const intent = (network.quotas && network.quotas.intent) || summary.network_quota_intent || 'info';
+            $quotaField.attr('data-intent', intent.toString());
+        }
+
+        const $projectionField = $card.find('[data-field="remote_network_projection"]');
+        if ($projectionField.length) {
+            const nextLabel = network.projections && network.projections.next_breach_label ? network.projections.next_breach_label : '';
+            let projectionText = projectionLabel;
+            if (nextLabel && projectionLabel.indexOf(nextLabel) === -1) {
+                projectionText += ' • ' + nextLabel;
+            }
+            $projectionField.text(projectionText);
+            const intent = (network.projections && network.projections.intent) || summary.network_projection_intent || 'info';
+            $projectionField.attr('data-intent', intent.toString());
+        }
+
+        const $slaField = $card.find('[data-field="remote_network_sla"]');
+        if ($slaField.length) {
+            let slaText = slaLabel;
+            if (network.sla && network.sla.validated_relative && slaLabel.indexOf(network.sla.validated_relative) === -1) {
+                slaText += ' • ' + network.sla.validated_relative;
+            }
+            $slaField.text(slaText);
+            const intent = (network.sla && network.sla.intent) || summary.network_sla_intent || 'info';
+            $slaField.attr('data-intent', intent.toString());
+        }
 
         if (refreshFormatted) {
             refreshText = refreshStale

@@ -23,10 +23,11 @@ class BJLG_Webhooks {
         
         // Gère les webhooks sortants pour notifications
         add_action('bjlg_send_webhook', [$this, 'send_webhook_notification'], 10, 2);
-        
+
         // Webhooks pour événements
         add_action('bjlg_backup_complete', [$this, 'notify_backup_complete'], 10, 2);
         add_action('bjlg_backup_failed', [$this, 'notify_backup_failed'], 10, 2);
+        add_action('bjlg_sla_alert', [$this, 'handle_sla_alert_webhook']);
     }
 
     /**
@@ -458,19 +459,82 @@ class BJLG_Webhooks {
      */
     public function notify_backup_failed($error_message, $details) {
         $webhook_settings = \bjlg_get_option('bjlg_webhook_settings', []);
-        
+
         if (empty($webhook_settings['enabled']) || empty($webhook_settings['urls']['backup_failed'])) {
             return;
         }
-        
+
         $data = [
             'event' => 'backup_failed',
             'error' => $error_message,
             'components' => $details['components'] ?? [],
             'task_id' => $details['task_id'] ?? null
         ];
-        
+
         $this->send_webhook_notification($webhook_settings['urls']['backup_failed'], $data);
+    }
+
+    /**
+     * Notifie un changement de statut SLA réseau.
+     */
+    public function handle_sla_alert_webhook($payload) {
+        if (!is_array($payload)) {
+            return;
+        }
+
+        $webhook_settings = \bjlg_get_option('bjlg_webhook_settings', []);
+        if (empty($webhook_settings['enabled']) || empty($webhook_settings['urls']['sla_alert'])) {
+            return;
+        }
+
+        $status = isset($payload['status']) ? sanitize_key($payload['status']) : 'unknown';
+        if ($status === '') {
+            $status = 'unknown';
+        }
+
+        $intent = isset($payload['intent']) ? sanitize_key($payload['intent']) : 'info';
+        if ($intent === '') {
+            $intent = 'info';
+        }
+
+        $available_copies = isset($payload['available_copies']) && is_numeric($payload['available_copies'])
+            ? (int) round((float) $payload['available_copies'])
+            : null;
+        $expected_copies = isset($payload['expected_copies']) && is_numeric($payload['expected_copies'])
+            ? (int) round((float) $payload['expected_copies'])
+            : null;
+        $rto_seconds = isset($payload['rto_seconds']) && is_numeric($payload['rto_seconds'])
+            ? (float) $payload['rto_seconds']
+            : null;
+        $rpo_seconds = isset($payload['rpo_seconds']) && is_numeric($payload['rpo_seconds'])
+            ? (float) $payload['rpo_seconds']
+            : null;
+        $quota_utilization = isset($payload['quota_utilization']) && is_numeric($payload['quota_utilization'])
+            ? (float) $payload['quota_utilization']
+            : null;
+        $quota_percent = $quota_utilization !== null ? round($quota_utilization * 100, 2) : null;
+        $timestamp = isset($payload['timestamp']) && is_numeric($payload['timestamp'])
+            ? (int) $payload['timestamp']
+            : current_time('timestamp');
+
+        $data = [
+            'event' => 'sla_alert',
+            'status' => $status,
+            'intent' => $intent,
+            'label' => isset($payload['label']) ? sanitize_text_field((string) $payload['label']) : '',
+            'available_copies' => $available_copies,
+            'expected_copies' => $expected_copies,
+            'rto_seconds' => $rto_seconds,
+            'rpo_seconds' => $rpo_seconds,
+            'validated_relative' => isset($payload['validated_relative']) ? sanitize_text_field((string) $payload['validated_relative']) : '',
+            'quota_utilization' => $quota_utilization,
+            'quota_utilization_percent' => $quota_percent,
+            'quota_label' => isset($payload['quota_label']) ? sanitize_text_field((string) $payload['quota_label']) : '',
+            'projection_label' => isset($payload['projection_label']) ? sanitize_text_field((string) $payload['projection_label']) : '',
+            'timestamp' => $timestamp,
+        ];
+
+        $this->send_webhook_notification($webhook_settings['urls']['sla_alert'], $data);
     }
     
     /**

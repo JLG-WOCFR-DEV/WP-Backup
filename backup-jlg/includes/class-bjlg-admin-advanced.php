@@ -200,12 +200,366 @@ class BJLG_Admin_Advanced {
 
         $metrics['sla_validation'] = $this->build_sla_validation_panel();
 
+        $metrics['network'] = $this->build_network_overview(
+            $metrics['storage']['remote_destinations'],
+            $metrics['resilience'],
+            $metrics['sla_validation']
+        );
+
+        $this->maybe_dispatch_sla_webhook($metrics['network']);
+
         $metrics['summary'] = $this->build_summary($metrics);
         $metrics['alerts'] = $this->build_alerts($metrics);
         $metrics['restore_self_test'] = $this->get_restore_self_test_snapshot($now);
         $metrics['reliability'] = $this->build_reliability($metrics);
 
         return $metrics;
+    }
+
+    private function build_network_overview(array $remote_destinations, array $resilience, array $sla_validation): array {
+        $now = current_time('timestamp');
+
+        $managed_storage_settings = [];
+        $managed_storage_status = [];
+        if (class_exists(__NAMESPACE__ . '\\BJLG_Managed_Storage')) {
+            try {
+                $storage_service = new BJLG_Managed_Storage();
+                $managed_storage_settings = $storage_service->get_settings();
+                $managed_storage_status = $storage_service->get_status();
+            } catch (\Throwable $exception) {
+                $managed_storage_settings = [];
+                $managed_storage_status = [];
+            }
+        } else {
+            $managed_storage_settings = \bjlg_get_option('bjlg_managed_storage_settings', []);
+            $managed_storage_status = \bjlg_get_option('bjlg_managed_storage_status', []);
+        }
+
+        if (!is_array($managed_storage_settings)) {
+            $managed_storage_settings = [];
+        }
+        if (!is_array($managed_storage_status)) {
+            $managed_storage_status = [];
+        }
+
+        $used_total = 0;
+        $quota_total = 0;
+        $free_total = 0;
+        $counted_used = 0;
+        $counted_quota = 0;
+        $destinations_count = 0;
+        $region_count = 0;
+        $projection_counts = [
+            'critical' => 0,
+            'warning' => 0,
+            'watch' => 0,
+            'success' => 0,
+            'neutral' => 0,
+        ];
+        $next_breach_seconds = null;
+
+        foreach ($remote_destinations as $destination) {
+            if (!is_array($destination)) {
+                continue;
+            }
+
+            $destinations_count++;
+
+            $used = isset($destination['used_bytes']) ? $this->sanitize_metric_value($destination['used_bytes']) : null;
+            $quota = isset($destination['quota_bytes']) ? $this->sanitize_metric_value($destination['quota_bytes']) : null;
+            $free = isset($destination['free_bytes']) ? $this->sanitize_metric_value($destination['free_bytes']) : null;
+
+            if ($used !== null) {
+                $used_total += $used;
+                $counted_used++;
+            }
+
+            if ($quota !== null) {
+                $quota_total += $quota;
+                $counted_quota++;
+            }
+
+            if ($free !== null) {
+                $free_total += $free;
+            }
+
+            if (!empty($destination['replica_status']) && is_array($destination['replica_status'])) {
+                $region_count += count($destination['replica_status']);
+            }
+
+            $projection_intent = isset($destination['projection_intent'])
+                ? strtolower((string) $destination['projection_intent'])
+                : 'neutral';
+            if (!isset($projection_counts[$projection_intent])) {
+                $projection_intent = 'neutral';
+            }
+            $projection_counts[$projection_intent]++;
+
+            if (isset($destination['days_to_threshold']) && is_numeric($destination['days_to_threshold'])) {
+                $days_to_threshold = (float) $destination['days_to_threshold'];
+                if ($days_to_threshold >= 0) {
+                    $seconds = (int) round($days_to_threshold * DAY_IN_SECONDS);
+                    if ($next_breach_seconds === null || $seconds < $next_breach_seconds) {
+                        $next_breach_seconds = $seconds;
+                    }
+                }
+            }
+        }
+
+        $utilization_ratio = null;
+        $quota_intent = 'info';
+        $quota_label = __('Quota réseau non communiqué.', 'backup-jlg');
+
+        if ($quota_total > 0 && $counted_used > 0) {
+            $utilization_ratio = $used_total / max(1, $quota_total);
+            $percentage = (int) round($utilization_ratio * 100);
+            $quota_label = sprintf(
+                __('Utilisation réseau : %1$s / %2$s (%3$s%%)', 'backup-jlg'),
+                size_format($used_total),
+                size_format($quota_total),
+                number_format_i18n($percentage)
+            );
+
+            if ($utilization_ratio >= 0.95) {
+                $quota_intent = 'danger';
+            } elseif ($utilization_ratio >= 0.85) {
+                $quota_intent = 'warning';
+            } else {
+                $quota_intent = 'success';
+            }
+        } elseif ($counted_used > 0) {
+            $quota_label = sprintf(__('Utilisation réseau : %s', 'backup-jlg'), size_format($used_total));
+        }
+
+        $projection_intent = 'info';
+        $projection_label = __('Projection réseau indisponible.', 'backup-jlg');
+        if ($projection_counts['critical'] > 0) {
+            $projection_intent = 'danger';
+            $projection_label = sprintf(
+                _n('%s destination en saturation critique', '%s destinations en saturation critique', $projection_counts['critical'], 'backup-jlg'),
+                number_format_i18n($projection_counts['critical'])
+            );
+        } elseif ($projection_counts['warning'] > 0) {
+            $projection_intent = 'warning';
+            $projection_label = sprintf(
+                _n('%s destination à surveiller', '%s destinations à surveiller', $projection_counts['warning'], 'backup-jlg'),
+                number_format_i18n($projection_counts['warning'])
+            );
+        } elseif ($projection_counts['watch'] > 0) {
+            $projection_intent = 'warning';
+            $projection_label = sprintf(
+                _n('%s projection active', '%s projections actives', $projection_counts['watch'], 'backup-jlg'),
+                number_format_i18n($projection_counts['watch'])
+            );
+        } elseif ($projection_counts['success'] > 0) {
+            $projection_intent = 'success';
+            $projection_label = __('Consommation stabilisée.', 'backup-jlg');
+        }
+
+        $projection_next_label = '';
+        if ($next_breach_seconds !== null) {
+            $target_time = $now + max(0, $next_breach_seconds);
+            [, $projection_relative] = $this->format_timestamp_pair($target_time, $now);
+            if ($projection_relative !== '') {
+                $projection_next_label = sprintf(__('Saturation estimée %s', 'backup-jlg'), $projection_relative);
+            }
+        }
+
+        $available = isset($resilience['available_copies']) ? max(0, (int) $resilience['available_copies']) : 0;
+        $expected = isset($resilience['expected_copies']) ? max(0, (int) $resilience['expected_copies']) : 0;
+        $latency = isset($resilience['latency_ms']) && $resilience['latency_ms'] !== null
+            ? (int) $resilience['latency_ms']
+            : null;
+
+        if (isset($managed_storage_status['available_copies'])) {
+            $available = max($available, (int) $managed_storage_status['available_copies']);
+        }
+        if (isset($managed_storage_status['expected_copies'])) {
+            $expected = max($expected, (int) $managed_storage_status['expected_copies']);
+        }
+        if ($expected === 0 && $available > 0) {
+            $expected = $available;
+        }
+        if ($latency === null && isset($managed_storage_status['latency_ms'])) {
+            $latency = (int) $managed_storage_status['latency_ms'];
+        }
+        if ($region_count === 0 && isset($managed_storage_status['regions']) && is_array($managed_storage_status['regions'])) {
+            $region_count = count($managed_storage_status['regions']);
+        }
+
+        $managed_rto_minutes = isset($managed_storage_settings['rto_minutes']) ? (int) $managed_storage_settings['rto_minutes'] : null;
+        $managed_rpo_minutes = isset($managed_storage_settings['rpo_minutes']) ? (int) $managed_storage_settings['rpo_minutes'] : null;
+
+        $sla_intent = 'info';
+        $sla_status = isset($resilience['status']) ? (string) $resilience['status'] : 'inactive';
+        $sla_label_parts = [];
+
+        $rto_human = $sla_validation['objectives']['rto_human'] ?? '';
+        $rpo_human = $sla_validation['objectives']['rpo_human'] ?? '';
+        $rto_seconds = isset($sla_validation['objectives']['rto_seconds']) ? (float) $sla_validation['objectives']['rto_seconds'] : null;
+        $rpo_seconds = isset($sla_validation['objectives']['rpo_seconds']) ? (float) $sla_validation['objectives']['rpo_seconds'] : null;
+
+        if ($rto_human === '' && $managed_rto_minutes !== null) {
+            $rto_human = sprintf(__('~%s', 'backup-jlg'), $this->format_minutes_label($managed_rto_minutes));
+            $rto_seconds = $managed_rto_minutes * MINUTE_IN_SECONDS;
+        }
+        if ($rpo_human === '' && $managed_rpo_minutes !== null) {
+            $rpo_human = sprintf(__('~%s', 'backup-jlg'), $this->format_minutes_label($managed_rpo_minutes));
+            $rpo_seconds = $managed_rpo_minutes * MINUTE_IN_SECONDS;
+        }
+
+        if ($rto_human !== '') {
+            $sla_label_parts[] = sprintf(__('RTO %s', 'backup-jlg'), $rto_human);
+        }
+        if ($rpo_human !== '') {
+            $sla_label_parts[] = sprintf(__('RPO %s', 'backup-jlg'), $rpo_human);
+        }
+
+        $copy_label = sprintf(
+            __('Copies disponibles : %1$s / %2$s', 'backup-jlg'),
+            number_format_i18n($available),
+            number_format_i18n(max(1, $expected))
+        );
+        $sla_label_parts[] = $copy_label;
+
+        if (!empty($sla_validation['available']) && isset($sla_validation['status'])) {
+            $validation_status = (string) $sla_validation['status'];
+            if ($validation_status === 'failure') {
+                $sla_status = 'failed';
+            } elseif ($validation_status === 'success') {
+                $sla_status = 'healthy';
+            }
+        }
+
+        if ($sla_status === 'failed') {
+            $sla_intent = 'danger';
+        } elseif ($sla_status === 'degraded') {
+            $sla_intent = 'warning';
+        } elseif ($sla_status === 'healthy') {
+            $sla_intent = 'success';
+        } elseif (!empty($sla_validation['available']) && $sla_validation['status'] === 'success') {
+            $sla_intent = 'success';
+        }
+
+        $sla_label = implode(' • ', array_filter(array_map('trim', $sla_label_parts)));
+        if ($sla_label === '') {
+            $sla_label = __('Objectifs SLA réseau non renseignés.', 'backup-jlg');
+        }
+
+        return [
+            'totals' => [
+                'used_bytes' => $used_total,
+                'quota_bytes' => $quota_total,
+                'free_bytes' => $free_total,
+                'destinations' => $destinations_count,
+                'regions' => $region_count,
+            ],
+            'quotas' => [
+                'label' => $quota_label,
+                'intent' => $quota_intent,
+                'used_bytes' => $used_total,
+                'quota_bytes' => $quota_total,
+                'free_bytes' => $free_total,
+                'utilization_ratio' => $utilization_ratio,
+                'utilization_percent' => $utilization_ratio !== null ? $utilization_ratio * 100 : null,
+            ],
+            'projections' => [
+                'label' => $projection_label,
+                'intent' => $projection_intent,
+                'counts' => $projection_counts,
+                'next_breach_seconds' => $next_breach_seconds,
+                'next_breach_label' => $projection_next_label,
+            ],
+            'sla' => [
+                'label' => $sla_label,
+                'intent' => $sla_intent,
+                'status' => $sla_status,
+                'available_copies' => $available,
+                'expected_copies' => max(1, $expected),
+                'latency_ms' => $latency,
+                'rto_seconds' => $rto_seconds,
+                'rpo_seconds' => $rpo_seconds,
+                'rto_human' => $rto_human,
+                'rpo_human' => $rpo_human,
+                'validated_relative' => $sla_validation['validated_relative'] ?? '',
+            ],
+        ];
+    }
+
+    private function maybe_dispatch_sla_webhook(array $network): void {
+        if (empty($network['sla']) || !is_array($network['sla'])) {
+            return;
+        }
+
+        $sla = $network['sla'];
+        $status = isset($sla['status']) ? (string) $sla['status'] : 'unknown';
+        $intent = isset($sla['intent']) ? (string) $sla['intent'] : 'info';
+        $label = isset($sla['label']) ? (string) $sla['label'] : '';
+
+        if ($status === 'unknown' && $label === '') {
+            return;
+        }
+
+        $previous = get_option('bjlg_sla_webhook_state', []);
+        if (!is_array($previous)) {
+            $previous = [];
+        }
+
+        $changed = ($previous['status'] ?? '') !== $status
+            || ($previous['intent'] ?? '') !== $intent
+            || ($previous['label'] ?? '') !== $label;
+
+        if (!$changed) {
+            return;
+        }
+
+        update_option('bjlg_sla_webhook_state', [
+            'status' => $status,
+            'intent' => $intent,
+            'label' => $label,
+            'updated_at' => current_time('timestamp'),
+        ]);
+
+        $payload = [
+            'event' => 'sla_alert',
+            'status' => $status,
+            'intent' => $intent,
+            'label' => $label,
+            'available_copies' => $sla['available_copies'] ?? null,
+            'expected_copies' => $sla['expected_copies'] ?? null,
+            'rto_seconds' => $sla['rto_seconds'] ?? null,
+            'rpo_seconds' => $sla['rpo_seconds'] ?? null,
+            'validated_relative' => $sla['validated_relative'] ?? '',
+            'quota_utilization' => $network['quotas']['utilization_ratio'] ?? null,
+            'quota_label' => $network['quotas']['label'] ?? '',
+            'projection_label' => $network['projections']['label'] ?? '',
+            'timestamp' => current_time('timestamp'),
+        ];
+
+        /**
+         * Déclenche un webhook lorsque les objectifs SLA réseau changent d’état.
+         *
+         * @param array<string,mixed> $payload
+         */
+        do_action('bjlg_sla_alert', $payload);
+    }
+
+    private function format_minutes_label(int $minutes): string {
+        $minutes = max(0, $minutes);
+        if ($minutes <= 1) {
+            return sprintf(_n('%d minute', '%d minutes', $minutes, 'backup-jlg'), number_format_i18n(max(1, $minutes)));
+        }
+
+        if ($minutes < 60) {
+            return sprintf(_n('%d minute', '%d minutes', $minutes, 'backup-jlg'), number_format_i18n($minutes));
+        }
+
+        if ($minutes % 60 === 0) {
+            $hours = (int) ($minutes / 60);
+            return sprintf(_n('%d heure', '%d heures', $hours, 'backup-jlg'), number_format_i18n($hours));
+        }
+
+        return sprintf(__('%s minutes', 'backup-jlg'), number_format_i18n($minutes));
     }
 
     private function build_sla_validation_panel(): array {
@@ -1680,6 +2034,7 @@ class BJLG_Admin_Advanced {
         $scheduler_stats = $metrics['scheduler']['stats'] ?? [];
         $storage = $metrics['storage'] ?? [];
         $resilience = isset($metrics['resilience']) && is_array($metrics['resilience']) ? $metrics['resilience'] : [];
+        $network = isset($metrics['network']) && is_array($metrics['network']) ? $metrics['network'] : [];
 
         $success_rate = isset($scheduler_stats['success_rate']) ? (float) $scheduler_stats['success_rate'] : 0.0;
         $formatted_rate = sprintf('%s%%', number_format_i18n($success_rate, $success_rate >= 1 ? 0 : 2));
@@ -1698,11 +2053,24 @@ class BJLG_Admin_Advanced {
             'resilience_status' => $resilience['status'] ?? 'inactive',
             'resilience_summary' => $this->format_resilience_summary($resilience),
             'resilience_updated_relative' => $resilience['updated_relative'] ?? '',
+            'network_quota_summary' => $network['quotas']['label'] ?? __('Quota réseau non communiqué.', 'backup-jlg'),
+            'network_quota_intent' => $network['quotas']['intent'] ?? 'info',
+            'network_projection_summary' => $network['projections']['label'] ?? __('Projection réseau indisponible.', 'backup-jlg'),
+            'network_projection_intent' => $network['projections']['intent'] ?? 'info',
+            'network_sla_summary' => $network['sla']['label'] ?? __('Objectifs SLA réseau non renseignés.', 'backup-jlg'),
+            'network_sla_intent' => $network['sla']['intent'] ?? 'info',
         ];
 
         if (!empty($metrics['history']['last_backup'])) {
             $summary['history_last_backup'] = $metrics['history']['last_backup']['formatted'];
             $summary['history_last_backup_relative'] = $metrics['history']['last_backup']['relative'];
+        }
+
+        if (!empty($network['sla']['rto_human'])) {
+            $summary['network_rto_human'] = $network['sla']['rto_human'];
+        }
+        if (!empty($network['sla']['rpo_human'])) {
+            $summary['network_rpo_human'] = $network['sla']['rpo_human'];
         }
 
         if (!empty($metrics['scheduler']['next_runs'][0])) {
@@ -2507,6 +2875,37 @@ class BJLG_Admin_Advanced {
             );
         }
 
+        $network = isset($metrics['network']) && is_array($metrics['network']) ? $metrics['network'] : [];
+        if (!empty($network['quotas']) && is_array($network['quotas'])) {
+            $quota_intent = isset($network['quotas']['intent']) ? (string) $network['quotas']['intent'] : 'info';
+            if (in_array($quota_intent, ['warning', 'danger'], true)) {
+                $alerts[] = $this->make_alert(
+                    $quota_intent === 'danger' ? 'error' : 'warning',
+                    __('Quota réseau sous tension', 'backup-jlg'),
+                    $network['quotas']['label'] ?? __('Quota réseau non communiqué.', 'backup-jlg'),
+                    [
+                        'label' => __('Ouvrir les destinations', 'backup-jlg'),
+                        'url' => add_query_arg(['page' => 'backup-jlg', 'section' => 'settings'], admin_url('admin.php')) . '#bjlg-destinations',
+                    ]
+                );
+            }
+        }
+
+        if (!empty($network['sla']) && is_array($network['sla'])) {
+            $sla_intent = isset($network['sla']['intent']) ? (string) $network['sla']['intent'] : 'info';
+            if (in_array($sla_intent, ['warning', 'danger'], true)) {
+                $alerts[] = $this->make_alert(
+                    $sla_intent === 'danger' ? 'error' : 'warning',
+                    __('Alerte SLA réseau', 'backup-jlg'),
+                    $network['sla']['label'] ?? __('Objectifs SLA réseau non renseignés.', 'backup-jlg'),
+                    [
+                        'label' => __('Consulter le rapport SLA', 'backup-jlg'),
+                        'url' => add_query_arg(['page' => 'backup-jlg', 'section' => 'monitoring'], admin_url('admin.php')) . '#bjlg-sla-dashboard',
+                    ]
+                );
+            }
+        }
+
         $resilience = isset($metrics['resilience']) && is_array($metrics['resilience']) ? $metrics['resilience'] : [];
         $resilience_status = isset($resilience['status']) ? (string) $resilience['status'] : 'inactive';
         if (in_array($resilience_status, ['degraded', 'failed'], true)) {
@@ -2658,6 +3057,7 @@ class BJLG_Admin_Advanced {
         $dashboard_url = admin_url('admin.php?page=backup-jlg');
         $documentation_url = trailingslashit(BJLG_PLUGIN_URL) . 'assets/docs/documentation.html';
         $tutorial_url = trailingslashit(BJLG_PLUGIN_URL) . 'assets/docs/tutoriel-planification.html';
+        $managed_storage_url = add_query_arg(['page' => 'backup-jlg', 'section' => 'integrations'], admin_url('admin.php'));
         $resources = [
             [
                 'title' => __('Guide de démarrage', 'backup-jlg'),
@@ -2677,6 +3077,12 @@ class BJLG_Admin_Advanced {
                 'command' => 'composer test',
                 'action_label' => __('Voir les tests', 'backup-jlg'),
                 'url' => add_query_arg(['section' => 'monitoring'], $dashboard_url) . '#bjlg-diagnostics-tests',
+            ],
+            [
+                'title' => __('Activer le stockage managé', 'backup-jlg'),
+                'description' => __('Provisionnez le stockage managé multi-région, consultez les contrats SLA et configurez les alertes réseau.', 'backup-jlg'),
+                'url' => $managed_storage_url . '#bjlg-managed-storage',
+                'action_label' => __('Lancer l’assistant', 'backup-jlg'),
             ],
         ];
 
