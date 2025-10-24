@@ -4197,6 +4197,18 @@ class BJLG_Admin {
                 'title' => __('Base de données', 'backup-jlg'),
                 'description' => __('Surveille les modifications de contenu, d’options et de commentaires.', 'backup-jlg'),
             ],
+            'inotify' => [
+                'title' => __('Watcher système (inotify)', 'backup-jlg'),
+                'description' => __('Déclenche quasi instantanément une sauvegarde incrémentale après la détection par inotify.', 'backup-jlg'),
+            ],
+            'application_webhook' => [
+                'title' => __('Webhooks applicatifs', 'backup-jlg'),
+                'description' => __('Relie les webhooks métier (WooCommerce, CRM, API) pour capturer les opérations critiques.', 'backup-jlg'),
+            ],
+            'binlog' => [
+                'title' => __('Binlog MySQL', 'backup-jlg'),
+                'description' => __('Observe les transactions du binlog MySQL pour réduire le RPO de la base.', 'backup-jlg'),
+            ],
         ];
 
         $monitoring_settings = BJLG_Settings::get_monitoring_settings();
@@ -4640,6 +4652,16 @@ class BJLG_Admin {
                             $cooldown = (int) ($current['cooldown'] ?? $defaults['cooldown']);
                             $batch_window = (int) ($current['batch_window'] ?? $defaults['batch_window']);
                             $max_batch = (int) ($current['max_batch'] ?? $defaults['max_batch']);
+                            $quiet_defaults = isset($defaults['quiet_hours']) && is_array($defaults['quiet_hours'])
+                                ? $defaults['quiet_hours']
+                                : ['enabled' => false, 'start' => '00:00', 'end' => '00:00', 'timezone' => 'site'];
+                            $quiet_current = isset($current['quiet_hours']) && is_array($current['quiet_hours'])
+                                ? wp_parse_args($current['quiet_hours'], $quiet_defaults)
+                                : $quiet_defaults;
+                            $quiet_enabled = !empty($quiet_current['enabled']);
+                            $quiet_start = sanitize_text_field($quiet_current['start']);
+                            $quiet_end = sanitize_text_field($quiet_current['end']);
+                            $quiet_timezone = sanitize_text_field($quiet_current['timezone']);
                             $label_info = $event_trigger_labels[$trigger_key] ?? [
                                 'title' => ucfirst($trigger_key),
                                 'description' => '',
@@ -4667,6 +4689,45 @@ class BJLG_Admin {
                                         <span><?php esc_html_e('Seuil d’événements', 'backup-jlg'); ?></span>
                                         <input type="number" min="1" step="1" data-field="event-max-batch" name="event_triggers[<?php echo esc_attr($trigger_key); ?>][max_batch]" value="<?php echo esc_attr($max_batch); ?>" <?php disabled(!$enabled); ?>>
                                     </label>
+                                </div>
+                                <div class="bjlg-event-trigger__quiet">
+                                    <h5><?php esc_html_e('Fenêtre de calme', 'backup-jlg'); ?></h5>
+                                    <label class="bjlg-event-trigger__quiet-toggle">
+                                        <input type="checkbox"
+                                               data-field="event-quiet-enabled"
+                                               name="event_triggers[<?php echo esc_attr($trigger_key); ?>][quiet_hours][enabled]"
+                                               value="1"
+                                               <?php checked($quiet_enabled); ?>
+                                               <?php disabled(!$enabled); ?>>
+                                        <span><?php esc_html_e('Suspendre les déclencheurs pendant une plage horaire', 'backup-jlg'); ?></span>
+                                    </label>
+                                    <div class="bjlg-event-trigger__quiet-controls">
+                                        <label>
+                                            <span><?php esc_html_e('Début', 'backup-jlg'); ?></span>
+                                            <input type="time"
+                                                   data-field="event-quiet-start"
+                                                   name="event_triggers[<?php echo esc_attr($trigger_key); ?>][quiet_hours][start]"
+                                                   value="<?php echo esc_attr($quiet_start); ?>"
+                                                   <?php disabled(!$enabled || !$quiet_enabled); ?>>
+                                        </label>
+                                        <label>
+                                            <span><?php esc_html_e('Fin', 'backup-jlg'); ?></span>
+                                            <input type="time"
+                                                   data-field="event-quiet-end"
+                                                   name="event_triggers[<?php echo esc_attr($trigger_key); ?>][quiet_hours][end]"
+                                                   value="<?php echo esc_attr($quiet_end); ?>"
+                                                   <?php disabled(!$enabled || !$quiet_enabled); ?>>
+                                        </label>
+                                        <label>
+                                            <span><?php esc_html_e('Fuseau horaire', 'backup-jlg'); ?></span>
+                                            <input type="text"
+                                                   data-field="event-quiet-timezone"
+                                                   name="event_triggers[<?php echo esc_attr($trigger_key); ?>][quiet_hours][timezone]"
+                                                   value="<?php echo esc_attr($quiet_timezone); ?>"
+                                                   placeholder="site / UTC / Europe/Paris"
+                                                   <?php disabled(!$enabled || !$quiet_enabled); ?>>
+                                        </label>
+                                    </div>
                                 </div>
                             </fieldset>
                         <?php endforeach; ?>
