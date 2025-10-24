@@ -71,6 +71,7 @@ class BJLG_Restore {
         $message = '';
 
         $components = [];
+        $log_offset = $this->get_debug_log_index();
 
         try {
             if (!self::user_can_use_sandbox()) {
@@ -212,7 +213,7 @@ class BJLG_Restore {
         $rpo_seconds = ($backup_mtime !== false) ? max(0, $started_at - (int) $backup_mtime) : null;
         $rpo_human = $rpo_seconds !== null ? $this->format_duration_for_report($rpo_seconds) : null;
 
-        return [
+        $report = [
             'status' => $status,
             'message' => $message,
             'backup_file' => $backup_file,
@@ -242,6 +243,22 @@ class BJLG_Restore {
             'health' => is_array($health_report) ? $health_report : null,
             'issues' => $this->normalize_validation_issues($issues),
         ];
+
+        $log_entries = $this->collect_debug_logs_since($log_offset);
+        if (!empty($log_entries)) {
+            $report['log_entries'] = $log_entries;
+            $report['log_excerpt'] = array_slice($log_entries, -20);
+        } else {
+            $report['log_entries'] = [];
+            $report['log_excerpt'] = [];
+        }
+
+        $report_files = $this->persist_sandbox_report_files($report, $log_entries);
+        if (!empty($report_files)) {
+            $report['report_files'] = $report_files;
+        }
+
+        return $report;
     }
 
     /**
@@ -356,6 +373,251 @@ class BJLG_Restore {
         }
 
         return $result;
+    }
+
+    private function get_debug_log_index(): int
+    {
+        if (class_exists(BJLG_Debug::class) && is_array(BJLG_Debug::$logs)) {
+            return count(BJLG_Debug::$logs);
+        }
+
+        return 0;
+    }
+
+    /**
+     * @param int $offset
+     * @return array<int,string>
+     */
+    private function collect_debug_logs_since($offset): array
+    {
+        if (!class_exists(BJLG_Debug::class) || !is_array(BJLG_Debug::$logs)) {
+            return [];
+        }
+
+        $offset = max(0, (int) $offset);
+        $logs = array_map('strval', BJLG_Debug::$logs);
+        if ($offset >= count($logs)) {
+            return [];
+        }
+
+        $entries = array_slice($logs, $offset);
+        if (count($entries) > 200) {
+            $entries = array_slice($entries, -200);
+        }
+
+        return $entries;
+    }
+
+    /**
+     * @param array<string,mixed> $report
+     * @param array<int,string>   $log_entries
+     * @return array<string,mixed>
+     */
+    private function persist_sandbox_report_files(array $report, array $log_entries): array
+    {
+        $storage = $this->get_sandbox_report_storage();
+        $base_dir = $storage['path'];
+        $base_url = $storage['url'];
+
+        if ($base_dir === '') {
+            return [];
+        }
+
+        if (!is_dir($base_dir)) {
+            self::ensure_directory_exists_static($base_dir);
+        }
+
+        $writable = function_exists('wp_is_writable') ? wp_is_writable($base_dir) : is_writable($base_dir);
+        if (!is_dir($base_dir) || !$writable) {
+            return [];
+        }
+
+        $base_dir = function_exists('trailingslashit') ? trailingslashit($base_dir) : rtrim($base_dir, '/\\') . '/';
+        $base_url = $base_url !== ''
+            ? (function_exists('trailingslashit') ? trailingslashit($base_url) : rtrim($base_url, '/\\') . '/')
+            : '';
+
+        $slug = $this->build_sandbox_report_slug($report);
+        $timestamp = isset($report['completed_at']) ? (int) $report['completed_at'] : time();
+        $files = [];
+
+        $json_report = $report;
+        if (isset($json_report['report_files'])) {
+            unset($json_report['report_files']);
+        }
+
+        $json_path = $base_dir . $slug . '.json';
+        $json_payload = function_exists('wp_json_encode')
+            ? wp_json_encode($json_report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
+            : json_encode($json_report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+        if (is_string($json_payload) && $json_payload !== '') {
+            $written = @file_put_contents($json_path, $json_payload);
+            if ($written !== false) {
+                $files['json'] = [
+                    'filename' => basename($json_path),
+                    'path' => $json_path,
+                    'url' => $base_url !== '' ? $base_url . basename($json_path) : '',
+                    'mime_type' => 'application/json',
+                    'generated_at' => $timestamp,
+                ];
+            }
+        }
+
+        $markdown = $this->build_sandbox_markdown_report($report);
+        if ($markdown !== '') {
+            $markdown_path = $base_dir . $slug . '.md';
+            $written = @file_put_contents($markdown_path, $markdown);
+            if ($written !== false) {
+                $files['markdown'] = [
+                    'filename' => basename($markdown_path),
+                    'path' => $markdown_path,
+                    'url' => $base_url !== '' ? $base_url . basename($markdown_path) : '',
+                    'mime_type' => 'text/markdown',
+                    'generated_at' => $timestamp,
+                ];
+            }
+        }
+
+        if (!empty($log_entries)) {
+            $log_path = $base_dir . $slug . '.log';
+            $log_written = @file_put_contents($log_path, implode("\n", $log_entries));
+            if ($log_written !== false) {
+                $files['log'] = [
+                    'filename' => basename($log_path),
+                    'path' => $log_path,
+                    'url' => $base_url !== '' ? $base_url . basename($log_path) : '',
+                    'mime_type' => 'text/plain',
+                    'generated_at' => $timestamp,
+                ];
+            }
+        }
+
+        if (!empty($files)) {
+            $files['base_path'] = $base_dir;
+            $files['base_url'] = $base_url;
+        }
+
+        return $files;
+    }
+
+    /**
+     * @return array{path:string,url:string}
+     */
+    private function get_sandbox_report_storage(): array
+    {
+        if (!function_exists('wp_upload_dir')) {
+            return ['path' => '', 'url' => ''];
+        }
+
+        $uploads = wp_upload_dir();
+        if (!empty($uploads['error'])) {
+            return ['path' => '', 'url' => ''];
+        }
+
+        $base_dir = isset($uploads['basedir']) ? (string) $uploads['basedir'] : '';
+        $base_url = isset($uploads['baseurl']) ? (string) $uploads['baseurl'] : '';
+
+        if ($base_dir === '') {
+            return ['path' => '', 'url' => ''];
+        }
+
+        $reports_dir = (function_exists('trailingslashit') ? trailingslashit($base_dir) : rtrim($base_dir, '/\\') . '/') . 'bjlg-sandbox-reports/';
+        $reports_url = $base_url !== ''
+            ? (function_exists('trailingslashit') ? trailingslashit($base_url) : rtrim($base_url, '/\\') . '/') . 'bjlg-sandbox-reports/'
+            : '';
+
+        return ['path' => $reports_dir, 'url' => $reports_url];
+    }
+
+    /**
+     * @param array<string,mixed> $report
+     */
+    private function build_sandbox_report_slug(array $report): string
+    {
+        $timestamp = isset($report['completed_at']) ? (int) $report['completed_at'] : time();
+        $date = gmdate('Ymd-His', $timestamp);
+        $suffix = function_exists('wp_generate_uuid4') ? substr(wp_generate_uuid4(), 0, 8) : substr(md5(uniqid('', true)), 0, 8);
+        $base = isset($report['backup_file']) && is_string($report['backup_file']) ? basename($report['backup_file']) : 'sandbox';
+        if (function_exists('sanitize_file_name')) {
+            $base = sanitize_file_name($base);
+        }
+        if ($base === '') {
+            $base = 'sandbox';
+        }
+
+        return strtolower($base . '-' . $date . '-' . $suffix);
+    }
+
+    /**
+     * @param array<string,mixed> $report
+     */
+    private function build_sandbox_markdown_report(array $report): string
+    {
+        $lines = [];
+        $lines[] = '# ' . __('Rapport de validation sandbox', 'backup-jlg');
+        $lines[] = '';
+
+        $status = isset($report['status']) ? (string) $report['status'] : 'failure';
+        $status_label = $status === 'success'
+            ? __('Réussi', 'backup-jlg')
+            : ($status === 'failure' ? __('Échec', 'backup-jlg') : ucfirst($status));
+        $lines[] = '- ' . __('Statut', 'backup-jlg') . ' : ' . $status_label;
+
+        if (!empty($report['message'])) {
+            $lines[] = '- ' . __('Résumé', 'backup-jlg') . ' : ' . (string) $report['message'];
+        }
+
+        if (!empty($report['backup_file'])) {
+            $lines[] = '- ' . __('Archive utilisée', 'backup-jlg') . ' : ' . basename((string) $report['backup_file']);
+        }
+
+        $objectives = isset($report['objectives']) && is_array($report['objectives']) ? $report['objectives'] : [];
+        if (!empty($objectives['rto_human'])) {
+            $lines[] = '- ' . __('RTO mesuré', 'backup-jlg') . ' : ' . $objectives['rto_human'];
+        }
+        if (!empty($objectives['rpo_human'])) {
+            $lines[] = '- ' . __('RPO estimé', 'backup-jlg') . ' : ' . $objectives['rpo_human'];
+        }
+
+        $started_at = isset($report['started_at']) ? (int) $report['started_at'] : null;
+        $completed_at = isset($report['completed_at']) ? (int) $report['completed_at'] : null;
+
+        if ($started_at) {
+            $lines[] = '- ' . __('Début', 'backup-jlg') . ' : ' . $this->format_report_timestamp($started_at);
+        }
+        if ($completed_at) {
+            $lines[] = '- ' . __('Fin', 'backup-jlg') . ' : ' . $this->format_report_timestamp($completed_at);
+        }
+
+        if (!empty($report['components']) && is_array($report['components'])) {
+            $lines[] = '';
+            $lines[] = __('## Composants restaurés', 'backup-jlg');
+            foreach ($report['components'] as $component) {
+                $lines[] = '- ' . (string) $component;
+            }
+        }
+
+        if (!empty($report['log_excerpt']) && is_array($report['log_excerpt'])) {
+            $lines[] = '';
+            $lines[] = __('## Extrait des journaux', 'backup-jlg');
+            $lines[] = '```';
+            foreach ($report['log_excerpt'] as $entry) {
+                $lines[] = (string) $entry;
+            }
+            $lines[] = '```';
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function format_report_timestamp(int $timestamp): string
+    {
+        if (function_exists('date_i18n')) {
+            return date_i18n('Y-m-d H:i:s', $timestamp);
+        }
+
+        return date('Y-m-d H:i:s', $timestamp);
     }
 
     /**
