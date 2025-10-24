@@ -252,12 +252,35 @@ class BJLG_Performance {
             return $cached['files'];
         }
         
+        if (!is_dir($directory)) {
+            BJLG_Debug::log(sprintf('Répertoire introuvable pour le scan : %s', $directory));
+
+            return [];
+        }
+
+        if (!is_readable($directory)) {
+            BJLG_Debug::log(sprintf('Répertoire illisible pour le scan : %s', $directory));
+
+            return [];
+        }
+
         $files = [];
-        $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($directory, RecursiveDirectoryIterator::SKIP_DOTS),
-            RecursiveIteratorIterator::LEAVES_ONLY
-        );
-        
+
+        try {
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($directory, RecursiveDirectoryIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::LEAVES_ONLY
+            );
+        } catch (\UnexpectedValueException $exception) {
+            BJLG_Debug::log(sprintf(
+                'Impossible de parcourir le répertoire %s : %s',
+                $directory,
+                $exception->getMessage()
+            ));
+
+            return [];
+        }
+
         foreach ($iterator as $file) {
             if ($file->isFile() && !$this->should_exclude($file->getPathname())) {
                 $files[] = [
@@ -283,16 +306,20 @@ class BJLG_Performance {
             '/.git/',
             '/cache/',
             '/.tmp',
-            '/backup-',
-            '.log'
+            '/backup-'
         ];
-        
+
         foreach ($exclude_patterns as $pattern) {
             if (strpos($filepath, $pattern) !== false) {
                 return true;
             }
         }
-        
+
+        $extension = pathinfo($filepath, PATHINFO_EXTENSION);
+        if (!empty($extension) && strcasecmp($extension, 'log') === 0) {
+            return true;
+        }
+
         return false;
     }
     
@@ -409,6 +436,12 @@ class BJLG_Performance {
             return $this->execute_sequential_optimized($tasks, $task_id);
         }
 
+        if (!function_exists('pcntl_fork') || in_array('pcntl_fork', $this->disabled_functions, true)) {
+            BJLG_Debug::log('Fonctions PCNTL indisponibles, exécution séquentielle.');
+
+            return $this->execute_sequential_optimized($tasks, $task_id);
+        }
+
         $grouped = [];
         foreach ($tasks as $task) {
             $worker_id = isset($task['worker_id']) ? (int) $task['worker_id'] : 0;
@@ -421,10 +454,9 @@ class BJLG_Performance {
 
         $temp_files = [];
         $worker_count = count($grouped);
-        $current_worker = 0;
+        $processes = [];
 
         foreach ($grouped as $worker_id => $worker_tasks) {
-            $current_worker++;
             BJLG_Debug::log(sprintf(
                 'Traitement optimisé - worker %d/%d (%d tâches).',
                 $worker_id,
@@ -432,13 +464,61 @@ class BJLG_Performance {
                 count($worker_tasks)
             ));
 
-            try {
-                $worker_results = $this->execute_sequential_optimized($worker_tasks, $task_id);
-                if (!empty($worker_results)) {
-                    $temp_files = array_merge($temp_files, $worker_results);
+            $temp_result_file = tempnam(sys_get_temp_dir(), 'bjlg_parallel_');
+            $pid = pcntl_fork();
+
+            if ($pid === -1) {
+                BJLG_Debug::log('Impossible de forker un worker, retour au mode séquentiel.');
+
+                // Nettoyer les processus déjà lancés
+                foreach ($processes as $process) {
+                    pcntl_waitpid($process['pid'], $status);
+                    if (file_exists($process['file'])) {
+                        @unlink($process['file']);
+                    }
                 }
-            } catch (Exception $e) {
-                BJLG_Debug::log('Erreur sur worker parallèle : ' . $e->getMessage());
+
+                return $this->execute_sequential_optimized($tasks, $task_id);
+            }
+
+            if ($pid === 0) {
+                try {
+                    $worker_results = $this->execute_sequential_optimized($worker_tasks, $task_id);
+                    $encoded_results = function_exists('wp_json_encode')
+                        ? wp_json_encode($worker_results)
+                        : json_encode($worker_results);
+
+                    file_put_contents($temp_result_file, $encoded_results);
+                } catch (Exception $e) {
+                    BJLG_Debug::log('Erreur dans le worker parallèle : ' . $e->getMessage());
+                }
+
+                exit(0);
+            }
+
+            $processes[] = [
+                'pid' => $pid,
+                'file' => $temp_result_file,
+            ];
+        }
+
+        foreach ($processes as $process) {
+            pcntl_waitpid($process['pid'], $status);
+
+            if (file_exists($process['file'])) {
+                $contents = file_get_contents($process['file']);
+                @unlink($process['file']);
+
+                if ($contents !== false) {
+                    $worker_results = json_decode($contents, true);
+                    if (is_array($worker_results) && !empty($worker_results)) {
+                        $temp_files = array_merge($temp_files, $worker_results);
+                    }
+                }
+            }
+
+            if (!pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0) {
+                BJLG_Debug::log('Un worker parallèle a terminé avec un statut inattendu.');
             }
         }
 
