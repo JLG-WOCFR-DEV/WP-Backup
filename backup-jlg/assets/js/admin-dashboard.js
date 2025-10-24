@@ -1420,6 +1420,38 @@ jQuery(function($) {
                     }).appendTo($entry);
                 }
 
+                if (entry.details && Array.isArray(entry.details.resolution_steps) && entry.details.resolution_steps.length) {
+                    const $timeline = $('<ol/>', {
+                        'class': 'bjlg-queue-card__timeline',
+                        'data-field': 'resolution-steps'
+                    }).appendTo($entry);
+
+                    entry.details.resolution_steps.forEach(function(step) {
+                        if (!step) {
+                            return;
+                        }
+
+                        const $timelineItem = $('<li/>', { 'class': 'bjlg-queue-card__timeline-item' }).appendTo($timeline);
+                        const $header = $('<div/>', { 'class': 'bjlg-queue-card__timeline-header' }).appendTo($timelineItem);
+
+                        if (step.actor) {
+                            $('<strong/>', { text: step.actor }).appendTo($header);
+                        }
+
+                        const whenLabel = step.relative || step.formatted || '';
+                        if (whenLabel) {
+                            $('<span/>', { text: whenLabel }).appendTo($header);
+                        }
+
+                        if (step.summary) {
+                            $('<p/>', {
+                                'class': 'bjlg-queue-card__timeline-summary',
+                                text: step.summary
+                            }).appendTo($timelineItem);
+                        }
+                    });
+                }
+
                 if (entry.details && Array.isArray(entry.details.resolution_actions) && entry.details.resolution_actions.length) {
                     const $actionsList = $('<ul/>', {
                         'class': 'bjlg-queue-card__entry-list',
