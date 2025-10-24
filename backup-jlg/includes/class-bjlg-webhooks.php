@@ -13,6 +13,10 @@ class BJLG_Webhooks {
     const WEBHOOK_QUERY_VAR = 'bjlg_trigger_backup';
     const WEBHOOK_HEADER = 'X-BJLG-Webhook-Key';
     const WEBHOOK_SECURE_MARKER = '1';
+    private const EVENT_URL_KEYS = [
+        'bjlg.storage.capacity' => 'storage_capacity',
+        'bjlg.sla.validation' => 'sla_validation',
+    ];
 
     public function __construct() {
         // Écoute sur chaque chargement de page pour détecter l'appel du webhook
@@ -378,7 +382,93 @@ class BJLG_Webhooks {
 
         return '';
     }
-    
+
+    /**
+     * Déclenche un webhook personnalisé si l'URL correspondante est configurée.
+     */
+    public static function dispatch_event(string $event, array $payload = []): void
+    {
+        $event = trim($event);
+
+        if ($event === '') {
+            return;
+        }
+
+        $url_key = self::EVENT_URL_KEYS[$event] ?? null;
+        if ($url_key === null) {
+            return;
+        }
+
+        $settings = \bjlg_get_option('bjlg_webhook_settings', []);
+        if (!is_array($settings) || empty($settings['enabled'])) {
+            return;
+        }
+
+        $urls = isset($settings['urls']) && is_array($settings['urls']) ? $settings['urls'] : [];
+        $url = isset($urls[$url_key]) ? trim((string) $urls[$url_key]) : '';
+
+        if ($url === '') {
+            return;
+        }
+
+        if (!array_key_exists('site_id', $payload)) {
+            $payload['site_id'] = function_exists('get_current_blog_id') ? (int) get_current_blog_id() : null;
+        }
+
+        $payload['event'] = $event;
+
+        /**
+         * Filtre la charge utile envoyée pour un événement webhook personnalisé.
+         *
+         * @param array<string,mixed> $payload
+         * @param string              $event
+         * @param string              $url_key
+         */
+        $filtered_payload = apply_filters('bjlg_webhook_event_payload', $payload, $event, $url_key);
+
+        do_action('bjlg_send_webhook', $url, $filtered_payload);
+    }
+
+    /**
+     * Prépare l'envoi du webhook de capacité de stockage.
+     */
+    public static function notify_storage_capacity(array $snapshot): void
+    {
+        $payload = [
+            'snapshot' => $snapshot,
+        ];
+
+        if (isset($snapshot['threshold_percent'])) {
+            $payload['threshold_percent'] = $snapshot['threshold_percent'];
+        }
+
+        if (isset($snapshot['generated_at'])) {
+            $payload['generated_at'] = $snapshot['generated_at'];
+        }
+
+        self::dispatch_event('bjlg.storage.capacity', $payload);
+    }
+
+    /**
+     * Prépare l'envoi du webhook de validation SLA sandbox.
+     */
+    public static function notify_sla_validation(array $report, array $metadata, string $status, string $summary, string $message): void
+    {
+        $payload = [
+            'report' => $report,
+            'metadata' => $metadata,
+            'status' => $status,
+            'summary' => $summary,
+            'message' => $message,
+        ];
+
+        if (isset($report['id'])) {
+            $payload['report_id'] = $report['id'];
+        }
+
+        self::dispatch_event('bjlg.sla.validation', $payload);
+    }
+
     /**
      * Envoie une notification webhook à une URL externe
      */

@@ -427,6 +427,9 @@ class BJLG_Scheduler {
 
         if ($status === 'success') {
             $message = $summary !== '' ? $summary : ($base_message !== '' ? $base_message : __('Validation sandbox réussie.', 'backup-jlg'));
+            if (class_exists(BJLG_Webhooks::class)) {
+                BJLG_Webhooks::notify_sla_validation($report, $metadata, $status, $summary, $message);
+            }
             BJLG_History::log('sandbox_restore_validation', 'success', $message, null, null, $metadata);
             do_action('bjlg_sandbox_restore_validation_passed', $report);
             return;
@@ -434,6 +437,9 @@ class BJLG_Scheduler {
 
         $failure_message = $base_message !== '' ? $base_message : __('Validation sandbox échouée.', 'backup-jlg');
         $message = $summary !== '' ? $summary . ' | ' . $failure_message : $failure_message;
+        if (class_exists(BJLG_Webhooks::class)) {
+            BJLG_Webhooks::notify_sla_validation($report, $metadata, $status, $summary, $message);
+        }
         BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $metadata);
         do_action('bjlg_sandbox_restore_validation_failed', $report);
     }

@@ -6162,11 +6162,18 @@ class BJLG_Admin {
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row">Alerte SLA réseau</th>
+                        <th scope="row">Capacité de stockage</th>
                         <td>
                             <div class="bjlg-field-control">
-                                <input type="url" name="webhook_sla_alert" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['sla_alert']); ?>" placeholder="https://exemple.com/webhooks/sla-alert">
-                                <p class="description"><?php esc_html_e('Déclenché lors d’un changement d’état des objectifs réseau (RTO/RPO, réplication).', 'backup-jlg'); ?></p>
+                                <input type="url" name="webhook_storage_capacity" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['storage_capacity']); ?>" placeholder="https://exemple.com/webhooks/storage-capacity">
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Validation SLA</th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <input type="url" name="webhook_sla_validation" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['sla_validation']); ?>" placeholder="https://exemple.com/webhooks/sla-validation">
                             </div>
                         </td>
                     </tr>
