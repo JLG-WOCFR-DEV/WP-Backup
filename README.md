@@ -116,8 +116,8 @@ Vous pouvez toujours demander la génération immédiate d’un lien signé en a
 
 ## ⚠️ Limitations connues
 - Le multi-threading et les benchmarks automatiques nécessitent des fonctions systèmes (`shell_exec`, `proc_open`) souvent désactivées sur les hébergements mutualisés ; le plugin bascule alors en traitement séquentiel.【F:backup-jlg/includes/class-bjlg-performance.php†L57-L109】
-- Les notifications externes disposent désormais de scénarios séquentiels multi-canaux et de modèles par gravité personnalisables ; il reste à automatiser les rapports de résolution et l’accusé de réception pour atteindre les standards des consoles pro.【F:backup-jlg/includes/class-bjlg-notifications.php†L600-L778】【F:backup-jlg/includes/class-bjlg-admin.php†L3290-L3361】【F:backup-jlg/assets/js/admin-dashboard.js†L328-L420】
-- Les environnements WordPress multisite ne sont pas officiellement supportés : réaliser des tests approfondis avant déploiement.
+- L’orchestration multisite (tables dédiées, préfixes, mutualisation API) reste à finaliser ; validez soigneusement chaque déploiement réseau avant production.【F:docs/roadmap-suivi.md†L123-L135】【F:docs/priorites-gaps.md†L17-L24】
+- Les exports SLA consolidés (rapports post-mortem, projections de saturation, recommandations automatiques) sont en cours : les nouvelles métriques de quotas doivent encore alimenter des rapports partageables.【F:docs/roadmap-suivi.md†L19-L122】【F:docs/priorites-gaps.md†L25-L32】
 - Les performances optimales supposent des limites PHP élevées (mémoire, temps d’exécution) ; sur des valeurs faibles les sauvegardes de sites volumineux peuvent échouer.
 
 ## 🔮 Améliorations proposées
