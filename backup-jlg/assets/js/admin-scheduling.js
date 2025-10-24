@@ -429,6 +429,7 @@ jQuery(function($) {
         schedulingAssistant.labels && typeof schedulingAssistant.labels === 'object' ? schedulingAssistant.labels : {}
     );
     const cronScenarios = mergeCronScenarios(schedulingAssistant.scenarios, defaultCronScenarios);
+    const cronCatalog = Array.isArray(schedulingAssistant.catalog) ? schedulingAssistant.catalog : [];
     const cronRiskThresholds = schedulingAssistant.risk_thresholds && typeof schedulingAssistant.risk_thresholds === 'object'
         ? schedulingAssistant.risk_thresholds
         : {};
@@ -451,6 +452,16 @@ jQuery(function($) {
             cronScenarioMap.set(key, entry);
         }
     });
+    const shareMacroLabel = cronLabels.share_macro || 'Partager';
+    const shareMacroSuccess = cronLabels.share_macro_success || 'Macro copiée dans le presse-papiers.';
+    const shareMacroFailure = cronLabels.share_macro_failure || 'Impossible de copier automatiquement la macro. Copiez la configuration suivante : %s';
+    const catalogTitleLabel = cronLabels.catalog_title || 'Catalogue d’exemples';
+    const catalogEmptyLabel = cronLabels.catalog_empty || 'Aucun exemple enregistré pour le moment.';
+    const presetApplyLabel = cronLabels.preset_apply || 'Appliquer ce preset';
+    const presetAppliedMessage = cronLabels.preset_applied || 'Preset appliqué à la planification active.';
+    const presetEmptyLabel = cronLabels.preset_empty || 'Aucun preset n’est disponible pour le moment.';
+    const relativeFutureTemplate = cronLabels.relative_future || 'dans %s';
+    const relativePastTemplate = cronLabels.relative_past || 'il y a %s';
     const cronPreviewCache = new Map();
     let cronPreviewTimer = null;
     let cronPreviewRequest = null;
@@ -486,6 +497,7 @@ jQuery(function($) {
 
     const $feedback = $('#bjlg-schedule-feedback');
     const $eventTriggerList = $scheduleForm.find('[data-role="event-trigger-list"]');
+    let lastFocusedScheduleItem = null;
 
     function parseJSONAttr(raw) {
         if (typeof raw !== 'string' || raw.trim() === '') {
@@ -508,6 +520,41 @@ jQuery(function($) {
 
     function normalizeCronExpression(expression) {
         return (expression || '').toString().replace(/\s+/g, ' ').trim();
+    }
+
+    function copyTextToClipboard(text) {
+        const value = (text || '').toString();
+        if (value === '') {
+            return Promise.reject(new Error('empty-text'));
+        }
+
+        if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            return navigator.clipboard.writeText(value);
+        }
+
+        return new Promise(function(resolve, reject) {
+            const $temp = $('<textarea/>', {
+                class: 'bjlg-visually-hidden',
+                text: value
+            }).css({ position: 'fixed', top: '-200px', left: '-200px' });
+            $(document.body).append($temp);
+            const node = $temp.get(0);
+            let succeeded = false;
+            if (node && node.select) {
+                node.select();
+                try {
+                    succeeded = document.execCommand('copy');
+                } catch (error) {
+                    succeeded = false;
+                }
+            }
+            $temp.remove();
+            if (succeeded) {
+                resolve();
+            } else {
+                reject(new Error('copy-unavailable'));
+            }
+        });
     }
 
     function loadCronHistoryEntries() {
@@ -956,6 +1003,145 @@ jQuery(function($) {
         }
 
         return null;
+    }
+
+    function formatDurationLabelFromMinutes(minutes) {
+        if (!Number.isFinite(minutes) || minutes <= 0) {
+            return '1 min';
+        }
+        if (minutes < 60) {
+            return Math.max(1, Math.round(minutes)) + ' min';
+        }
+        if (minutes < 1440) {
+            return Math.max(1, Math.round(minutes / 60)) + ' h';
+        }
+        return Math.max(1, Math.round(minutes / 1440)) + ' j';
+    }
+
+    function formatRelativeLabel(diffMs) {
+        const future = diffMs >= 0;
+        const minutes = Math.abs(diffMs) / 60000;
+        const label = formatDurationLabelFromMinutes(minutes);
+        const template = future ? relativeFutureTemplate : relativePastTemplate;
+        return template.replace('%s', label);
+    }
+
+    function formatNextRunPreviewFromTimestamp(timestamp) {
+        const date = new Date(timestamp * 1000);
+        let formatted;
+        try {
+            if (state.timezone) {
+                formatted = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone: state.timezone }).format(date);
+            } else {
+                formatted = date.toLocaleString();
+            }
+        } catch (error) {
+            formatted = date.toLocaleString();
+        }
+        return {
+            formatted: formatted,
+            relative: formatRelativeLabel(date.getTime() - Date.now())
+        };
+    }
+
+    function markScheduleDirty($item) {
+        if ($item && $item.length) {
+            $item.data('bjlgDirty', true);
+        }
+    }
+
+    function updateNextRunPreviewForItem($item, force) {
+        if (!$item || !$item.length) {
+            return;
+        }
+
+        const recurrenceData = collectScheduleData($item, true);
+        if (!recurrenceData || typeof recurrenceData !== 'object') {
+            return;
+        }
+
+        const recurrence = (recurrenceData.recurrence || 'disabled').toString();
+        const $value = $item.find('.bjlg-next-run-value');
+        const $relative = $item.find('.bjlg-next-run-relative');
+        if (!$value.length && !$relative.length) {
+            return;
+        }
+
+        let preview = null;
+        if (recurrence === 'custom') {
+            const storedRuns = $item.data('cronNextRuns');
+            if (Array.isArray(storedRuns) && storedRuns.length) {
+                const first = storedRuns[0] || {};
+                let timestamp = Number(first.timestamp);
+                if (!Number.isFinite(timestamp) && first.iso) {
+                    const parsedIso = Date.parse(first.iso);
+                    if (!Number.isNaN(parsedIso)) {
+                        timestamp = parsedIso / 1000;
+                    }
+                }
+                if (Number.isFinite(timestamp) && timestamp > 0) {
+                    preview = formatNextRunPreviewFromTimestamp(timestamp);
+                } else if (first.formatted) {
+                    preview = {
+                        formatted: first.formatted,
+                        relative: (first.relative || '').toString()
+                    };
+                }
+            }
+        } else if (force || $item.data('bjlgDirty')) {
+            const nextTimestamp = computeFallbackNextTimestamp(recurrenceData, Math.floor(Date.now() / 1000));
+            if (Number.isFinite(nextTimestamp) && nextTimestamp > 0) {
+                preview = formatNextRunPreviewFromTimestamp(nextTimestamp);
+            }
+        }
+
+        if (preview) {
+            if ($value.length) {
+                $value.text(preview.formatted || defaultNextRunSummary.next_run_formatted);
+            }
+            if ($relative.length) {
+                if (preview.relative) {
+                    $relative.text('(' + preview.relative + ')').show();
+                } else {
+                    $relative.text('').hide();
+                }
+            }
+            return;
+        }
+
+        if (force && $value.length) {
+            $value.text(defaultNextRunSummary.next_run_formatted);
+        }
+        if ($relative.length) {
+            $relative.text('').hide();
+        }
+    }
+
+    function ensureScheduleTargetForPreset($referenceItem) {
+        if ($referenceItem && $referenceItem.length && !$referenceItem.hasClass('bjlg-schedule-item--template')) {
+            return $referenceItem;
+        }
+        if (lastFocusedScheduleItem && lastFocusedScheduleItem.length && lastFocusedScheduleItem.closest('body').length) {
+            return lastFocusedScheduleItem;
+        }
+
+        let $target = scheduleItems().first();
+        if ($target.length) {
+            return $target;
+        }
+
+        const $newItem = cloneTemplate();
+        const prefix = 'preset_' + (++newScheduleCounter);
+        assignFieldPrefix($newItem, prefix);
+        setScheduleId($newItem, '');
+        populateScheduleItem($newItem, defaultScheduleData, defaultNextRunSummary, scheduleItems().length);
+        $newItem.insertBefore($template);
+        initCronAssistant($newItem);
+        markScheduleDirty($newItem);
+        scheduleRecommendationRefresh($newItem, true);
+        updateState(collectSchedulesForRequest(), state.nextRuns);
+        lastFocusedScheduleItem = $newItem;
+        return $newItem;
     }
 
     function buildTimelineEvents(schedules, nextRuns, view) {
@@ -1787,6 +1973,7 @@ jQuery(function($) {
         }
 
         setScheduleMacro($item, scenario.id || '');
+        markScheduleDirty($item);
         const helper = ensureCronAssistant($item);
         if (helper) {
             markActiveScenario(helper, expression, $item);
@@ -1812,6 +1999,7 @@ jQuery(function($) {
 
         updateCronAssistantContext($input);
         refreshCronAssistant($item, true);
+        updateNextRunPreviewForItem($item, true);
     }
 
     function buildCronScenarioPanel($container, $item) {
@@ -1823,6 +2011,7 @@ jQuery(function($) {
             return;
         }
 
+        const helper = getCronAssistantHelper($item);
         const fragment = $(document.createDocumentFragment());
         cronScenarios.forEach(function(scenario) {
             if (!scenario || typeof scenario !== 'object') {
@@ -1833,6 +2022,9 @@ jQuery(function($) {
             const description = (scenario.description || '').toString();
             const analysis = scenario.analysis && typeof scenario.analysis === 'object' ? scenario.analysis : {};
             const metaParts = [];
+            if (scenario.category_label) {
+                metaParts.push(scenario.category_label.toString());
+            }
             if (analysis.frequency_label) {
                 metaParts.push(analysis.frequency_label.toString());
             }
@@ -1841,6 +2033,7 @@ jQuery(function($) {
             } else if (analysis.next_run_formatted) {
                 metaParts.push(analysis.next_run_formatted.toString());
             }
+            const $row = $('<div/>', { class: 'bjlg-cron-scenario__item', role: 'listitem' });
             const $button = $('<button/>', {
                 type: 'button',
                 class: 'bjlg-cron-scenario',
@@ -1858,10 +2051,210 @@ jQuery(function($) {
                 event.preventDefault();
                 applyCronScenario($item, scenario);
             });
-            fragment.append($button);
+            const $actions = $('<div/>', { class: 'bjlg-cron-scenario__actions' });
+            $('<button/>', {
+                type: 'button',
+                class: 'button-link bjlg-cron-scenario__share',
+                text: shareMacroLabel
+            }).on('click', function(event) {
+                event.preventDefault();
+                event.stopPropagation();
+                shareScenario(scenario, helper);
+            }).appendTo($actions);
+            $row.append($button).append($actions);
+            fragment.append($row);
         });
 
         $container.empty().append(fragment).data('initialized', '1');
+    }
+
+    function buildCronCatalogPanel(helper, $item) {
+        if (!helper || !helper.catalog || !helper.catalog.length || helper.catalog.data('initialized')) {
+            return;
+        }
+
+        const $wrapper = helper.catalog;
+        const $list = helper.catalogList;
+        const $empty = helper.catalogEmpty;
+
+        if (!$list || !$list.length) {
+            $wrapper.hide();
+            return;
+        }
+
+        if (!Array.isArray(cronCatalog) || !cronCatalog.length) {
+            if ($empty && $empty.length) {
+                $empty.text(catalogEmptyLabel).removeAttr('hidden').show();
+            }
+            $wrapper.removeAttr('hidden').show();
+            $wrapper.data('initialized', '1');
+            return;
+        }
+
+        const fragment = $(document.createDocumentFragment());
+        cronCatalog.forEach(function(group) {
+            if (!group || !Array.isArray(group.macros) || !group.macros.length) {
+                return;
+            }
+            const groupLabel = (group.label || '').toString() || catalogTitleLabel;
+            const $group = $('<li/>', { class: 'bjlg-cron-catalog__group', role: 'listitem' });
+            $('<strong/>', { class: 'bjlg-cron-catalog__title', text: groupLabel }).appendTo($group);
+            if (group.description) {
+                $('<p/>', { class: 'bjlg-cron-catalog__description', text: group.description }).appendTo($group);
+            }
+            const $macroContainer = $('<div/>', { class: 'bjlg-cron-catalog__macros' });
+            group.macros.forEach(function(entry) {
+                if (!entry || typeof entry !== 'object') {
+                    return;
+                }
+                const key = (entry.id || entry.expression || entry.label || '').toString();
+                const scenario = cronScenarioMap.get(key) || cronScenarioMap.get(entry.expression || '') || entry;
+                const $macro = $('<article/>', { class: 'bjlg-cron-catalog__macro' });
+                $('<h6/>', { class: 'bjlg-cron-catalog__macro-title', text: entry.label || entry.expression || key }).appendTo($macro);
+                if (entry.description) {
+                    $('<p/>', { class: 'description', text: entry.description }).appendTo($macro);
+                }
+                const $actions = $('<div/>', { class: 'bjlg-cron-catalog__macro-actions' });
+                $('<button/>', {
+                    type: 'button',
+                    class: 'button button-secondary',
+                    'data-action': 'apply-catalog-macro',
+                    'data-macro-id': key,
+                    text: presetApplyLabel
+                }).data('cronScenario', scenario).appendTo($actions);
+                $('<button/>', {
+                    type: 'button',
+                    class: 'button-link',
+                    'data-action': 'share-catalog-macro',
+                    'data-macro-id': key,
+                    text: shareMacroLabel
+                }).data('cronScenario', scenario).appendTo($actions);
+                $macro.append($actions);
+                $macroContainer.append($macro);
+            });
+            $group.append($macroContainer);
+            fragment.append($group);
+        });
+
+        $list.empty().append(fragment);
+        if ($empty && $empty.length) {
+            $empty.attr('hidden', 'hidden').hide();
+        }
+        $wrapper.removeAttr('hidden').show();
+        $wrapper.data('initialized', '1');
+
+        if (!$list.data('listeners')) {
+            $list.on('click', '[data-action="apply-catalog-macro"]', function(event) {
+                event.preventDefault();
+                const $button = $(this);
+                const macroId = ($button.attr('data-macro-id') || '').toString();
+                const scenario = $button.data('cronScenario') || cronScenarioMap.get(macroId);
+                if (!scenario) {
+                    return;
+                }
+                const $target = ensureScheduleTargetForPreset($item);
+                applyCronScenario($target, scenario);
+                renderScheduleFeedback('info', presetAppliedMessage, []);
+            });
+            $list.on('click', '[data-action="share-catalog-macro"]', function(event) {
+                event.preventDefault();
+                const $button = $(this);
+                const macroId = ($button.attr('data-macro-id') || '').toString();
+                const scenario = $button.data('cronScenario') || cronScenarioMap.get(macroId);
+                shareScenario(scenario, helper);
+            });
+            $list.data('listeners', '1');
+        }
+    }
+
+    function initGlobalPresetPanel() {
+        const $panel = $scheduleForm.find('[data-role="schedule-presets"]');
+        if (!$panel.length) {
+            return;
+        }
+
+        const $list = $panel.find('[data-role="schedule-presets-list"]');
+        if (!$list.length) {
+            return;
+        }
+
+        if (!Array.isArray(cronScenarios) || !cronScenarios.length) {
+            $panel.removeAttr('hidden').show();
+            if (!$panel.find('.bjlg-schedule-presets__empty').length) {
+                $('<p/>', { class: 'bjlg-schedule-presets__empty description', text: presetEmptyLabel }).appendTo($panel);
+            }
+            return;
+        }
+
+        const fragment = $(document.createDocumentFragment());
+        cronScenarios.forEach(function(scenario) {
+            if (!scenario || typeof scenario !== 'object') {
+                return;
+            }
+            const key = (scenario.id || scenario.expression || scenario.label || '').toString();
+            const $card = $('<article/>', { class: 'bjlg-schedule-preset', 'data-preset-id': key });
+            $('<h5/>', { class: 'bjlg-schedule-preset__title', text: scenario.label || scenario.expression || key }).appendTo($card);
+            if (scenario.description) {
+                $('<p/>', { class: 'description', text: scenario.description }).appendTo($card);
+            }
+            const metaParts = [];
+            const analysis = scenario.analysis && typeof scenario.analysis === 'object' ? scenario.analysis : {};
+            if (analysis.frequency_label) {
+                metaParts.push(analysis.frequency_label.toString());
+            }
+            if (analysis.next_run_relative) {
+                metaParts.push(analysis.next_run_relative.toString());
+            } else if (analysis.next_run_formatted) {
+                metaParts.push(analysis.next_run_formatted.toString());
+            }
+            if (metaParts.length) {
+                $('<p/>', { class: 'bjlg-schedule-preset__meta', text: metaParts.join(' • ') }).appendTo($card);
+            }
+            const $actions = $('<div/>', { class: 'bjlg-schedule-preset__actions' });
+            $('<button/>', {
+                type: 'button',
+                class: 'button button-secondary',
+                'data-action': 'apply-global-preset',
+                'data-preset-id': key,
+                text: presetApplyLabel
+            }).data('cronScenario', scenario).appendTo($actions);
+            $('<button/>', {
+                type: 'button',
+                class: 'button-link',
+                'data-action': 'share-global-preset',
+                'data-preset-id': key,
+                text: shareMacroLabel
+            }).data('cronScenario', scenario).appendTo($actions);
+            $card.append($actions);
+            fragment.append($card);
+        });
+
+        $list.empty().append(fragment);
+        $panel.removeAttr('hidden').show();
+
+        if (!$panel.data('listeners')) {
+            $panel.on('click', '[data-action="apply-global-preset"]', function(event) {
+                event.preventDefault();
+                const $button = $(this);
+                const presetId = ($button.attr('data-preset-id') || '').toString();
+                const scenario = $button.data('cronScenario') || cronScenarioMap.get(presetId);
+                if (!scenario) {
+                    return;
+                }
+                const $target = ensureScheduleTargetForPreset(lastFocusedScheduleItem);
+                applyCronScenario($target, scenario);
+                renderScheduleFeedback('info', presetAppliedMessage, []);
+                lastFocusedScheduleItem = $target;
+            });
+            $panel.on('click', '[data-action="share-global-preset"]', function(event) {
+                event.preventDefault();
+                const $button = $(this);
+                const presetId = ($button.attr('data-preset-id') || '').toString();
+                const scenario = $button.data('cronScenario') || cronScenarioMap.get(presetId);
+                shareScenario(scenario, null);
+            });
+            $panel.data('listeners', '1');
+        }
     }
 
     function updateCronAssistantContext($input) {
@@ -2013,6 +2406,62 @@ jQuery(function($) {
         return analysis.severity;
     }
 
+    function formatShareFailureMessage(shareText) {
+        const snippet = (shareText || '').toString().split('\n')[0].trim();
+        const trimmed = snippet.length > 80 ? snippet.slice(0, 77) + '…' : snippet;
+        return shareMacroFailure.replace('%s', trimmed || shareText);
+    }
+
+    function getScenarioShareText(scenario) {
+        if (!scenario || typeof scenario !== 'object') {
+            return '';
+        }
+        if (typeof scenario.share_text === 'string' && scenario.share_text.trim() !== '') {
+            return scenario.share_text;
+        }
+        if (scenario.share_payload) {
+            try {
+                return JSON.stringify(scenario.share_payload, null, 2);
+            } catch (error) {
+                return JSON.stringify(scenario.share_payload);
+            }
+        }
+        return (scenario.expression || '').toString();
+    }
+
+    function setCronAssistantStatus(helper, message, variant) {
+        if (!helper || !helper.status || !helper.status.length) {
+            return false;
+        }
+        helper.status
+            .text(message || '')
+            .removeClass('bjlg-cron-status--success bjlg-cron-status--warning bjlg-cron-status--error');
+        if (variant) {
+            helper.status.addClass('bjlg-cron-status--' + variant);
+        }
+        return true;
+    }
+
+    function shareScenario(scenario, helper) {
+        if (!scenario) {
+            return;
+        }
+        const shareText = getScenarioShareText(scenario);
+        if (!shareText) {
+            return;
+        }
+        copyTextToClipboard(shareText).then(function() {
+            if (!setCronAssistantStatus(helper, shareMacroSuccess, 'success')) {
+                renderScheduleFeedback('info', shareMacroSuccess, []);
+            }
+        }).catch(function() {
+            const message = formatShareFailureMessage(shareText);
+            if (!setCronAssistantStatus(helper, message, 'warning')) {
+                renderScheduleFeedback('info', message, []);
+            }
+        });
+    }
+
     function getCronAssistantHelper($item) {
         if (!$item || !$item.length) {
             return null;
@@ -2042,6 +2491,9 @@ jQuery(function($) {
             risk: $assistant.find('[data-cron-risk]'),
             riskLabel: $assistant.find('[data-cron-risk-label]'),
             riskMessage: $assistant.find('[data-cron-risk-message]'),
+            catalog: $assistant.find('[data-cron-catalog]'),
+            catalogList: $assistant.find('[data-cron-catalog-list]'),
+            catalogEmpty: $assistant.find('[data-cron-catalog-empty]'),
         };
     }
 
@@ -2403,6 +2855,7 @@ jQuery(function($) {
         }
 
         initializeCronHistory(helper, $item);
+        buildCronCatalogPanel(helper, $item);
 
         if (!helper.examples.length || helper.examples.data('initialized')) {
             if (helper.status.length && typeof helper.status.data('default') === 'undefined') {
@@ -2447,6 +2900,7 @@ jQuery(function($) {
             markRecommendedScenario(helper, suggestedScenario);
         }
         initializeCronHistory(helper, $item);
+        buildCronCatalogPanel(helper, $item);
 
         if (helper.suggestionsTitle && helper.suggestionsTitle.length && !helper.suggestionsTitle.data('initialized')) {
             helper.suggestionsTitle.text(suggestionsTitle);
@@ -2478,6 +2932,11 @@ jQuery(function($) {
 
         if ($item && typeof $item.data === 'function') {
             $item.data('cronImpact', impactData);
+            if (payload && Array.isArray(payload.next_runs) && payload.next_runs.length) {
+                $item.data('cronNextRuns', payload.next_runs);
+            } else if (payload && payload.expression) {
+                $item.removeData('cronNextRuns');
+            }
         }
 
         if ($input.length) {
@@ -2506,6 +2965,10 @@ jQuery(function($) {
                     .removeClass('bjlg-field-error bjlg-cron-input--success bjlg-cron-input--warning bjlg-cron-input--error')
                     .removeAttr('aria-invalid');
             }
+            if ($item && typeof $item.removeData === 'function') {
+                $item.removeData('cronNextRuns');
+            }
+            updateNextRunPreviewForItem($item, true);
             return;
         }
 
@@ -2605,6 +3068,8 @@ jQuery(function($) {
                 renderCronHistory(helper, updatedHistory);
             }
         }
+
+        updateNextRunPreviewForItem($item, true);
     }
 
     function clearCronAssistant($item) {
@@ -3710,6 +4175,7 @@ jQuery(function($) {
         const summaryData = collectScheduleData($item, true);
         const $summary = $item.find('[data-field="summary"]');
         renderScheduleBadgeGroups($summary, buildSummaryGroupsFromData(summaryData));
+        updateNextRunPreviewForItem($item, false);
     }
 
     function populateScheduleItem($item, schedule, nextRun, index) {
@@ -4169,6 +4635,8 @@ jQuery(function($) {
 
     updateState(collectSchedulesForRequest(), state.nextRuns);
 
+    initGlobalPresetPanel();
+
     // Gestion des événements de champ
     $scheduleForm.on('change', '.bjlg-schedule-item [data-field="recurrence"]', function() {
         const $item = $(this).closest('.bjlg-schedule-item');
@@ -4181,6 +4649,7 @@ jQuery(function($) {
             const expression = ($item.find('[data-field="custom_cron"]').val() || '').toString();
             syncMacroFromExpression($item, expression);
         }
+        markScheduleDirty($item);
         updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
         scheduleRecommendationRefresh($item, false);
@@ -4196,6 +4665,7 @@ jQuery(function($) {
         } else {
             refreshCronInsights($item);
         }
+        markScheduleDirty($item);
         updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
         scheduleRecommendationRefresh($item, false);
@@ -4211,9 +4681,18 @@ jQuery(function($) {
         } else {
             refreshCronInsights($item);
         }
+        markScheduleDirty($item);
         updateScheduleSummaryForItem($item);
         updateState(collectSchedulesForRequest(), state.nextRuns);
         scheduleRecommendationRefresh($item, false);
+    });
+
+    $scheduleForm.on('focusin click', '.bjlg-schedule-item', function() {
+        const $item = $(this);
+        if ($item.hasClass('bjlg-schedule-item--template')) {
+            return;
+        }
+        lastFocusedScheduleItem = $item;
     });
 
     scheduleItems().each(function() {

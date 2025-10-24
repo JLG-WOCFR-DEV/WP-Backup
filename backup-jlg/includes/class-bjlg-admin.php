@@ -3066,10 +3066,14 @@ class BJLG_Admin {
             return;
         }
 
+        $assistant_examples = $this->get_cron_assistant_examples();
+        $assistant_scenarios = $this->get_cron_assistant_scenarios();
+
         $data = [
             'cron_assistant' => [
-                'examples' => $this->get_cron_assistant_examples(),
-                'scenarios' => $this->get_cron_assistant_scenarios(),
+                'examples' => $assistant_examples,
+                'scenarios' => $assistant_scenarios,
+                'catalog' => $this->build_cron_catalog_from_scenarios($assistant_scenarios),
                 'risk_thresholds' => BJLG_Scheduler::get_cron_risk_thresholds(),
                 'labels' => [
                     'suggestions_title' => __('Suggestions recommandées', 'backup-jlg'),
@@ -3079,6 +3083,17 @@ class BJLG_Admin {
                     'risk_medium' => __('Risque modéré', 'backup-jlg'),
                     'risk_high' => __('Risque élevé', 'backup-jlg'),
                     'risk_unknown' => __('Risque indéterminé', 'backup-jlg'),
+                    'catalog_title' => __('Catalogue d’exemples', 'backup-jlg'),
+                    'catalog_empty' => __('Aucun exemple enregistré pour le moment.', 'backup-jlg'),
+                    'share_macro' => __('Partager', 'backup-jlg'),
+                    'share_macro_success' => __('Macro copiée dans le presse-papiers.', 'backup-jlg'),
+                    'share_macro_failure' => __('Impossible de copier automatiquement la macro. Copiez la configuration suivante : %s', 'backup-jlg'),
+                    'preset_title' => __('Presets recommandés', 'backup-jlg'),
+                    'preset_apply' => __('Appliquer ce preset', 'backup-jlg'),
+                    'preset_applied' => __('Preset appliqué à la planification active.', 'backup-jlg'),
+                    'preset_empty' => __('Aucun preset n’est disponible pour le moment.', 'backup-jlg'),
+                    'relative_future' => __('dans %s', 'backup-jlg'),
+                    'relative_past' => __('il y a %s', 'backup-jlg'),
                 ],
             ],
         ];
@@ -3107,22 +3122,27 @@ class BJLG_Admin {
             [
                 'label' => __('Tous les jours à 03h00', 'backup-jlg'),
                 'expression' => '0 3 * * *',
+                'description' => __('Sauvegarde nocturne classique pour profiter des heures creuses.', 'backup-jlg'),
             ],
             [
                 'label' => __('Chaque lundi à 01h30', 'backup-jlg'),
                 'expression' => '30 1 * * 1',
+                'description' => __('Synchronisation hebdomadaire en début de semaine.', 'backup-jlg'),
             ],
             [
                 'label' => __('Du lundi au vendredi à 22h00', 'backup-jlg'),
                 'expression' => '0 22 * * 1-5',
+                'description' => __('Rotation en fin de journée ouvrée.', 'backup-jlg'),
             ],
             [
                 'label' => __('Le premier jour du mois à 04h15', 'backup-jlg'),
                 'expression' => '15 4 1 * *',
+                'description' => __('Archivage de début de mois après la période de trafic.', 'backup-jlg'),
             ],
             [
                 'label' => __('Toutes les deux heures', 'backup-jlg'),
                 'expression' => '0 */2 * * *',
+                'description' => __('Fréquence renforcée pour les contenus très actifs.', 'backup-jlg'),
             ],
         ];
     }
@@ -3141,18 +3161,97 @@ class BJLG_Admin {
                 $analysis = BJLG_Scheduler::describe_schedule_macro($entry);
             }
 
+            $share_payload = $this->build_macro_share_payload($entry);
+            $share_text = wp_json_encode($share_payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+            if (!is_string($share_text)) {
+                $share_text = wp_json_encode($share_payload);
+            }
+
+            $category = $entry['category'] ?? 'custom';
+            $category_labels = $this->get_schedule_macro_category_labels();
+
             $scenarios[] = [
                 'id' => $entry['id'] ?? '',
                 'label' => $entry['label'] ?? '',
                 'description' => $entry['description'] ?? '',
                 'expression' => $entry['expression'] ?? '',
-                'category' => $entry['category'] ?? '',
+                'category' => $category,
+                'category_label' => $category_labels[$category] ?? ucfirst(str_replace('-', ' ', (string) $category)),
                 'adjustments' => $entry['adjustments'] ?? [],
                 'analysis' => $analysis,
+                'share_payload' => $share_payload,
+                'share_text' => is_string($share_text) ? $share_text : '',
             ];
         }
 
         return $scenarios;
+    }
+
+    private function build_cron_catalog_from_scenarios(array $scenarios): array
+    {
+        $groups = [];
+        $category_labels = $this->get_schedule_macro_category_labels();
+        $category_descriptions = $this->get_schedule_macro_category_descriptions();
+
+        foreach ($scenarios as $scenario) {
+            if (!is_array($scenario)) {
+                continue;
+            }
+
+            $category = isset($scenario['category']) ? (string) $scenario['category'] : 'custom';
+            if (!isset($groups[$category])) {
+                $groups[$category] = [
+                    'id' => $category,
+                    'label' => $category_labels[$category] ?? ucfirst(str_replace('-', ' ', $category)),
+                    'description' => $category_descriptions[$category] ?? '',
+                    'macros' => [],
+                ];
+            }
+
+            $groups[$category]['macros'][] = [
+                'id' => $scenario['id'] ?? '',
+                'label' => $scenario['label'] ?? '',
+                'description' => $scenario['description'] ?? '',
+                'expression' => $scenario['expression'] ?? '',
+                'share_payload' => $scenario['share_payload'] ?? [],
+            ];
+        }
+
+        return array_values($groups);
+    }
+
+    private function get_schedule_macro_category_labels(): array
+    {
+        return [
+            'hourly' => __('Cadences horaires', 'backup-jlg'),
+            'change-window' => __('Fenêtres de changement', 'backup-jlg'),
+            'weekend' => __('Repos & week-end', 'backup-jlg'),
+            'custom' => __('Personnalisées', 'backup-jlg'),
+        ];
+    }
+
+    private function get_schedule_macro_category_descriptions(): array
+    {
+        return [
+            'hourly' => __('Surveillez les sites très actifs avec des captures récurrentes.', 'backup-jlg'),
+            'change-window' => __('Sécurisez vos déploiements en multipliant les points de restauration.', 'backup-jlg'),
+            'weekend' => __('Profitez des périodes de faible trafic pour effectuer des sauvegardes complètes.', 'backup-jlg'),
+            'custom' => __('Personnalisez vos expressions Cron selon vos contraintes.', 'backup-jlg'),
+        ];
+    }
+
+    private function build_macro_share_payload(array $entry): array
+    {
+        $adjustments = isset($entry['adjustments']) && is_array($entry['adjustments']) ? $entry['adjustments'] : [];
+
+        return [
+            'id' => $entry['id'] ?? '',
+            'label' => $entry['label'] ?? '',
+            'description' => $entry['description'] ?? '',
+            'expression' => $entry['expression'] ?? '',
+            'category' => $entry['category'] ?? 'custom',
+            'adjustments' => $adjustments,
+        ];
     }
 
     private function render_schedule_section() {
@@ -4561,6 +4660,19 @@ class BJLG_Admin {
                     'backup-jlg'
                 ); ?></p>
             </div>
+            <section class="bjlg-schedule-handbook" aria-labelledby="bjlg-schedule-handbook-title">
+                <h4 id="bjlg-schedule-handbook-title"><?php esc_html_e('Astuces de planification', 'backup-jlg'); ?></h4>
+                <ul class="bjlg-schedule-handbook__tips">
+                    <li><?php esc_html_e('Prévisualisez le prochain run directement dans l’assistant Cron avant d’enregistrer.', 'backup-jlg'); ?></li>
+                    <li><?php esc_html_e('Partez d’un preset puis adaptez l’expression Cron pour couvrir vos scénarios critiques.', 'backup-jlg'); ?></li>
+                    <li><?php esc_html_e('Partagez un preset avec votre équipe en copiant la macro depuis le catalogue d’exemples.', 'backup-jlg'); ?></li>
+                </ul>
+                <div class="bjlg-schedule-presets" data-role="schedule-presets" hidden>
+                    <h5 class="bjlg-schedule-presets__title"><?php esc_html_e('Presets prêts à l’emploi', 'backup-jlg'); ?></h5>
+                    <p class="description"><?php esc_html_e('Appliquez un preset à la planification sélectionnée ou partagez sa configuration.', 'backup-jlg'); ?></p>
+                    <div class="bjlg-schedule-presets__list" data-role="schedule-presets-list"></div>
+                </div>
+            </section>
             <noscript>
                 <div class="notice notice-warning">
                     <p><?php echo esc_html__(
@@ -6845,6 +6957,11 @@ class BJLG_Admin {
                                             <div class="bjlg-cron-history__chips" data-cron-history-list role="list"></div>
                                         </div>
                                         <div class="bjlg-cron-assistant__examples" data-cron-examples role="list"></div>
+                                        <section class="bjlg-cron-assistant__catalog" data-cron-catalog hidden>
+                                            <strong class="bjlg-cron-assistant__title"><?php esc_html_e('Catalogue d’exemples', 'backup-jlg'); ?></strong>
+                                            <p class="bjlg-cron-catalog__empty" data-cron-catalog-empty hidden><?php esc_html_e('Aucun exemple enregistré pour le moment.', 'backup-jlg'); ?></p>
+                                            <ul class="bjlg-cron-catalog__list" data-cron-catalog-list role="list"></ul>
+                                        </section>
                                         <div class="bjlg-cron-assistant__preview" data-cron-preview hidden>
                                             <strong class="bjlg-cron-assistant__title"><?php esc_html_e('Prochaines exécutions', 'backup-jlg'); ?></strong>
                                             <ol class="bjlg-cron-assistant__runs" data-cron-preview-list data-default-message="<?php echo esc_attr__('Les prochaines occurrences s’afficheront après validation de l’expression.', 'backup-jlg'); ?>"></ol>
