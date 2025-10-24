@@ -227,6 +227,9 @@ class BJLG_Admin_Advanced {
         $objectives = isset($report['objectives']) && is_array($report['objectives']) ? $report['objectives'] : [];
         $timings = isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [];
         $sandbox = isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [];
+        $steps = isset($report['steps']) && is_array($report['steps']) ? $report['steps'] : [];
+        $logs = isset($report['logs']) && is_array($report['logs']) ? $report['logs'] : [];
+        $rollback = isset($report['rollback']) && is_array($report['rollback']) ? $report['rollback'] : [];
         $status = isset($entry['status']) ? (string) $entry['status'] : 'info';
         $timestamp = isset($entry['timestamp']) ? strtotime($entry['timestamp']) : false;
         $relative = ($timestamp && function_exists('human_time_diff')) ? human_time_diff($timestamp, time()) : '';
@@ -264,6 +267,12 @@ class BJLG_Admin_Advanced {
             'sandbox' => [
                 'path' => isset($sandbox['base_path']) ? (string) $sandbox['base_path'] : '',
                 'cleanup' => $cleanup,
+            ],
+            'steps' => $steps,
+            'logs' => array_slice($logs, -10),
+            'rollback' => [
+                'performed' => !empty($rollback['performed']),
+                'error' => isset($rollback['error']) ? (string) $rollback['error'] : '',
             ],
         ];
     }

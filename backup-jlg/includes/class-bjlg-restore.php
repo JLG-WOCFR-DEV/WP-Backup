@@ -73,9 +73,9 @@ class BJLG_Restore {
         $message = '';
 
         $components = [];
-        $execution_log = [];
-
-        $this->append_sandbox_log($execution_log, 'Initialisation de la validation sandbox.');
+        $steps = [];
+        $logs = [];
+        $rollback = ['performed' => false, 'error' => null];
 
         try {
             if (!self::user_can_use_sandbox()) {
@@ -103,6 +103,10 @@ class BJLG_Restore {
                 'components' => $components,
             ]);
 
+            $prepare_started_at = time();
+            $prepare_timer = microtime(true);
+            $prepare_notes = [__('Initialisation de la sandbox.', 'backup-jlg')];
+
             $environment = self::prepare_environment(self::ENV_SANDBOX, [
                 'sandbox_path' => isset($args['sandbox_path']) && is_string($args['sandbox_path'])
                     ? $args['sandbox_path']
@@ -110,9 +114,22 @@ class BJLG_Restore {
             ]);
 
             $sandbox_context = $environment['sandbox'];
-            $this->append_sandbox_log($execution_log, 'Environnement sandbox préparé.', [
-                'base_path' => isset($sandbox_context['base_path']) ? (string) $sandbox_context['base_path'] : '',
-            ]);
+            if (is_array($sandbox_context) && !empty($sandbox_context['base_path'])) {
+                $prepare_notes[] = sprintf(__('Répertoire sandbox : %s', 'backup-jlg'), (string) $sandbox_context['base_path']);
+                $logs[] = sprintf(__('Sandbox préparée dans %s.', 'backup-jlg'), (string) $sandbox_context['base_path']);
+            }
+
+            $prepare_duration = (int) max(0, round(microtime(true) - $prepare_timer));
+            $steps[] = [
+                'key' => 'prepare_environment',
+                'label' => __('Préparation de la sandbox', 'backup-jlg'),
+                'status' => 'success',
+                'started_at' => $prepare_started_at,
+                'completed_at' => time(),
+                'duration_seconds' => $prepare_duration,
+                'duration_human' => $this->format_duration_for_report($prepare_duration),
+                'notes' => $prepare_notes,
+            ];
 
             $task_id = 'bjlg_sandbox_validation_' . md5(uniqid('sandbox', true));
 
@@ -149,10 +166,8 @@ class BJLG_Restore {
 
             BJLG_Backup::release_task_slot($task_id);
 
-            $this->append_sandbox_log($execution_log, 'Tâche sandbox initialisée.', [
-                'task_id' => $task_id,
-            ]);
-
+            $restore_started_at = time();
+            $restore_timer = microtime(true);
             $this->run_restore_task($task_id);
 
             $task_state = get_transient($task_id);
@@ -164,7 +179,41 @@ class BJLG_Restore {
                 'progress' => isset($task_state['progress']) ? $task_state['progress'] : null,
             ]);
 
-            if ($task_status === 'complete') {
+            $restore_duration = (int) max(0, round(microtime(true) - $restore_timer));
+            $restore_status = (is_array($task_state) && isset($task_state['status']) && $task_state['status'] === 'complete')
+                ? 'success'
+                : 'failure';
+            $restore_notes = [];
+            if (is_array($task_state)) {
+                if (!empty($task_state['status_text'])) {
+                    $restore_notes[] = (string) $task_state['status_text'];
+                }
+
+                if (isset($task_state['progress'])) {
+                    $progress_value = (float) $task_state['progress'];
+                    $progress_formatted = function_exists('number_format_i18n')
+                        ? number_format_i18n($progress_value, 1)
+                        : number_format($progress_value, 1);
+                    $restore_notes[] = sprintf(__('Progression : %s%%', 'backup-jlg'), $progress_formatted);
+                }
+            }
+
+            $steps[] = [
+                'key' => 'run_restore',
+                'label' => __('Restauration sandbox', 'backup-jlg'),
+                'status' => $restore_status,
+                'started_at' => $restore_started_at,
+                'completed_at' => time(),
+                'duration_seconds' => $restore_duration,
+                'duration_human' => $this->format_duration_for_report($restore_duration),
+                'notes' => $restore_notes,
+            ];
+
+            $logs[] = $restore_status === 'success'
+                ? __('Les étapes de restauration se sont terminées correctement.', 'backup-jlg')
+                : __('La tâche de restauration n’a pas atteint l’état « complete ».', 'backup-jlg');
+
+            if ($restore_status === 'success') {
                 $status = 'success';
                 $message = __('Validation sandbox terminée avec succès.', 'backup-jlg');
 
@@ -199,6 +248,24 @@ class BJLG_Restore {
                     ];
                 }
             }
+
+            $steps[] = [
+                'key' => 'validation',
+                'label' => __('Vérification des objectifs SLA', 'backup-jlg'),
+                'status' => $status,
+                'started_at' => time(),
+                'completed_at' => time(),
+                'duration_seconds' => 0,
+                'duration_human' => $this->format_duration_for_report(0),
+                'notes' => [
+                    $status === 'success'
+                        ? __('Les objectifs RTO/RPO sont respectés sur cette exécution.', 'backup-jlg')
+                        : __('Les objectifs SLA n’ont pas été atteints durant cette exécution.', 'backup-jlg'),
+                ],
+            ];
+            $logs[] = $status === 'success'
+                ? __('Validation SLA conclue avec succès.', 'backup-jlg')
+                : __('Validation SLA en échec.', 'backup-jlg');
         } catch (Throwable $throwable) {
             $status = 'failure';
             $message = sprintf(__('Validation sandbox échouée : %s', 'backup-jlg'), $throwable->getMessage());
@@ -211,23 +278,54 @@ class BJLG_Restore {
                 BJLG_Debug::log('[Sandbox validation] ' . $throwable->getMessage(), 'error');
             }
 
-            $issues[] = [
-                'type' => 'exception',
-                'component' => 'runtime',
-                'message' => $throwable->getMessage(),
+            $logs[] = $message;
+            $steps[] = [
+                'key' => 'exception',
+                'label' => __('Erreur de validation sandbox', 'backup-jlg'),
+                'status' => 'failure',
+                'started_at' => time(),
+                'completed_at' => time(),
+                'duration_seconds' => 0,
+                'duration_human' => $this->format_duration_for_report(0),
+                'notes' => [$throwable->getMessage()],
             ];
         } finally {
             if ($task_id !== '') {
+                $cleanup_started_at = time();
+                $cleanup_timer = microtime(true);
                 $cleanup_result = $this->cleanup_validation_sandbox(
                     is_array($sandbox_context) && isset($sandbox_context['base_path'])
                         ? $sandbox_context['base_path']
                         : ''
                 );
 
-                $this->append_sandbox_log($execution_log, 'Nettoyage sandbox effectué.', [
-                    'performed' => !empty($cleanup_result['performed']),
-                    'error' => $cleanup_result['error'],
-                ]);
+                $cleanup_duration = (int) max(0, round(microtime(true) - $cleanup_timer));
+                $cleanup_status = $cleanup_result['error'] !== null
+                    ? 'failure'
+                    : ($cleanup_result['performed'] ? 'success' : 'skipped');
+                $cleanup_notes = [];
+                if (!empty($cleanup_result['performed'])) {
+                    $cleanup_notes[] = __('Répertoire sandbox nettoyé.', 'backup-jlg');
+                    $logs[] = __('Le répertoire sandbox temporaire a été supprimé.', 'backup-jlg');
+                }
+                if (!empty($cleanup_result['error'])) {
+                    $cleanup_notes[] = sprintf(__('Erreur de nettoyage : %s', 'backup-jlg'), $cleanup_result['error']);
+                    $logs[] = sprintf(__('Erreur durant le nettoyage de la sandbox : %s', 'backup-jlg'), $cleanup_result['error']);
+                }
+
+                $steps[] = [
+                    'key' => 'cleanup',
+                    'label' => __('Nettoyage de la sandbox', 'backup-jlg'),
+                    'status' => $cleanup_status,
+                    'started_at' => $cleanup_started_at,
+                    'completed_at' => time(),
+                    'duration_seconds' => $cleanup_duration,
+                    'duration_human' => $this->format_duration_for_report($cleanup_duration),
+                    'notes' => $cleanup_notes,
+                ];
+
+                $rollback['performed'] = ($status === 'failure') && !empty($cleanup_result['performed']);
+                $rollback['error'] = $cleanup_result['error'];
 
                 delete_transient($task_id);
             }
@@ -277,6 +375,9 @@ class BJLG_Restore {
                     : '',
                 'cleanup' => $cleanup_result,
             ],
+            'steps' => $steps,
+            'logs' => $logs,
+            'rollback' => $rollback,
             'task' => [
                 'id' => $task_id,
                 'state' => is_array($task_state) ? $task_state : [],

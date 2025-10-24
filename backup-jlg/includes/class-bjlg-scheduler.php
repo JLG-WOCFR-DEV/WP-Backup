@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
 
 require_once __DIR__ . '/class-bjlg-history.php';
 require_once __DIR__ . '/class-bjlg-restore.php';
+require_once __DIR__ . '/class-bjlg-settings.php';
 
 /**
  * Gère la planification avancée des sauvegardes automatiques.
@@ -17,8 +18,7 @@ class BJLG_Scheduler {
 
     const SCHEDULE_HOOK = 'bjlg_scheduled_backup_hook';
     const SANDBOX_VALIDATION_HOOK = 'bjlg_sandbox_validation_hook';
-    private const SANDBOX_SCHEDULE_OPTION = 'bjlg_sandbox_schedule';
-    private const SANDBOX_SNAPSHOT_OPTION = 'bjlg_sandbox_validation_snapshot';
+    const SANDBOX_AUTOMATION_HOOK = 'bjlg_schedule_sandbox_restore';
     const MIN_CUSTOM_CRON_INTERVAL = 5 * MINUTE_IN_SECONDS;
     const EVENT_CRON_HOOK = 'bjlg_process_event_triggers';
 
@@ -87,7 +87,8 @@ class BJLG_Scheduler {
             [BJLG_Remote_Storage_Metrics::class, 'refresh_snapshot']
         );
         add_action(self::SANDBOX_VALIDATION_HOOK, [self::class, 'run_sandbox_validation_job']);
-        add_action(self::RESTORE_CHECK_HOOK, [self::class, 'run_scheduled_restore_check_job']);
+        add_action(self::SANDBOX_AUTOMATION_HOOK, [self::class, 'run_sandbox_automation_job']);
+        add_action('bjlg_settings_saved', [self::class, 'handle_settings_saved'], 15, 1);
     }
 
     /**
@@ -102,7 +103,18 @@ class BJLG_Scheduler {
             wp_schedule_event($start, $recurrence, $hook);
         }
 
-        self::instance()->maybe_schedule_sandbox_validation();
+        $sandbox_hook = self::SANDBOX_VALIDATION_HOOK;
+        if (!wp_next_scheduled($sandbox_hook)) {
+            $start = time() + (int) apply_filters('bjlg_sandbox_validation_delay', DAY_IN_SECONDS);
+            $recurrence = apply_filters('bjlg_sandbox_validation_recurrence', 'daily');
+            if (!is_string($recurrence) || $recurrence === '') {
+                $recurrence = 'daily';
+            }
+
+            wp_schedule_event($start, $recurrence, $sandbox_hook);
+        }
+
+        self::sync_sandbox_automation_schedule();
     }
 
         if (isset($events[$hook]) && is_array($events[$hook])) {
@@ -115,9 +127,13 @@ class BJLG_Scheduler {
             }
         }
 
-        while ($timestamp = wp_next_scheduled($hook)) { // phpcs:ignore Squiz.PHP.DisallowMultipleAssignments
-            wp_unschedule_event($timestamp, $hook);
-        }
+    public static function run_sandbox_automation_job(): void {
+        self::instance()->execute_sandbox_automation_job();
+    }
+
+    public static function handle_settings_saved($settings = []): void {
+        unset($settings);
+        self::sync_sandbox_automation_schedule(true);
     }
 
     /**
@@ -203,50 +219,15 @@ class BJLG_Scheduler {
         try {
             $restore = new BJLG_Restore();
             $report = $restore->run_sandbox_validation($args);
-            $status = isset($report['status']) ? (string) $report['status'] : 'failure';
-
-            $metadata = [
-                'report' => isset($report['report']) && is_array($report['report']) ? $report['report'] : [],
-                'timings' => isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [],
-                'objectives' => isset($report['objectives']) && is_array($report['objectives']) ? $report['objectives'] : [],
-                'components' => isset($report['components']) && is_array($report['components']) ? $report['components'] : [],
-                'sandbox' => isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [],
-                'log_excerpt' => array_slice(isset($report['log']) && is_array($report['log']) ? $report['log'] : [], -5),
-                'triggered_at' => time(),
-                'source' => $source,
-            ];
-
-            $summary = $this->summarize_sandbox_report($report);
-            $base_message = isset($report['message']) ? (string) $report['message'] : '';
-            if ($status === 'success') {
-                $message = $summary !== '' ? $summary : ($base_message !== '' ? $base_message : __('Validation sandbox réussie.', 'backup-jlg'));
-                $entry_id = BJLG_History::log('sandbox_restore_validation', 'success', $message, null, null, $metadata);
-                do_action('bjlg_sandbox_restore_validation_passed', $report);
-            } else {
-                $failure_message = $base_message !== '' ? $base_message : __('Validation sandbox échouée.', 'backup-jlg');
-                $message = $summary !== '' ? $summary . ' | ' . $failure_message : $failure_message;
-                $entry_id = BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $metadata);
-                do_action('bjlg_sandbox_restore_validation_failed', $report);
-            }
-
-            if (!empty($entry_id) && isset($metadata['report']['id'])) {
-                BJLG_Restore::attach_sandbox_report_to_history((string) $metadata['report']['id'], (int) $entry_id);
-            }
+            $this->dispatch_sandbox_report($report, ['source' => 'scheduler']);
         } catch (Throwable $throwable) {
             $status = 'failure';
             $message = 'Validation sandbox échouée : ' . $throwable->getMessage();
-            $history_metadata = [
-                'report_summary' => [
-                    'status' => 'failure',
-                    'message' => $throwable->getMessage(),
-                    'log_excerpt' => [],
-                    'started_at' => time(),
-                    'components' => $settings['components'] ?? [],
-                ],
+            BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, [
+                'error' => $throwable->getMessage(),
+                'triggered_at' => time(),
                 'source' => 'scheduler',
-            ];
-            BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $history_metadata);
-            $this->update_sandbox_snapshot($settings, $history_metadata);
+            ]);
 
             if (class_exists(BJLG_Debug::class)) {
                 BJLG_Debug::log('[Sandbox validation job] ' . $throwable->getMessage(), 'error');
@@ -259,6 +240,55 @@ class BJLG_Scheduler {
             ];
 
             do_action('bjlg_sandbox_restore_validation_failed', $report);
+        }
+    }
+
+    /**
+     * Exécute la planification configurée pour les restaurations sandbox automatisées.
+     */
+    private function execute_sandbox_automation_job(): void {
+        if (!class_exists(BJLG_Restore::class) || !class_exists(BJLG_Settings::class)) {
+            return;
+        }
+
+        $settings = BJLG_Settings::get_sandbox_automation_settings();
+        if (empty($settings['enabled']) || ($settings['recurrence'] ?? 'disabled') === 'disabled') {
+            return;
+        }
+
+        try {
+            $restore = new BJLG_Restore();
+            $args = [];
+
+            if (!empty($settings['sandbox_path'])) {
+                $args['sandbox_path'] = $settings['sandbox_path'];
+            }
+
+            $report = $restore->run_sandbox_validation($args);
+            $this->dispatch_sandbox_report($report, [
+                'source' => 'automation',
+                'automation' => $settings,
+            ]);
+        } catch (Throwable $throwable) {
+            $message = 'Validation sandbox échouée : ' . $throwable->getMessage();
+            $result['status'] = 'failure';
+            $result['message'] = $message;
+            $metadata = [
+                'error' => $throwable->getMessage(),
+                'triggered_at' => time(),
+                'source' => 'automation',
+                'automation' => $settings,
+            ]);
+
+            if (class_exists(BJLG_Debug::class)) {
+                BJLG_Debug::log('[Sandbox automation job] ' . $throwable->getMessage(), 'error');
+            }
+
+            do_action('bjlg_sandbox_restore_validation_failed', [
+                'status' => 'failure',
+                'message' => $message,
+                'error' => $throwable->getMessage(),
+            ]);
         }
 
         $this->update_sandbox_schedule_state($status, $report);
@@ -337,330 +367,127 @@ class BJLG_Scheduler {
         return implode(' | ', $parts);
     }
 
-    public static function get_default_sandbox_schedule_settings(): array
-    {
-        return [
-            'enabled' => false,
-            'recurrence' => 'weekly',
-            'custom_interval' => 3 * DAY_IN_SECONDS,
-            'initial_delay' => HOUR_IN_SECONDS,
-            'components' => ['db', 'plugins', 'themes', 'uploads'],
-            'sandbox_path' => '',
-            'last_run_at' => null,
-            'last_status' => null,
-            'last_report_id' => null,
-            'schedule_signature' => '',
-            'last_scheduled_at' => null,
-        ];
+    /**
+     * Enregistre et distribue un rapport de validation sandbox.
+     *
+     * @param array<string,mixed> $report
+     * @param array<string,mixed> $metadata
+     */
+    private function dispatch_sandbox_report(array $report, array $metadata = []): void {
+        $metadata = array_merge([
+            'report' => $report,
+            'triggered_at' => time(),
+        ], $metadata);
+
+        if (!isset($metadata['source'])) {
+            $metadata['source'] = 'scheduler';
+        }
+
+        $status = isset($report['status']) ? (string) $report['status'] : 'failure';
+        $summary = $this->summarize_sandbox_report($report);
+        $base_message = isset($report['message']) ? (string) $report['message'] : '';
+
+        if ($status === 'success') {
+            $message = $summary !== '' ? $summary : ($base_message !== '' ? $base_message : __('Validation sandbox réussie.', 'backup-jlg'));
+            BJLG_History::log('sandbox_restore_validation', 'success', $message, null, null, $metadata);
+            do_action('bjlg_sandbox_restore_validation_passed', $report);
+            return;
+        }
+
+        $failure_message = $base_message !== '' ? $base_message : __('Validation sandbox échouée.', 'backup-jlg');
+        $message = $summary !== '' ? $summary . ' | ' . $failure_message : $failure_message;
+        BJLG_History::log('sandbox_restore_validation', 'failure', $message, null, null, $metadata);
+        do_action('bjlg_sandbox_restore_validation_failed', $report);
     }
 
-    public static function sanitize_sandbox_schedule_settings($raw, ?array $base = null): array
-    {
-        $defaults = $base ?? self::get_default_sandbox_schedule_settings();
-        $settings = $defaults;
-
-        if (!is_array($raw)) {
-            return $settings;
+    /**
+     * Synchronise l'événement cron dédié aux restaurations sandbox automatisées.
+     */
+    private static function sync_sandbox_automation_schedule(bool $force_reschedule = false): void {
+        if (!class_exists(BJLG_Settings::class)) {
+            return;
         }
 
-        $settings['enabled'] = !empty($raw['enabled']);
+        $settings = BJLG_Settings::get_sandbox_automation_settings();
+        $hook = self::SANDBOX_AUTOMATION_HOOK;
 
-        $recurrence = isset($raw['recurrence']) ? sanitize_key((string) $raw['recurrence']) : $defaults['recurrence'];
-        $allowed_recurrences = ['hourly', 'twice_daily', 'daily', 'weekly', 'monthly', 'custom'];
-        if (!in_array($recurrence, $allowed_recurrences, true)) {
-            $recurrence = $defaults['recurrence'];
-        }
-        $settings['recurrence'] = $recurrence;
+        $event = null;
+        $event_args = [];
+        $current_schedule = '';
+        $next_timestamp = false;
 
-        $custom_interval = $defaults['custom_interval'];
-        if (isset($raw['custom_interval_minutes'])) {
-            $custom_interval = (int) $raw['custom_interval_minutes'] * MINUTE_IN_SECONDS;
-        } elseif (isset($raw['custom_interval'])) {
-            $custom_interval = (int) $raw['custom_interval'];
-        }
-        if ($custom_interval < self::MIN_CUSTOM_CRON_INTERVAL) {
-            $custom_interval = self::MIN_CUSTOM_CRON_INTERVAL;
-        }
-        $settings['custom_interval'] = $custom_interval;
-
-        $initial_delay = $defaults['initial_delay'];
-        if (isset($raw['initial_delay_minutes'])) {
-            $initial_delay = (int) $raw['initial_delay_minutes'] * MINUTE_IN_SECONDS;
-        } elseif (isset($raw['initial_delay'])) {
-            $initial_delay = (int) $raw['initial_delay'];
-        }
-        if ($initial_delay < self::MIN_CUSTOM_CRON_INTERVAL) {
-            $initial_delay = self::MIN_CUSTOM_CRON_INTERVAL;
-        }
-        $settings['initial_delay'] = $initial_delay;
-
-        $components = $defaults['components'];
-        if (isset($raw['components'])) {
-            $component_candidates = is_array($raw['components']) ? $raw['components'] : [$raw['components']];
-            if (class_exists(BJLG_Settings::class)) {
-                $components = BJLG_Settings::sanitize_schedule_components($component_candidates);
-            } else {
-                $components = [];
-                foreach ((array) $component_candidates as $component) {
-                    if (!is_string($component)) {
-                        continue;
-                    }
-                    $normalized = sanitize_key($component);
-                    if ($normalized !== '') {
-                        $components[] = $normalized;
-                    }
+        if (function_exists('wp_get_scheduled_event')) {
+            $event = wp_get_scheduled_event($hook);
+            if ($event) {
+                $next_timestamp = $event->timestamp;
+                if (!empty($event->schedule) && is_string($event->schedule)) {
+                    $current_schedule = $event->schedule;
+                }
+                if (!empty($event->args) && is_array($event->args)) {
+                    $event_args = $event->args;
                 }
             }
         }
-        if (empty($components)) {
-            $components = $defaults['components'];
+
+        if (!$next_timestamp) {
+            $next_timestamp = wp_next_scheduled($hook);
         }
-        $settings['components'] = array_values(array_unique($components));
 
-        $sandbox_path = isset($raw['sandbox_path']) ? (string) $raw['sandbox_path'] : $defaults['sandbox_path'];
-        $settings['sandbox_path'] = function_exists('sanitize_text_field')
-            ? sanitize_text_field($sandbox_path)
-            : trim(strip_tags($sandbox_path));
-
-        $persisted_fields = ['last_run_at', 'last_status', 'last_report_id', 'schedule_signature', 'last_scheduled_at'];
-        foreach ($persisted_fields as $field) {
-            if (!array_key_exists($field, $raw)) {
-                continue;
+        if ($current_schedule === '' && function_exists('wp_get_schedule')) {
+            $fallback_schedule = wp_get_schedule($hook);
+            if (is_string($fallback_schedule) && $fallback_schedule !== '') {
+                $current_schedule = $fallback_schedule;
             }
-            $value = $raw[$field];
-            if ($field === 'last_run_at' || $field === 'last_scheduled_at') {
-                $settings[$field] = is_numeric($value) ? (int) $value : null;
-            } elseif ($field === 'last_report_id') {
-                $settings[$field] = is_string($value) ? sanitize_text_field($value) : null;
-            } elseif ($field === 'schedule_signature') {
-                $settings[$field] = is_string($value) ? $value : '';
+        }
+
+        if (empty($settings['enabled']) || ($settings['recurrence'] ?? 'disabled') === 'disabled') {
+            if ($event && $next_timestamp) {
+                wp_unschedule_event($event->timestamp, $hook, $event_args);
+                self::log_sandbox_debug('Sandbox automation event unscheduled.');
+            } elseif ($next_timestamp) {
+                wp_unschedule_event($next_timestamp, $hook);
+                self::log_sandbox_debug('Sandbox automation timestamp cleared (no event object).');
             } else {
-                $settings[$field] = is_string($value) ? sanitize_text_field($value) : null;
+                wp_clear_scheduled_hook($hook);
+                self::log_sandbox_debug('Sandbox automation hook cleared.');
             }
-        }
-
-        if ($settings['recurrence'] !== 'custom') {
-            $settings['custom_interval'] = max(self::MIN_CUSTOM_CRON_INTERVAL, $settings['custom_interval']);
-        }
-
-        return $settings;
-    }
-
-    public function get_sandbox_schedule_settings(): array
-    {
-        if (self::$sandbox_schedule_cache !== null) {
-            return self::$sandbox_schedule_cache;
-        }
-
-        $stored = \bjlg_get_option(self::SANDBOX_SCHEDULE_OPTION, []);
-        if (!is_array($stored) || empty($stored)) {
-            $stored = get_option(self::SANDBOX_SCHEDULE_OPTION, []);
-        }
-
-        $defaults = self::get_default_sandbox_schedule_settings();
-        if (is_array($stored)) {
-            $defaults = array_merge($defaults, array_intersect_key($stored, $defaults));
-        }
-
-        $settings = self::sanitize_sandbox_schedule_settings($stored, $defaults);
-        self::$sandbox_schedule_cache = $settings;
-
-        return $settings;
-    }
-
-    public function save_sandbox_schedule_settings(array $raw): array
-    {
-        $current = $this->get_sandbox_schedule_settings();
-        $settings = self::sanitize_sandbox_schedule_settings($raw, $current);
-        $settings['schedule_signature'] = '';
-        $this->persist_sandbox_schedule_settings($settings);
-        $this->maybe_schedule_sandbox_validation();
-
-        return $settings;
-    }
-
-    public function get_sandbox_next_run_summary(): array
-    {
-        $settings = $this->get_sandbox_schedule_settings();
-        $next_run = wp_next_scheduled(self::SANDBOX_VALIDATION_HOOK);
-        $formatted = null;
-        $relative = null;
-
-        if ($next_run) {
-            $formatted = date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $next_run);
-            $relative = function_exists('human_time_diff')
-                ? sprintf(__('Dans %s', 'backup-jlg'), human_time_diff(time(), $next_run))
-                : null;
-        }
-
-        $frequency = $this->describe_sandbox_frequency($settings);
-
-        return [
-            'enabled' => !empty($settings['enabled']),
-            'recurrence' => $settings['recurrence'],
-            'frequency_label' => $frequency,
-            'custom_interval' => $settings['custom_interval'],
-            'next_run' => $next_run ?: null,
-            'next_run_formatted' => $formatted,
-            'next_run_relative' => $relative,
-            'last_run_at' => $settings['last_run_at'],
-            'last_status' => $settings['last_status'],
-            'last_report_id' => $settings['last_report_id'],
-        ];
-    }
-
-    private function describe_sandbox_frequency(array $settings): string
-    {
-        $recurrence = isset($settings['recurrence']) ? (string) $settings['recurrence'] : 'weekly';
-        $labels = [
-            'hourly' => __('Toutes les heures', 'backup-jlg'),
-            'twice_daily' => __('Deux fois par jour', 'backup-jlg'),
-            'daily' => __('Chaque jour', 'backup-jlg'),
-            'weekly' => __('Hebdomadaire', 'backup-jlg'),
-            'monthly' => __('Mensuelle', 'backup-jlg'),
-        ];
-
-        if ($recurrence === 'custom') {
-            $interval = isset($settings['custom_interval']) ? (int) $settings['custom_interval'] : DAY_IN_SECONDS;
-            $label = $this->format_interval_label($interval);
-
-            return sprintf(__('Intervalle personnalisé (%s)', 'backup-jlg'), $label);
-        }
-
-        return $labels[$recurrence] ?? ucfirst(str_replace('_', ' ', $recurrence));
-    }
-
-    private static function get_sandbox_custom_schedule_slug(int $interval): string
-    {
-        $interval = max(self::MIN_CUSTOM_CRON_INTERVAL, $interval);
-
-        return 'bjlg_sandbox_custom_' . $interval;
-    }
-
-    private function resolve_sandbox_schedule_slug(array $settings): array
-    {
-        $recurrence = isset($settings['recurrence']) ? (string) $settings['recurrence'] : 'weekly';
-
-        if ($recurrence === 'custom') {
-            $interval = isset($settings['custom_interval']) ? (int) $settings['custom_interval'] : DAY_IN_SECONDS;
-            $interval = max(self::MIN_CUSTOM_CRON_INTERVAL, $interval);
-
-            return [
-                'slug' => self::get_sandbox_custom_schedule_slug($interval),
-                'interval' => $interval,
-            ];
-        }
-
-        if ($recurrence === '') {
-            $recurrence = 'weekly';
-        }
-
-        return [
-            'slug' => $recurrence,
-            'interval' => null,
-        ];
-    }
-
-    private function persist_sandbox_schedule_settings(array $settings): void
-    {
-        update_option(self::SANDBOX_SCHEDULE_OPTION, $settings, false);
-        self::$sandbox_schedule_cache = $settings;
-    }
-
-    private function clear_sandbox_schedule(): void
-    {
-        if (function_exists('wp_clear_scheduled_hook')) {
-            wp_clear_scheduled_hook(self::SANDBOX_VALIDATION_HOOK);
-
             return;
         }
 
-        $timestamp = wp_next_scheduled(self::SANDBOX_VALIDATION_HOOK);
-        while ($timestamp !== false) {
-            wp_unschedule_event($timestamp, self::SANDBOX_VALIDATION_HOOK);
-            $timestamp = wp_next_scheduled(self::SANDBOX_VALIDATION_HOOK);
+        $recurrence = $settings['recurrence'];
+
+        if ($force_reschedule || ($current_schedule !== '' && $current_schedule !== $recurrence)) {
+            if ($event && $next_timestamp) {
+                wp_unschedule_event($event->timestamp, $hook, $event_args);
+                self::log_sandbox_debug('Sandbox automation schedule updated, previous event unscheduled.');
+            } elseif ($next_timestamp) {
+                wp_unschedule_event($next_timestamp, $hook);
+                self::log_sandbox_debug('Sandbox automation schedule updated via timestamp unschedule.');
+            } else {
+                wp_clear_scheduled_hook($hook);
+                self::log_sandbox_debug('Sandbox automation schedule update forced hook clear.');
+            }
+            $event = null;
+            $next_timestamp = false;
+        }
+
+        if (!$event && !$next_timestamp) {
+            $delay = (int) apply_filters('bjlg_sandbox_restore_schedule_delay', HOUR_IN_SECONDS);
+            $delay = max(MINUTE_IN_SECONDS, $delay);
+            $start = time() + $delay;
+            wp_schedule_event($start, $recurrence, $hook);
+            self::log_sandbox_debug(sprintf(
+                'Sandbox automation scheduled: recurrence=%s, starts=%s.',
+                $recurrence,
+                gmdate('c', $start)
+            ));
         }
     }
 
-    private function maybe_schedule_sandbox_validation(): void
-    {
-        $settings = $this->get_sandbox_schedule_settings();
-        $settings = apply_filters('bjlg_sandbox_validation_schedule_settings', $settings);
-        $hook = self::SANDBOX_VALIDATION_HOOK;
-        $next_run = wp_next_scheduled($hook);
-
-        if (empty($settings['enabled'])) {
-            if ($next_run !== false) {
-                $this->clear_sandbox_schedule();
-            }
-
-            if (!empty($settings['schedule_signature'])) {
-                $settings['schedule_signature'] = '';
-                $this->persist_sandbox_schedule_settings($settings);
-            }
-
-            return;
+    private static function log_sandbox_debug(string $message, string $level = 'info'): void {
+        if (class_exists(__NAMESPACE__ . '\\BJLG_Debug')) {
+            BJLG_Debug::log('[Sandbox automation] ' . $message, $level);
         }
-
-        $target = $this->resolve_sandbox_schedule_slug($settings);
-        $signature = md5($target['slug'] . '|' . ($target['interval'] ?? '0'));
-        $stored_signature = isset($settings['schedule_signature']) ? (string) $settings['schedule_signature'] : '';
-
-        if ($next_run !== false && $stored_signature === $signature) {
-            return;
-        }
-
-        $this->clear_sandbox_schedule();
-
-        if ($target['interval'] !== null) {
-            self::$sandbox_custom_schedule = $target;
-        } else {
-            self::$sandbox_custom_schedule = null;
-        }
-
-        $delay = isset($settings['initial_delay']) ? (int) $settings['initial_delay'] : HOUR_IN_SECONDS;
-        if ($delay < self::MIN_CUSTOM_CRON_INTERVAL) {
-            $delay = self::MIN_CUSTOM_CRON_INTERVAL;
-        }
-
-        $delay = (int) apply_filters('bjlg_sandbox_validation_delay', $delay, $settings);
-        if ($delay < self::MIN_CUSTOM_CRON_INTERVAL) {
-            $delay = self::MIN_CUSTOM_CRON_INTERVAL;
-        }
-
-        $recurrence = apply_filters('bjlg_sandbox_validation_recurrence', $target['slug'], $settings);
-        if (!is_string($recurrence) || $recurrence === '') {
-            $recurrence = $target['slug'];
-        }
-
-        $start = time() + $delay;
-        $scheduled = wp_schedule_event($start, $recurrence, $hook);
-
-        if ($scheduled === false || is_wp_error($scheduled)) {
-            if (class_exists(BJLG_Debug::class)) {
-                $error_message = is_wp_error($scheduled) ? $scheduled->get_error_message() : 'unknown';
-                BJLG_Debug::log('[Scheduler] Impossible de planifier la validation sandbox : ' . $error_message, 'error');
-            }
-
-            return;
-        }
-
-        $settings['schedule_signature'] = $signature;
-        $settings['last_scheduled_at'] = time();
-        $this->persist_sandbox_schedule_settings($settings);
-    }
-
-    private function update_sandbox_schedule_state(string $status, array $report): void
-    {
-        $settings = $this->get_sandbox_schedule_settings();
-        $settings['last_run_at'] = time();
-        $settings['last_status'] = $status;
-
-        if (isset($report['report']['id']) && is_string($report['report']['id'])) {
-            $settings['last_report_id'] = $report['report']['id'];
-        }
-
-        $this->persist_sandbox_schedule_settings($settings);
     }
 
     private function __construct() {

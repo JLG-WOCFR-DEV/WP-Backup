@@ -2284,6 +2284,15 @@ class BJLG_Admin {
         $backups = $snapshot['backups'];
         $actions = $snapshot['actions'];
         $generated_at = $snapshot['generated_at'];
+        $sla_status_key = isset($summary['sla_status']) ? sanitize_key((string) $summary['sla_status']) : '';
+        $sla_status_label = __('Non disponible', 'backup-jlg');
+        if ($sla_status_key === 'success') {
+            $sla_status_label = __('Réussie', 'backup-jlg');
+        } elseif ($sla_status_key === 'failure') {
+            $sla_status_label = __('Échec', 'backup-jlg');
+        } elseif ($sla_status_key !== '') {
+            $sla_status_label = ucfirst($sla_status_key);
+        }
 
         ?>
         <div class="bjlg-dashboard-widget" role="region" aria-live="polite" aria-atomic="true">
@@ -2314,6 +2323,24 @@ class BJLG_Admin {
                     <span class="bjlg-dashboard-widget__stat-value"><?php echo esc_html(number_format_i18n($summary['storage_backup_count'] ?? 0)); ?></span>
                     <?php if (!empty($summary['storage_total_size_human'])): ?>
                         <span class="bjlg-dashboard-widget__stat-meta"><?php echo esc_html($summary['storage_total_size_human']); ?></span>
+                    <?php endif; ?>
+                </div>
+                <div class="bjlg-dashboard-widget__stat">
+                    <span class="bjlg-dashboard-widget__stat-label"><?php esc_html_e('Dernière validation sandbox', 'backup-jlg'); ?></span>
+                    <span class="bjlg-dashboard-widget__stat-value"><?php echo esc_html($sla_status_label); ?></span>
+                    <?php if (!empty($summary['sla_validated_relative'])): ?>
+                        <span class="bjlg-dashboard-widget__stat-meta"><?php echo esc_html($summary['sla_validated_relative']); ?></span>
+                    <?php endif; ?>
+                    <?php
+                    $sla_meta_parts = [];
+                    if (!empty($summary['sla_rto_human'])) {
+                        $sla_meta_parts[] = sprintf(__('RTO %s', 'backup-jlg'), $summary['sla_rto_human']);
+                    }
+                    if (!empty($summary['sla_rpo_human'])) {
+                        $sla_meta_parts[] = sprintf(__('RPO %s', 'backup-jlg'), $summary['sla_rpo_human']);
+                    }
+                    if (!empty($sla_meta_parts)) : ?>
+                        <span class="bjlg-dashboard-widget__stat-meta"><?php echo esc_html(implode(' · ', $sla_meta_parts)); ?></span>
                     <?php endif; ?>
                 </div>
             </div>
@@ -4138,6 +4165,20 @@ class BJLG_Admin {
         $remote_metrics_ttl = isset($monitoring_settings['remote_metrics_ttl_minutes'])
             ? max(5, min(1440, (int) $monitoring_settings['remote_metrics_ttl_minutes']))
             : 15;
+        $sandbox_automation_settings = BJLG_Settings::get_sandbox_automation_settings();
+        $sandbox_schedule_enabled = !empty($sandbox_automation_settings['enabled']);
+        $sandbox_schedule_recurrence = $sandbox_automation_settings['recurrence'] ?? 'weekly';
+        $sandbox_schedule_path = isset($sandbox_automation_settings['sandbox_path']) ? (string) $sandbox_automation_settings['sandbox_path'] : '';
+        $sandbox_recurrence_choices = [
+            'disabled' => __('Désactivé', 'backup-jlg'),
+            'every_five_minutes' => __('Toutes les 5 minutes', 'backup-jlg'),
+            'every_fifteen_minutes' => __('Toutes les 15 minutes', 'backup-jlg'),
+            'hourly' => __('Toutes les heures', 'backup-jlg'),
+            'twice_daily' => __('Deux fois par jour', 'backup-jlg'),
+            'daily' => __('Quotidien', 'backup-jlg'),
+            'weekly' => __('Hebdomadaire', 'backup-jlg'),
+            'monthly' => __('Mensuel', 'backup-jlg'),
+        ];
 
         $components_labels = [
             'db' => 'Base de données',
@@ -4865,6 +4906,49 @@ class BJLG_Admin {
                                     </div>
                                 </div>
                                 <p id="bjlg-remote-metrics-ttl-description" class="description"><?php esc_html_e('Détermine la durée maximale pendant laquelle un relevé distant est considéré comme à jour.', 'backup-jlg'); ?></p>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+
+                <h3><span class="dashicons dashicons-backup" aria-hidden="true"></span> <?php esc_html_e('Validation sandbox automatisée', 'backup-jlg'); ?></h3>
+                <p class="description"><?php esc_html_e('Planifiez une restauration sandbox périodique afin de mesurer automatiquement vos objectifs RTO/RPO et rassurer vos équipes conformité.', 'backup-jlg'); ?></p>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><label for="bjlg-sandbox-schedule-enabled"><?php esc_html_e('Activer la validation planifiée', 'backup-jlg'); ?></label></th>
+                        <td>
+                            <label class="bjlg-toggle">
+                                <input type="checkbox" id="bjlg-sandbox-schedule-enabled" name="sandbox_schedule_enabled" value="1" <?php checked($sandbox_schedule_enabled); ?>>
+                                <span><?php esc_html_e('Exécuter automatiquement une restauration sandbox selon la fréquence définie.', 'backup-jlg'); ?></span>
+                            </label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="bjlg-sandbox-schedule-recurrence"><?php esc_html_e('Fréquence de validation', 'backup-jlg'); ?></label></th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <select id="bjlg-sandbox-schedule-recurrence" name="sandbox_schedule_recurrence" class="regular-text">
+                                    <?php foreach ($sandbox_recurrence_choices as $value => $label) : ?>
+                                        <option value="<?php echo esc_attr($value); ?>" <?php selected($sandbox_schedule_recurrence, $value); ?>><?php echo esc_html($label); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <p class="description"><?php esc_html_e('Sélectionnez la cadence d’exécution du test sandbox. Choisissez « Désactivé » pour désactiver la planification.', 'backup-jlg'); ?></p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="bjlg-sandbox-schedule-path"><?php esc_html_e('Destination sandbox', 'backup-jlg'); ?></label></th>
+                        <td>
+                            <div class="bjlg-field-control">
+                                <input
+                                    type="text"
+                                    id="bjlg-sandbox-schedule-path"
+                                    name="sandbox_schedule_path"
+                                    class="regular-text"
+                                    value="<?php echo esc_attr($sandbox_schedule_path); ?>"
+                                    placeholder="<?php esc_attr_e('Laisser vide pour utiliser le dossier sandbox par défaut', 'backup-jlg'); ?>"
+                                >
+                                <p class="description"><?php esc_html_e('Spécifiez un sous-dossier autorisé si vous souhaitez isoler les validations SLA dans un emplacement dédié.', 'backup-jlg'); ?></p>
                             </div>
                         </td>
                     </tr>

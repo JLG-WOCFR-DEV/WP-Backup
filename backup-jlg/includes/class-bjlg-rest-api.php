@@ -2794,6 +2794,10 @@ class BJLG_REST_API {
                 }
             }
 
+            if (class_exists(__NAMESPACE__ . '\\BJLG_Settings')) {
+                $response['schedule'] = BJLG_Settings::get_sandbox_automation_settings();
+            }
+
             $response['summary'] = [
                 'status' => $entry['status'],
                 'rto_seconds' => $report['objectives']['rto_seconds'] ?? null,
@@ -2801,6 +2805,10 @@ class BJLG_REST_API {
                 'rto_human' => $report['objectives']['rto_human'] ?? ($report['timings']['duration_human'] ?? null),
                 'rpo_human' => $report['objectives']['rpo_human'] ?? null,
                 'validated_at' => $entry['timestamp'],
+                'steps' => $report['steps'] ?? [],
+                'logs' => $report['logs'] ?? [],
+                'rollback' => isset($report['rollback']) && is_array($report['rollback']) ? $report['rollback'] : [],
+                'sandbox_path' => isset($report['sandbox']['base_path']) ? $report['sandbox']['base_path'] : ($report['sandbox']['path'] ?? ''),
             ];
 
             return rest_ensure_response($response);

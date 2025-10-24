@@ -1075,26 +1075,9 @@ class BJLG_Notifications {
         $timings = isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [];
         $sandbox = isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [];
         $cleanup = isset($sandbox['cleanup']) && is_array($sandbox['cleanup']) ? $sandbox['cleanup'] : [];
-        $report_meta = isset($report['report']) && is_array($report['report']) ? $report['report'] : [];
-
-        $log_excerpt = [];
-        $raw_log_excerpt = [];
-        if (isset($report['log_excerpt']) && is_array($report['log_excerpt'])) {
-            $raw_log_excerpt = $report['log_excerpt'];
-        } elseif (isset($report['log']) && is_array($report['log'])) {
-            $raw_log_excerpt = array_slice($report['log'], -5);
-        }
-
-        foreach ($raw_log_excerpt as $entry) {
-            if (!is_array($entry) || empty($entry['message'])) {
-                continue;
-            }
-
-            $log_excerpt[] = [
-                'timestamp' => isset($entry['timestamp']) ? (int) $entry['timestamp'] : null,
-                'message' => (string) $entry['message'],
-            ];
-        }
+        $steps = isset($report['steps']) && is_array($report['steps']) ? array_values($report['steps']) : [];
+        $logs = isset($report['logs']) && is_array($report['logs']) ? array_map('strval', $report['logs']) : [];
+        $rollback = isset($report['rollback']) && is_array($report['rollback']) ? $report['rollback'] : [];
 
         $components = [];
         if (isset($report['components']) && is_array($report['components'])) {
@@ -1123,9 +1106,10 @@ class BJLG_Notifications {
             'sandbox_path' => isset($sandbox['base_path']) ? (string) $sandbox['base_path'] : '',
             'cleanup_performed' => !empty($cleanup['performed']),
             'cleanup_error' => isset($cleanup['error']) && $cleanup['error'] !== null ? (string) $cleanup['error'] : null,
-            'report_id' => isset($report_meta['id']) ? (string) $report_meta['id'] : '',
-            'report_files' => isset($report_meta['files']) && is_array($report_meta['files']) ? $report_meta['files'] : [],
-            'log_excerpt' => $log_excerpt,
+            'steps' => $steps,
+            'logs' => $logs,
+            'rollback_performed' => !empty($rollback['performed']),
+            'rollback_error' => isset($rollback['error']) && $rollback['error'] !== null ? (string) $rollback['error'] : null,
             'raw' => $report,
         ];
     }
@@ -1779,25 +1763,46 @@ class BJLG_Notifications {
                     $lines[] = __('Nettoyage sandbox : ', 'backup-jlg') . $context['cleanup_error'];
                 }
 
-                if (!empty($context['report_files']['json']['url'])) {
-                    $lines[] = __('Rapport détaillé : ', 'backup-jlg') . $context['report_files']['json']['url'];
-                }
+                if (!empty($context['steps']) && is_array($context['steps'])) {
+                    $total_steps = count($context['steps']);
+                    $successful_steps = 0;
+                    $failed_steps = 0;
 
-                if (!empty($context['report_files']['log']['url'])) {
-                    $lines[] = __('Journal NDJSON : ', 'backup-jlg') . $context['report_files']['log']['url'];
-                }
-
-                if (!empty($context['log_excerpt']) && is_array($context['log_excerpt'])) {
-                    $lines[] = __('Extrait du journal :', 'backup-jlg');
-                    $log_lines = array_slice($context['log_excerpt'], -3);
-                    foreach ($log_lines as $log_entry) {
-                        if (!is_array($log_entry) || empty($log_entry['message'])) {
+                    foreach ($context['steps'] as $step) {
+                        if (!is_array($step)) {
                             continue;
                         }
-                        $prefix = !empty($log_entry['timestamp'])
-                            ? $this->format_timestamp((int) $log_entry['timestamp']) . ' — '
-                            : '';
-                        $lines[] = $prefix . $log_entry['message'];
+
+                        $status_key = isset($step['status']) ? sanitize_key((string) $step['status']) : '';
+                        if ($status_key === 'success') {
+                            $successful_steps++;
+                        } elseif ($status_key === 'failure') {
+                            $failed_steps++;
+                        }
+                    }
+
+                    $lines[] = sprintf(
+                        __('Étapes réussies : %1$d / %2$d (échecs : %3$d)', 'backup-jlg'),
+                        $successful_steps,
+                        $total_steps,
+                        $failed_steps
+                    );
+                }
+
+                if (!empty($context['rollback_performed'])) {
+                    $lines[] = __('Rollback automatique : effectué', 'backup-jlg');
+                } elseif ($is_failure) {
+                    $lines[] = __('Rollback automatique : non déclenché', 'backup-jlg');
+                }
+
+                if (!empty($context['rollback_error'])) {
+                    $lines[] = __('Erreur de rollback : ', 'backup-jlg') . $context['rollback_error'];
+                }
+
+                if (!empty($context['logs']) && is_array($context['logs'])) {
+                    $last_log = end($context['logs']);
+                    if (is_string($last_log) && $last_log !== '') {
+                        $lines[] = __('Dernier log : ', 'backup-jlg') . $last_log;
                     }
                 }
                 break;

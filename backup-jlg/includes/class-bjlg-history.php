@@ -671,7 +671,8 @@ class BJLG_History {
             'encryption_key_generated' => 'Clé de chiffrement générée',
             'support_package' => 'Pack de support créé',
             'event_trigger' => 'Sauvegarde événementielle',
-            'event_trigger_settings' => 'Réglages des déclencheurs événementiels'
+            'event_trigger_settings' => 'Réglages des déclencheurs événementiels',
+            'sandbox_restore_validation' => 'Validation sandbox automatisée'
         ];
     }
 
