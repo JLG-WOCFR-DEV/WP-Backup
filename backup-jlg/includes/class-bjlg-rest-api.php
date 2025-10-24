@@ -809,6 +809,639 @@ class BJLG_REST_API {
 
         return true;
     }
+
+    private function collect_network_schedules($request, ?int $site_id)
+    {
+        $availability = $this->ensure_network_context_available();
+        if (is_wp_error($availability)) {
+            return $availability;
+        }
+
+        $has_network_access = \bjlg_with_network(static function () {
+            return \bjlg_can_manage_plugin();
+        });
+
+        if (!$has_network_access) {
+            return new WP_Error(
+                'bjlg_network_forbidden',
+                __('Vous n’avez pas les permissions requises pour gérer le réseau.', 'backup-jlg'),
+                ['status' => 403]
+            );
+        }
+
+        $site_ids = $this->resolve_supervised_site_ids($site_id);
+        if (is_wp_error($site_ids)) {
+            return $site_ids;
+        }
+
+        if (empty($site_ids)) {
+            return [
+                'context' => 'network',
+                'site_id' => $site_id,
+                'sites' => [],
+                'summary' => [
+                    'total_sites' => 0,
+                    'total_events' => 0,
+                    'upcoming' => [],
+                ],
+            ];
+        }
+
+        $sites = [];
+        $events = [];
+
+        foreach ($site_ids as $id) {
+            $site_details = $this->describe_site($id);
+
+            $snapshot = \bjlg_with_site($id, function () {
+                return $this->resolve_schedule_snapshot();
+            });
+
+            if (!is_array($snapshot)) {
+                $snapshot = [
+                    'collection' => ['schedules' => []],
+                    'schedules' => [],
+                    'next_runs' => [],
+                ];
+            }
+
+            $sites[] = [
+                'id' => $id,
+                'site' => $site_details,
+                'collection' => $snapshot['collection'],
+                'schedules' => $snapshot['schedules'],
+                'next_runs' => $snapshot['next_runs'],
+            ];
+
+            foreach ($snapshot['next_runs'] as $schedule_id => $run) {
+                if (!is_array($run)) {
+                    continue;
+                }
+
+                $timestamp = isset($run['next_run']) ? (int) $run['next_run'] : null;
+                if ($timestamp === null || $timestamp <= 0) {
+                    continue;
+                }
+
+                $events[] = [
+                    'site_id' => $id,
+                    'site' => $site_details,
+                    'schedule_id' => is_string($schedule_id) ? $schedule_id : (string) ($run['id'] ?? ''),
+                    'label' => isset($run['label']) ? (string) $run['label'] : (isset($run['id']) ? (string) $run['id'] : (string) $schedule_id),
+                    'next_run' => $timestamp,
+                    'next_run_formatted' => isset($run['next_run_formatted']) ? (string) $run['next_run_formatted'] : '',
+                    'next_run_relative' => isset($run['next_run_relative']) ? (string) $run['next_run_relative'] : '',
+                    'enabled' => !empty($run['enabled']),
+                ];
+            }
+        }
+
+        usort($events, static function ($a, $b) {
+            $a_time = $a['next_run'] ?? 0;
+            $b_time = $b['next_run'] ?? 0;
+
+            if ($a_time === $b_time) {
+                return 0;
+            }
+
+            return ($a_time < $b_time) ? -1 : 1;
+        });
+
+        return [
+            'context' => 'network',
+            'site_id' => $site_id,
+            'sites' => $sites,
+            'summary' => [
+                'total_sites' => count($sites),
+                'total_events' => count($events),
+                'upcoming' => array_slice($events, 0, 10),
+            ],
+        ];
+    }
+
+    private function collect_network_history($request, ?int $site_id, int $limit, array $filters)
+    {
+        $availability = $this->ensure_network_context_available();
+        if (is_wp_error($availability)) {
+            return $availability;
+        }
+
+        $has_network_access = \bjlg_with_network(static function () {
+            return \bjlg_can_manage_plugin();
+        });
+
+        if (!$has_network_access) {
+            return new WP_Error(
+                'bjlg_network_forbidden',
+                __('Vous n’avez pas les permissions requises pour gérer le réseau.', 'backup-jlg'),
+                ['status' => 403]
+            );
+        }
+
+        $site_ids = $this->resolve_supervised_site_ids($site_id);
+        if (is_wp_error($site_ids)) {
+            return $site_ids;
+        }
+
+        if (empty($site_ids)) {
+            return [
+                'context' => 'network',
+                'site_id' => $site_id,
+                'filters' => $filters,
+                'sites' => [],
+                'summary' => [
+                    'total_sites' => 0,
+                    'total_entries' => 0,
+                    'latest' => [],
+                    'incidents' => [],
+                ],
+            ];
+        }
+
+        $sites = [];
+        $all_entries = [];
+
+        foreach ($site_ids as $id) {
+            $site_details = $this->describe_site($id);
+            $entries = \bjlg_with_site($id, function () use ($limit, $filters) {
+                return BJLG_History::get_history($limit, $filters);
+            });
+
+            if (!is_array($entries)) {
+                $entries = [];
+            }
+
+            $sites[] = [
+                'id' => $id,
+                'site' => $site_details,
+                'entries' => $entries,
+                'total' => count($entries),
+            ];
+
+            foreach ($entries as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+
+                $timestamp = isset($entry['timestamp']) ? strtotime((string) $entry['timestamp']) : false;
+
+                $all_entries[] = [
+                    'site_id' => $id,
+                    'site' => $site_details,
+                    'entry' => $entry,
+                    'timestamp' => $timestamp ?: null,
+                ];
+            }
+        }
+
+        usort($all_entries, static function ($a, $b) {
+            $a_time = $a['timestamp'] ?? 0;
+            $b_time = $b['timestamp'] ?? 0;
+
+            if ($a_time === $b_time) {
+                return 0;
+            }
+
+            return ($a_time > $b_time) ? -1 : 1;
+        });
+
+        $incidents = array_filter($all_entries, static function ($item) {
+            $entry = $item['entry'] ?? [];
+            return isset($entry['status']) && $entry['status'] === 'failure';
+        });
+
+        return [
+            'context' => 'network',
+            'site_id' => $site_id,
+            'filters' => $filters,
+            'sites' => $sites,
+            'summary' => [
+                'total_sites' => count($sites),
+                'total_entries' => array_sum(array_map(static function ($site) {
+                    return isset($site['total']) ? (int) $site['total'] : 0;
+                }, $sites)),
+                'latest' => array_slice($all_entries, 0, $limit),
+                'incidents' => array_slice(array_values($incidents), 0, $limit),
+            ],
+        ];
+    }
+
+    private function collect_network_stats($request, ?int $site_id, string $period)
+    {
+        $availability = $this->ensure_network_context_available();
+        if (is_wp_error($availability)) {
+            return $availability;
+        }
+
+        $has_network_access = \bjlg_with_network(static function () {
+            return \bjlg_can_manage_plugin();
+        });
+
+        if (!$has_network_access) {
+            return new WP_Error(
+                'bjlg_network_forbidden',
+                __('Vous n’avez pas les permissions requises pour gérer le réseau.', 'backup-jlg'),
+                ['status' => 403]
+            );
+        }
+
+        $site_ids = $this->resolve_supervised_site_ids($site_id);
+        if (is_wp_error($site_ids)) {
+            return $site_ids;
+        }
+
+        if (empty($site_ids)) {
+            return [
+                'context' => 'network',
+                'site_id' => $site_id,
+                'period' => $period,
+                'sites' => [],
+                'summary' => [
+                    'total_sites' => 0,
+                    'backups' => [
+                        'total' => 0,
+                        'total_size' => 0,
+                    ],
+                    'disk' => [
+                        'total' => 0,
+                        'free' => 0,
+                        'usage_percent' => null,
+                    ],
+                    'quota' => [
+                        'total_used_bytes' => 0,
+                        'total_quota_bytes' => 0,
+                        'usage_percent' => null,
+                        'hotspots' => [],
+                        'destinations_over_threshold' => 0,
+                        'sites_over_threshold' => 0,
+                    ],
+                ],
+            ];
+        }
+
+        $sites = [];
+        $total_backups = 0;
+        $total_backup_size = 0;
+        $disk_total_sum = 0.0;
+        $disk_free_sum = 0.0;
+        $quota_used_sum = 0.0;
+        $quota_capacity_sum = 0.0;
+        $hotspots = [];
+        $threshold_sites = [];
+        $destinations_over_threshold = 0;
+
+        foreach ($site_ids as $id) {
+            $site_details = $this->describe_site($id);
+            $snapshot = \bjlg_with_site($id, function () use ($period) {
+                return $this->resolve_stats_snapshot($period);
+            });
+
+            if (!is_array($snapshot)) {
+                $snapshot = [
+                    'backups' => [],
+                    'activity' => [],
+                    'disk' => [],
+                    'quota' => [
+                        'destinations' => [],
+                        'total_used_bytes' => 0,
+                        'total_quota_bytes' => 0,
+                        'usage_percent' => null,
+                        'threshold_percent' => null,
+                    ],
+                ];
+            }
+
+            $sites[] = [
+                'id' => $id,
+                'site' => $site_details,
+                'backups' => $snapshot['backups'],
+                'activity' => $snapshot['activity'],
+                'disk' => $snapshot['disk'],
+                'quota' => $snapshot['quota'],
+            ];
+
+            $backups = $snapshot['backups'];
+            $total_backups += isset($backups['total']) ? (int) $backups['total'] : 0;
+            $total_backup_size += isset($backups['total_size']) ? (float) $backups['total_size'] : 0.0;
+
+            $disk = $snapshot['disk'];
+            if (isset($disk['total']) && is_numeric($disk['total'])) {
+                $disk_total_sum += (float) $disk['total'];
+            }
+            if (isset($disk['free']) && is_numeric($disk['free'])) {
+                $disk_free_sum += (float) $disk['free'];
+            }
+
+            $quota = isset($snapshot['quota']) && is_array($snapshot['quota']) ? $snapshot['quota'] : [];
+            $quota_used = isset($quota['total_used_bytes']) ? (float) $quota['total_used_bytes'] : 0.0;
+            $quota_capacity = isset($quota['total_quota_bytes']) ? (float) $quota['total_quota_bytes'] : 0.0;
+            $quota_used_sum += $quota_used;
+            $quota_capacity_sum += $quota_capacity;
+
+            if (!empty($quota['destinations']) && is_array($quota['destinations'])) {
+                foreach ($quota['destinations'] as $destination) {
+                    if (!is_array($destination)) {
+                        continue;
+                    }
+
+                    $usage = isset($destination['usage_percent']) ? (float) $destination['usage_percent'] : null;
+                    if ($usage === null) {
+                        continue;
+                    }
+
+                    $hotspots[] = [
+                        'site_id' => $id,
+                        'site' => $site_details,
+                        'destination_id' => isset($destination['id']) ? (string) $destination['id'] : '',
+                        'destination_name' => isset($destination['name']) ? (string) $destination['name'] : (isset($destination['id']) ? (string) $destination['id'] : ''),
+                        'usage_percent' => $usage,
+                        'used_bytes' => isset($destination['used_bytes']) ? (float) $destination['used_bytes'] : null,
+                        'quota_bytes' => isset($destination['quota_bytes']) ? (float) $destination['quota_bytes'] : null,
+                    ];
+
+                    $threshold = isset($quota['threshold_percent']) ? (float) $quota['threshold_percent'] : null;
+                    if ($threshold !== null && $usage >= $threshold) {
+                        $destinations_over_threshold++;
+                        $threshold_sites[$id] = true;
+                    }
+                }
+            }
+        }
+
+        usort($hotspots, static function ($a, $b) {
+            $a_usage = $a['usage_percent'] ?? 0;
+            $b_usage = $b['usage_percent'] ?? 0;
+
+            if ($a_usage === $b_usage) {
+                return 0;
+            }
+
+            return ($a_usage > $b_usage) ? -1 : 1;
+        });
+
+        $disk_usage_percent = null;
+        if ($disk_total_sum > 0) {
+            $disk_usage_percent = round((($disk_total_sum - $disk_free_sum) / $disk_total_sum) * 100, 2);
+        }
+
+        $quota_usage_percent = null;
+        if ($quota_capacity_sum > 0) {
+            $quota_usage_percent = round(($quota_used_sum / $quota_capacity_sum) * 100, 2);
+        }
+
+        return [
+            'context' => 'network',
+            'site_id' => $site_id,
+            'period' => $period,
+            'sites' => $sites,
+            'summary' => [
+                'total_sites' => count($sites),
+                'backups' => [
+                    'total' => $total_backups,
+                    'total_size' => $total_backup_size,
+                ],
+                'disk' => [
+                    'total' => $disk_total_sum,
+                    'free' => $disk_free_sum,
+                    'usage_percent' => $disk_usage_percent,
+                ],
+                'quota' => [
+                    'total_used_bytes' => $quota_used_sum,
+                    'total_quota_bytes' => $quota_capacity_sum,
+                    'usage_percent' => $quota_usage_percent,
+                    'hotspots' => array_slice($hotspots, 0, 10),
+                    'destinations_over_threshold' => $destinations_over_threshold,
+                    'sites_over_threshold' => count($threshold_sites),
+                ],
+            ],
+        ];
+    }
+
+    private function resolve_schedule_snapshot(array $option_args = []): array
+    {
+        if (!empty($option_args)) {
+            $stored = \bjlg_get_option('bjlg_schedule_settings', [], $option_args);
+        } else {
+            $stored = \bjlg_get_option('bjlg_schedule_settings', []);
+        }
+
+        $collection = BJLG_Settings::sanitize_schedule_collection($stored);
+        $schedules = isset($collection['schedules']) && is_array($collection['schedules']) ? $collection['schedules'] : [];
+
+        $next_runs = [];
+        if (class_exists(BJLG_Scheduler::class)) {
+            $scheduler = BJLG_Scheduler::instance();
+            if ($scheduler && method_exists($scheduler, 'get_next_runs_summary')) {
+                $next_runs = $scheduler->get_next_runs_summary($schedules);
+            }
+        }
+
+        if (!is_array($next_runs)) {
+            $next_runs = [];
+        }
+
+        return [
+            'collection' => $collection,
+            'schedules' => $schedules,
+            'next_runs' => $next_runs,
+        ];
+    }
+
+    private function resolve_stats_snapshot(string $period): array
+    {
+        $history_stats = BJLG_History::get_stats($period);
+        $storage_stats = BJLG_Cleanup::get_storage_stats_snapshot();
+
+        $disk_total = isset($storage_stats['disk_total']) ? $storage_stats['disk_total'] : 0;
+        $disk_free = isset($storage_stats['disk_free']) ? $storage_stats['disk_free'] : 0;
+
+        $disk_calculation_error = false;
+        $disk_usage_percent = null;
+
+        if (!is_numeric($disk_total) || $disk_total <= 0 || !is_numeric($disk_free)) {
+            $disk_calculation_error = true;
+        } else {
+            $disk_usage_percent = round((($disk_total - $disk_free) / $disk_total) * 100, 2);
+        }
+
+        if (!empty($storage_stats['disk_space_error'])) {
+            $disk_calculation_error = true;
+        }
+
+        $quota_snapshot = class_exists(BJLG_Remote_Storage_Metrics::class)
+            ? BJLG_Remote_Storage_Metrics::get_snapshot()
+            : [];
+
+        $quota = $this->summarize_remote_snapshot($quota_snapshot);
+
+        return [
+            'backups' => [
+                'total' => isset($storage_stats['total_backups']) ? (int) $storage_stats['total_backups'] : 0,
+                'total_size' => isset($storage_stats['total_size']) ? (int) $storage_stats['total_size'] : 0,
+                'average_size' => $storage_stats['average_size'] ?? null,
+                'oldest' => $storage_stats['oldest_backup'] ?? null,
+                'newest' => $storage_stats['newest_backup'] ?? null,
+            ],
+            'activity' => $history_stats,
+            'disk' => [
+                'free' => $storage_stats['disk_free'] ?? null,
+                'total' => $storage_stats['disk_total'] ?? null,
+                'usage_percent' => $disk_usage_percent,
+                'calculation_error' => $disk_calculation_error,
+            ],
+            'quota' => $quota,
+        ];
+    }
+
+    private function summarize_remote_snapshot(array $snapshot): array
+    {
+        $destinations = isset($snapshot['destinations']) && is_array($snapshot['destinations'])
+            ? $snapshot['destinations']
+            : [];
+
+        $results = [];
+        $total_used = 0.0;
+        $total_quota = 0.0;
+
+        foreach ($destinations as $destination) {
+            if (!is_array($destination)) {
+                continue;
+            }
+
+            $id = isset($destination['id']) ? (string) $destination['id'] : '';
+            $name = isset($destination['name']) ? (string) $destination['name'] : ($id !== '' ? $id : '');
+            $used = $this->normalize_metric_value($destination['used_bytes'] ?? ($destination['used'] ?? null));
+            $quota = $this->normalize_metric_value($destination['quota_bytes'] ?? ($destination['quota'] ?? null));
+
+            if ($used !== null) {
+                $total_used += $used;
+            }
+            if ($quota !== null) {
+                $total_quota += $quota;
+            }
+
+            $usage_percent = null;
+            if ($quota !== null && $quota > 0 && $used !== null) {
+                $usage_percent = round(($used / $quota) * 100, 2);
+            }
+
+            $results[] = [
+                'id' => $id,
+                'name' => $name,
+                'used_bytes' => $used,
+                'quota_bytes' => $quota,
+                'usage_percent' => $usage_percent,
+            ];
+        }
+
+        $usage_percent = null;
+        if ($total_quota > 0) {
+            $usage_percent = round(($total_used / $total_quota) * 100, 2);
+        }
+
+        return [
+            'destinations' => $results,
+            'total_used_bytes' => $total_used,
+            'total_quota_bytes' => $total_quota,
+            'usage_percent' => $usage_percent,
+            'generated_at' => isset($snapshot['generated_at']) ? (int) $snapshot['generated_at'] : 0,
+            'stale' => !empty($snapshot['stale']),
+            'threshold_percent' => isset($snapshot['threshold_percent']) ? (float) $snapshot['threshold_percent'] : null,
+        ];
+    }
+
+    private function resolve_supervised_site_ids(?int $site_id = null)
+    {
+        $managed = \bjlg_with_network(static function () {
+            $stored = \bjlg_get_option('bjlg_supervised_sites', [], ['network' => true]);
+            if (!is_array($stored)) {
+                $stored = [];
+            }
+
+            $ids = [];
+            foreach ($stored as $entry) {
+                $value = is_scalar($entry) ? (int) $entry : 0;
+                if ($value > 0) {
+                    $ids[] = $value;
+                }
+            }
+
+            return array_values(array_unique($ids));
+        });
+
+        if (is_wp_error($managed)) {
+            return $managed;
+        }
+
+        if (!is_array($managed)) {
+            $managed = [];
+        }
+
+        if ($site_id !== null) {
+            if (!in_array($site_id, $managed, true)) {
+                return new WP_Error(
+                    'bjlg_site_not_supervised',
+                    __('Le site demandé n’est pas supervisé.', 'backup-jlg'),
+                    ['status' => 404]
+                );
+            }
+
+            return [$site_id];
+        }
+
+        return $managed;
+    }
+
+    private function describe_site(int $site_id): array
+    {
+        $site = [
+            'id' => $site_id,
+            'name' => '',
+            'url' => '',
+            'admin_url' => '',
+        ];
+
+        if (function_exists('get_site')) {
+            $details = get_site($site_id);
+            if ($details) {
+                if (isset($details->blogname)) {
+                    $site['name'] = (string) $details->blogname;
+                }
+                if (isset($details->domain) && isset($details->path)) {
+                    $site['url'] = 'https://' . $details->domain . $details->path;
+                }
+            }
+        }
+
+        if ($site['url'] === '' && function_exists('get_site_url')) {
+            $site['url'] = (string) get_site_url($site_id);
+        }
+
+        if ($site['name'] === '' && function_exists('__')) {
+            $site['name'] = sprintf(__('Site #%d', 'backup-jlg'), $site_id);
+        }
+
+        if (function_exists('get_admin_url')) {
+            $site['admin_url'] = get_admin_url($site_id, 'admin.php?page=backup-jlg');
+        }
+
+        return $site;
+    }
+
+    private function normalize_metric_value($value): ?float
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_numeric($value)) {
+            $numeric = (float) $value;
+
+            return $numeric >= 0 ? $numeric : null;
+        }
+
+        return null;
+    }
     
     /**
      * Vérifie une clé API
@@ -2807,44 +3440,28 @@ class BJLG_REST_API {
      * Endpoint : Statistiques
      */
     public function get_stats($request) {
-        return $this->with_request_site($request, function () use ($request) {
-            $period = $request->get_param('period');
+        $period = $request->get_param('period');
+        $context = $this->get_requested_context($request);
+        $site_id = $this->get_requested_site_id($request);
 
-            $history_stats = BJLG_History::get_stats($period);
-            $storage_stats = BJLG_Cleanup::get_storage_stats_snapshot();
-
-            $disk_total = $storage_stats['disk_total'];
-            $disk_free = $storage_stats['disk_free'];
-
-            $disk_calculation_error = false;
-            $disk_usage_percent = null;
-
-            if (!is_numeric($disk_total) || $disk_total <= 0 || !is_numeric($disk_free)) {
-                $disk_calculation_error = true;
-            } else {
-                $disk_usage_percent = round((($disk_total - $disk_free) / $disk_total) * 100, 2);
+        if ($context === 'network') {
+            $response = $this->collect_network_stats($request, $site_id, $period);
+            if (is_wp_error($response)) {
+                return $response;
             }
 
-            if (!empty($storage_stats['disk_space_error'])) {
-                $disk_calculation_error = true;
-            }
+            return rest_ensure_response($response);
+        }
+
+        return $this->with_request_site($request, function () use ($period, $site_id) {
+            $snapshot = $this->resolve_stats_snapshot($period);
 
             return rest_ensure_response([
                 'period' => $period,
-                'backups' => [
-                    'total' => $storage_stats['total_backups'],
-                    'total_size' => $storage_stats['total_size'],
-                    'average_size' => $storage_stats['average_size'],
-                    'oldest' => $storage_stats['oldest_backup'],
-                    'newest' => $storage_stats['newest_backup']
-                ],
-                'activity' => $history_stats,
-                'disk' => [
-                    'free' => $storage_stats['disk_free'],
-                    'total' => $storage_stats['disk_total'],
-                    'usage_percent' => $disk_usage_percent,
-                    'calculation_error' => $disk_calculation_error
-                ]
+                'backups' => $snapshot['backups'],
+                'activity' => $snapshot['activity'],
+                'disk' => $snapshot['disk'],
+                'quota' => $snapshot['quota'],
             ]);
         });
     }
@@ -2901,22 +3518,38 @@ class BJLG_REST_API {
      * Endpoint : Historique
      */
     public function get_history($request) {
-        return $this->with_request_site($request, function () use ($request) {
-            $limit = $request->get_param('limit');
-            $action = $request->get_param('action');
-            $status = $request->get_param('status');
+        $limit = $request->get_param('limit');
+        $action = $request->get_param('action');
+        $status = $request->get_param('status');
 
-            $filters = [];
-            if ($action) $filters['action_type'] = $action;
-            if ($status) $filters['status'] = $status;
+        $filters = [];
+        if ($action) {
+            $filters['action_type'] = $action;
+        }
+        if ($status) {
+            $filters['status'] = $status;
+        }
 
-            $limit = max(1, min(500, (int) $limit));
+        $limit = max(1, min(500, (int) $limit));
 
+        $context = $this->get_requested_context($request);
+        $site_id = $this->get_requested_site_id($request);
+
+        if ($context === 'network') {
+            $response = $this->collect_network_history($request, $site_id, $limit, $filters);
+            if (is_wp_error($response)) {
+                return $response;
+            }
+
+            return rest_ensure_response($response);
+        }
+
+        return $this->with_request_site($request, function () use ($limit, $filters) {
             $history = BJLG_History::get_history($limit, $filters);
 
             return rest_ensure_response([
                 'entries' => $history,
-                'total' => count($history)
+                'total' => count($history),
             ]);
         });
     }
@@ -3000,24 +3633,20 @@ class BJLG_REST_API {
     }
 
     public function get_schedule_settings_catalog($request) {
-        return $this->with_request_site($request, function () use ($request) {
-            $context = $this->get_requested_context($request);
-            $site_id = $this->get_requested_site_id($request);
+        $context = $this->get_requested_context($request);
+        $site_id = $this->get_requested_site_id($request);
 
-            $option_args = [];
-
-            if ($context === 'network') {
-                $option_args['network'] = true;
-            } elseif ($site_id) {
-                $option_args['site_id'] = $site_id;
+        if ($context === 'network') {
+            $response = $this->collect_network_schedules($request, $site_id);
+            if (is_wp_error($response)) {
+                return $response;
             }
 
-            if (!empty($option_args)) {
-                $stored = \bjlg_get_option('bjlg_schedule_settings', [], $option_args);
-            } else {
-                $stored = \bjlg_get_option('bjlg_schedule_settings', []);
-            }
-            $collection = BJLG_Settings::sanitize_schedule_collection($stored);
+            return rest_ensure_response($response);
+        }
+
+        return $this->with_request_site($request, function () use ($context, $site_id) {
+            $snapshot = $this->resolve_schedule_snapshot();
 
             $macros = BJLG_Settings::get_schedule_macro_catalog();
             $described = [];
@@ -3033,20 +3662,12 @@ class BJLG_REST_API {
                 $described[] = $entry;
             }
 
-            $next_runs = [];
-            if (class_exists(BJLG_Scheduler::class)) {
-                $scheduler = BJLG_Scheduler::instance();
-                if ($scheduler && method_exists($scheduler, 'get_next_runs_summary')) {
-                    $next_runs = $scheduler->get_next_runs_summary($collection['schedules']);
-                }
-            }
-
             return rest_ensure_response([
-                'collection' => $collection,
+                'collection' => $snapshot['collection'],
                 'macros' => $described,
-                'next_runs' => $next_runs,
+                'next_runs' => $snapshot['next_runs'],
                 'context' => $context,
-                'site_id' => $context === 'site' ? $site_id : null,
+                'site_id' => $site_id,
             ]);
         });
     }

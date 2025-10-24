@@ -402,6 +402,53 @@ class BJLG_Admin {
 
                 <div class="bjlg-network-app__panel" aria-live="polite" aria-atomic="true">
                     <div class="bjlg-network-app__loading"><?php esc_html_e('Chargement des données réseau…', 'backup-jlg'); ?></div>
+
+                    <div class="notice notice-error bjlg-network-app__error" style="display:none;" role="alert"></div>
+
+                    <div class="bjlg-network-dashboard" data-role="network-dashboard" hidden>
+                        <div class="bjlg-network-dashboard__summary">
+                            <div class="bjlg-network-summary-card" data-summary="sites">
+                                <span class="bjlg-network-summary-card__label"><?php esc_html_e('Sites supervisés', 'backup-jlg'); ?></span>
+                                <span class="bjlg-network-summary-card__value" data-field="total-sites">0</span>
+                            </div>
+                            <div class="bjlg-network-summary-card" data-summary="upcoming">
+                                <span class="bjlg-network-summary-card__label"><?php esc_html_e('Prochaine sauvegarde', 'backup-jlg'); ?></span>
+                                <span class="bjlg-network-summary-card__value" data-field="next-run-label">—</span>
+                                <span class="bjlg-network-summary-card__hint" data-field="next-run-relative"></span>
+                            </div>
+                            <div class="bjlg-network-summary-card" data-summary="incidents">
+                                <span class="bjlg-network-summary-card__label"><?php esc_html_e('Incidents actifs', 'backup-jlg'); ?></span>
+                                <span class="bjlg-network-summary-card__value" data-field="incident-count">0</span>
+                            </div>
+                            <div class="bjlg-network-summary-card" data-summary="quota">
+                                <span class="bjlg-network-summary-card__label"><?php esc_html_e('Utilisation du quota', 'backup-jlg'); ?></span>
+                                <span class="bjlg-network-summary-card__value" data-field="quota-usage">—</span>
+                            </div>
+                        </div>
+
+                        <div class="bjlg-network-dashboard__columns">
+                            <section class="bjlg-network-card" data-panel="schedules">
+                                <h2><?php esc_html_e('Prochaines exécutions', 'backup-jlg'); ?></h2>
+                                <p class="description" data-field="schedules-description"><?php esc_html_e('Synthèse des exécutions planifiées sur les sites supervisés.', 'backup-jlg'); ?></p>
+                                <ul class="bjlg-network-list" data-role="schedules-list"></ul>
+                                <p class="description bjlg-network-empty" data-empty="schedules" hidden><?php esc_html_e('Aucune sauvegarde planifiée trouvée.', 'backup-jlg'); ?></p>
+                            </section>
+
+                            <section class="bjlg-network-card" data-panel="incidents">
+                                <h2><?php esc_html_e('Incidents récents', 'backup-jlg'); ?></h2>
+                                <p class="description" data-field="incidents-description"><?php esc_html_e('Derniers événements en échec détectés sur le réseau.', 'backup-jlg'); ?></p>
+                                <ul class="bjlg-network-list" data-role="incidents-list"></ul>
+                                <p class="description bjlg-network-empty" data-empty="incidents" hidden><?php esc_html_e('Aucun incident enregistré.', 'backup-jlg'); ?></p>
+                            </section>
+
+                            <section class="bjlg-network-card" data-panel="quotas">
+                                <h2><?php esc_html_e('Quotas de stockage', 'backup-jlg'); ?></h2>
+                                <p class="description" data-field="quotas-description"><?php esc_html_e('Capacité utilisée sur les destinations distantes.', 'backup-jlg'); ?></p>
+                                <ul class="bjlg-network-list" data-role="quotas-list"></ul>
+                                <p class="description bjlg-network-empty" data-empty="quotas" hidden><?php esc_html_e('Aucun quota surveillé.', 'backup-jlg'); ?></p>
+                            </section>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="bjlg-network-app__fallback" data-has-sites="<?php echo empty($sites_snapshot) ? '0' : '1'; ?>">

@@ -25,7 +25,14 @@ class BJLG_Site_Context {
         'bjlg_notification_queue',
         'bjlg_monitoring_settings',
         'bjlg_remote_storage_metrics',
+        'bjlg_schedule_settings',
         'bjlg_supervised_sites',
+    ];
+
+    private const SUPERVISED_SITE_SYNC_OPTIONS = [
+        'bjlg_schedule_settings',
+        'bjlg_api_keys',
+        'bjlg_notification_settings',
     ];
 
     /**
@@ -94,6 +101,9 @@ class BJLG_Site_Context {
 
     /** @var array<string, bool> */
     private static $network_sync_stack = [];
+
+    /** @var array<string, bool> */
+    private static $supervised_sync_stack = [];
 
     /**
      * Sanitize a history scope value.
@@ -548,6 +558,10 @@ class BJLG_Site_Context {
             return;
         }
 
+        if (isset(self::$supervised_sync_stack[$option_name])) {
+            return;
+        }
+
         if (!self::is_network_context() && !self::is_network_synced_option($option_name)) {
             return;
         }
@@ -560,6 +574,7 @@ class BJLG_Site_Context {
 
         try {
             update_site_option($option_name, $value);
+            self::sync_option_to_supervised_sites($option_name, $value);
         } finally {
             unset(self::$network_sync_stack[$option_name]);
         }
@@ -580,6 +595,56 @@ class BJLG_Site_Context {
     private static function is_network_synced_option(string $option_name): bool
     {
         return self::is_network_mode_enabled() && in_array($option_name, self::NETWORK_SYNCED_OPTIONS, true);
+    }
+
+    private static function sync_option_to_supervised_sites(string $option_name, $value): void
+    {
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return;
+        }
+
+        if (!self::is_network_mode_enabled()) {
+            return;
+        }
+
+        if (!self::is_network_context()) {
+            return;
+        }
+
+        if (!in_array($option_name, self::SUPERVISED_SITE_SYNC_OPTIONS, true)) {
+            return;
+        }
+
+        if (isset(self::$supervised_sync_stack[$option_name])) {
+            return;
+        }
+
+        $site_ids = get_site_option('bjlg_supervised_sites', []);
+        if (!is_array($site_ids) || empty($site_ids)) {
+            return;
+        }
+
+        $site_ids = array_values(array_filter(array_map(static function ($site_id) {
+            $site_id = is_scalar($site_id) ? (int) $site_id : 0;
+
+            return $site_id > 0 ? $site_id : null;
+        }, $site_ids)));
+
+        if (empty($site_ids)) {
+            return;
+        }
+
+        self::$supervised_sync_stack[$option_name] = true;
+
+        try {
+            foreach ($site_ids as $site_id) {
+                self::with_site($site_id, static function () use ($option_name, $value) {
+                    update_option($option_name, $value);
+                });
+            }
+        } finally {
+            unset(self::$supervised_sync_stack[$option_name]);
+        }
     }
 
     /**
