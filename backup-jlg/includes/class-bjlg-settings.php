@@ -30,6 +30,23 @@ class BJLG_Settings {
 
     private const DEFAULT_REMOTE_STORAGE_THRESHOLD = 0.85;
 
+    private const DEFAULT_SANDBOX_AUTOMATION_SETTINGS = [
+        'enabled' => false,
+        'recurrence' => 'weekly',
+        'sandbox_path' => '',
+    ];
+
+    private const VALID_SANDBOX_AUTOMATION_RECURRENCES = [
+        'disabled',
+        'every_five_minutes',
+        'every_fifteen_minutes',
+        'hourly',
+        'twice_daily',
+        'daily',
+        'weekly',
+        'monthly',
+    ];
+
     private const DEFAULT_MANAGED_REPLICATION_SETTINGS = [
         'enabled' => false,
         'primary' => [
@@ -684,6 +701,42 @@ class BJLG_Settings {
                     ];
                     BJLG_Debug::log('Permission requise mise à jour : ' . $required_capability);
                 }
+            }
+
+            // --- Planification des restaurations sandbox ---
+            $automation_fields = ['sandbox_schedule_enabled', 'sandbox_schedule_recurrence', 'sandbox_schedule_path'];
+            $automation_submitted = false;
+            foreach ($automation_fields as $field) {
+                if (array_key_exists($field, $_POST)) {
+                    $automation_submitted = true;
+                    break;
+                }
+            }
+
+            if ($automation_submitted) {
+                $raw_settings = [
+                    'enabled' => array_key_exists('sandbox_schedule_enabled', $_POST)
+                        ? $this->to_bool(wp_unslash($_POST['sandbox_schedule_enabled']))
+                        : false,
+                    'recurrence' => isset($_POST['sandbox_schedule_recurrence'])
+                        ? wp_unslash($_POST['sandbox_schedule_recurrence'])
+                        : self::DEFAULT_SANDBOX_AUTOMATION_SETTINGS['recurrence'],
+                    'sandbox_path' => isset($_POST['sandbox_schedule_path'])
+                        ? wp_unslash($_POST['sandbox_schedule_path'])
+                        : '',
+                ];
+
+                $automation_settings = self::sanitize_sandbox_automation_settings($raw_settings);
+
+                if (!$automation_settings['enabled'] || $automation_settings['recurrence'] === 'disabled') {
+                    $automation_settings['enabled'] = false;
+                    $automation_settings['recurrence'] = 'disabled';
+                }
+
+                $this->update_option_value('bjlg_sandbox_automation_settings', $automation_settings);
+                $saved_settings['sandbox_automation'] = $automation_settings;
+
+                BJLG_Debug::log('Réglages d’automatisation sandbox mis à jour : ' . print_r($automation_settings, true));
             }
 
             // --- Réglages de Chiffrement ---
@@ -3091,6 +3144,79 @@ class BJLG_Settings {
         $value = $settings['remote_storage_threshold'] ?? $default;
 
         return self::normalize_ratio($value, $default);
+    }
+
+    /**
+     * Retourne la configuration d'automatisation de la sandbox.
+     */
+    public static function get_sandbox_automation_settings(): array {
+        $stored = \bjlg_get_option('bjlg_sandbox_automation_settings', []);
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+
+        $sanitized = self::sanitize_sandbox_automation_settings($stored);
+
+        return wp_parse_args($sanitized, self::DEFAULT_SANDBOX_AUTOMATION_SETTINGS);
+    }
+
+    /**
+     * Normalise une configuration d'automatisation de sandbox.
+     *
+     * @param array<string,mixed>|string $settings
+     */
+    public static function sanitize_sandbox_automation_settings($settings): array {
+        if (is_string($settings)) {
+            $decoded = json_decode($settings, true);
+            if (is_array($decoded)) {
+                $settings = $decoded;
+            }
+        }
+
+        if (!is_array($settings)) {
+            $settings = [];
+        }
+
+        $normalized = self::DEFAULT_SANDBOX_AUTOMATION_SETTINGS;
+
+        if (array_key_exists('enabled', $settings)) {
+            $normalized['enabled'] = (bool) $settings['enabled'];
+        }
+
+        if (array_key_exists('recurrence', $settings)) {
+            $normalized['recurrence'] = self::normalize_sandbox_automation_recurrence($settings['recurrence']);
+        }
+
+        if (array_key_exists('sandbox_path', $settings)) {
+            $normalized['sandbox_path'] = self::sanitize_sandbox_path($settings['sandbox_path']);
+        }
+
+        return $normalized;
+    }
+
+    private static function normalize_sandbox_automation_recurrence($recurrence): string {
+        if (is_string($recurrence)) {
+            $candidate = sanitize_key($recurrence);
+            if (in_array($candidate, self::VALID_SANDBOX_AUTOMATION_RECURRENCES, true)) {
+                return $candidate;
+            }
+        }
+
+        return self::DEFAULT_SANDBOX_AUTOMATION_SETTINGS['recurrence'];
+    }
+
+    private static function sanitize_sandbox_path($path): string {
+        if (!is_string($path)) {
+            return '';
+        }
+
+        $path = trim($path);
+
+        if ($path === '') {
+            return '';
+        }
+
+        return sanitize_text_field($path);
     }
 
     /**

@@ -968,6 +968,9 @@ class BJLG_Notifications {
         $timings = isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [];
         $sandbox = isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [];
         $cleanup = isset($sandbox['cleanup']) && is_array($sandbox['cleanup']) ? $sandbox['cleanup'] : [];
+        $steps = isset($report['steps']) && is_array($report['steps']) ? array_values($report['steps']) : [];
+        $logs = isset($report['logs']) && is_array($report['logs']) ? array_map('strval', $report['logs']) : [];
+        $rollback = isset($report['rollback']) && is_array($report['rollback']) ? $report['rollback'] : [];
 
         $components = [];
         if (isset($report['components']) && is_array($report['components'])) {
@@ -991,6 +994,10 @@ class BJLG_Notifications {
             'sandbox_path' => isset($sandbox['base_path']) ? (string) $sandbox['base_path'] : '',
             'cleanup_performed' => !empty($cleanup['performed']),
             'cleanup_error' => isset($cleanup['error']) && $cleanup['error'] !== null ? (string) $cleanup['error'] : null,
+            'steps' => $steps,
+            'logs' => $logs,
+            'rollback_performed' => !empty($rollback['performed']),
+            'rollback_error' => isset($rollback['error']) && $rollback['error'] !== null ? (string) $rollback['error'] : null,
             'raw' => $report,
         ];
     }
@@ -1415,6 +1422,49 @@ class BJLG_Notifications {
 
                 if (!empty($context['cleanup_error'])) {
                     $lines[] = __('Nettoyage sandbox : ', 'backup-jlg') . $context['cleanup_error'];
+                }
+
+                if (!empty($context['steps']) && is_array($context['steps'])) {
+                    $total_steps = count($context['steps']);
+                    $successful_steps = 0;
+                    $failed_steps = 0;
+
+                    foreach ($context['steps'] as $step) {
+                        if (!is_array($step)) {
+                            continue;
+                        }
+
+                        $status_key = isset($step['status']) ? sanitize_key((string) $step['status']) : '';
+                        if ($status_key === 'success') {
+                            $successful_steps++;
+                        } elseif ($status_key === 'failure') {
+                            $failed_steps++;
+                        }
+                    }
+
+                    $lines[] = sprintf(
+                        __('Étapes réussies : %1$d / %2$d (échecs : %3$d)', 'backup-jlg'),
+                        $successful_steps,
+                        $total_steps,
+                        $failed_steps
+                    );
+                }
+
+                if (!empty($context['rollback_performed'])) {
+                    $lines[] = __('Rollback automatique : effectué', 'backup-jlg');
+                } elseif ($is_failure) {
+                    $lines[] = __('Rollback automatique : non déclenché', 'backup-jlg');
+                }
+
+                if (!empty($context['rollback_error'])) {
+                    $lines[] = __('Erreur de rollback : ', 'backup-jlg') . $context['rollback_error'];
+                }
+
+                if (!empty($context['logs']) && is_array($context['logs'])) {
+                    $last_log = end($context['logs']);
+                    if (is_string($last_log) && $last_log !== '') {
+                        $lines[] = __('Dernier log : ', 'backup-jlg') . $last_log;
+                    }
                 }
                 break;
             default:
