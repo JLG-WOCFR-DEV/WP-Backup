@@ -674,7 +674,9 @@ final class BJLG_Plugin {
             $active_section = sanitize_key($_GET['tab']);
         }
 
-        if ($active_section === '') {
+        if ($is_network_page) {
+            $active_section = 'network';
+        } elseif ($active_section === '') {
             $active_section = 'monitoring';
         }
 
@@ -694,6 +696,7 @@ final class BJLG_Plugin {
             'logs' => 'assets/js/admin-logs.js',
             'api' => 'assets/js/admin-api.js',
             'rbac' => 'assets/js/admin-rbac.js',
+            'network' => 'assets/js/admin-network.js',
         ];
 
         $module_urls = [];
@@ -711,6 +714,7 @@ final class BJLG_Plugin {
             'settings' => ['settings'],
             'integrations' => ['api'],
             'rbac' => ['rbac'],
+            'network' => ['network'],
         ];
 
         wp_enqueue_script(
@@ -777,8 +781,9 @@ final class BJLG_Plugin {
             $localized_data['network'] = [
                 'enabled' => \BJLG\BJLG_Site_Context::is_network_mode_enabled(),
                 'endpoints' => [
-                    'history' => esc_url_raw(rest_url(\BJLG\BJLG_REST_API::API_NAMESPACE . '/network/history')),
-                    'sites' => esc_url_raw(rest_url(\BJLG\BJLG_REST_API::API_NAMESPACE . '/network/sites')),
+                    'schedules' => esc_url_raw(rest_url(\BJLG\BJLG_REST_API::API_NAMESPACE . '/settings/schedule')),
+                    'history' => esc_url_raw(rest_url(\BJLG\BJLG_REST_API::API_NAMESPACE . '/history')),
+                    'stats' => esc_url_raw(rest_url(\BJLG\BJLG_REST_API::API_NAMESPACE . '/stats')),
                 ],
             ];
         }
