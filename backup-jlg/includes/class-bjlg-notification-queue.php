@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 class BJLG_Notification_Queue {
 
     private const OPTION = 'bjlg_notification_queue';
+    private const TABLE = 'bjlg_notification_queue';
     private const HOOK = 'bjlg_process_notification_queue';
     private const REMINDER_HOOK = 'bjlg_notification_queue_reminder';
     private const LOCK_TRANSIENT = 'bjlg_notification_queue_lock';
@@ -24,11 +25,135 @@ class BJLG_Notification_Queue {
     private const META_TABLE_NAME = 'bjlg_notification_queue_meta';
     private const MIGRATION_OPTION = 'bjlg_notification_queue_migrated';
 
+    /** @var bool|null */
+    private static $table_exists = null;
+
+    /** @var array<int,array<string,mixed>>|null */
+    private static $table_cache = null;
+
     public function __construct() {
         add_filter('cron_schedules', [$this, 'register_cron_schedule']);
         add_action('init', [$this, 'ensure_schedule']);
         add_action(self::HOOK, [$this, 'process_queue']);
         add_action(self::REMINDER_HOOK, [$this, 'handle_reminder']);
+    }
+
+    /**
+     * Returns the fully qualified table name used to persist the queue.
+     */
+    public static function get_table_name(): string {
+        $wpdb = self::get_wpdb();
+
+        if ($wpdb === null || empty($wpdb->prefix)) {
+            return self::TABLE;
+        }
+
+        return $wpdb->prefix . self::TABLE;
+    }
+
+    /**
+     * Installs or updates the database tables used by the notification queue.
+     */
+    public static function create_tables(): void {
+        $wpdb = self::get_wpdb();
+        if ($wpdb === null) {
+            return;
+        }
+
+        $charset_collate = method_exists($wpdb, 'get_charset_collate') ? (string) $wpdb->get_charset_collate() : '';
+        $table_name = self::get_table_name();
+
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
+
+        $sql = sprintf(
+            "CREATE TABLE %s (
+                id varchar(191) NOT NULL,
+                queue_data longtext NOT NULL,
+                acknowledged_at bigint(20) DEFAULT 0,
+                acknowledged_by varchar(191) DEFAULT '',
+                resolved_at bigint(20) DEFAULT 0,
+                reminder_next_at bigint(20) DEFAULT 0,
+                reminder_attempts int(11) DEFAULT 0,
+                reminder_active tinyint(1) DEFAULT 1,
+                reminder_last_triggered_at bigint(20) DEFAULT 0,
+                resolution_summary text NULL,
+                resolution_steps longtext NULL,
+                resolution_notes text NULL,
+                created_at bigint(20) DEFAULT 0,
+                updated_at bigint(20) DEFAULT 0,
+                PRIMARY KEY  (id),
+                KEY reminder_next (reminder_next_at),
+                KEY resolved_at (resolved_at)
+            ) %s;",
+            $table_name,
+            $charset_collate
+        );
+
+        dbDelta($sql);
+
+        self::$table_exists = null;
+        self::maybe_migrate_legacy_queue();
+    }
+
+    /**
+     * Returns the global wpdb instance when available.
+     */
+    private static function get_wpdb() {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb)) {
+            return null;
+        }
+
+        return $wpdb;
+    }
+
+    private static function queue_table_exists(): bool {
+        if (self::$table_exists === true) {
+            return true;
+        }
+
+        if (self::$table_exists === false) {
+            return false;
+        }
+
+        $wpdb = self::get_wpdb();
+        if ($wpdb === null) {
+            self::$table_exists = false;
+
+            return false;
+        }
+
+        $table_name = self::get_table_name();
+        $result = null;
+
+        if (method_exists($wpdb, 'prepare')) {
+            $result = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table_name));
+        } else {
+            $result = $wpdb->get_var("SHOW TABLES LIKE '{$table_name}'");
+        }
+
+        self::$table_exists = ($result === $table_name);
+
+        return self::$table_exists;
+    }
+
+    private static function maybe_migrate_legacy_queue(): void {
+        if (!self::queue_table_exists()) {
+            return;
+        }
+
+        $legacy_queue = bjlg_get_option(self::OPTION, null);
+
+        if (!is_array($legacy_queue) || empty($legacy_queue)) {
+            bjlg_update_option(self::OPTION, [], null, null, false);
+
+            return;
+        }
+
+        self::persist_entries($legacy_queue, true);
     }
 
     /**
@@ -1272,21 +1397,73 @@ class BJLG_Notification_Queue {
     }
 
     /**
-     * Retrieves the queue from the database table.
+     * Retrieves the queue from the persistence layer.
      *
      * @return array<int,array<string,mixed>>
      */
     private static function get_queue() {
-        $db = self::db();
-        if (!$db || !method_exists($db, 'get_results')) {
+        if (self::queue_table_exists()) {
+            self::maybe_migrate_legacy_queue();
+
+            $queue = self::get_queue_from_table();
+            if (!empty($queue)) {
+                return $queue;
+            }
+
+            if (is_array(self::$table_cache)) {
+                return self::$table_cache;
+            }
+        }
+
+        return self::get_queue_from_option();
+    }
+
+    /**
+     * Persists the queue to the storage backend.
+     *
+     * @param array<int,array<string,mixed>> $queue
+     */
+    private static function save_queue(array $queue) {
+        self::persist_entries($queue, true);
+    }
+
+    private static function get_queue_from_table() {
+        $wpdb = self::get_wpdb();
+        if ($wpdb === null) {
+            return is_array(self::$table_cache) ? self::$table_cache : [];
+        }
+
+        $table_name = self::get_table_name();
+        $sql = sprintf('SELECT * FROM %s ORDER BY created_at ASC', $table_name);
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+
+        if (!is_array($rows)) {
             return [];
         }
 
-        $table = self::table_name();
-        $rows = $db->get_results(
-            "SELECT entry_id, payload FROM {$table} ORDER BY created_at ASC, id ASC",
-            ARRAY_A
-        );
+        $queue = [];
+        foreach ($rows as $row) {
+            if (is_object($row)) {
+                $row = (array) $row;
+            }
+
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $entry = self::hydrate_entry_from_row($row);
+            if ($entry !== null) {
+                $queue[] = $entry;
+            }
+        }
+
+        self::$table_cache = $queue;
+
+        return $queue;
+    }
+
+    private static function get_queue_from_option() {
+        $queue = bjlg_get_option(self::OPTION, []);
 
         if (!is_array($rows)) {
             return [];
@@ -1312,380 +1489,224 @@ class BJLG_Notification_Queue {
             $entries[] = $entry;
         }
 
-        return $entries;
+        self::$table_cache = $normalized;
+
+        return $normalized;
     }
 
     /**
-     * Persists the queue in the database table.
-     *
      * @param array<int,array<string,mixed>> $queue
      */
-    private static function save_queue(array $queue) {
-        $db = self::db();
-        if (!$db) {
+    private static function persist_entries(array $queue, $clear_option) {
+        $should_clear_option = (bool) $clear_option;
+
+        if (!self::queue_table_exists()) {
+            bjlg_update_option(self::OPTION, array_values($queue), null, null, false);
+            self::$table_cache = array_values(array_filter($queue, 'is_array'));
+
             return;
         }
 
-        $table = self::table_name();
-        $meta_table = self::meta_table_name();
-        $existing_rows = [];
-        if (method_exists($db, 'get_results')) {
-            $existing_rows = $db->get_results("SELECT entry_id FROM {$table}", ARRAY_A);
+        $wpdb = self::get_wpdb();
+        if ($wpdb === null) {
+            bjlg_update_option(self::OPTION, array_values($queue), null, null, false);
+            self::$table_cache = array_values(array_filter($queue, 'is_array'));
+
+            return;
         }
 
-        $existing_ids = [];
-        if (is_array($existing_rows)) {
-            foreach ($existing_rows as $row) {
-                if (!is_array($row) || !isset($row['entry_id'])) {
-                    continue;
-                }
+        $table_name = self::get_table_name();
+        $existing_ids = self::get_existing_ids($table_name);
+        $ids_to_keep = [];
+        $normalized_entries = [];
 
-                $existing_ids[] = (string) $row['entry_id'];
-            }
-        }
-
-        $persisted_ids = [];
         foreach ($queue as $entry) {
-            if (!is_array($entry) || empty($entry)) {
+            if (!is_array($entry)) {
                 continue;
             }
 
-            $entry_id = isset($entry['id']) ? (string) $entry['id'] : '';
-            if ($entry_id === '') {
+            $prepared = self::map_entry_to_row($entry);
+            if ($prepared === null) {
                 continue;
             }
 
-            $persisted_ids[] = $entry_id;
-            $serialized = self::serialize_entry($entry);
-            if (in_array($entry_id, $existing_ids, true)) {
-                if (method_exists($db, 'update')) {
-                    $db->update($table, $serialized['data'], ['entry_id' => $entry_id]);
-                }
-            } else {
-                if (method_exists($db, 'insert')) {
-                    $db->insert($table, $serialized['data']);
-                }
-            }
+            $ids_to_keep[] = $prepared['row']['id'];
+            $normalized_entries[] = $prepared['entry'];
 
-            self::replace_resolution_meta($entry_id, $serialized['steps'], $serialized['actions']);
+            $wpdb->replace($table_name, $prepared['row']);
         }
 
-        $to_delete = array_diff($existing_ids, $persisted_ids);
-        foreach ($to_delete as $entry_id) {
-            if (method_exists($db, 'delete')) {
-                $db->delete($table, ['entry_id' => $entry_id]);
-                $db->delete($meta_table, ['entry_id' => $entry_id]);
+        if (!empty($existing_ids)) {
+            $ids_to_remove = array_diff($existing_ids, $ids_to_keep);
+            foreach ($ids_to_remove as $identifier) {
+                $wpdb->delete($table_name, ['id' => $identifier]);
             }
+        }
+
+        self::$table_cache = $normalized_entries;
+
+        if ($should_clear_option) {
+            bjlg_update_option(self::OPTION, [], null, null, false);
         }
     }
 
-    /**
-     * Serializes an entry for database storage.
-     *
-     * @param array<string,mixed> $entry
-     *
-     * @return array{data:array<string,mixed>,steps:array<int,array<string,mixed>>,actions:array<int,string>}
-     */
-    private static function serialize_entry(array $entry): array {
-        $resolution = isset($entry['resolution']) && is_array($entry['resolution']) ? $entry['resolution'] : [];
-        $reminders = isset($entry['reminders']) && is_array($entry['reminders']) ? $entry['reminders'] : [];
-        $escalation = isset($entry['escalation']) && is_array($entry['escalation']) ? $entry['escalation'] : [];
-        $quiet_hours = isset($entry['quiet_hours']) && is_array($entry['quiet_hours']) ? $entry['quiet_hours'] : [];
+    private static function get_existing_ids($table_name) {
+        $wpdb = self::get_wpdb();
+        if ($wpdb === null) {
+            return [];
+        }
 
-        $entry_id = isset($entry['id']) ? (string) $entry['id'] : uniqid('bjlg_notif_', true);
+        $sql = sprintf('SELECT id FROM %s', $table_name);
+        $results = $wpdb->get_results($sql, ARRAY_A);
 
-        $data = [
-            'entry_id' => $entry_id,
-            'event' => isset($entry['event']) ? (string) $entry['event'] : '',
-            'title' => isset($entry['title']) ? (string) $entry['title'] : '',
-            'subject' => isset($entry['subject']) ? (string) $entry['subject'] : '',
-            'severity' => isset($entry['severity']) ? (string) $entry['severity'] : '',
-            'created_at' => isset($entry['created_at']) ? (int) $entry['created_at'] : 0,
-            'next_attempt_at' => isset($entry['next_attempt_at']) ? (int) $entry['next_attempt_at'] : 0,
-            'last_attempt_at' => isset($entry['last_attempt_at']) ? (int) $entry['last_attempt_at'] : 0,
-            'updated_at' => isset($entry['updated_at']) ? (int) $entry['updated_at'] : 0,
-            'acknowledged_by' => isset($entry['acknowledged_by']) ? (string) $entry['acknowledged_by'] : '',
-            'acknowledged_at' => isset($entry['acknowledged_at']) ? (int) $entry['acknowledged_at'] : 0,
-            'resolved_at' => isset($entry['resolved_at']) ? (int) $entry['resolved_at'] : 0,
-            'resolution_summary' => isset($entry['resolution_summary']) ? (string) $entry['resolution_summary'] : '',
-            'resolution_status' => isset($entry['resolution_status']) ? (string) $entry['resolution_status'] : '',
-            'resolution_acknowledged_at' => isset($resolution['acknowledged_at']) ? (int) $resolution['acknowledged_at'] : 0,
-            'resolution_resolved_at' => isset($resolution['resolved_at']) ? (int) $resolution['resolved_at'] : 0,
-            'resolution_notes' => isset($entry['resolution_notes']) ? (string) $entry['resolution_notes'] : '',
-            'reminder_attempts' => isset($reminders['attempts']) ? (int) $reminders['attempts'] : 0,
+        if (!is_array($results)) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ($results as $row) {
+            if (is_array($row) && isset($row['id'])) {
+                $ids[] = (string) $row['id'];
+                continue;
+            }
+
+            if (is_object($row) && isset($row->id)) {
+                $ids[] = (string) $row->id;
+            }
+        }
+
+        return $ids;
+    }
+
+    private static function map_entry_to_row(array $entry) {
+        $entry_id = isset($entry['id']) ? (string) $entry['id'] : '';
+        if ($entry_id === '') {
+            return null;
+        }
+
+        $normalized_entry = $entry;
+        $severity = isset($normalized_entry['severity']) ? (string) $normalized_entry['severity'] : 'info';
+        $now = isset($normalized_entry['updated_at']) ? (int) $normalized_entry['updated_at'] : time();
+
+        $reminders = isset($normalized_entry['reminders']) && is_array($normalized_entry['reminders'])
+            ? $normalized_entry['reminders']
+            : self::normalize_reminders($normalized_entry, $severity, $now);
+        $normalized_entry['reminders'] = $reminders;
+
+        $resolution = isset($normalized_entry['resolution']) && is_array($normalized_entry['resolution'])
+            ? self::normalize_resolution($normalized_entry['resolution'])
+            : self::normalize_resolution([], $normalized_entry['resolution'] ?? []);
+        $normalized_entry['resolution'] = $resolution;
+        $normalized_entry['resolution_summary'] = isset($normalized_entry['resolution_summary'])
+            ? (string) $normalized_entry['resolution_summary']
+            : ($resolution['summary'] ?? '');
+        $normalized_entry['resolution_status'] = self::determine_resolution_status($normalized_entry, $resolution);
+        $normalized_entry['resolution_notes'] = self::sanitize_notes_value($normalized_entry['resolution_notes'] ?? '');
+
+        $encoded = wp_json_encode($normalized_entry);
+        if (!is_string($encoded) || $encoded === '') {
+            return null;
+        }
+
+        $steps = isset($resolution['steps']) && is_array($resolution['steps']) ? array_values($resolution['steps']) : [];
+        $steps_payload = wp_json_encode($steps);
+        if (!is_string($steps_payload)) {
+            $steps_payload = '[]';
+        }
+
+        $row = [
+            'id' => $entry_id,
+            'queue_data' => $encoded,
+            'acknowledged_at' => isset($normalized_entry['acknowledged_at']) ? (int) $normalized_entry['acknowledged_at'] : 0,
+            'acknowledged_by' => self::sanitize_actor_label($normalized_entry['acknowledged_by'] ?? ''),
+            'resolved_at' => isset($normalized_entry['resolved_at']) ? (int) $normalized_entry['resolved_at'] : (int) ($resolution['resolved_at'] ?? 0),
             'reminder_next_at' => isset($reminders['next_at']) ? (int) $reminders['next_at'] : 0,
+            'reminder_attempts' => isset($reminders['attempts']) ? (int) $reminders['attempts'] : 0,
+            'reminder_active' => !isset($reminders['active']) || (bool) $reminders['active'] ? 1 : 0,
             'reminder_last_triggered_at' => isset($reminders['last_triggered_at']) ? (int) $reminders['last_triggered_at'] : 0,
-            'reminder_base_interval' => isset($reminders['base_interval']) ? (int) $reminders['base_interval'] : 0,
-            'reminder_active' => !empty($reminders['active']) ? 1 : 0,
-            'reminder_backoff_multiplier' => isset($reminders['backoff_multiplier']) ? (float) $reminders['backoff_multiplier'] : 0.0,
-            'reminder_max_interval' => isset($reminders['max_interval']) ? (int) $reminders['max_interval'] : 0,
-            'last_error' => isset($entry['last_error']) ? (string) $entry['last_error'] : '',
-            'quiet_until' => isset($entry['quiet_until']) ? (int) $entry['quiet_until'] : 0,
-            'reminders_payload' => self::encode_json($reminders),
-            'resolution_payload' => self::encode_json($resolution),
-            'escalation_payload' => self::encode_json($escalation),
-            'quiet_hours_payload' => self::encode_json($quiet_hours),
-            'payload' => self::encode_json($entry),
+            'resolution_summary' => $normalized_entry['resolution_summary'],
+            'resolution_steps' => $steps_payload,
+            'resolution_notes' => $normalized_entry['resolution_notes'],
+            'created_at' => isset($normalized_entry['created_at']) ? (int) $normalized_entry['created_at'] : $now,
+            'updated_at' => isset($normalized_entry['updated_at']) ? (int) $normalized_entry['updated_at'] : $now,
         ];
-
-        $steps = isset($resolution['steps']) && is_array($resolution['steps']) ? $resolution['steps'] : [];
-        $actions = isset($resolution['actions']) && is_array($resolution['actions']) ? $resolution['actions'] : [];
 
         return [
-            'data' => $data,
-            'steps' => $steps,
-            'actions' => $actions,
+            'row' => $row,
+            'entry' => $normalized_entry,
         ];
     }
 
-    /**
-     * Replaces the stored meta rows for the provided entry.
-     *
-     * @param string                    $entry_id
-     * @param array<int,array<string,mixed>> $steps
-     * @param array<int,string>         $actions
-     */
-    private static function replace_resolution_meta($entry_id, array $steps, array $actions): void {
-        if ($entry_id === '') {
-            return;
+    private static function hydrate_entry_from_row(array $row) {
+        if (!isset($row['queue_data'])) {
+            return null;
         }
 
-        $db = self::db();
-        if (!$db) {
-            return;
+        $decoded = json_decode((string) $row['queue_data'], true);
+        if (!is_array($decoded)) {
+            return null;
         }
 
-        $meta_table = self::meta_table_name();
-        if (method_exists($db, 'delete')) {
-            $db->delete($meta_table, ['entry_id' => $entry_id]);
+        $decoded['acknowledged_at'] = isset($row['acknowledged_at']) ? (int) $row['acknowledged_at'] : (int) ($decoded['acknowledged_at'] ?? 0);
+        if (isset($row['acknowledged_by'])) {
+            $decoded['acknowledged_by'] = self::sanitize_actor_label($row['acknowledged_by']);
         }
 
-        $order = 0;
-        foreach ($steps as $step) {
-            if (!is_array($step)) {
-                continue;
-            }
+        $decoded['resolved_at'] = isset($row['resolved_at']) ? (int) $row['resolved_at'] : (int) ($decoded['resolved_at'] ?? 0);
 
-            if (method_exists($db, 'insert')) {
-                $db->insert($meta_table, [
-                    'entry_id' => $entry_id,
-                    'meta_key' => 'resolution_step',
-                    'meta_value' => self::encode_json($step),
-                    'meta_order' => $order++,
-                ]);
-            }
+        if (!isset($decoded['reminders']) || !is_array($decoded['reminders'])) {
+            $decoded['reminders'] = [];
         }
 
-        $order = 0;
-        foreach ($actions as $action) {
-            if (!is_string($action)) {
-                $action = is_scalar($action) ? (string) $action : '';
-            }
+        $decoded['reminders']['next_at'] = isset($row['reminder_next_at']) ? (int) $row['reminder_next_at'] : (int) ($decoded['reminders']['next_at'] ?? 0);
+        $decoded['reminders']['attempts'] = isset($row['reminder_attempts']) ? (int) $row['reminder_attempts'] : (int) ($decoded['reminders']['attempts'] ?? 0);
+        $decoded['reminders']['last_triggered_at'] = isset($row['reminder_last_triggered_at'])
+            ? (int) $row['reminder_last_triggered_at']
+            : (int) ($decoded['reminders']['last_triggered_at'] ?? 0);
 
-            if ($action === '') {
-                continue;
-            }
+        if (isset($row['reminder_active'])) {
+            $decoded['reminders']['active'] = (bool) $row['reminder_active'];
+        } elseif (!isset($decoded['reminders']['active'])) {
+            $decoded['reminders']['active'] = true;
+        }
 
-            if (method_exists($db, 'insert')) {
-                $db->insert($meta_table, [
-                    'entry_id' => $entry_id,
-                    'meta_key' => 'resolution_action',
-                    'meta_value' => $action,
-                    'meta_order' => $order++,
-                ]);
+        $decoded['resolution_notes'] = self::sanitize_notes_value($row['resolution_notes'] ?? ($decoded['resolution_notes'] ?? ''));
+
+        $steps = [];
+        if (!empty($row['resolution_steps'])) {
+            $steps_data = json_decode((string) $row['resolution_steps'], true);
+            if (is_array($steps_data)) {
+                $steps = $steps_data;
             }
         }
-    }
 
-    /**
-     * Hydrates resolution data for an entry using the meta table.
-     *
-     * @param array<string,mixed> $entry
-     * @param string              $entry_id
-     *
-     * @return array<string,mixed>
-     */
-    private static function hydrate_resolution_from_meta(array $entry, $entry_id): array {
-        if ($entry_id === '') {
-            return $entry;
-        }
-
-        $meta = self::load_resolution_meta($entry_id);
-        if (empty($meta['steps']) && empty($meta['actions'])) {
-            return $entry;
-        }
-
-        $existing_resolution = isset($entry['resolution']) && is_array($entry['resolution'])
-            ? $entry['resolution']
+        $resolution = isset($decoded['resolution']) && is_array($decoded['resolution'])
+            ? $decoded['resolution']
             : [];
 
-        $source = array_merge($existing_resolution, [
-            'steps' => $meta['steps'],
-            'actions' => $meta['actions'],
-            'summary' => $existing_resolution['summary'] ?? ($entry['resolution_summary'] ?? ''),
-        ]);
-
-        $entry['resolution'] = self::normalize_resolution($source, $existing_resolution);
-        $entry['resolution_summary'] = isset($entry['resolution']['summary']) ? (string) $entry['resolution']['summary'] : '';
-        $entry['resolution_status'] = self::determine_resolution_status($entry, $entry['resolution']);
-
-        return $entry;
-    }
-
-    /**
-     * Loads resolution steps and actions from the meta table.
-     *
-     * @param string $entry_id
-     *
-     * @return array{steps:array<int,array<string,mixed>>,actions:array<int,string>}
-     */
-    private static function load_resolution_meta($entry_id): array {
-        $db = self::db();
-        if (!$db || !method_exists($db, 'get_results')) {
-            return ['steps' => [], 'actions' => []];
+        if (!empty($steps)) {
+            $resolution['steps'] = $steps;
         }
 
-        $meta_table = self::meta_table_name();
-        $query = $db->prepare(
-            "SELECT meta_key, meta_value FROM {$meta_table} WHERE entry_id = %s ORDER BY meta_order ASC",
-            $entry_id
-        );
-
-        $rows = $db->get_results($query, ARRAY_A);
-        $steps = [];
-        $actions = [];
-
-        if (!is_array($rows)) {
-            return ['steps' => [], 'actions' => []];
+        if (isset($row['resolution_summary']) && is_string($row['resolution_summary']) && $row['resolution_summary'] !== '') {
+            $resolution['summary'] = (string) $row['resolution_summary'];
         }
 
-        foreach ($rows as $row) {
-            if (!is_array($row) || !isset($row['meta_key'])) {
-                continue;
-            }
-
-            $key = (string) $row['meta_key'];
-            if ($key === 'resolution_step') {
-                $decoded = self::decode_json($row['meta_value'] ?? '');
-                if (is_array($decoded)) {
-                    $steps[] = $decoded;
-                }
-            } elseif ($key === 'resolution_action') {
-                $actions[] = isset($row['meta_value']) ? (string) $row['meta_value'] : '';
-            }
+        if (!isset($resolution['acknowledged_at']) && !empty($decoded['acknowledged_at'])) {
+            $resolution['acknowledged_at'] = (int) $decoded['acknowledged_at'];
         }
 
-        return [
-            'steps' => $steps,
-            'actions' => array_values(array_filter($actions, static function ($action) {
-                return is_string($action) && $action !== '';
-            })),
-        ];
-    }
-
-    /**
-     * Encodes a PHP value as JSON.
-     *
-     * @param mixed $value
-     */
-    private static function encode_json($value): string {
-        $encoded = wp_json_encode($value);
-
-        if (!is_string($encoded) || $encoded === '') {
-            return 'null';
+        if (!isset($resolution['resolved_at']) && !empty($decoded['resolved_at'])) {
+            $resolution['resolved_at'] = (int) $decoded['resolved_at'];
         }
 
-        return $encoded;
-    }
-
-    /**
-     * Decodes a JSON string into a PHP value.
-     *
-     * @param mixed $value
-     *
-     * @return mixed
-     */
-    private static function decode_json($value) {
-        if (!is_string($value) || $value === '') {
-            return null;
-        }
-
-        $decoded = json_decode($value, true);
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            return null;
-        }
+        $decoded['resolution'] = self::normalize_resolution($resolution, $resolution);
+        $decoded['resolution_summary'] = isset($decoded['resolution']['summary'])
+            ? (string) $decoded['resolution']['summary']
+            : '';
+        $decoded['resolution_status'] = self::determine_resolution_status($decoded, $decoded['resolution']);
 
         return $decoded;
-    }
-
-    /**
-     * Returns the fully qualified queue table name.
-     */
-    private static function table_name(): string {
-        $db = self::db();
-        $prefix = is_object($db) && isset($db->prefix) ? (string) $db->prefix : '';
-
-        return $prefix . self::TABLE_NAME;
-    }
-
-    /**
-     * Returns the fully qualified meta table name.
-     */
-    private static function meta_table_name(): string {
-        $db = self::db();
-        $prefix = is_object($db) && isset($db->prefix) ? (string) $db->prefix : '';
-
-        return $prefix . self::META_TABLE_NAME;
-    }
-
-    /**
-     * Returns the wpdb instance when available.
-     *
-     * @return \wpdb|object|null
-     */
-    private static function db() {
-        global $wpdb;
-
-        if (isset($wpdb)) {
-            return $wpdb;
-        }
-
-        return null;
-    }
-
-    /**
-     * Migrates legacy option-based queue data to the database table.
-     */
-    private static function maybe_migrate_from_option(): void {
-        $already_migrated = bjlg_get_option(self::MIGRATION_OPTION, false);
-        if (!empty($already_migrated)) {
-            return;
-        }
-
-        $legacy_queue = bjlg_get_option(self::OPTION, []);
-        if (is_array($legacy_queue) && !empty($legacy_queue)) {
-            $normalized = [];
-            foreach ($legacy_queue as $entry) {
-                if (!is_array($entry)) {
-                    continue;
-                }
-
-                $normalized_entry = self::normalize_entry($entry);
-                if (!empty($normalized_entry)) {
-                    $normalized[] = $normalized_entry;
-                }
-            }
-
-            if (!empty($normalized)) {
-                self::save_queue($normalized);
-            }
-        }
-
-        if (function_exists('bjlg_delete_option')) {
-            bjlg_delete_option(self::OPTION);
-        }
-
-        bjlg_update_option(self::MIGRATION_OPTION, time());
     }
 
     /**

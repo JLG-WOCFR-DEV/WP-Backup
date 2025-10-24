@@ -57,6 +57,10 @@ if (!defined('BJLG_VERSION')) {
     define('BJLG_VERSION', 'tests');
 }
 
+if (!defined('BJLG_DISABLE_ADMIN_METRICS')) {
+    define('BJLG_DISABLE_ADMIN_METRICS', true);
+}
+
 if (!function_exists('register_activation_hook')) {
     function register_activation_hook($file, $callback) {
         if (!isset($GLOBALS['bjlg_test_hooks']['activation'])) {
@@ -576,22 +580,182 @@ if (!isset($GLOBALS['wpdb'])) {
         /** @var string */
         public $prefix = 'wp_';
 
+        /** @var array<int,string> */
+        public $queries = [];
+
+        /** @var array<string,array<string|int,array<string,mixed>>> */
+        public $tables = [];
+
         public function query($query)
         {
+            $this->queries[] = (string) $query;
+
+            if (preg_match('/DELETE\s+FROM\s+`?([^`\s]+)`?/i', (string) $query, $matches)) {
+                $table = $matches[1] ?? '';
+                if ($table !== '' && isset($this->tables[$table])) {
+                    $this->tables[$table] = [];
+                }
+            }
+
             return true;
         }
 
-        public function get_row($query)
+        public function get_row($query, $output = OBJECT)
         {
-            return (object) [
-                'size' => 0,
-                'tables' => 0,
-            ];
+            $this->queries[] = (string) $query;
+
+            if ($output === ARRAY_A) {
+                return [];
+            }
+
+            return (object) [];
         }
 
         public function db_version()
         {
             return '10.4.0-test';
+        }
+
+        public function get_charset_collate()
+        {
+            return 'DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci';
+        }
+
+        public function get_results($query, $output = OBJECT)
+        {
+            $this->queries[] = (string) $query;
+            $table = $this->resolve_table_from_query($query);
+
+            if ($table === '' || !isset($this->tables[$table])) {
+                return [];
+            }
+
+            $rows = array_values($this->tables[$table]);
+
+            if ($output === ARRAY_A) {
+                return array_map(static function ($row) {
+                    return is_array($row) ? $row : (array) $row;
+                }, $rows);
+            }
+
+            return array_map(static function ($row) {
+                return (object) (is_array($row) ? $row : (array) $row);
+            }, $rows);
+        }
+
+        public function get_var($query)
+        {
+            $this->queries[] = (string) $query;
+
+            if (preg_match('/SHOW\s+TABLES\s+LIKE\s+\'?([^\'\s]+)\'?/i', (string) $query, $matches)) {
+                $table = $matches[1] ?? '';
+
+                return isset($this->tables[$table]) ? $table : null;
+            }
+
+            if (stripos((string) $query, 'SELECT') === 0) {
+                $results = $this->get_results($query, ARRAY_A);
+                if (!empty($results)) {
+                    $first = reset($results);
+                    if (is_array($first)) {
+                        $value = reset($first);
+
+                        return is_scalar($value) ? $value : null;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        public function replace($table, $data)
+        {
+            if (!isset($this->tables[$table])) {
+                $this->tables[$table] = [];
+            }
+
+            if (isset($data['id'])) {
+                $this->tables[$table][$data['id']] = $data;
+            } else {
+                $this->tables[$table][] = $data;
+            }
+
+            return true;
+        }
+
+        public function delete($table, $where)
+        {
+            if (!isset($this->tables[$table])) {
+                return false;
+            }
+
+            if (isset($where['id']) && array_key_exists($where['id'], $this->tables[$table])) {
+                unset($this->tables[$table][$where['id']]);
+
+                return true;
+            }
+
+            return false;
+        }
+
+        public function insert($table, $data)
+        {
+            if (!isset($this->tables[$table])) {
+                $this->tables[$table] = [];
+            }
+
+            $this->tables[$table][] = $data;
+
+            return true;
+        }
+
+        public function update($table, $data, $where)
+        {
+            if (!isset($this->tables[$table])) {
+                return false;
+            }
+
+            if (isset($where['id']) && array_key_exists($where['id'], $this->tables[$table])) {
+                $this->tables[$table][$where['id']] = array_merge(
+                    $this->tables[$table][$where['id']],
+                    $data
+                );
+
+                return true;
+            }
+
+            return false;
+        }
+
+        public function prepare($query, ...$args)
+        {
+            if (empty($args)) {
+                return $query;
+            }
+
+            $escaped = array_map(static function ($value) {
+                if (is_string($value)) {
+                    return addslashes($value);
+                }
+
+                return $value;
+            }, $args);
+
+            return vsprintf($query, $escaped);
+        }
+
+        public function esc_like($text)
+        {
+            return $text;
+        }
+
+        private function resolve_table_from_query($query)
+        {
+            if (preg_match('/FROM\s+`?([^`\s]+)`?/i', (string) $query, $matches)) {
+                return $matches[1] ?? '';
+            }
+
+            return '';
         }
     };
 }
@@ -1140,6 +1304,18 @@ if (!function_exists('get_admin_url')) {
     }
 }
 
+if (!function_exists('date_i18n')) {
+    function date_i18n($format, $timestamp = false, $gmt = false) {
+        if ($timestamp === false) {
+            $timestamp = time();
+        }
+
+        $timestamp = (int) $timestamp;
+
+        return date((string) $format, $timestamp);
+    }
+}
+
 if (!function_exists('network_admin_url')) {
     function network_admin_url($path = '', $scheme = 'admin') {
         return 'https://example.test/wp-admin/network/' . ltrim($path, '/');
@@ -1324,7 +1500,9 @@ if (!function_exists('update_option')) {
 }
 
 if (!function_exists('bjlg_update_option')) {
-    function bjlg_update_option($option, $value) {
+    function bjlg_update_option($option, $value, ...$args) {
+        unset($args); // unused in the test shim.
+
         return update_option($option, $value);
     }
 }

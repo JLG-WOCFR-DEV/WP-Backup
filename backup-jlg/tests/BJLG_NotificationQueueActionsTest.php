@@ -70,8 +70,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        BJLG_Notification_Queue::create_tables();
-        BJLG_Notification_Queue::seed_queue([]);
+        $this->resetQueueStorage();
         $GLOBALS['bjlg_test_scheduled_events']['single'] = [];
 
         $GLOBALS['current_user'] = (object) [
@@ -89,6 +88,8 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         if (isset($GLOBALS['bjlg_test_users'][42])) {
             unset($GLOBALS['bjlg_test_users'][42]);
         }
+
+        $this->resetQueueStorage();
 
         $this->resetNotificationsInstance();
         parent::tearDown();
@@ -124,7 +125,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::retry_entry('entry-1'));
 
-        $queue = BJLG_Notification_Queue::export_queue();
+        $queue = $this->getQueueEntries();
         $this->assertCount(1, $queue);
         $entry = $queue[0];
         $this->assertSame('entry-1', $entry['id']);
@@ -137,6 +138,11 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         $this->assertSame('pending', $channel['status']);
         $this->assertSame(0, $channel['attempts']);
         $this->assertArrayNotHasKey('last_error', $channel);
+
+        $row = $this->getTableRow('entry-1');
+        $this->assertNotNull($row);
+        $this->assertSame('entry-1', $row['id']);
+        $this->assertGreaterThan(0, $row['created_at']);
 
         $scheduled = $GLOBALS['bjlg_test_scheduled_events']['single'] ?? [];
         $this->assertNotEmpty($scheduled);
@@ -167,8 +173,9 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         ]);
 
         $this->assertTrue(BJLG_Notification_Queue::delete_entry('delete-me'));
-        $queue = BJLG_Notification_Queue::export_queue();
+        $queue = $this->getQueueEntries();
         $this->assertSame([], $queue);
+        $this->assertNull($this->getTableRow('delete-me'));
     }
 
     public function test_acknowledge_channel_marks_entry_and_channel(): void
@@ -195,7 +202,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::acknowledge_channel('ack-entry', 'email', 42));
 
-        $queue = BJLG_Notification_Queue::export_queue();
+        $queue = $this->getQueueEntries();
         $this->assertCount(1, $queue);
         $entry = $queue[0];
         $this->assertArrayHasKey('acknowledged_at', $entry);
@@ -208,6 +215,11 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $slack = $entry['channels']['slack'];
         $this->assertTrue(!isset($slack['acknowledged_at']) || (int) $slack['acknowledged_at'] === 0);
+
+        $row = $this->getTableRow('ack-entry');
+        $this->assertNotNull($row);
+        $this->assertGreaterThan(0, $row['acknowledged_at']);
+        $this->assertSame('Test Operator', $row['acknowledged_by']);
     }
 
     public function test_acknowledge_entry_marks_all_channels(): void
@@ -234,7 +246,8 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::acknowledge_entry('ack-all', 42));
 
-        $queue = BJLG_Notification_Queue::export_queue();
+        $queue = $this->getQueueEntries();
+        $this->assertCount(1, $queue);
         $entry = $queue[0];
         $this->assertArrayHasKey('acknowledged_at', $entry);
         $this->assertSame('Test Operator', $entry['acknowledged_by']);
@@ -243,6 +256,10 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
             $this->assertSame('Test Operator', $channel['acknowledged_by']);
             $this->assertGreaterThan(0, $channel['acknowledged_at']);
         }
+
+        $row = $this->getTableRow('ack-all');
+        $this->assertNotNull($row);
+        $this->assertGreaterThan(0, $row['acknowledged_at']);
     }
 
     public function test_resolve_channel_logs_when_all_channels_resolved(): void
@@ -282,7 +299,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::resolve_channel('resolve-me', 'email', 42, 'Email ok'));
 
-        $queue = BJLG_Notification_Queue::export_queue();
+        $queue = $this->getQueueEntries();
         $entry = $queue[0];
         $this->assertArrayHasKey('resolution_notes', $entry);
         $this->assertStringContainsString('email', $entry['resolution_notes']);
@@ -291,7 +308,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::resolve_channel('resolve-me', 'slack', 42, 'Slack ok'));
 
-        $queue = BJLG_Notification_Queue::export_queue();
+        $queue = $this->getQueueEntries();
         $entry = $queue[0];
         $this->assertGreaterThan(0, $entry['resolved_at']);
         $this->assertStringContainsString('slack', $entry['resolution_notes']);
@@ -301,6 +318,11 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         $this->assertSame('info', $history[0]['status']);
         $this->assertNotEmpty($resolvedEntries);
         $this->assertSame('resolve-me', $resolvedEntries[0]['id']);
+
+        $row = $this->getTableRow('resolve-me');
+        $this->assertNotNull($row);
+        $this->assertGreaterThan(0, $row['resolved_at']);
+        $this->assertStringContainsString('Slack ok', (string) $row['resolution_notes']);
     }
 
     public function test_trigger_manual_reminder_schedules_event(): void
@@ -327,12 +349,16 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::trigger_manual_reminder('manual-reminder'));
 
-        $queue = BJLG_Notification_Queue::export_queue();
+        $queue = $this->getQueueEntries();
         $this->assertCount(1, $queue);
         $entry = $queue[0];
         $this->assertArrayHasKey('reminders', $entry);
         $this->assertTrue(isset($entry['reminders']['active']) ? (bool) $entry['reminders']['active'] : true);
         $this->assertGreaterThan(time(), $entry['reminders']['next_at']);
+
+        $row = $this->getTableRow('manual-reminder');
+        $this->assertNotNull($row);
+        $this->assertGreaterThan(time(), $row['reminder_next_at']);
 
         $scheduled = $GLOBALS['bjlg_test_scheduled_events']['single'] ?? [];
         $this->assertNotEmpty($scheduled);
@@ -449,15 +475,74 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         $this->assertNotEmpty($smsCalls, 'Le canal SMS doit être sollicité.');
 
         $this->assertNotEmpty($history, 'Un log BJLG_History est attendu.');
-        $this->assertSame('notification_resolution_broadcast', $history[0]['action']);
-        $this->assertSame('info', $history[0]['status']);
+        $historyActions = array_column($history, 'action');
+        $this->assertContains('notification_resolution_broadcast', $historyActions);
         $this->assertStringContainsString('Résumé', $history[0]['details']);
+
+        $snapshot = BJLG_Notification_Queue::get_queue_snapshot();
+        $this->assertNotEmpty($snapshot['entries']);
+        $snapshotEntry = $snapshot['entries'][0];
+        $this->assertSame('resolve-broadcast', $snapshotEntry['id']);
+        $this->assertSame('resolved', $snapshotEntry['resolution_status']);
+        $this->assertSame($resolvedSummary, $snapshotEntry['resolution_summary']);
+        $this->assertNotEmpty($snapshotEntry['resolution_steps']);
+
+        $row = $this->getTableRow('resolve-broadcast');
+        $this->assertNotNull($row);
+        $this->assertSame($resolvedSummary, $row['resolution_summary']);
+        $this->assertStringContainsString('Consignation finale', (string) $row['resolution_notes']);
+        $rowSteps = json_decode((string) $row['resolution_steps'], true);
+        $this->assertIsArray($rowSteps);
+        $this->assertCount(2, $rowSteps);
 
         if ($previous_history_hooks === null) {
             unset($GLOBALS['bjlg_test_hooks']['actions']['bjlg_history_logged']);
         } else {
             $GLOBALS['bjlg_test_hooks']['actions']['bjlg_history_logged'] = $previous_history_hooks;
         }
+    }
+
+    private function resetQueueStorage(): void
+    {
+        $table = BJLG_Notification_Queue::get_table_name();
+        $GLOBALS['wpdb']->tables[$table] = [];
+        bjlg_update_option('bjlg_notification_queue', []);
+        BJLG_Notification_Queue::create_tables();
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function getQueueEntries(): array
+    {
+        $table = BJLG_Notification_Queue::get_table_name();
+        $rows = $GLOBALS['wpdb']->tables[$table] ?? [];
+        $entries = [];
+
+        foreach ($rows as $row) {
+            if (!is_array($row) || !isset($row['queue_data'])) {
+                continue;
+            }
+
+            $decoded = json_decode((string) $row['queue_data'], true);
+            if (is_array($decoded)) {
+                $entries[] = $decoded;
+            }
+        }
+
+        return array_values($entries);
+    }
+
+    private function getTableRow(string $entryId): ?array
+    {
+        $table = BJLG_Notification_Queue::get_table_name();
+        $rows = $GLOBALS['wpdb']->tables[$table] ?? [];
+
+        if (isset($rows[$entryId]) && is_array($rows[$entryId])) {
+            return $rows[$entryId];
+        }
+
+        return null;
     }
 
     private function resetNotificationsInstance(): void
