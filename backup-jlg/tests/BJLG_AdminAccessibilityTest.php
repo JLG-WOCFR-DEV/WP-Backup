@@ -128,32 +128,28 @@ final class BJLG_AdminAccessibilityTest extends TestCase
 
         $xpath = $this->createXPathFromHtml($html);
 
-        $app = $xpath->query('//*[@id="bjlg-admin-app"]')->item(0);
-        $this->assertInstanceOf(\DOMElement::class, $app, 'React app container not found.');
-        /** @var \DOMElement $app */
-        $this->assertNotSame('', $app->getAttribute('data-bjlg-sections'), 'Sections payload missing.');
+        $root = $xpath->query('//*[@id="bjlg-modern-admin-root"]').item(0);
+        $this->assertInstanceOf(\DOMElement::class, $root, 'Modern admin root not found.');
+        /** @var \DOMElement $root */
+        $this->assertNotSame('', $root->getAttribute('data-bjlg-active-section'), 'Active section attribute missing.');
 
-        $nav = $xpath->query('//*[@id="bjlg-admin-app-nav"]')->item(0);
-        $this->assertInstanceOf(\DOMElement::class, $nav, 'TabPanel placeholder missing.');
-        /** @var \DOMElement $nav */
-        $this->assertFalse($nav->hasAttribute('aria-hidden'));
+        $status = $xpath->query('//*[@id="bjlg-admin-status"]').item(0);
+        $this->assertInstanceOf(\DOMElement::class, $status, 'Status region missing.');
+        /** @var \DOMElement $status */
+        $this->assertSame('status', $status->getAttribute('role'));
+        $this->assertSame('polite', $status->getAttribute('aria-live'));
 
-        $panels = $xpath->query('//*[contains(concat(" ", normalize-space(@class), " "), " bjlg-shell-section ")]');
-        $this->assertGreaterThan(0, $panels->length, 'No panels were rendered.');
+        $templates = $xpath->query('//*[@id="bjlg-modern-admin-templates"]/section');
+        $this->assertGreaterThan(0, $templates->length, 'No section templates were rendered.');
 
-        foreach ($panels as $panelElement) {
-            $this->assertInstanceOf(\DOMElement::class, $panelElement);
-            /** @var \DOMElement $panel */
-            $panel = $panelElement;
+        foreach ($templates as $templateElement) {
+            $this->assertInstanceOf(\DOMElement::class, $templateElement);
+            /** @var \DOMElement $template */
+            $template = $templateElement;
 
-            $panelId = $panel->getAttribute('id');
-            $panelSection = $panel->getAttribute('data-section');
-            $panelLabelledBy = $panel->getAttribute('aria-labelledby');
+            $this->assertNotSame('', $template->getAttribute('id'), 'Template section must declare an id.');
+            $this->assertNotSame('', $template->getAttribute('data-section'), 'Template section must declare its key.');
 
-            $this->assertNotSame('', $panelId, 'Panel must have an id.');
-            $this->assertNotSame('', $panelSection, 'Panel must declare its section.');
-            $this->assertSame('tabpanel', $panel->getAttribute('role'));
-            $this->assertNotSame('', $panelLabelledBy, 'Panel must reference its tab control.');
-        }
+
     }
 }

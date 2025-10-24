@@ -1185,6 +1185,364 @@ jQuery(function($) {
         });
     })();
 
+    function mountModernShell(rootElement, templatesElement, config) {
+        if (!window.wp || !window.wp.element || !window.wp.components) {
+            return;
+        }
+
+        const sections = Array.isArray(config.sections) ? config.sections : [];
+        if (!sections.length) {
+            return;
+        }
+
+        sections.forEach(function(section) {
+            if (section && section.key) {
+                sectionLabels[section.key] = section.label || '';
+            }
+        });
+
+        const templateMap = new Map();
+        templatesElement.querySelectorAll('section[data-section]').forEach(function(node) {
+            if (!node || typeof node.getAttribute !== 'function') {
+                return;
+            }
+
+            const key = node.getAttribute('data-section');
+            if (!key) {
+                return;
+            }
+
+            templateMap.set(key, node.innerHTML || '');
+
+            const attr = node.getAttribute('data-bjlg-modules');
+            if (attr) {
+                const modules = parseModuleAttribute(attr);
+                if (modules.length) {
+                    if (!sectionModulesMap[key]) {
+                        sectionModulesMap[key] = modules.slice();
+                    } else {
+                        sectionModulesMap[key] = sectionModulesMap[key].concat(modules);
+                    }
+
+                    sectionModulesMap[key] = Array.from(new Set(sectionModulesMap[key]));
+                }
+            }
+        });
+
+        const moduleMapping = Object.assign({}, sectionModulesMap, config.modules || {});
+        const notices = Array.isArray(config.notices) ? config.notices : [];
+        const summaryItems = Array.isArray(config.summary) ? config.summary : [];
+        const reliability = (config.reliability && typeof config.reliability === 'object') ? config.reliability : {};
+        const breadcrumbs = Array.isArray(config.breadcrumbs) ? config.breadcrumbs : [];
+        const onboardingData = config.onboarding && typeof config.onboarding === 'object' && Array.isArray(config.onboarding.steps) && config.onboarding.steps.length
+            ? config.onboarding
+            : null;
+
+        const elementApi = window.wp.element;
+        const components = window.wp.components;
+
+        if (!elementApi || !components) {
+            return;
+        }
+
+        const { createElement, useEffect, useMemo, useRef, useState } = elementApi;
+        const RawHTMLComponent = elementApi.RawHTML;
+        const renderFn = typeof elementApi.render === 'function' ? elementApi.render : null;
+        const createRoot = typeof elementApi.createRoot === 'function' ? elementApi.createRoot : null;
+        const RawHTML = RawHTMLComponent || function RawHTML(props) {
+            return createElement('div', { dangerouslySetInnerHTML: { __html: props && props.children ? props.children : '' } });
+        };
+
+        const { Button, Card, CardBody, CardHeader, CardFooter, Notice, TabPanel } = components;
+
+        if ((!renderFn && !createRoot) || !Button || !Card || !CardBody || !TabPanel || !Notice) {
+            return;
+        }
+
+        const statusRegion = document.getElementById('bjlg-admin-status');
+
+        const moduleLoader = function(sectionKey) {
+            const configured = moduleMapping[sectionKey];
+            const modules = [];
+
+            if (Array.isArray(configured)) {
+                configured.forEach(function(name) {
+                    if (typeof name === 'string' && name !== '') {
+                        modules.push(name);
+                    }
+                });
+            }
+
+            requestModules(modules);
+        };
+
+        const getSectionLabel = function(key) {
+            const match = sections.find(function(section) {
+                return section && section.key === key;
+            });
+
+            return match && match.label ? match.label : '';
+        };
+
+        const ModernApp = function() {
+            const fallbackKey = sections[0] ? sections[0].key : '';
+            const initialSection = sections.some(function(section) { return section && section.key === config.activeSection; })
+                ? config.activeSection
+                : fallbackKey;
+
+            const [activeSection, setActiveSection] = useState(initialSection);
+            const [sidebarOpen, setSidebarOpen] = useState(false);
+            const historyPreference = useRef(true);
+
+            const handleSelect = function(sectionKey, shouldUpdateHistory) {
+                if (!sectionKey || sectionKey === activeSection) {
+                    return;
+                }
+
+                if (!sections.some(function(section) { return section && section.key === sectionKey; })) {
+                    return;
+                }
+
+                historyPreference.current = shouldUpdateHistory !== false;
+                setSidebarOpen(false);
+                setActiveSection(sectionKey);
+            };
+
+            useEffect(function() {
+                moduleLoader(activeSection);
+
+                if (rootElement) {
+                    rootElement.setAttribute('data-bjlg-active-section', activeSection);
+                }
+
+                const label = getSectionLabel(activeSection);
+                if (statusRegion) {
+                    statusRegion.textContent = label;
+                }
+
+                if (speak && label) {
+                    speak(sprintf(__('Section activée : %s', 'backup-jlg'), label));
+                }
+
+                if (historyPreference.current) {
+                    try {
+                        if (window.history && typeof window.history.replaceState === 'function') {
+                            const url = new URL(window.location.href);
+                            url.searchParams.set('section', activeSection);
+                            window.history.replaceState({}, '', url.toString());
+                        }
+                    } catch (error) {
+                        const baseUrl = window.location.href.split('#')[0];
+                        const hasQuery = baseUrl.indexOf('?') !== -1;
+                        let newUrl = '';
+                        if (baseUrl.indexOf('section=') !== -1) {
+                            newUrl = baseUrl.replace(/([?&])section=[^&#]*/, '$1section=' + encodeURIComponent(activeSection));
+                        } else if (hasQuery) {
+                            newUrl = baseUrl + '&section=' + encodeURIComponent(activeSection);
+                        } else {
+                            newUrl = baseUrl + '?section=' + encodeURIComponent(activeSection);
+                        }
+                        window.history.replaceState({}, '', newUrl);
+                    }
+                } else {
+                    historyPreference.current = true;
+                }
+
+                let sectionEvent = null;
+                const detail = { section: activeSection, panel: rootElement };
+                if (typeof window.CustomEvent === 'function') {
+                    sectionEvent = new window.CustomEvent('bjlg:section-activated', { detail: detail });
+                } else if (document.createEvent) {
+                    sectionEvent = document.createEvent('CustomEvent');
+                    if (sectionEvent && typeof sectionEvent.initCustomEvent === 'function') {
+                        sectionEvent.initCustomEvent('bjlg:section-activated', false, false, detail);
+                    }
+                }
+
+                if (sectionEvent) {
+                    document.dispatchEvent(sectionEvent);
+                }
+
+                if (onboardingData) {
+                    const checklistRoot = document.getElementById('bjlg-onboarding-checklist');
+                    if (checklistRoot) {
+                        mountOnboardingChecklist(checklistRoot, onboardingData);
+                    }
+                }
+            }, [activeSection]);
+
+            useEffect(function() {
+                window.bjlgAdmin = window.bjlgAdmin || {};
+                window.bjlgAdmin.setActiveSection = function(sectionKey, updateHistory) {
+                    handleSelect(sectionKey, updateHistory !== false);
+                };
+                window.bjlgAdmin.getActiveSection = function() {
+                    return activeSection;
+                };
+                window.bjlgAdmin.onSectionChange = function(callback) {
+                    if (typeof callback !== 'function') {
+                        return function noop() {};
+                    }
+
+                    const handler = function(event) {
+                        if (!event || !event.detail) {
+                            callback({});
+                            return;
+                        }
+
+                        callback(event.detail);
+                    };
+
+                    document.addEventListener('bjlg:section-activated', handler);
+
+                    return function unsubscribe() {
+                        document.removeEventListener('bjlg:section-activated', handler);
+                    };
+                };
+                window.bjlgSetActiveSection = function(sectionKey) {
+                    handleSelect(sectionKey, true);
+                };
+            }, [activeSection]);
+
+            const tabs = useMemo(function() {
+                return sections.map(function(section) {
+                    return {
+                        name: section.key,
+                        title: section.label,
+                    };
+                });
+            }, [sections]);
+
+            return createElement('div', { className: 'bjlg-modern-shell' + (sidebarOpen ? ' is-sidebar-open' : '') }, [
+                createElement('div', { className: 'bjlg-modern-shell__toolbar' }, [
+                    createElement(Button, {
+                        variant: 'secondary',
+                        className: 'bjlg-modern-shell__menu-toggle',
+                        onClick: function() {
+                            setSidebarOpen(function(open) { return !open; });
+                        },
+                        'aria-expanded': sidebarOpen ? 'true' : 'false',
+                        'aria-controls': 'bjlg-modern-shell-sidebar',
+                    }, __('Ouvrir la navigation', 'backup-jlg')),
+                ]),
+                createElement('div', { className: 'bjlg-modern-shell__layout' }, [
+                    createElement('aside', {
+                        id: 'bjlg-modern-shell-sidebar',
+                        className: 'bjlg-modern-shell__sidebar',
+                        'aria-label': __('Navigation principale', 'backup-jlg'),
+                    }, [
+                        createElement('div', { className: 'bjlg-modern-shell__sidebar-header' }, [
+                            createElement('h2', null, __('Navigation', 'backup-jlg')),
+                            createElement(Button, {
+                                variant: 'tertiary',
+                                className: 'bjlg-modern-shell__sidebar-close',
+                                onClick: function() { setSidebarOpen(false); },
+                            }, __('Fermer', 'backup-jlg')),
+                        ]),
+                        createElement('nav', { className: 'bjlg-modern-shell__nav' }, sections.map(function(section) {
+                            if (!section || !section.key) {
+                                return null;
+                            }
+                            const isActive = section.key === activeSection;
+                            return createElement(Button, {
+                                key: section.key,
+                                className: 'bjlg-modern-shell__nav-link' + (isActive ? ' is-active' : ''),
+                                variant: isActive ? 'primary' : 'secondary',
+                                onClick: function() {
+                                    handleSelect(section.key, true);
+                                },
+                                'aria-current': isActive ? 'page' : undefined,
+                            }, section.label);
+                        })),
+                        summaryItems.length ? createElement(Card, { className: 'bjlg-modern-shell__summary-card' }, [
+                            createElement(CardHeader, null, __('Résumé d’état', 'backup-jlg')),
+                            createElement(CardBody, null,
+                                createElement('ul', { className: 'bjlg-modern-shell__summary-list' }, summaryItems.map(function(item, index) {
+                                    if (!item) {
+                                        return null;
+                                    }
+                                    return createElement('li', { key: item.label || index }, [
+                                        createElement('span', { className: 'bjlg-modern-shell__summary-label' }, item.label || ''),
+                                        createElement('span', { className: 'bjlg-modern-shell__summary-value' }, item.value || ''),
+                                        item.meta ? createElement('span', { className: 'bjlg-modern-shell__summary-meta' }, item.meta) : null,
+                                    ]);
+                                }))
+                            ),
+                            (reliability.level || typeof reliability.score === 'number') ? createElement(CardFooter, { className: 'bjlg-modern-shell__summary-footer' }, [
+                                reliability.level ? createElement('span', { className: 'bjlg-modern-shell__summary-reliability' }, reliability.level) : null,
+                                typeof reliability.score === 'number' ? createElement('span', { className: 'bjlg-modern-shell__summary-score' }, sprintf(__('%s /100', 'backup-jlg'), reliability.score)) : null,
+                            ]) : null,
+                        ]) : null,
+                    ]),
+                    createElement('div', { className: 'bjlg-modern-shell__content' }, [
+                        notices.map(function(notice, index) {
+                            if (!notice || !notice.message) {
+                                return null;
+                            }
+                            const status = notice.status || 'info';
+                            return createElement(Notice, {
+                                key: 'bjlg-modern-notice-' + index,
+                                status: status,
+                                isDismissible: false,
+                                className: 'bjlg-modern-shell__notice',
+                            }, notice.message);
+                        }),
+                        breadcrumbs.length ? createElement('nav', { className: 'bjlg-modern-shell__breadcrumbs', 'aria-label': __('Fil d’Ariane', 'backup-jlg') },
+                            createElement('ol', null, breadcrumbs.map(function(item, index) {
+                                if (!item) {
+                                    return null;
+                                }
+                                const isLast = index === breadcrumbs.length - 1;
+                                if (!item.url || isLast) {
+                                    return createElement('li', { key: item.label || index }, createElement('span', { 'aria-current': isLast ? 'page' : undefined }, item.label || ''));
+                                }
+                                return createElement('li', { key: item.label || index }, createElement('a', { href: item.url }, item.label || ''));
+                            }))
+                        ) : null,
+                        createElement(TabPanel, {
+                            className: 'bjlg-modern-shell__tabpanel',
+                            activeClass: 'is-active',
+                            tabs: tabs,
+                            initialTab: activeSection,
+                            onSelect: function(tabName) {
+                                handleSelect(tabName, true);
+                            },
+                            key: activeSection,
+                        }, function(tab) {
+                            const content = templateMap.get(tab.name) || '';
+                            return createElement(Card, { className: 'bjlg-modern-shell__panel-card', 'data-bjlg-panel': tab.name }, [
+                                createElement(CardBody, null, createElement(RawHTML, null, content)),
+                            ]);
+                        }),
+                    ]),
+                ]),
+            ]);
+        };
+
+        if (createRoot) {
+            const root = createRoot(rootElement);
+            root.render(createElement(ModernApp));
+        } else if (renderFn) {
+            renderFn(createElement(ModernApp), rootElement);
+        }
+    }
+
+    (function initModernShell() {
+        const rootElement = document.getElementById('bjlg-modern-admin-root');
+        const templatesElement = document.getElementById('bjlg-modern-admin-templates');
+        if (!rootElement || !templatesElement) {
+            return;
+        }
+
+        const modernConfig = (typeof window.bjlgModernAdmin === 'object' && window.bjlgModernAdmin) ? window.bjlgModernAdmin : {};
+        const sections = Array.isArray(modernConfig.sections) ? modernConfig.sections : [];
+        if (!sections.length) {
+            return;
+        }
+
+        mountModernShell(rootElement, templatesElement, modernConfig);
+    })();
+
     $(window).on('resize', function() {
         if (window.innerWidth > 960) {
             setSidebarExpanded(false);
