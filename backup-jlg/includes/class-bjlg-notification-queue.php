@@ -11,6 +11,7 @@ if (!defined('ABSPATH')) {
 class BJLG_Notification_Queue {
 
     private const OPTION = 'bjlg_notification_queue';
+    private const TABLE = 'bjlg_notification_queue';
     private const HOOK = 'bjlg_process_notification_queue';
     private const REMINDER_HOOK = 'bjlg_notification_queue_reminder';
     private const LOCK_TRANSIENT = 'bjlg_notification_queue_lock';
@@ -21,11 +22,135 @@ class BJLG_Notification_Queue {
     private const DEFAULT_REMINDER_INTERVAL = 900; // 15 minutes
     private const MAX_REMINDER_INTERVAL = 86400; // 24 hours
 
+    /** @var bool|null */
+    private static $table_exists = null;
+
+    /** @var array<int,array<string,mixed>>|null */
+    private static $table_cache = null;
+
     public function __construct() {
         add_filter('cron_schedules', [$this, 'register_cron_schedule']);
         add_action('init', [$this, 'ensure_schedule']);
         add_action(self::HOOK, [$this, 'process_queue']);
         add_action(self::REMINDER_HOOK, [$this, 'handle_reminder']);
+    }
+
+    /**
+     * Returns the fully qualified table name used to persist the queue.
+     */
+    public static function get_table_name(): string {
+        $wpdb = self::get_wpdb();
+
+        if ($wpdb === null || empty($wpdb->prefix)) {
+            return self::TABLE;
+        }
+
+        return $wpdb->prefix . self::TABLE;
+    }
+
+    /**
+     * Installs or updates the database tables used by the notification queue.
+     */
+    public static function create_tables(): void {
+        $wpdb = self::get_wpdb();
+        if ($wpdb === null) {
+            return;
+        }
+
+        $charset_collate = method_exists($wpdb, 'get_charset_collate') ? (string) $wpdb->get_charset_collate() : '';
+        $table_name = self::get_table_name();
+
+        if (!function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
+
+        $sql = sprintf(
+            "CREATE TABLE %s (
+                id varchar(191) NOT NULL,
+                queue_data longtext NOT NULL,
+                acknowledged_at bigint(20) DEFAULT 0,
+                acknowledged_by varchar(191) DEFAULT '',
+                resolved_at bigint(20) DEFAULT 0,
+                reminder_next_at bigint(20) DEFAULT 0,
+                reminder_attempts int(11) DEFAULT 0,
+                reminder_active tinyint(1) DEFAULT 1,
+                reminder_last_triggered_at bigint(20) DEFAULT 0,
+                resolution_summary text NULL,
+                resolution_steps longtext NULL,
+                resolution_notes text NULL,
+                created_at bigint(20) DEFAULT 0,
+                updated_at bigint(20) DEFAULT 0,
+                PRIMARY KEY  (id),
+                KEY reminder_next (reminder_next_at),
+                KEY resolved_at (resolved_at)
+            ) %s;",
+            $table_name,
+            $charset_collate
+        );
+
+        dbDelta($sql);
+
+        self::$table_exists = null;
+        self::maybe_migrate_legacy_queue();
+    }
+
+    /**
+     * Returns the global wpdb instance when available.
+     */
+    private static function get_wpdb() {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb)) {
+            return null;
+        }
+
+        return $wpdb;
+    }
+
+    private static function queue_table_exists(): bool {
+        if (self::$table_exists === true) {
+            return true;
+        }
+
+        if (self::$table_exists === false) {
+            return false;
+        }
+
+        $wpdb = self::get_wpdb();
+        if ($wpdb === null) {
+            self::$table_exists = false;
+
+            return false;
+        }
+
+        $table_name = self::get_table_name();
+        $result = null;
+
+        if (method_exists($wpdb, 'prepare')) {
+            $result = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table_name));
+        } else {
+            $result = $wpdb->get_var("SHOW TABLES LIKE '{$table_name}'");
+        }
+
+        self::$table_exists = ($result === $table_name);
+
+        return self::$table_exists;
+    }
+
+    private static function maybe_migrate_legacy_queue(): void {
+        if (!self::queue_table_exists()) {
+            return;
+        }
+
+        $legacy_queue = bjlg_get_option(self::OPTION, null);
+
+        if (!is_array($legacy_queue) || empty($legacy_queue)) {
+            bjlg_update_option(self::OPTION, [], null, null, false);
+
+            return;
+        }
+
+        self::persist_entries($legacy_queue, true);
     }
 
     /**
@@ -1157,11 +1282,72 @@ class BJLG_Notification_Queue {
     }
 
     /**
-     * Retrieves the queue from the options table.
+     * Retrieves the queue from the persistence layer.
      *
      * @return array<int,array<string,mixed>>
      */
     private static function get_queue() {
+        if (self::queue_table_exists()) {
+            self::maybe_migrate_legacy_queue();
+
+            $queue = self::get_queue_from_table();
+            if (!empty($queue)) {
+                return $queue;
+            }
+
+            if (is_array(self::$table_cache)) {
+                return self::$table_cache;
+            }
+        }
+
+        return self::get_queue_from_option();
+    }
+
+    /**
+     * Persists the queue to the storage backend.
+     *
+     * @param array<int,array<string,mixed>> $queue
+     */
+    private static function save_queue(array $queue) {
+        self::persist_entries($queue, true);
+    }
+
+    private static function get_queue_from_table() {
+        $wpdb = self::get_wpdb();
+        if ($wpdb === null) {
+            return is_array(self::$table_cache) ? self::$table_cache : [];
+        }
+
+        $table_name = self::get_table_name();
+        $sql = sprintf('SELECT * FROM %s ORDER BY created_at ASC', $table_name);
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        $queue = [];
+        foreach ($rows as $row) {
+            if (is_object($row)) {
+                $row = (array) $row;
+            }
+
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $entry = self::hydrate_entry_from_row($row);
+            if ($entry !== null) {
+                $queue[] = $entry;
+            }
+        }
+
+        self::$table_cache = $queue;
+
+        return $queue;
+    }
+
+    private static function get_queue_from_option() {
         $queue = bjlg_get_option(self::OPTION, []);
 
         if (!is_array($queue)) {
@@ -1175,16 +1361,224 @@ class BJLG_Notification_Queue {
             }
         }
 
+        self::$table_cache = $normalized;
+
         return $normalized;
     }
 
     /**
-     * Persists the queue in the options table.
-     *
      * @param array<int,array<string,mixed>> $queue
      */
-    private static function save_queue(array $queue) {
-        bjlg_update_option(self::OPTION, array_values($queue), null, null, false);
+    private static function persist_entries(array $queue, $clear_option) {
+        $should_clear_option = (bool) $clear_option;
+
+        if (!self::queue_table_exists()) {
+            bjlg_update_option(self::OPTION, array_values($queue), null, null, false);
+            self::$table_cache = array_values(array_filter($queue, 'is_array'));
+
+            return;
+        }
+
+        $wpdb = self::get_wpdb();
+        if ($wpdb === null) {
+            bjlg_update_option(self::OPTION, array_values($queue), null, null, false);
+            self::$table_cache = array_values(array_filter($queue, 'is_array'));
+
+            return;
+        }
+
+        $table_name = self::get_table_name();
+        $existing_ids = self::get_existing_ids($table_name);
+        $ids_to_keep = [];
+        $normalized_entries = [];
+
+        foreach ($queue as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $prepared = self::map_entry_to_row($entry);
+            if ($prepared === null) {
+                continue;
+            }
+
+            $ids_to_keep[] = $prepared['row']['id'];
+            $normalized_entries[] = $prepared['entry'];
+
+            $wpdb->replace($table_name, $prepared['row']);
+        }
+
+        if (!empty($existing_ids)) {
+            $ids_to_remove = array_diff($existing_ids, $ids_to_keep);
+            foreach ($ids_to_remove as $identifier) {
+                $wpdb->delete($table_name, ['id' => $identifier]);
+            }
+        }
+
+        self::$table_cache = $normalized_entries;
+
+        if ($should_clear_option) {
+            bjlg_update_option(self::OPTION, [], null, null, false);
+        }
+    }
+
+    private static function get_existing_ids($table_name) {
+        $wpdb = self::get_wpdb();
+        if ($wpdb === null) {
+            return [];
+        }
+
+        $sql = sprintf('SELECT id FROM %s', $table_name);
+        $results = $wpdb->get_results($sql, ARRAY_A);
+
+        if (!is_array($results)) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ($results as $row) {
+            if (is_array($row) && isset($row['id'])) {
+                $ids[] = (string) $row['id'];
+                continue;
+            }
+
+            if (is_object($row) && isset($row->id)) {
+                $ids[] = (string) $row->id;
+            }
+        }
+
+        return $ids;
+    }
+
+    private static function map_entry_to_row(array $entry) {
+        $entry_id = isset($entry['id']) ? (string) $entry['id'] : '';
+        if ($entry_id === '') {
+            return null;
+        }
+
+        $normalized_entry = $entry;
+        $severity = isset($normalized_entry['severity']) ? (string) $normalized_entry['severity'] : 'info';
+        $now = isset($normalized_entry['updated_at']) ? (int) $normalized_entry['updated_at'] : time();
+
+        $reminders = isset($normalized_entry['reminders']) && is_array($normalized_entry['reminders'])
+            ? $normalized_entry['reminders']
+            : self::normalize_reminders($normalized_entry, $severity, $now);
+        $normalized_entry['reminders'] = $reminders;
+
+        $resolution = isset($normalized_entry['resolution']) && is_array($normalized_entry['resolution'])
+            ? self::normalize_resolution($normalized_entry['resolution'])
+            : self::normalize_resolution([], $normalized_entry['resolution'] ?? []);
+        $normalized_entry['resolution'] = $resolution;
+        $normalized_entry['resolution_summary'] = isset($normalized_entry['resolution_summary'])
+            ? (string) $normalized_entry['resolution_summary']
+            : ($resolution['summary'] ?? '');
+        $normalized_entry['resolution_status'] = self::determine_resolution_status($normalized_entry, $resolution);
+        $normalized_entry['resolution_notes'] = self::sanitize_notes_value($normalized_entry['resolution_notes'] ?? '');
+
+        $encoded = wp_json_encode($normalized_entry);
+        if (!is_string($encoded) || $encoded === '') {
+            return null;
+        }
+
+        $steps = isset($resolution['steps']) && is_array($resolution['steps']) ? array_values($resolution['steps']) : [];
+        $steps_payload = wp_json_encode($steps);
+        if (!is_string($steps_payload)) {
+            $steps_payload = '[]';
+        }
+
+        $row = [
+            'id' => $entry_id,
+            'queue_data' => $encoded,
+            'acknowledged_at' => isset($normalized_entry['acknowledged_at']) ? (int) $normalized_entry['acknowledged_at'] : 0,
+            'acknowledged_by' => self::sanitize_actor_label($normalized_entry['acknowledged_by'] ?? ''),
+            'resolved_at' => isset($normalized_entry['resolved_at']) ? (int) $normalized_entry['resolved_at'] : (int) ($resolution['resolved_at'] ?? 0),
+            'reminder_next_at' => isset($reminders['next_at']) ? (int) $reminders['next_at'] : 0,
+            'reminder_attempts' => isset($reminders['attempts']) ? (int) $reminders['attempts'] : 0,
+            'reminder_active' => !isset($reminders['active']) || (bool) $reminders['active'] ? 1 : 0,
+            'reminder_last_triggered_at' => isset($reminders['last_triggered_at']) ? (int) $reminders['last_triggered_at'] : 0,
+            'resolution_summary' => $normalized_entry['resolution_summary'],
+            'resolution_steps' => $steps_payload,
+            'resolution_notes' => $normalized_entry['resolution_notes'],
+            'created_at' => isset($normalized_entry['created_at']) ? (int) $normalized_entry['created_at'] : $now,
+            'updated_at' => isset($normalized_entry['updated_at']) ? (int) $normalized_entry['updated_at'] : $now,
+        ];
+
+        return [
+            'row' => $row,
+            'entry' => $normalized_entry,
+        ];
+    }
+
+    private static function hydrate_entry_from_row(array $row) {
+        if (!isset($row['queue_data'])) {
+            return null;
+        }
+
+        $decoded = json_decode((string) $row['queue_data'], true);
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        $decoded['acknowledged_at'] = isset($row['acknowledged_at']) ? (int) $row['acknowledged_at'] : (int) ($decoded['acknowledged_at'] ?? 0);
+        if (isset($row['acknowledged_by'])) {
+            $decoded['acknowledged_by'] = self::sanitize_actor_label($row['acknowledged_by']);
+        }
+
+        $decoded['resolved_at'] = isset($row['resolved_at']) ? (int) $row['resolved_at'] : (int) ($decoded['resolved_at'] ?? 0);
+
+        if (!isset($decoded['reminders']) || !is_array($decoded['reminders'])) {
+            $decoded['reminders'] = [];
+        }
+
+        $decoded['reminders']['next_at'] = isset($row['reminder_next_at']) ? (int) $row['reminder_next_at'] : (int) ($decoded['reminders']['next_at'] ?? 0);
+        $decoded['reminders']['attempts'] = isset($row['reminder_attempts']) ? (int) $row['reminder_attempts'] : (int) ($decoded['reminders']['attempts'] ?? 0);
+        $decoded['reminders']['last_triggered_at'] = isset($row['reminder_last_triggered_at'])
+            ? (int) $row['reminder_last_triggered_at']
+            : (int) ($decoded['reminders']['last_triggered_at'] ?? 0);
+
+        if (isset($row['reminder_active'])) {
+            $decoded['reminders']['active'] = (bool) $row['reminder_active'];
+        } elseif (!isset($decoded['reminders']['active'])) {
+            $decoded['reminders']['active'] = true;
+        }
+
+        $decoded['resolution_notes'] = self::sanitize_notes_value($row['resolution_notes'] ?? ($decoded['resolution_notes'] ?? ''));
+
+        $steps = [];
+        if (!empty($row['resolution_steps'])) {
+            $steps_data = json_decode((string) $row['resolution_steps'], true);
+            if (is_array($steps_data)) {
+                $steps = $steps_data;
+            }
+        }
+
+        $resolution = isset($decoded['resolution']) && is_array($decoded['resolution'])
+            ? $decoded['resolution']
+            : [];
+
+        if (!empty($steps)) {
+            $resolution['steps'] = $steps;
+        }
+
+        if (isset($row['resolution_summary']) && is_string($row['resolution_summary']) && $row['resolution_summary'] !== '') {
+            $resolution['summary'] = (string) $row['resolution_summary'];
+        }
+
+        if (!isset($resolution['acknowledged_at']) && !empty($decoded['acknowledged_at'])) {
+            $resolution['acknowledged_at'] = (int) $decoded['acknowledged_at'];
+        }
+
+        if (!isset($resolution['resolved_at']) && !empty($decoded['resolved_at'])) {
+            $resolution['resolved_at'] = (int) $decoded['resolved_at'];
+        }
+
+        $decoded['resolution'] = self::normalize_resolution($resolution, $resolution);
+        $decoded['resolution_summary'] = isset($decoded['resolution']['summary'])
+            ? (string) $decoded['resolution']['summary']
+            : '';
+        $decoded['resolution_status'] = self::determine_resolution_status($decoded, $decoded['resolution']);
+
+        return $decoded;
     }
 
     /**

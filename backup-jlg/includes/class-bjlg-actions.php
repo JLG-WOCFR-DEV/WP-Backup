@@ -742,6 +742,10 @@ class BJLG_Actions {
     }
 
     private function get_dashboard_metrics_snapshot() {
+        if (defined('BJLG_DISABLE_ADMIN_METRICS') && BJLG_DISABLE_ADMIN_METRICS) {
+            return [];
+        }
+
         if (!class_exists(BJLG_Admin_Advanced::class)) {
             return [];
         }

@@ -48,6 +48,7 @@ namespace BJLG {
 
 namespace BJLG\Tests {
 
+use BJLG\BJLG_Notification_Queue;
 use BJLG\BJLG_Notifications;
 use BJLG\BJLG_Remote_Storage_Metrics;
 use PHPUnit\Framework\TestCase;
@@ -64,7 +65,10 @@ final class BJLG_NotificationsStorageWarningTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $table = BJLG_Notification_Queue::get_table_name();
+        $GLOBALS['wpdb']->tables[$table] = [];
         bjlg_update_option('bjlg_notification_queue', []);
+        BJLG_Notification_Queue::create_tables();
         bjlg_update_option(BJLG_Remote_Storage_Metrics::WARNING_DIGEST_OPTION, []);
         bjlg_update_option('bjlg_notification_settings', [
             'enabled' => true,
@@ -85,6 +89,9 @@ final class BJLG_NotificationsStorageWarningTest extends TestCase
 
     protected function tearDown(): void
     {
+        $table = BJLG_Notification_Queue::get_table_name();
+        $GLOBALS['wpdb']->tables[$table] = [];
+        bjlg_update_option('bjlg_notification_queue', []);
         $this->resetNotificationsInstance();
         parent::tearDown();
     }
@@ -112,7 +119,7 @@ final class BJLG_NotificationsStorageWarningTest extends TestCase
             'path' => $path,
         ]);
 
-        $queue = bjlg_get_option('bjlg_notification_queue', []);
+        $queue = $this->getQueueEntries();
         $this->assertCount(1, $queue);
         $entry = $queue[0];
 
@@ -123,6 +130,9 @@ final class BJLG_NotificationsStorageWarningTest extends TestCase
         $this->assertSame('warning', $entry['severity']);
         $this->assertArrayHasKey('email', $entry['channels']);
         $this->assertArrayHasKey('slack', $entry['channels']);
+
+        $row = $this->getTableRow($entry['id']);
+        $this->assertNotNull($row);
     }
 
     public function test_handle_storage_warning_falls_back_to_local_channel_when_remote_invalid(): void
@@ -151,7 +161,7 @@ final class BJLG_NotificationsStorageWarningTest extends TestCase
             'path' => 's3://critical/backups',
         ]);
 
-        $queue = bjlg_get_option('bjlg_notification_queue', []);
+        $queue = $this->getQueueEntries();
         $this->assertCount(1, $queue);
         $entry = $queue[0];
 
@@ -160,6 +170,44 @@ final class BJLG_NotificationsStorageWarningTest extends TestCase
         $this->assertSame(1024, $entry['context']['free_space']);
         $this->assertSame(85, $entry['context']['threshold']);
         $this->assertSame('s3://critical/backups', $entry['context']['path']);
+
+        $row = $this->getTableRow($entry['id']);
+        $this->assertNotNull($row);
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function getQueueEntries(): array
+    {
+        $table = BJLG_Notification_Queue::get_table_name();
+        $rows = $GLOBALS['wpdb']->tables[$table] ?? [];
+        $entries = [];
+
+        foreach ($rows as $row) {
+            if (!is_array($row) || !isset($row['queue_data'])) {
+                continue;
+            }
+
+            $decoded = json_decode((string) $row['queue_data'], true);
+            if (is_array($decoded)) {
+                $entries[] = $decoded;
+            }
+        }
+
+        return array_values($entries);
+    }
+
+    private function getTableRow(string $entryId): ?array
+    {
+        $table = BJLG_Notification_Queue::get_table_name();
+        $rows = $GLOBALS['wpdb']->tables[$table] ?? [];
+
+        if (isset($rows[$entryId]) && is_array($rows[$entryId])) {
+            return $rows[$entryId];
+        }
+
+        return null;
     }
 
     private function resetNotificationsInstance(): void

@@ -36,10 +36,26 @@ namespace BJLG {
             }
         }
     }
+
+    if (!class_exists(__NAMESPACE__ . '\\BJLG_Admin_Advanced')) {
+        class BJLG_Admin_Advanced
+        {
+            public static function log_action(...$args): void
+            {
+                // No-op stub for tests.
+            }
+
+            public function get_dashboard_metrics(): array
+            {
+                return [];
+            }
+        }
+    }
 }
 
 namespace {
 
+use BJLG\BJLG_Notification_Queue;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/class-bjlg-notification-queue.php';
@@ -61,6 +77,10 @@ final class BJLG_ActionsTest extends TestCase
         $_POST = [];
         $_REQUEST = [];
         $_GET = [];
+        $table = BJLG_Notification_Queue::get_table_name();
+        $GLOBALS['wpdb']->tables[$table] = [];
+        bjlg_update_option('bjlg_notification_queue', []);
+        BJLG_Notification_Queue::create_tables();
         $this->manifestPath = bjlg_get_backup_directory() . '.incremental-manifest.json';
         if (file_exists($this->manifestPath)) {
             @unlink($this->manifestPath);
@@ -70,6 +90,9 @@ final class BJLG_ActionsTest extends TestCase
     protected function tearDown(): void
     {
         parent::tearDown();
+        $table = BJLG_Notification_Queue::get_table_name();
+        $GLOBALS['wpdb']->tables[$table] = [];
+        bjlg_update_option('bjlg_notification_queue', []);
         if (isset($this->manifestPath) && file_exists($this->manifestPath)) {
             @unlink($this->manifestPath);
         }
@@ -99,6 +122,41 @@ final class BJLG_ActionsTest extends TestCase
         $save = $reflection->getMethod('save_manifest');
         $save->setAccessible(true);
         $this->assertTrue($save->invoke($incremental));
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function getQueueEntries(): array
+    {
+        $table = BJLG_Notification_Queue::get_table_name();
+        $rows = $GLOBALS['wpdb']->tables[$table] ?? [];
+        $entries = [];
+
+        foreach ($rows as $row) {
+            if (!is_array($row) || !isset($row['queue_data'])) {
+                continue;
+            }
+
+            $decoded = json_decode((string) $row['queue_data'], true);
+            if (is_array($decoded)) {
+                $entries[] = $decoded;
+            }
+        }
+
+        return array_values($entries);
+    }
+
+    private function getTableRow(string $entryId): ?array
+    {
+        $table = BJLG_Notification_Queue::get_table_name();
+        $rows = $GLOBALS['wpdb']->tables[$table] ?? [];
+
+        if (isset($rows[$entryId]) && is_array($rows[$entryId])) {
+            return $rows[$entryId];
+        }
+
+        return null;
     }
 
     public function test_handle_delete_backup_denies_user_without_capability(): void
@@ -366,8 +424,9 @@ final class BJLG_ActionsTest extends TestCase
             $_POST = [];
         }
 
-        $queue = bjlg_get_option('bjlg_notification_queue');
+        $queue = $this->getQueueEntries();
         $this->assertSame('pending', $queue[0]['channels']['email']['status']);
+        $this->assertNotNull($this->getTableRow('ajax-entry'));
     }
 
     public function test_handle_notification_queue_delete_succeeds(): void
@@ -407,8 +466,9 @@ final class BJLG_ActionsTest extends TestCase
             $_POST = [];
         }
 
-        $queue = bjlg_get_option('bjlg_notification_queue');
+        $queue = $this->getQueueEntries();
         $this->assertSame([], $queue);
+        $this->assertNull($this->getTableRow('ajax-delete'));
     }
 
     public function test_handle_remote_purge_retry_succeeds(): void
