@@ -25,6 +25,7 @@ class BJLG_History {
         
         $sql = "CREATE TABLE $table_name (
             id mediumint(9) NOT NULL AUTO_INCREMENT,
+            blog_id bigint(20) unsigned NOT NULL DEFAULT 0,
             timestamp datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
             action_type varchar(50) NOT NULL,
             status varchar(20) NOT NULL,
@@ -33,6 +34,8 @@ class BJLG_History {
             user_id bigint(20) DEFAULT NULL,
             ip_address varchar(45) DEFAULT NULL,
             PRIMARY KEY  (id),
+            KEY blog_id (blog_id),
+            KEY blog_id_timestamp (blog_id, timestamp),
             KEY action_type (action_type),
             KEY status (status),
             KEY timestamp (timestamp),
@@ -85,14 +88,17 @@ class BJLG_History {
         // Obtenir l'adresse IP
         $ip_address = self::get_client_ip();
 
+        $resolved_blog_id = self::resolve_storage_blog_id($blog_id);
+
         $data = [
+            'blog_id'     => $resolved_blog_id,
             'timestamp'   => current_time('mysql'),
             'action_type' => $action,
             'status'      => $status,
             'details'     => $details,
         ];
 
-        $formats = ['%s', '%s', '%s', '%s'];
+        $formats = ['%d', '%s', '%s', '%s', '%s'];
 
         $encoded_metadata = self::encode_metadata($metadata);
         if ($encoded_metadata !== null) {
@@ -150,9 +156,17 @@ class BJLG_History {
     public static function get_history($limit = 50, $filters = [], $blog_id = null) {
         global $wpdb;
         $table_name = self::get_table_name($blog_id);
-        
+
         $where_clauses = ['1=1'];
         $values = [];
+
+        if (isset($filters['blog_id'])) {
+            $filters['blog_id'] = self::normalize_blog_id_filter($filters['blog_id']);
+
+            if ($filters['blog_id'] === null) {
+                unset($filters['blog_id']);
+            }
+        }
         
         // Appliquer les filtres
         if (!empty($filters['action_type'])) {
@@ -179,10 +193,15 @@ class BJLG_History {
             $where_clauses[] = 'timestamp <= %s';
             $values[] = $filters['date_to'];
         }
-        
+
+        if (isset($filters['blog_id'])) {
+            $where_clauses[] = 'blog_id = %d';
+            $values[] = $filters['blog_id'];
+        }
+
         // Ajouter la limite
         $values[] = intval($limit);
-        
+
         $where_sql = implode(' AND ', $where_clauses);
         
         // Préparer la requête
@@ -200,6 +219,7 @@ class BJLG_History {
 
         foreach ($results as &$entry) {
             $entry['metadata'] = self::decode_metadata($entry['metadata'] ?? null);
+            $entry['blog_id'] = isset($entry['blog_id']) ? (int) $entry['blog_id'] : 0;
         }
 
         // Enrichir les résultats avec les noms d'utilisateur
@@ -248,6 +268,7 @@ class BJLG_History {
         }
 
         $row['metadata'] = self::decode_metadata($row['metadata'] ?? null);
+        $row['blog_id'] = isset($row['blog_id']) ? (int) $row['blog_id'] : 0;
 
         return $row;
     }
@@ -344,12 +365,30 @@ class BJLG_History {
      * @param string   $period  Période d'analyse.
      * @param int|null $blog_id Identifiant du site cible.
      */
-    public static function get_stats($period = 'week', $blog_id = null) {
+    public static function get_stats($period = 'week', $blog_id = null, array $filters = []) {
         global $wpdb;
         $table_name = self::get_table_name($blog_id);
-        
+
         $date_limit = date('Y-m-d H:i:s', strtotime('-1 ' . $period));
-        
+
+        $blog_filter = null;
+        if (isset($filters['blog_id'])) {
+            $blog_filter = self::normalize_blog_id_filter($filters['blog_id']);
+        }
+
+        $where_clauses = ['timestamp > %s'];
+        $base_values = [$date_limit];
+
+        if ($blog_filter !== null) {
+            $where_clauses[] = 'blog_id = %d';
+            $base_values[] = $blog_filter;
+        }
+
+        $where_sql = implode(' AND ', $where_clauses);
+        $prepare = static function ($sql, array $values) use ($wpdb) {
+            return $wpdb->prepare($sql, ...$values);
+        };
+
         $stats = [
             'total_actions' => 0,
             'successful' => 0,
@@ -362,11 +401,8 @@ class BJLG_History {
         
         // Total des actions
         if (self::wpdb_supports(['prepare', 'get_var'])) {
-            $stats['total_actions'] = $wpdb->get_var(
-                $wpdb->prepare(
-                    "SELECT COUNT(*) FROM $table_name WHERE timestamp > %s",
-                    $date_limit
-                )
+            $stats['total_actions'] = (int) $wpdb->get_var(
+                $prepare("SELECT COUNT(*) FROM $table_name WHERE $where_sql", $base_values)
             );
         }
         
@@ -375,12 +411,12 @@ class BJLG_History {
 
         if (self::wpdb_supports(['prepare', 'get_results'])) {
             $status_counts = $wpdb->get_results(
-                $wpdb->prepare(
+                $prepare(
                     "SELECT status, COUNT(*) as count
                      FROM $table_name
-                     WHERE timestamp > %s
+                     WHERE $where_sql
                      GROUP BY status",
-                    $date_limit
+                    $base_values
                 ),
                 ARRAY_A
             );
@@ -395,14 +431,14 @@ class BJLG_History {
 
         if (self::wpdb_supports(['prepare', 'get_results'])) {
             $action_counts = $wpdb->get_results(
-                $wpdb->prepare(
+                $prepare(
                     "SELECT action_type, COUNT(*) as count
                      FROM $table_name
-                     WHERE timestamp > %s
+                     WHERE $where_sql
                      GROUP BY action_type
                      ORDER BY count DESC
                      LIMIT 10",
-                    $date_limit
+                    $base_values
                 ),
                 ARRAY_A
             );
@@ -417,14 +453,14 @@ class BJLG_History {
 
         if (self::wpdb_supports(['prepare', 'get_results'])) {
             $user_counts = $wpdb->get_results(
-                $wpdb->prepare(
+                $prepare(
                     "SELECT user_id, COUNT(*) as count
                      FROM $table_name
-                     WHERE timestamp > %s AND user_id IS NOT NULL
+                     WHERE $where_sql AND user_id IS NOT NULL
                      GROUP BY user_id
                      ORDER BY count DESC
                      LIMIT 5",
-                    $date_limit
+                    $base_values
                 ),
                 ARRAY_A
             );
@@ -441,14 +477,14 @@ class BJLG_History {
 
         if (self::wpdb_supports(['prepare', 'get_row'])) {
             $hour_stats = $wpdb->get_row(
-                $wpdb->prepare(
+                $prepare(
                     "SELECT HOUR(timestamp) as hour, COUNT(*) as count
                      FROM $table_name
-                     WHERE timestamp > %s
+                     WHERE $where_sql
                      GROUP BY HOUR(timestamp)
                      ORDER BY count DESC
                      LIMIT 1",
-                    $date_limit
+                    $base_values
                 ),
                 ARRAY_A
             );
@@ -459,6 +495,101 @@ class BJLG_History {
         }
         
         return $stats;
+    }
+
+    /**
+     * Retourne un résumé agrégé des sites du réseau.
+     *
+     * @param string $period
+     * @param array<string,mixed> $filters
+     * @return array<string,mixed>
+     */
+    public static function get_network_activity_summary($period = 'week', array $filters = []): array
+    {
+        $summary = [
+            'period' => $period,
+            'generated_at' => current_time('mysql'),
+            'totals' => [
+                'total_actions' => 0,
+                'successful' => 0,
+                'failed' => 0,
+            ],
+            'sites' => [],
+        ];
+
+        if (!self::wpdb_supports(['prepare', 'get_results', 'get_var'])) {
+            return $summary;
+        }
+
+        if (!function_exists('is_multisite') || !is_multisite()) {
+            return $summary;
+        }
+
+        $table_name = self::get_table_name(0);
+        $date_limit = date('Y-m-d H:i:s', strtotime('-1 ' . $period));
+
+        $where_clauses = ['timestamp > %s'];
+        $values = [$date_limit];
+
+        $blog_filter = null;
+        if (isset($filters['blog_id'])) {
+            $blog_filter = self::normalize_blog_id_filter($filters['blog_id']);
+        }
+
+        if ($blog_filter !== null) {
+            $where_clauses[] = 'blog_id = %d';
+            $values[] = $blog_filter;
+        }
+
+        $where_sql = implode(' AND ', $where_clauses);
+
+        global $wpdb;
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT blog_id,
+                        COUNT(*) AS total_actions,
+                        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS successful,
+                        SUM(CASE WHEN status = 'failure' THEN 1 ELSE 0 END) AS failed,
+                        MAX(timestamp) AS last_activity
+                 FROM $table_name
+                 WHERE $where_sql
+                 GROUP BY blog_id
+                 ORDER BY last_activity DESC",
+                ...$values
+            ),
+            ARRAY_A
+        );
+
+        if (!is_array($rows)) {
+            return $summary;
+        }
+
+        foreach ($rows as $row) {
+            $blog_id_value = isset($row['blog_id']) ? (int) $row['blog_id'] : 0;
+            $site_summary = [
+                'blog_id' => $blog_id_value,
+                'total_actions' => isset($row['total_actions']) ? (int) $row['total_actions'] : 0,
+                'successful' => isset($row['successful']) ? (int) $row['successful'] : 0,
+                'failed' => isset($row['failed']) ? (int) $row['failed'] : 0,
+                'last_activity' => isset($row['last_activity']) ? (string) $row['last_activity'] : '',
+                'last_entry' => null,
+            ];
+
+            if ($site_summary['total_actions'] > 0) {
+                $latest = self::get_history(1, ['blog_id' => $blog_id_value], 0);
+                if (!empty($latest)) {
+                    $site_summary['last_entry'] = $latest[0];
+                }
+            }
+
+            $summary['sites'][] = $site_summary;
+            $summary['totals']['total_actions'] += $site_summary['total_actions'];
+            $summary['totals']['successful'] += $site_summary['successful'];
+            $summary['totals']['failed'] += $site_summary['failed'];
+        }
+
+        return $summary;
     }
     
     /**
@@ -503,10 +634,11 @@ class BJLG_History {
         $history = self::get_history(9999, $filters, $blog_id);
 
         $csv_data = [];
-        $csv_data[] = ['Date', 'Action', 'Statut', 'Détails', 'Utilisateur', 'IP'];
-        
+        $csv_data[] = ['Site', 'Date', 'Action', 'Statut', 'Détails', 'Utilisateur', 'IP'];
+
         foreach ($history as $entry) {
             $csv_data[] = [
+                isset($entry['blog_id']) ? (int) $entry['blog_id'] : 0,
                 $entry['timestamp'],
                 $entry['action_type'],
                 $entry['status'],
@@ -709,6 +841,7 @@ class BJLG_History {
         }
 
         $row['metadata'] = self::decode_metadata($row['metadata'] ?? null);
+        $row['blog_id'] = isset($row['blog_id']) ? (int) $row['blog_id'] : 0;
 
         return $row;
     }
@@ -753,6 +886,44 @@ class BJLG_History {
         $decoded = json_decode($metadata, true);
 
         return is_array($decoded) ? $decoded : [];
+    }
+
+    private static function resolve_storage_blog_id($blog_id = null): int
+    {
+        if ($blog_id === 0 || $blog_id === '0') {
+            return 0;
+        }
+
+        if (is_numeric($blog_id)) {
+            $value = (int) $blog_id;
+            if ($value > 0) {
+                return $value;
+            }
+        }
+
+        if (function_exists('get_current_blog_id')) {
+            $current = (int) get_current_blog_id();
+            if ($current > 0) {
+                return $current;
+            }
+        }
+
+        return 1;
+    }
+
+    private static function normalize_blog_id_filter($blog_id)
+    {
+        if ($blog_id === null || $blog_id === '') {
+            return null;
+        }
+
+        if (is_numeric($blog_id)) {
+            $value = (int) $blog_id;
+
+            return $value >= 0 ? $value : null;
+        }
+
+        return null;
     }
 
     private static function format_duration_human($seconds): string

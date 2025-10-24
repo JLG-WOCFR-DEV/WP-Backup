@@ -356,6 +356,181 @@ class BJLG_REST_API {
             ])
         ]);
 
+        register_rest_route(self::API_NAMESPACE, '/network/history', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [$this, 'get_network_history'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => [
+                'period' => [
+                    'default' => 'week',
+                    'enum' => ['day', 'week', 'month', 'year'],
+                ],
+                'blog_id' => [
+                    'required' => false,
+                    'sanitize_callback' => static function ($param) {
+                        if ($param === null || $param === '' || $param === false) {
+                            return null;
+                        }
+
+                        $value = absint($param);
+
+                        return $value >= 0 ? $value : null;
+                    },
+                    'validate_callback' => static function ($param) {
+                        if ($param === null || $param === '' || $param === false) {
+                            return true;
+                        }
+
+                        if (!is_numeric($param) || absint($param) < 0) {
+                            return new WP_Error(
+                                'bjlg_invalid_blog_id',
+                                __('Le paramètre blog_id doit être un entier positif.', 'backup-jlg'),
+                                ['status' => 400]
+                            );
+                        }
+
+                        return true;
+                    },
+                ],
+                'limit' => [
+                    'default' => 50,
+                    'validate_callback' => function($param) {
+                        $value = filter_var(
+                            $param,
+                            FILTER_VALIDATE_INT,
+                            [
+                                'options' => [
+                                    'min_range' => 1,
+                                    'max_range' => 500,
+                                ],
+                            ]
+                        );
+
+                        if ($value === false) {
+                            return new WP_Error(
+                                'rest_invalid_param',
+                                __('Le paramètre limit doit être un entier compris entre 1 et 500.', 'backup-jlg'),
+                                ['status' => 400]
+                            );
+                        }
+
+                        return true;
+                    }
+                ],
+            ],
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/network/sites', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [$this, 'get_network_sites_overview'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => [
+                'period' => [
+                    'default' => 'week',
+                    'enum' => ['day', 'week', 'month', 'year'],
+                ],
+                'search' => [
+                    'required' => false,
+                    'sanitize_callback' => static function ($param) {
+                        if ($param === null || $param === false) {
+                            return '';
+                        }
+
+                        return is_scalar($param) ? sanitize_text_field((string) $param) : '';
+                    },
+                ],
+                'status' => [
+                    'required' => false,
+                    'sanitize_callback' => static function ($param) {
+                        if (!is_string($param)) {
+                            return '';
+                        }
+
+                        $value = strtolower($param);
+
+                        return in_array($value, ['healthy', 'failing', 'idle', 'all'], true) ? $value : '';
+                    },
+                ],
+                'page' => [
+                    'default' => 1,
+                    'validate_callback' => function($param) {
+                        $value = filter_var(
+                            $param,
+                            FILTER_VALIDATE_INT,
+                            [
+                                'options' => [
+                                    'min_range' => 1,
+                                    'max_range' => 1000,
+                                ],
+                            ]
+                        );
+
+                        if ($value === false) {
+                            return new WP_Error(
+                                'rest_invalid_param',
+                                __('Le paramètre page doit être un entier positif.', 'backup-jlg'),
+                                ['status' => 400]
+                            );
+                        }
+
+                        return true;
+                    }
+                ],
+                'per_page' => [
+                    'default' => 25,
+                    'validate_callback' => function($param) {
+                        $value = filter_var(
+                            $param,
+                            FILTER_VALIDATE_INT,
+                            [
+                                'options' => [
+                                    'min_range' => 1,
+                                    'max_range' => 200,
+                                ],
+                            ]
+                        );
+
+                        if ($value === false) {
+                            return new WP_Error(
+                                'rest_invalid_param',
+                                __('Le paramètre per_page doit être un entier compris entre 1 et 200.', 'backup-jlg'),
+                                ['status' => 400]
+                            );
+                        }
+
+                        return true;
+                    }
+                ],
+                'blog_id' => [
+                    'required' => false,
+                    'sanitize_callback' => static function ($param) {
+                        if ($param === null || $param === '' || $param === false) {
+                            return null;
+                        }
+
+                        $value = absint($param);
+
+                        return $value > 0 ? $value : null;
+                    },
+                    'validate_callback' => static function ($param) {
+                        if ($param === null || $param === '' || $param === false) {
+                            return true;
+                        }
+
+                        if (!is_numeric($param) || absint($param) <= 0) {
+                            return new WP_Error(
+                                'bjlg_invalid_blog_id',
+                                __('Le paramètre blog_id doit être un entier positif.', 'backup-jlg'),
+                                ['status' => 400]
+                            );
+                        }
+
+                        return true;
+                    },
+                ],
+            ],
+        ]);
+
         register_rest_route(self::API_NAMESPACE, '/sla-report', [
             'methods' => 'GET',
             'callback' => [$this, 'get_sla_report'],
@@ -491,7 +666,7 @@ class BJLG_REST_API {
 
             // Vérifier l'authentification WordPress standard
             return \bjlg_can_manage_backups();
-        });
+        }, true);
 
         return $result;
     }
@@ -512,7 +687,7 @@ class BJLG_REST_API {
 
         return $this->with_request_site($request, function () {
             return \bjlg_can_manage_settings();
-        });
+        }, true);
     }
 
     public function check_rbac_permissions($request) {
@@ -540,7 +715,7 @@ class BJLG_REST_API {
             }
 
             return function_exists('current_user_can') ? current_user_can('manage_options') : false;
-        });
+        }, true);
     }
 
     public function get_rbac_settings($request) {
@@ -566,7 +741,7 @@ class BJLG_REST_API {
                 'templates' => BJLG_RBAC::get_templates(),
                 'choices' => BJLG_RBAC::get_permission_choices(),
             ]);
-        });
+        }, true);
     }
 
     public function update_rbac_settings($request) {
@@ -608,7 +783,23 @@ class BJLG_REST_API {
                 'scope' => $scope,
                 'map' => $map,
             ]);
-        });
+        }, true);
+    }
+
+    private function resolve_network_site_status(array $activity): string
+    {
+        $failed = isset($activity['failed']) ? (int) $activity['failed'] : 0;
+        $total = isset($activity['total_actions']) ? (int) $activity['total_actions'] : 0;
+
+        if ($failed > 0) {
+            return 'failing';
+        }
+
+        if ($total > 0) {
+            return 'healthy';
+        }
+
+        return 'idle';
     }
 
     /**
@@ -749,7 +940,7 @@ class BJLG_REST_API {
      *
      * @return mixed
      */
-    private function with_request_site($request, callable $callback) {
+    private function with_request_site($request, callable $callback, bool $allow_network_filters = false) {
         $context = $this->get_requested_context($request);
 
         if ($context === 'network') {
@@ -758,7 +949,8 @@ class BJLG_REST_API {
                 return $availability;
             }
 
-            if ($this->get_requested_site_id($request)) {
+            $site_id = $this->get_requested_site_id($request);
+            if ($site_id && !$allow_network_filters) {
                 return new WP_Error(
                     'bjlg_context_conflict',
                     __('Impossible de combiner un identifiant de site avec le contexte réseau.', 'backup-jlg'),
@@ -3545,41 +3737,59 @@ class BJLG_REST_API {
      */
     public function get_status($request) {
         return $this->with_request_site($request, function () use ($request) {
-            $backup_files = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
+            $context = $this->get_requested_context($request);
+            $site_id = $this->get_requested_site_id($request);
 
-            $backup_directory = bjlg_get_backup_directory();
-            $disk_free_space = null;
-            $disk_space_error = false;
+            $compute_status = function () {
+                $backup_directory = bjlg_get_backup_directory();
+                $backup_files = glob($backup_directory . '*.zip*') ?: [];
+                $disk_space_error = false;
+                $disk_free_space = null;
 
-            if (is_dir($backup_directory) && is_readable($backup_directory)) {
-                $available_space = @disk_free_space($backup_directory);
+                if (is_dir($backup_directory) && is_readable($backup_directory)) {
+                    $available_space = @disk_free_space($backup_directory);
 
-                if ($available_space !== false) {
-                    $disk_free_space = $available_space;
+                    if ($available_space !== false) {
+                        $disk_free_space = $available_space;
+                    } else {
+                        $disk_space_error = true;
+                    }
                 } else {
                     $disk_space_error = true;
                 }
+
+                return [
+                    'plugin_version' => BJLG_VERSION,
+                    'wordpress_version' => get_bloginfo('version'),
+                    'php_version' => PHP_VERSION,
+                    'backup_directory' => $backup_directory,
+                    'backup_directory_writable' => is_writable($backup_directory),
+                    'total_backups' => count($backup_files),
+                    'total_size' => $this->get_total_backup_size(),
+                    'disk_free_space' => $disk_free_space,
+                    'disk_space_error' => $disk_space_error,
+                    'memory_limit' => ini_get('memory_limit'),
+                    'max_execution_time' => ini_get('max_execution_time'),
+                    'active_tasks' => $this->get_active_tasks_count(),
+                ];
+            };
+
+            if ($context === 'network' && $site_id) {
+                $status = bjlg_with_site($site_id, $compute_status);
             } else {
-                $disk_space_error = true;
+                $status = $compute_status();
             }
 
-            $status = [
-                'plugin_version' => BJLG_VERSION,
-                'wordpress_version' => get_bloginfo('version'),
-                'php_version' => PHP_VERSION,
-                'backup_directory' => $backup_directory,
-                'backup_directory_writable' => is_writable($backup_directory),
-                'total_backups' => count($backup_files),
-                'total_size' => $this->get_total_backup_size(),
-                'disk_free_space' => $disk_free_space,
-                'disk_space_error' => $disk_space_error,
-                'memory_limit' => ini_get('memory_limit'),
-                'max_execution_time' => ini_get('max_execution_time'),
-                'active_tasks' => $this->get_active_tasks_count()
-            ];
+            if (!is_array($status)) {
+                $status = [];
+            }
+
+            if ($context === 'network') {
+                $status['network_activity'] = BJLG_History::get_network_activity_summary('week', $site_id ? ['blog_id' => $site_id] : []);
+            }
 
             return rest_ensure_response($status);
-        });
+        }, true);
     }
     
     /**
@@ -3600,12 +3810,21 @@ class BJLG_REST_API {
                 }
             }
 
-            return rest_ensure_response([
+            $response = [
                 'status' => $overall_status,
                 'checks' => $results,
                 'timestamp' => current_time('c')
-            ]);
-        });
+            ];
+
+            $context = $this->get_requested_context($request);
+            $site_id = $this->get_requested_site_id($request);
+
+            if ($context === 'network') {
+                $response['network_activity'] = BJLG_History::get_network_activity_summary('week', $site_id ? ['blog_id' => $site_id] : []);
+            }
+
+            return rest_ensure_response($response);
+        }, true);
     }
 
     public function get_remote_purge_monitoring($request)
@@ -3646,14 +3865,46 @@ class BJLG_REST_API {
      * Endpoint : Statistiques
      */
     public function get_stats($request) {
-        $period = $request->get_param('period');
-        $context = $this->get_requested_context($request);
-        $site_id = $this->get_requested_site_id($request);
+        return $this->with_request_site($request, function () use ($request) {
+            $period = $request->get_param('period');
+            $context = $this->get_requested_context($request);
+            $site_id = $this->get_requested_site_id($request);
 
-        if ($context === 'network') {
-            $response = $this->collect_network_stats($request, $site_id, $period);
-            if (is_wp_error($response)) {
-                return $response;
+            $history_filters = [];
+            if ($context === 'network' && $site_id) {
+                $history_filters['blog_id'] = $site_id;
+            }
+
+            if ($context === 'network') {
+                $history_stats = BJLG_History::get_stats($period, 0, $history_filters);
+            } else {
+                $history_stats = BJLG_History::get_stats($period, $site_id ?: null);
+            }
+
+            if ($context === 'network' && $site_id) {
+                $storage_stats = bjlg_with_site($site_id, static function () {
+                    return BJLG_Cleanup::get_storage_stats_snapshot();
+                });
+            } else {
+                $storage_stats = BJLG_Cleanup::get_storage_stats_snapshot();
+            }
+
+            if (!is_array($storage_stats)) {
+                $storage_stats = [
+                    'total_backups' => 0,
+                    'total_size' => 0,
+                    'average_size' => 0,
+                    'oldest_backup' => null,
+                    'newest_backup' => null,
+                    'disk_free' => null,
+                    'disk_total' => null,
+                    'disk_space_error' => true,
+                ];
+            }
+
+            $network_summary = null;
+            if ($context === 'network') {
+                $network_summary = BJLG_History::get_network_activity_summary($period, $history_filters);
             }
 
             return rest_ensure_response($response);
@@ -3715,15 +3966,31 @@ class BJLG_REST_API {
                 $has_network_data = true;
             }
 
-            return rest_ensure_response([
-                'status' => 'ok',
-                'available' => $has_network_data,
-                'generated_at' => isset($metrics['generated_at']) ? sanitize_text_field((string) $metrics['generated_at']) : '',
-                'generated_at_unix' => current_time('timestamp'),
-                'network' => $normalized_network,
-                'summary' => $normalized_summary,
-            ]);
-        });
+            $response = [
+                'period' => $period,
+                'backups' => [
+                    'total' => $storage_stats['total_backups'],
+                    'total_size' => $storage_stats['total_size'],
+                    'average_size' => $storage_stats['average_size'],
+                    'oldest' => $storage_stats['oldest_backup'],
+                    'newest' => $storage_stats['newest_backup'],
+                ],
+                'activity' => $history_stats,
+                'disk' => [
+                    'free' => $storage_stats['disk_free'],
+                    'total' => $storage_stats['disk_total'],
+                    'usage_percent' => $disk_usage_percent,
+                    'calculation_error' => $disk_calculation_error,
+                ],
+                'timestamp' => current_time('c'),
+            ];
+
+            if ($network_summary !== null) {
+                $response['network'] = $network_summary;
+            }
+
+            return rest_ensure_response($response);
+        }, true);
     }
 
     public function get_managed_vault_report($request) {
@@ -3795,23 +4062,317 @@ class BJLG_REST_API {
         $context = $this->get_requested_context($request);
         $site_id = $this->get_requested_site_id($request);
 
-        if ($context === 'network') {
-            $response = $this->collect_network_history($request, $site_id, $limit, $filters);
-            if (is_wp_error($response)) {
-                return $response;
+            $context = $this->get_requested_context($request);
+            $site_id = $this->get_requested_site_id($request);
+
+            $limit = max(1, min(500, (int) $limit));
+
+            if ($context === 'network') {
+                if ($site_id) {
+                    $filters['blog_id'] = $site_id;
+                }
+                $history = BJLG_History::get_history($limit, $filters, 0);
+            } else {
+                $history = BJLG_History::get_history($limit, $filters, $site_id ?: null);
             }
-
-            return rest_ensure_response($response);
-        }
-
-        return $this->with_request_site($request, function () use ($limit, $filters) {
-            $history = BJLG_History::get_history($limit, $filters);
 
             return rest_ensure_response([
                 'entries' => $history,
                 'total' => count($history),
             ]);
+        }, true);
+    }
+
+    /**
+     * Endpoint : Historique réseau agrégé
+     */
+    public function get_network_history($request) {
+        $availability = $this->ensure_network_context_available();
+        if (is_wp_error($availability)) {
+            return $availability;
+        }
+
+        $period = $request->get_param('period');
+        if (!is_string($period) || $period === '') {
+            $period = 'week';
+        }
+
+        $limit = (int) $request->get_param('limit');
+        if ($limit <= 0) {
+            $limit = 50;
+        } elseif ($limit > 500) {
+            $limit = 500;
+        }
+
+        $blog_id_param = $request->get_param('blog_id');
+        $blog_id = $blog_id_param !== null && $blog_id_param !== '' && $blog_id_param !== false
+            ? absint($blog_id_param)
+            : null;
+
+        $filters = [];
+        if ($blog_id !== null) {
+            $filters['blog_id'] = $blog_id;
+        }
+
+        $summary = BJLG_History::get_network_activity_summary($period, $filters);
+        $history = BJLG_History::get_history($limit, $filters, 0);
+
+        $network_event = null;
+        $site_breakdown = [];
+
+        if (isset($summary['sites']) && is_array($summary['sites'])) {
+            foreach ($summary['sites'] as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+
+                $entry['blog_id'] = isset($entry['blog_id']) ? (int) $entry['blog_id'] : 0;
+
+                if ($entry['blog_id'] === 0) {
+                    $network_event = $entry;
+                    continue;
+                }
+
+                $site_breakdown[] = $entry;
+            }
+        }
+
+        $summary['sites'] = $site_breakdown;
+
+        return rest_ensure_response([
+            'period' => $period,
+            'filters' => [
+                'blog_id' => $blog_id,
+                'limit' => $limit,
+            ],
+            'generated_at' => $summary['generated_at'] ?? current_time('mysql'),
+            'summary' => $summary,
+            'network_event' => $network_event,
+            'history' => $history,
+        ]);
+    }
+
+    /**
+     * Endpoint : Vue d'ensemble des sites réseau
+     */
+    public function get_network_sites_overview($request) {
+        $availability = $this->ensure_network_context_available();
+        if (is_wp_error($availability)) {
+            return $availability;
+        }
+
+        $period = $request->get_param('period');
+        if (!is_string($period) || $period === '') {
+            $period = 'week';
+        }
+
+        $search = $request->get_param('search');
+        $original_search = is_string($search) ? $search : '';
+        $search_term = strtolower($original_search);
+
+        $status_filter = $request->get_param('status');
+        $status_filter = is_string($status_filter) ? strtolower($status_filter) : '';
+        if ($status_filter === 'all') {
+            $status_filter = '';
+        }
+
+        $page = (int) $request->get_param('page');
+        if ($page <= 0) {
+            $page = 1;
+        }
+
+        $per_page = (int) $request->get_param('per_page');
+        if ($per_page <= 0) {
+            $per_page = 25;
+        } elseif ($per_page > 200) {
+            $per_page = 200;
+        }
+
+        $blog_id_param = $request->get_param('blog_id');
+        $blog_id = $blog_id_param !== null && $blog_id_param !== '' && $blog_id_param !== false
+            ? absint($blog_id_param)
+            : null;
+
+        $filters = [];
+        if ($blog_id) {
+            $filters['blog_id'] = $blog_id;
+        }
+
+        $summary = BJLG_History::get_network_activity_summary($period, $filters);
+
+        $activity_map = [];
+        $network_event = null;
+
+        if (isset($summary['sites']) && is_array($summary['sites'])) {
+            foreach ($summary['sites'] as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+
+                $site_id = isset($entry['blog_id']) ? (int) $entry['blog_id'] : 0;
+                if ($site_id === 0) {
+                    $network_event = $entry;
+                    continue;
+                }
+
+                if (!isset($entry['last_activity_unix'])) {
+                    $entry['last_activity_unix'] = isset($entry['last_activity']) && $entry['last_activity'] !== ''
+                        ? strtotime($entry['last_activity'])
+                        : null;
+                }
+
+                $activity_map[$site_id] = $entry;
+            }
+        }
+
+        $site_records = [];
+        $indexed_sites = [];
+
+        $raw_sites = [];
+        if (function_exists('get_sites')) {
+            $args = ['number' => 0];
+            if ($blog_id) {
+                $args['site__in'] = [$blog_id];
+            }
+            $raw_sites = get_sites($args);
+        }
+
+        foreach ((array) $raw_sites as $site) {
+            $site_id = isset($site->blog_id) ? (int) $site->blog_id : (isset($site->id) ? (int) $site->id : 0);
+            if ($site_id <= 0) {
+                continue;
+            }
+
+            $name = isset($site->blogname) && is_string($site->blogname) ? $site->blogname : '';
+            $domain = isset($site->domain) && is_string($site->domain) ? $site->domain : '';
+            $path = isset($site->path) && is_string($site->path) ? $site->path : '';
+            $url = function_exists('get_site_url') ? get_site_url($site_id) : ($domain !== '' ? 'https://' . $domain . $path : '');
+            $admin_url = function_exists('get_admin_url') ? get_admin_url($site_id, 'admin.php?page=backup-jlg') : '';
+
+            $activity = $activity_map[$site_id] ?? [
+                'blog_id' => $site_id,
+                'total_actions' => 0,
+                'successful' => 0,
+                'failed' => 0,
+                'last_activity' => '',
+                'last_activity_unix' => null,
+                'last_entry' => null,
+            ];
+
+            if (!isset($activity['last_activity_unix'])) {
+                $activity['last_activity_unix'] = isset($activity['last_activity']) && $activity['last_activity'] !== ''
+                    ? strtotime($activity['last_activity'])
+                    : null;
+            }
+
+            $status = $this->resolve_network_site_status($activity);
+
+            $site_records[] = [
+                'id' => $site_id,
+                'name' => $name !== '' ? $name : sprintf(__('Site #%d', 'backup-jlg'), $site_id),
+                'domain' => $domain,
+                'path' => $path,
+                'url' => $url,
+                'admin_url' => $admin_url,
+                'status' => $status,
+                'activity' => $activity,
+                'orphaned' => false,
+            ];
+
+            $indexed_sites[$site_id] = true;
+        }
+
+        foreach ($activity_map as $site_id => $activity) {
+            if (isset($indexed_sites[$site_id])) {
+                continue;
+            }
+
+            if (!isset($activity['last_activity_unix'])) {
+                $activity['last_activity_unix'] = isset($activity['last_activity']) && $activity['last_activity'] !== ''
+                    ? strtotime($activity['last_activity'])
+                    : null;
+            }
+
+            $site_records[] = [
+                'id' => $site_id,
+                'name' => sprintf(__('Site #%d', 'backup-jlg'), $site_id),
+                'domain' => '',
+                'path' => '',
+                'url' => '',
+                'admin_url' => '',
+                'status' => $this->resolve_network_site_status($activity),
+                'activity' => $activity,
+                'orphaned' => true,
+            ];
+        }
+
+        if ($search_term !== '') {
+            $site_records = array_filter($site_records, static function ($record) use ($search_term) {
+                $haystacks = [
+                    strtolower($record['name'] ?? ''),
+                    strtolower($record['domain'] ?? ''),
+                    strtolower($record['path'] ?? ''),
+                    strtolower($record['url'] ?? ''),
+                ];
+
+                foreach ($haystacks as $haystack) {
+                    if ($haystack !== '' && strpos($haystack, $search_term) !== false) {
+                        return true;
+                    }
+                }
+
+                return false;
+            });
+        }
+
+        if ($status_filter !== '') {
+            $site_records = array_filter($site_records, static function ($record) use ($status_filter) {
+                return isset($record['status']) && $record['status'] === $status_filter;
+            });
+        }
+
+        if ($blog_id) {
+            $site_records = array_filter($site_records, static function ($record) use ($blog_id) {
+                return isset($record['id']) && (int) $record['id'] === $blog_id;
+            });
+        }
+
+        usort($site_records, static function ($a, $b) {
+            return strcmp(strtolower($a['name'] ?? ''), strtolower($b['name'] ?? ''));
         });
+
+        $total_sites = count($site_records);
+        $total_pages = $per_page > 0 ? (int) ceil($total_sites / $per_page) : 1;
+        if ($total_pages < 1) {
+            $total_pages = 1;
+        }
+        if ($page > $total_pages) {
+            $page = $total_pages;
+        }
+
+        $offset = ($page - 1) * $per_page;
+        $paged_sites = array_slice($site_records, $offset, $per_page);
+
+        return rest_ensure_response([
+            'period' => $period,
+            'filters' => [
+                'search' => $original_search,
+                'status' => $status_filter === '' ? 'all' : $status_filter,
+                'blog_id' => $blog_id,
+                'page' => $page,
+                'per_page' => $per_page,
+            ],
+            'generated_at' => $summary['generated_at'] ?? current_time('mysql'),
+            'totals' => $summary['totals'] ?? ['total_actions' => 0, 'successful' => 0, 'failed' => 0],
+            'network_event' => $network_event,
+            'sites' => array_values($paged_sites),
+            'pagination' => [
+                'total' => $total_sites,
+                'pages' => $total_pages,
+                'current_page' => $page,
+                'per_page' => $per_page,
+            ],
+        ]);
     }
 
     /**

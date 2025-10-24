@@ -67,6 +67,7 @@ class BJLG_API_Keys {
         $secret = self::generate_secret();
         $timestamp = time();
         $user_meta = self::get_current_user_metadata();
+        $blog_id = self::resolve_current_blog_id();
 
         $keys[$identifier] = array_merge(
             [
@@ -76,6 +77,7 @@ class BJLG_API_Keys {
                 'created_at' => $timestamp,
                 'last_rotated_at' => $timestamp,
                 'display_secret' => self::sanitize_secret($secret),
+                'blog_id' => $blog_id,
             ],
             $user_meta
         );
@@ -187,6 +189,8 @@ class BJLG_API_Keys {
 
         $indexed = [];
 
+        $needs_persist = false;
+
         foreach ($stored as $key => $record) {
             if (!is_array($record)) {
                 continue;
@@ -202,7 +206,20 @@ class BJLG_API_Keys {
                 continue;
             }
 
+            if (!self::key_matches_current_scope($normalized)) {
+                continue;
+            }
+
+            $original_blog = isset($record['blog_id']) ? (int) $record['blog_id'] : null;
+            if ($original_blog !== $normalized['blog_id']) {
+                $needs_persist = true;
+            }
+
             $indexed[$normalized['id']] = $normalized;
+        }
+
+        if ($needs_persist && !empty($indexed)) {
+            self::save_indexed_keys($indexed);
         }
 
         return $indexed;
@@ -279,6 +296,7 @@ class BJLG_API_Keys {
         }
 
         $current_time = time();
+        $blog_id = isset($record['blog_id']) ? (int) $record['blog_id'] : self::resolve_current_blog_id();
 
         $output = array_merge(
             [
@@ -300,6 +318,8 @@ class BJLG_API_Keys {
             ],
             $user_meta
         );
+
+        $output['blog_id'] = $blog_id;
 
         return $output;
     }
@@ -410,7 +430,48 @@ class BJLG_API_Keys {
             $normalized['display_secret'] = $plain_secret;
         }
 
+        $blog_id_value = isset($record['blog_id']) ? absint($record['blog_id']) : self::resolve_current_blog_id();
+        if ($blog_id_value < 0) {
+            $blog_id_value = 0;
+        }
+
+        $normalized['blog_id'] = $blog_id_value;
+
         return $normalized;
+    }
+
+    private static function resolve_current_blog_id(): int
+    {
+        if (class_exists(BJLG_Site_Context::class) && BJLG_Site_Context::is_network_context()) {
+            return 0;
+        }
+
+        if (function_exists('get_current_blog_id')) {
+            $current = (int) get_current_blog_id();
+
+            if ($current > 0) {
+                return $current;
+            }
+        }
+
+        return 1;
+    }
+
+    private static function key_matches_current_scope(array $record): bool
+    {
+        $record_blog = isset($record['blog_id']) ? (int) $record['blog_id'] : self::resolve_current_blog_id();
+
+        if (class_exists(BJLG_Site_Context::class) && BJLG_Site_Context::is_network_context()) {
+            return true;
+        }
+
+        if ($record_blog === 0) {
+            return true;
+        }
+
+        $current = self::resolve_current_blog_id();
+
+        return $record_blog === $current;
     }
 
     /**
