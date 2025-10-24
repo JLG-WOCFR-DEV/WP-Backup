@@ -728,6 +728,41 @@ jQuery(function($) {
         return 0;
     }
 
+    function sanitizeTimeInput(value, fallback) {
+        const defaultValue = typeof fallback === 'string' && fallback ? fallback : '00:00';
+        let raw = typeof value === 'string' ? value.trim() : '';
+        const match = /^([0-9]{1,2}):([0-9]{1,2})$/.exec(raw);
+        if (!match) {
+            raw = defaultValue;
+        }
+        const parts = /^([0-9]{1,2}):([0-9]{1,2})$/.exec(raw);
+        const hour = parts ? Math.min(Math.max(parseInt(parts[1], 10) || 0, 0), 23) : 0;
+        const minute = parts ? Math.min(Math.max(parseInt(parts[2], 10) || 0, 0), 59) : 0;
+
+        return hour.toString().padStart(2, '0') + ':' + minute.toString().padStart(2, '0');
+    }
+
+    function sanitizeTimezoneInput(value, fallback) {
+        const raw = typeof value === 'string' ? value.trim() : '';
+        if (raw !== '') {
+            return raw;
+        }
+
+        return typeof fallback === 'string' && fallback.trim() !== '' ? fallback.trim() : 'site';
+    }
+
+    function normalizeQuietHours(source, base) {
+        const defaults = base && typeof base === 'object' ? base : {};
+        const raw = source && typeof source === 'object' ? source : {};
+
+        const enabled = !!raw.enabled;
+        const start = sanitizeTimeInput(raw.start, defaults.start || '00:00');
+        const end = sanitizeTimeInput(raw.end, defaults.end || '00:00');
+        const timezone = sanitizeTimezoneInput(raw.timezone, defaults.timezone || 'site');
+
+        return { enabled, start, end, timezone };
+    }
+
     function normalizeEventTriggerState(raw) {
         const defaults = eventTriggerDefaults && typeof eventTriggerDefaults === 'object' ? eventTriggerDefaults : {};
         const normalized = {};
@@ -735,12 +770,17 @@ jQuery(function($) {
         Object.keys(defaults).forEach(function(key) {
             const base = defaults[key] && typeof defaults[key] === 'object' ? defaults[key] : {};
             const source = raw && typeof raw === 'object' && raw[key] ? raw[key] : {};
+            const quietBase = base.quiet_hours && typeof base.quiet_hours === 'object' ? base.quiet_hours : {};
+            const quietSource = source.quiet_hours && typeof source.quiet_hours === 'object'
+                ? source.quiet_hours
+                : (source.quietHours && typeof source.quietHours === 'object' ? source.quietHours : {});
 
             normalized[key] = {
                 enabled: !!source.enabled,
                 cooldown: toNonNegativeInt(source.cooldown, base.cooldown || 0),
                 batch_window: toNonNegativeInt(source.batch_window, base.batch_window || 0),
                 max_batch: Math.max(1, toNonNegativeInt(source.max_batch, base.max_batch || 1)),
+                quiet_hours: normalizeQuietHours(quietSource, quietBase)
             };
         });
 
@@ -761,6 +801,9 @@ jQuery(function($) {
             const cooldown = toNonNegativeInt(config.cooldown, base.cooldown || 0);
             const batchWindow = toNonNegativeInt(config.batch_window, base.batch_window || 0);
             const maxBatch = Math.max(1, toNonNegativeInt(config.max_batch, base.max_batch || 1));
+            const quietBase = base.quiet_hours && typeof base.quiet_hours === 'object' ? base.quiet_hours : {};
+            const quietConfig = config.quiet_hours && typeof config.quiet_hours === 'object' ? config.quiet_hours : {};
+            const quietSettings = normalizeQuietHours(quietConfig, quietBase);
             const $fieldset = $eventTriggerList.find('[data-event-trigger="' + key + '"]');
 
             if (!$fieldset.length) {
@@ -771,6 +814,10 @@ jQuery(function($) {
             $fieldset.find('[data-field="event-cooldown"]').val(cooldown).prop('disabled', !enabled);
             $fieldset.find('[data-field="event-batch-window"]').val(batchWindow).prop('disabled', !enabled);
             $fieldset.find('[data-field="event-max-batch"]').val(maxBatch).prop('disabled', !enabled);
+            $fieldset.find('[data-field="event-quiet-enabled"]').prop('checked', quietSettings.enabled).prop('disabled', !enabled);
+            $fieldset.find('[data-field="event-quiet-start"]').val(quietSettings.start).prop('disabled', !enabled || !quietSettings.enabled);
+            $fieldset.find('[data-field="event-quiet-end"]').val(quietSettings.end).prop('disabled', !enabled || !quietSettings.enabled);
+            $fieldset.find('[data-field="event-quiet-timezone"]').val(quietSettings.timezone).prop('disabled', !enabled || !quietSettings.enabled);
         });
     }
 
@@ -807,12 +854,23 @@ jQuery(function($) {
             const cooldown = toNonNegativeInt($fieldset.find('[data-field="event-cooldown"]').val(), base.cooldown || 0);
             const batchWindow = toNonNegativeInt($fieldset.find('[data-field="event-batch-window"]').val(), base.batch_window || 0);
             const maxBatch = Math.max(1, toNonNegativeInt($fieldset.find('[data-field="event-max-batch"]').val(), base.max_batch || 1));
+            const quietBase = base.quiet_hours && typeof base.quiet_hours === 'object' ? base.quiet_hours : {};
+            const quietEnabled = $fieldset.find('[data-field="event-quiet-enabled"]').is(':checked') && enabled;
+            const quietStart = sanitizeTimeInput($fieldset.find('[data-field="event-quiet-start"]').val(), quietBase.start || '00:00');
+            const quietEnd = sanitizeTimeInput($fieldset.find('[data-field="event-quiet-end"]').val(), quietBase.end || '00:00');
+            const quietTimezone = sanitizeTimezoneInput($fieldset.find('[data-field="event-quiet-timezone"]').val(), quietBase.timezone || 'site');
 
             collected[key] = {
                 enabled: enabled,
                 cooldown: cooldown,
                 batch_window: batchWindow,
                 max_batch: maxBatch,
+                quiet_hours: {
+                    enabled: quietEnabled,
+                    start: quietStart,
+                    end: quietEnd,
+                    timezone: quietTimezone
+                }
             };
         });
 
@@ -4742,6 +4800,57 @@ jQuery(function($) {
                 triggers[key].batch_window = toNonNegativeInt($input.val(), defaultsForKey.batch_window);
             } else if ($input.is('[data-field="event-max-batch"]')) {
                 triggers[key].max_batch = Math.max(1, toNonNegativeInt($input.val(), defaultsForKey.max_batch));
+            }
+
+            setEventTriggerState(triggers, { sync: false });
+            syncEventTriggerUI();
+        });
+
+        $eventTriggerList.on('change', '[data-field="event-quiet-enabled"]', function() {
+            const $input = $(this);
+            const key = ($input.closest('[data-event-trigger]').data('event-trigger') || '').toString();
+            if (!key) {
+                return;
+            }
+
+            const defaultsForKey = normalizedDefaults[key] || { quiet_hours: { enabled: false, start: '00:00', end: '00:00', timezone: 'site' } };
+            const triggers = $.extend(true, {}, state.eventTriggers);
+            if (!Object.prototype.hasOwnProperty.call(triggers, key)) {
+                triggers[key] = $.extend(true, {}, defaultsForKey);
+            }
+
+            if (!Object.prototype.hasOwnProperty.call(triggers[key], 'quiet_hours') || typeof triggers[key].quiet_hours !== 'object') {
+                triggers[key].quiet_hours = $.extend({}, defaultsForKey.quiet_hours || {});
+            }
+
+            triggers[key].quiet_hours.enabled = $input.is(':checked');
+            setEventTriggerState(triggers, { sync: false });
+            syncEventTriggerUI();
+        });
+
+        $eventTriggerList.on('input change', '[data-field="event-quiet-start"], [data-field="event-quiet-end"], [data-field="event-quiet-timezone"]', function() {
+            const $input = $(this);
+            const key = ($input.closest('[data-event-trigger]').data('event-trigger') || '').toString();
+            if (!key) {
+                return;
+            }
+
+            const defaultsForKey = normalizedDefaults[key] || { quiet_hours: { start: '00:00', end: '00:00', timezone: 'site' } };
+            const triggers = $.extend(true, {}, state.eventTriggers);
+            if (!Object.prototype.hasOwnProperty.call(triggers, key)) {
+                triggers[key] = $.extend(true, {}, defaultsForKey);
+            }
+
+            if (!Object.prototype.hasOwnProperty.call(triggers[key], 'quiet_hours') || typeof triggers[key].quiet_hours !== 'object') {
+                triggers[key].quiet_hours = $.extend({}, defaultsForKey.quiet_hours || {});
+            }
+
+            if ($input.is('[data-field="event-quiet-start"]')) {
+                triggers[key].quiet_hours.start = sanitizeTimeInput($input.val(), defaultsForKey.quiet_hours ? defaultsForKey.quiet_hours.start : '00:00');
+            } else if ($input.is('[data-field="event-quiet-end"]')) {
+                triggers[key].quiet_hours.end = sanitizeTimeInput($input.val(), defaultsForKey.quiet_hours ? defaultsForKey.quiet_hours.end : '00:00');
+            } else {
+                triggers[key].quiet_hours.timezone = sanitizeTimezoneInput($input.val(), defaultsForKey.quiet_hours ? defaultsForKey.quiet_hours.timezone : 'site');
             }
 
             setEventTriggerState(triggers, { sync: false });
