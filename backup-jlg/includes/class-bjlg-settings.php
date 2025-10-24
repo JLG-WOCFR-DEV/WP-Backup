@@ -170,6 +170,8 @@ class BJLG_Settings {
         'monitoring' => [
             'storage_quota_warning_threshold' => 85,
             'remote_metrics_ttl_minutes' => 15,
+            'remote_capacity_warning_hours' => 72,
+            'remote_capacity_critical_hours' => 24,
         ],
         'gdrive' => [
             'client_id' => '',
@@ -973,7 +975,12 @@ class BJLG_Settings {
                 BJLG_Debug::log('Réglages de performance sauvegardés.');
             }
 
-            if (isset($_POST['storage_quota_warning_threshold']) || isset($_POST['remote_metrics_ttl_minutes'])) {
+            if (
+                isset($_POST['storage_quota_warning_threshold'])
+                || isset($_POST['remote_metrics_ttl_minutes'])
+                || isset($_POST['remote_capacity_warning_hours'])
+                || isset($_POST['remote_capacity_critical_hours'])
+            ) {
                 $monitoring_defaults = $this->default_settings['monitoring'];
                 $monitoring_settings = $this->get_option_value('bjlg_monitoring_settings', []);
                 if (!is_array($monitoring_settings)) {
@@ -989,6 +996,19 @@ class BJLG_Settings {
                 if (isset($_POST['remote_metrics_ttl_minutes'])) {
                     $ttl_minutes = intval(wp_unslash($_POST['remote_metrics_ttl_minutes']));
                     $monitoring_settings['remote_metrics_ttl_minutes'] = max(5, min(1440, $ttl_minutes));
+                }
+
+                if (isset($_POST['remote_capacity_warning_hours'])) {
+                    $warning_hours = intval(wp_unslash($_POST['remote_capacity_warning_hours']));
+                    $monitoring_settings['remote_capacity_warning_hours'] = max(1, min(24 * 7, $warning_hours));
+                }
+
+                if (isset($_POST['remote_capacity_critical_hours'])) {
+                    $critical_hours = intval(wp_unslash($_POST['remote_capacity_critical_hours']));
+                    $warning_reference = isset($monitoring_settings['remote_capacity_warning_hours'])
+                        ? (int) $monitoring_settings['remote_capacity_warning_hours']
+                        : 72;
+                    $monitoring_settings['remote_capacity_critical_hours'] = max(1, min($warning_reference, $critical_hours));
                 }
 
                 $this->update_option_value('bjlg_monitoring_settings', $monitoring_settings);
