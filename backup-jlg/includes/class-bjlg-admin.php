@@ -384,6 +384,16 @@ class BJLG_Admin {
         $network_mode_enabled = BJLG_Site_Context::is_network_mode_enabled();
         $sites_snapshot = $this->collect_network_site_snapshot();
         $sites_json = !empty($sites_snapshot) ? wp_json_encode($sites_snapshot) : '[]';
+        if (!is_string($sites_json) || $sites_json === '') {
+            $sites_json = '[]';
+        }
+        $has_sites = !empty($sites_snapshot) && !empty($sites_snapshot['sites']);
+        $totals = isset($sites_snapshot['totals']) && is_array($sites_snapshot['totals'])
+            ? $sites_snapshot['totals']
+            : ['total_actions' => 0, 'successful' => 0, 'failed' => 0];
+        $sites_for_fallback = isset($sites_snapshot['sites']) && is_array($sites_snapshot['sites'])
+            ? $sites_snapshot['sites']
+            : [];
 
         $this->is_network_screen = $previous_state;
 
@@ -404,44 +414,84 @@ class BJLG_Admin {
                     <div class="bjlg-network-app__loading"><?php esc_html_e('Chargement des données réseau…', 'backup-jlg'); ?></div>
                 </div>
 
-                <div class="bjlg-network-app__fallback" data-has-sites="<?php echo empty($sites_snapshot) ? '0' : '1'; ?>">
-                    <?php if (!empty($sites_snapshot)): ?>
-                        <table class="widefat striped">
-                            <thead>
-                            <tr>
-                                <th><?php esc_html_e('Site', 'backup-jlg'); ?></th>
-                                <th><?php esc_html_e('Dernières activités', 'backup-jlg'); ?></th>
-                                <th><?php esc_html_e('Quotas utilisés', 'backup-jlg'); ?></th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            <?php foreach ($sites_snapshot as $site): ?>
-                                <tr>
-                                    <td>
-                                        <strong><?php echo esc_html($site['name']); ?></strong><br>
-                                        <a href="<?php echo esc_url($site['admin_url']); ?>" class="button button-small"><?php esc_html_e('Ouvrir', 'backup-jlg'); ?></a>
-                                    </td>
-                                    <td>
+                <div class="bjlg-network-app__fallback" data-has-sites="<?php echo $has_sites ? '1' : '0'; ?>">
+                    <?php if ($has_sites): ?>
+                        <div class="bjlg-network-dashboard bjlg-network-dashboard--fallback">
+                            <section class="bjlg-network-dashboard__summary" aria-label="<?php esc_attr_e('Résumé réseau', 'backup-jlg'); ?>">
+                                <ul class="bjlg-network-dashboard__summary-list">
+                                    <li class="bjlg-network-dashboard__summary-item">
+                                        <span class="bjlg-network-dashboard__summary-value"><?php echo esc_html(number_format_i18n((int) ($totals['total_actions'] ?? 0))); ?></span>
+                                        <span class="bjlg-network-dashboard__summary-label"><?php esc_html_e('Actions enregistrées', 'backup-jlg'); ?></span>
+                                    </li>
+                                    <li class="bjlg-network-dashboard__summary-item">
+                                        <span class="bjlg-network-dashboard__summary-value"><?php echo esc_html(number_format_i18n((int) ($totals['successful'] ?? 0))); ?></span>
+                                        <span class="bjlg-network-dashboard__summary-label"><?php esc_html_e('Succès', 'backup-jlg'); ?></span>
+                                    </li>
+                                    <li class="bjlg-network-dashboard__summary-item">
+                                        <span class="bjlg-network-dashboard__summary-value"><?php echo esc_html(number_format_i18n((int) ($totals['failed'] ?? 0))); ?></span>
+                                        <span class="bjlg-network-dashboard__summary-label"><?php esc_html_e('Échecs', 'backup-jlg'); ?></span>
+                                    </li>
+                                </ul>
+                            </section>
+
+                            <section class="bjlg-network-dashboard__sites" aria-label="<?php esc_attr_e('Sites du réseau', 'backup-jlg'); ?>">
+                                <table class="widefat striped bjlg-network-dashboard__table">
+                                    <thead>
+                                    <tr>
+                                        <th scope="col"><?php esc_html_e('Site', 'backup-jlg'); ?></th>
+                                        <th scope="col"><?php esc_html_e('Statut', 'backup-jlg'); ?></th>
+                                        <th scope="col"><?php esc_html_e('Dernière activité', 'backup-jlg'); ?></th>
+                                        <th scope="col"><?php esc_html_e('Actions', 'backup-jlg'); ?></th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    <?php foreach ($sites_for_fallback as $site): ?>
                                         <?php
-                                        $history = $site['history'];
-                                        printf(
-                                            /* translators: 1: total entries, 2: number of successful entries */
-                                            esc_html__('Total : %1$d · Réussites : %2$d', 'backup-jlg'),
-                                            (int) ($history['total_actions'] ?? 0),
-                                            (int) ($history['successful'] ?? 0)
-                                        );
+                                        $activity = isset($site['activity']) && is_array($site['activity']) ? $site['activity'] : [];
+                                        $last_activity = isset($activity['last_activity']) ? (string) $activity['last_activity'] : '';
+                                        $last_activity_label = __('Jamais', 'backup-jlg');
+                                        $last_activity_relative = '';
+                                        $last_activity_timestamp = $last_activity !== '' ? strtotime($last_activity) : false;
+
+                                        if ($last_activity_timestamp) {
+                                            $last_activity_label = date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last_activity_timestamp);
+                                            if (function_exists('human_time_diff')) {
+                                                $last_activity_relative = human_time_diff($last_activity_timestamp, current_time('timestamp'));
+                                            }
+                                        }
+
+                                        $status = isset($site['status']) ? (string) $site['status'] : 'idle';
+                                        $status_label = $this->get_network_status_label($status);
                                         ?>
-                                    </td>
-                                    <td>
-                                        <?php
-                                        $quota_used = isset($site['quota']['used']) ? (int) $site['quota']['used'] : 0;
-                                        echo esc_html(size_format($quota_used, 2));
-                                        ?>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                        <tr>
+                                            <td>
+                                                <strong><?php echo esc_html($site['name'] ?? ''); ?></strong>
+                                                <?php if (!empty($site['url'])): ?>
+                                                    <br><a href="<?php echo esc_url($site['url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html($site['url']); ?></a>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <span class="bjlg-network-dashboard__status-badge bjlg-network-dashboard__status-badge--<?php echo esc_attr($status); ?>"><?php echo esc_html($status_label); ?></span>
+                                            </td>
+                                            <td>
+                                                <?php echo esc_html($last_activity_label); ?>
+                                                <?php if ($last_activity_relative): ?>
+                                                    <br><span class="description"><?php echo esc_html(sprintf(esc_html__('Il y a %s', 'backup-jlg'), $last_activity_relative)); ?></span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <?php if (!empty($site['admin_url'])): ?>
+                                                    <a href="<?php echo esc_url($site['admin_url']); ?>" class="button button-small"><?php esc_html_e('Ouvrir', 'backup-jlg'); ?></a>
+                                                <?php else: ?>
+                                                    <span class="description"><?php esc_html_e('Accès indisponible', 'backup-jlg'); ?></span>
+                                                <?php endif; ?>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </section>
+                        </div>
                     <?php else: ?>
                         <p><?php esc_html_e('Aucun site réseau disponible ou données indisponibles.', 'backup-jlg'); ?></p>
                     <?php endif; ?>
@@ -6256,65 +6306,184 @@ class BJLG_Admin {
 
     private function collect_network_site_snapshot(): array
     {
-        $sites = $this->get_network_sites();
-        if (empty($sites)) {
+        if (!function_exists('is_multisite') || !is_multisite()) {
             return [];
         }
 
-        $snapshot = [];
+        $per_page = 25;
 
-        foreach ($sites as $site) {
-            $blog_id = isset($site['id']) ? (int) $site['id'] : 0;
+        $summary = function_exists('bjlg_with_network')
+            ? bjlg_with_network(static function () {
+                return BJLG_History::get_network_activity_summary('week');
+            })
+            : BJLG_History::get_network_activity_summary('week');
 
+        if (!is_array($summary)) {
+            $summary = [];
+        }
+
+        $activity_map = [];
+        $network_event = null;
+
+        if (!empty($summary['sites']) && is_array($summary['sites'])) {
+            foreach ($summary['sites'] as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+
+                $blog_id = isset($entry['blog_id']) ? (int) $entry['blog_id'] : 0;
+
+                if (!isset($entry['last_activity_unix'])) {
+                    $entry['last_activity_unix'] = isset($entry['last_activity']) && $entry['last_activity'] !== ''
+                        ? strtotime((string) $entry['last_activity'])
+                        : null;
+                }
+
+                if ($blog_id === 0) {
+                    $network_event = $entry;
+                    continue;
+                }
+
+                $activity_map[$blog_id] = $entry;
+            }
+        }
+
+        $site_records = [];
+        $indexed_sites = [];
+
+        $raw_sites = function_exists('get_sites') ? get_sites(['number' => 0]) : [];
+
+        foreach ((array) $raw_sites as $site) {
+            $blog_id = isset($site->blog_id) ? (int) $site->blog_id : (isset($site->id) ? (int) $site->id : 0);
             if ($blog_id <= 0) {
                 continue;
             }
 
-            $site_data = bjlg_with_site($blog_id, function () use ($site, $blog_id) {
-                $history_stats = ['total_actions' => 0, 'successful' => 0, 'failed' => 0];
-                if (class_exists(BJLG_History::class)) {
-                    $history_stats = BJLG_History::get_stats('month', $blog_id);
-                }
+            $name = isset($site->blogname) && is_string($site->blogname) ? $site->blogname : '';
+            $domain = isset($site->domain) && is_string($site->domain) ? $site->domain : '';
+            $path = isset($site->path) && is_string($site->path) ? $site->path : '';
+            $url = function_exists('get_site_url') ? get_site_url($blog_id) : ($domain !== '' ? 'https://' . $domain . $path : '');
+            $admin_url = function_exists('get_admin_url') ? get_admin_url($blog_id, 'admin.php?page=backup-jlg') : '';
 
-                $metrics = \bjlg_get_option('bjlg_remote_storage_metrics', []);
-                $quota_used = 0;
+            $activity = $activity_map[$blog_id] ?? [
+                'blog_id' => $blog_id,
+                'total_actions' => 0,
+                'successful' => 0,
+                'failed' => 0,
+                'last_activity' => '',
+                'last_activity_unix' => null,
+                'last_entry' => null,
+            ];
 
-                if (is_array($metrics)) {
-                    foreach ($metrics as $metric) {
-                        if (!is_array($metric)) {
-                            continue;
-                        }
-
-                        $quota_used += isset($metric['used']) ? (int) $metric['used'] : 0;
-                    }
-                }
-
-                $admin_url = function_exists('get_admin_url')
-                    ? get_admin_url($blog_id, 'admin.php?page=backup-jlg')
-                    : '';
-
-                return [
-                    'id' => $blog_id,
-                    'name' => $site['name'],
-                    'url' => $site['url'],
-                    'admin_url' => $admin_url,
-                    'history' => [
-                        'total_actions' => isset($history_stats['total_actions']) ? (int) $history_stats['total_actions'] : 0,
-                        'successful' => isset($history_stats['successful']) ? (int) $history_stats['successful'] : 0,
-                        'failed' => isset($history_stats['failed']) ? (int) $history_stats['failed'] : 0,
-                    ],
-                    'quota' => [
-                        'used' => $quota_used,
-                    ],
-                ];
-            });
-
-            if (is_array($site_data)) {
-                $snapshot[] = $site_data;
+            if (!isset($activity['last_activity_unix'])) {
+                $activity['last_activity_unix'] = isset($activity['last_activity']) && $activity['last_activity'] !== ''
+                    ? strtotime((string) $activity['last_activity'])
+                    : null;
             }
+
+            $site_records[] = [
+                'id' => $blog_id,
+                'name' => $name !== '' ? $name : sprintf(__('Site #%d', 'backup-jlg'), $blog_id),
+                'domain' => $domain,
+                'path' => $path,
+                'url' => $url,
+                'admin_url' => $admin_url,
+                'status' => $this->resolve_network_site_status($activity),
+                'activity' => $activity,
+                'orphaned' => false,
+            ];
+
+            $indexed_sites[$blog_id] = true;
         }
 
-        return $snapshot;
+        foreach ($activity_map as $blog_id => $activity) {
+            if (isset($indexed_sites[$blog_id])) {
+                continue;
+            }
+
+            if (!isset($activity['last_activity_unix'])) {
+                $activity['last_activity_unix'] = isset($activity['last_activity']) && $activity['last_activity'] !== ''
+                    ? strtotime((string) $activity['last_activity'])
+                    : null;
+            }
+
+            $site_records[] = [
+                'id' => $blog_id,
+                'name' => sprintf(__('Site #%d', 'backup-jlg'), $blog_id),
+                'domain' => '',
+                'path' => '',
+                'url' => '',
+                'admin_url' => '',
+                'status' => $this->resolve_network_site_status($activity),
+                'activity' => $activity,
+                'orphaned' => true,
+            ];
+        }
+
+        usort($site_records, static function ($a, $b) {
+            return strcmp(strtolower($a['name'] ?? ''), strtolower($b['name'] ?? ''));
+        });
+
+        $total_sites = count($site_records);
+        $total_pages = $per_page > 0 ? (int) ceil($total_sites / $per_page) : 1;
+        if ($total_pages < 1) {
+            $total_pages = 1;
+        }
+
+        $paged_sites = array_slice($site_records, 0, $per_page);
+
+        $totals = isset($summary['totals']) && is_array($summary['totals'])
+            ? $summary['totals']
+            : ['total_actions' => 0, 'successful' => 0, 'failed' => 0];
+
+        return [
+            'period' => 'week',
+            'filters' => [
+                'search' => '',
+                'status' => 'all',
+                'blog_id' => null,
+                'page' => 1,
+                'per_page' => $per_page,
+            ],
+            'generated_at' => isset($summary['generated_at']) ? (string) $summary['generated_at'] : current_time('mysql'),
+            'totals' => $totals,
+            'network_event' => $network_event,
+            'sites' => $paged_sites,
+            'pagination' => [
+                'total' => $total_sites,
+                'pages' => $total_pages,
+                'current_page' => 1,
+                'per_page' => $per_page,
+            ],
+        ];
+    }
+
+    private function resolve_network_site_status(array $activity): string
+    {
+        $failed = isset($activity['failed']) ? (int) $activity['failed'] : 0;
+        $total = isset($activity['total_actions']) ? (int) $activity['total_actions'] : 0;
+
+        if ($failed > 0) {
+            return 'failing';
+        }
+
+        if ($total > 0) {
+            return 'healthy';
+        }
+
+        return 'idle';
+    }
+
+    private function get_network_status_label(string $status): string
+    {
+        switch ($status) {
+            case 'failing':
+                return __('En alerte', 'backup-jlg');
+            case 'healthy':
+                return __('Actif', 'backup-jlg');
+            default:
+                return __('Inactif', 'backup-jlg');
+        }
     }
 
     private function get_permission_choices() {

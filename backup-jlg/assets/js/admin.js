@@ -953,9 +953,18 @@ jQuery(function($) {
         const networkEnabled = root.getAttribute('data-network-enabled') === '1';
         const fallback = root.querySelector('.bjlg-network-app__fallback');
         const panel = root.querySelector('.bjlg-network-app__panel');
-
+        const config = (window.bjlg_ajax && window.bjlg_ajax.network) ? window.bjlg_ajax.network : null;
+        const endpoints = config && config.endpoints ? config.endpoints : {};
+        const restNonce = window.bjlg_ajax ? window.bjlg_ajax.rest_nonce : '';
+        const restBackups = window.bjlg_ajax ? window.bjlg_ajax.rest_backups : '';
+        const bootstrap = parseJSONSafe(root.getAttribute('data-sites'), null);
         const i18n = window.wp && window.wp.i18n ? window.wp.i18n : {};
         const __ = typeof i18n.__ === 'function' ? i18n.__ : function(str) { return str; };
+        const _n = typeof i18n._n === 'function'
+            ? i18n._n
+            : function(single, plural, number) {
+                return number === 1 ? single : plural;
+            };
         const sprintf = typeof i18n.sprintf === 'function'
             ? i18n.sprintf
             : function(format) {
@@ -967,20 +976,21 @@ jQuery(function($) {
                     return typeof replacement === 'undefined' ? '' : replacement;
                 });
             };
-        const numberFormat = typeof i18n.numberFormat === 'function'
-            ? i18n.numberFormat
-            : function(value, precision) {
-                const numeric = typeof value === 'number' ? value : parseFloat(value);
-                if (!isFinite(numeric)) {
-                    return '0.00';
-                }
 
-                const pow = Math.pow(10, precision);
-                return String(Math.round(numeric * pow) / pow);
-            };
+        const state = {
+            period: 'week',
+            status: 'all',
+            search: '',
+            page: 1,
+            perPage: 25,
+            blogId: null,
+        };
 
-        const networkConfig = (window.bjlg_ajax && window.bjlg_ajax.network) ? window.bjlg_ajax.network : null;
-        let sites = parseJSONSafe(root.getAttribute('data-sites'), []);
+        let sitesPayload = bootstrap;
+        let historyPayload = null;
+        let isLoading = false;
+        let lastError = '';
+        let searchTimer = null;
 
         const hideFallback = function() {
             if (!fallback) {
@@ -990,153 +1000,589 @@ jQuery(function($) {
             fallback.classList.add('is-hidden');
         };
 
-        const renderStatus = function(container, site) {
-            container.innerHTML = '';
+        const formatNumber = function(value, decimals) {
+            const numeric = typeof value === 'number' ? value : parseFloat(value);
+            if (!isFinite(numeric)) {
+                return '0';
+            }
 
-            if (!site) {
-                const message = document.createElement('p');
-                message.textContent = networkEnabled
-                    ? __('Sélectionnez un site pour afficher ses informations.', 'backup-jlg')
-                    : __('Le mode réseau est désactivé. Activez-le pour synchroniser les données.', 'backup-jlg');
-                container.appendChild(message);
+            if (window.Intl && window.Intl.NumberFormat) {
+                return new window.Intl.NumberFormat(undefined, { maximumFractionDigits: decimals, minimumFractionDigits: decimals }).format(numeric);
+            }
 
+            const pow = Math.pow(10, decimals);
+            return String(Math.round(numeric * pow) / pow);
+        };
+
+        const formatRelativeDate = function(iso) {
+            if (!iso) {
+                return __('Jamais', 'backup-jlg');
+            }
+
+            const timestamp = Date.parse(iso);
+            if (Number.isNaN(timestamp)) {
+                return iso;
+            }
+
+            const deltaSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+
+            if (deltaSeconds < 60) {
+                return __('Il y a quelques secondes', 'backup-jlg');
+            }
+
+            if (deltaSeconds < 3600) {
+                const minutes = Math.floor(deltaSeconds / 60);
+                return sprintf(_n('Il y a %s minute', 'Il y a %s minutes', minutes, 'backup-jlg'), minutes);
+            }
+
+            if (deltaSeconds < 86400) {
+                const hours = Math.floor(deltaSeconds / 3600);
+                return sprintf(_n('Il y a %s heure', 'Il y a %s heures', hours, 'backup-jlg'), hours);
+            }
+
+            const days = Math.floor(deltaSeconds / 86400);
+            return sprintf(_n('Il y a %s jour', 'Il y a %s jours', days, 'backup-jlg'), days);
+        };
+
+        const appendQuery = function(url, params) {
+            if (!url) {
+                return '';
+            }
+
+            const searchParams = new window.URLSearchParams();
+            Object.keys(params).forEach(function(key) {
+                const value = params[key];
+                if (value === null || typeof value === 'undefined' || value === '') {
+                    return;
+                }
+                searchParams.append(key, value);
+            });
+
+            const separator = url.indexOf('?') === -1 ? '?' : '&';
+            const query = searchParams.toString();
+
+            return query ? url + separator + query : url;
+        };
+
+        const fetchJSON = function(url, options) {
+            const settings = Object.assign({
+                credentials: 'same-origin',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-WP-Nonce': restNonce,
+                },
+            }, options || {});
+
+            return window.fetch(url, settings).then(function(response) {
+                if (!response.ok) {
+                    return response.json().catch(function() {
+                        return {};
+                    }).then(function(body) {
+                        const message = body && body.message ? body.message : __('Une erreur est survenue.', 'backup-jlg');
+                        const error = new Error(message);
+                        error.status = response.status;
+                        throw error;
+                    });
+                }
+
+                return response.json();
+            });
+        };
+
+        const renderMessage = function(container, message, type) {
+            const paragraph = document.createElement('p');
+            paragraph.className = 'bjlg-network-dashboard__message' + (type ? ' is-' + type : '');
+            paragraph.textContent = message;
+            container.appendChild(paragraph);
+        };
+
+        const buildStatusBadge = function(status) {
+            const badge = document.createElement('span');
+            badge.className = 'bjlg-network-dashboard__status-badge bjlg-network-dashboard__status-badge--' + status;
+            if (status === 'failing') {
+                badge.textContent = __('En alerte', 'backup-jlg');
+            } else if (status === 'healthy') {
+                badge.textContent = __('Actif', 'backup-jlg');
+            } else {
+                badge.textContent = __('Inactif', 'backup-jlg');
+            }
+
+            return badge;
+        };
+
+        const triggerBackup = function(site, button) {
+            if (!restBackups) {
                 return;
             }
 
-            const statsList = document.createElement('dl');
-            statsList.className = 'bjlg-network-app__stats';
+            const siteId = site.id;
+            if (!siteId) {
+                return;
+            }
 
-            const addStat = function(label, value) {
-                const term = document.createElement('dt');
-                term.textContent = label;
-                const description = document.createElement('dd');
-                description.textContent = value;
-                statsList.appendChild(term);
-                statsList.appendChild(description);
-            };
+            button.disabled = true;
+            const initialText = button.textContent;
+            button.textContent = __('Planification…', 'backup-jlg');
 
-            const history = site.history || {};
-            addStat(__('Actions enregistrées', 'backup-jlg'), String(history.total_actions || 0));
-            addStat(__('Réussites', 'backup-jlg'), String(history.successful || 0));
-            addStat(__('Échecs', 'backup-jlg'), String(history.failed || 0));
-
-            const quota = site.quota || {};
-            const quotaValue = typeof quota.used === 'number'
-                ? sprintf(__('%s Mo', 'backup-jlg'), numberFormat(quota.used / (1024 * 1024), 2))
-                : __('Inconnu', 'backup-jlg');
-
-            addStat(__('Quota consommé', 'backup-jlg'), quotaValue);
-
-            container.appendChild(statsList);
+            const url = appendQuery(restBackups, { site_id: siteId });
+            fetchJSON(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-WP-Nonce': restNonce,
+                },
+                body: JSON.stringify({ type: 'full' }),
+            }).then(function() {
+                button.textContent = __('Sauvegarde planifiée', 'backup-jlg');
+                window.setTimeout(function() {
+                    button.textContent = initialText;
+                    button.disabled = false;
+                }, 1500);
+                loadData();
+            }).catch(function(error) {
+                button.textContent = initialText;
+                button.disabled = false;
+                window.console.error('Backup trigger failed', error);
+                window.alert(__('Impossible de déclencher la sauvegarde distante.', 'backup-jlg'));
+            });
         };
 
-        const mountInterface = function(list) {
+        const renderSummary = function(container, payload) {
+            container.innerHTML = '';
+
+            if (!payload || !payload.totals) {
+                renderMessage(container, __('Aucune donnée réseau à afficher.', 'backup-jlg'), 'info');
+                return;
+            }
+
+            const totals = payload.totals;
+            const summaryList = document.createElement('ul');
+            summaryList.className = 'bjlg-network-dashboard__summary-list';
+
+            const summaryItems = [
+                {
+                    label: __('Actions enregistrées', 'backup-jlg'),
+                    value: formatNumber(totals.total_actions || 0, 0),
+                },
+                {
+                    label: __('Succès', 'backup-jlg'),
+                    value: formatNumber(totals.successful || 0, 0),
+                },
+                {
+                    label: __('Échecs', 'backup-jlg'),
+                    value: formatNumber(totals.failed || 0, 0),
+                },
+            ];
+
+            summaryItems.forEach(function(item) {
+                const li = document.createElement('li');
+                li.className = 'bjlg-network-dashboard__summary-item';
+
+                const value = document.createElement('span');
+                value.className = 'bjlg-network-dashboard__summary-value';
+                value.textContent = item.value;
+                li.appendChild(value);
+
+                const label = document.createElement('span');
+                label.className = 'bjlg-network-dashboard__summary-label';
+                label.textContent = item.label;
+                li.appendChild(label);
+
+                summaryList.appendChild(li);
+            });
+
+            container.appendChild(summaryList);
+        };
+
+        const renderHistory = function(container, payload) {
+            container.innerHTML = '';
+
+            const heading = document.createElement('h3');
+            heading.className = 'bjlg-network-dashboard__section-title';
+            heading.textContent = __('Historique récent', 'backup-jlg');
+            container.appendChild(heading);
+
+            if (!payload || !Array.isArray(payload.history) || payload.history.length === 0) {
+                renderMessage(container, __('Aucun événement récent.', 'backup-jlg'), 'info');
+                return;
+            }
+
+            const list = document.createElement('ul');
+            list.className = 'bjlg-network-dashboard__history-list';
+
+            payload.history.forEach(function(entry) {
+                if (!entry || typeof entry !== 'object') {
+                    return;
+                }
+
+                const item = document.createElement('li');
+                item.className = 'bjlg-network-dashboard__history-item';
+
+                const header = document.createElement('div');
+                header.className = 'bjlg-network-dashboard__history-header';
+
+                const action = document.createElement('span');
+                action.className = 'bjlg-network-dashboard__history-action';
+                action.textContent = entry.action_type || '';
+                header.appendChild(action);
+
+                const badge = buildStatusBadge(entry.status || 'info');
+                badge.classList.add('bjlg-network-dashboard__history-status');
+                header.appendChild(badge);
+
+                const siteLabel = document.createElement('span');
+                siteLabel.className = 'bjlg-network-dashboard__history-site';
+                const siteId = entry.blog_id ? parseInt(entry.blog_id, 10) : 0;
+                siteLabel.textContent = siteId > 0
+                    ? sprintf(__('Site #%s', 'backup-jlg'), siteId)
+                    : __('Événement réseau', 'backup-jlg');
+                header.appendChild(siteLabel);
+
+                item.appendChild(header);
+
+                if (entry.details) {
+                    const details = document.createElement('p');
+                    details.className = 'bjlg-network-dashboard__history-details';
+                    details.textContent = entry.details;
+                    item.appendChild(details);
+                }
+
+                const timestamp = document.createElement('span');
+                timestamp.className = 'bjlg-network-dashboard__history-time';
+                timestamp.textContent = formatRelativeDate(entry.timestamp);
+                item.appendChild(timestamp);
+
+                list.appendChild(item);
+            });
+
+            container.appendChild(list);
+        };
+
+        const renderSitesTable = function(container, payload) {
+            container.innerHTML = '';
+
+            const heading = document.createElement('h3');
+            heading.className = 'bjlg-network-dashboard__section-title';
+            heading.textContent = __('Sites supervisés', 'backup-jlg');
+            container.appendChild(heading);
+
+            if (!payload || !Array.isArray(payload.sites) || payload.sites.length === 0) {
+                renderMessage(container, __('Aucun site disponible pour cette sélection.', 'backup-jlg'), 'info');
+                return;
+            }
+
+            const table = document.createElement('table');
+            table.className = 'bjlg-network-dashboard__table';
+
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            [
+                __('Site', 'backup-jlg'),
+                __('Statut', 'backup-jlg'),
+                __('Actions', 'backup-jlg'),
+                __('Échecs', 'backup-jlg'),
+                __('Dernière activité', 'backup-jlg'),
+                __('Actions distantes', 'backup-jlg'),
+            ].forEach(function(label) {
+                const th = document.createElement('th');
+                th.textContent = label;
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+
+            payload.sites.forEach(function(site) {
+                if (!site || typeof site !== 'object') {
+                    return;
+                }
+
+                const activity = site.activity || {};
+                const row = document.createElement('tr');
+
+                const nameCell = document.createElement('td');
+                const nameLink = document.createElement('a');
+                nameLink.textContent = site.name || sprintf(__('Site #%s', 'backup-jlg'), site.id);
+                nameLink.href = site.url || '#';
+                nameLink.target = '_blank';
+                nameLink.rel = 'noopener noreferrer';
+                nameCell.appendChild(nameLink);
+                row.appendChild(nameCell);
+
+                const statusCell = document.createElement('td');
+                statusCell.appendChild(buildStatusBadge(site.status || 'idle'));
+                row.appendChild(statusCell);
+
+                const totalCell = document.createElement('td');
+                totalCell.textContent = formatNumber(activity.total_actions || 0, 0);
+                row.appendChild(totalCell);
+
+                const failedCell = document.createElement('td');
+                failedCell.textContent = formatNumber(activity.failed || 0, 0);
+                row.appendChild(failedCell);
+
+                const lastCell = document.createElement('td');
+                lastCell.textContent = formatRelativeDate(activity.last_activity || '');
+                row.appendChild(lastCell);
+
+                const actionsCell = document.createElement('td');
+                actionsCell.className = 'bjlg-network-dashboard__site-actions';
+
+                const openButton = document.createElement('a');
+                openButton.className = 'button button-secondary';
+                openButton.href = site.admin_url || '#';
+                openButton.target = '_blank';
+                openButton.rel = 'noopener noreferrer';
+                openButton.textContent = __('Ouvrir', 'backup-jlg');
+                actionsCell.appendChild(openButton);
+
+                const historyButton = document.createElement('button');
+                historyButton.type = 'button';
+                historyButton.className = 'button';
+                historyButton.textContent = __('Historique', 'backup-jlg');
+                historyButton.addEventListener('click', function() {
+                    state.blogId = site.id;
+                    state.page = 1;
+                    loadData();
+                });
+                actionsCell.appendChild(historyButton);
+
+                if (restBackups) {
+                    const backupButton = document.createElement('button');
+                    backupButton.type = 'button';
+                    backupButton.className = 'button button-primary';
+                    backupButton.textContent = __('Sauvegarder', 'backup-jlg');
+                    backupButton.addEventListener('click', function() {
+                        triggerBackup(site, backupButton);
+                    });
+                    actionsCell.appendChild(backupButton);
+                }
+
+                row.appendChild(actionsCell);
+                tbody.appendChild(row);
+            });
+
+            table.appendChild(tbody);
+            container.appendChild(table);
+
+            if (payload.pagination && payload.pagination.pages > 1) {
+                const pager = document.createElement('div');
+                pager.className = 'bjlg-network-dashboard__pagination';
+
+                const prev = document.createElement('button');
+                prev.type = 'button';
+                prev.className = 'button';
+                prev.textContent = __('Précédent', 'backup-jlg');
+                prev.disabled = state.page <= 1;
+                prev.addEventListener('click', function() {
+                    if (state.page > 1) {
+                        state.page--;
+                        loadData();
+                    }
+                });
+                pager.appendChild(prev);
+
+                const pageInfo = document.createElement('span');
+                pageInfo.className = 'bjlg-network-dashboard__page-info';
+                pageInfo.textContent = sprintf(__('Page %1$s sur %2$s', 'backup-jlg'), state.page, payload.pagination.pages);
+                pager.appendChild(pageInfo);
+
+                const next = document.createElement('button');
+                next.type = 'button';
+                next.className = 'button';
+                next.textContent = __('Suivant', 'backup-jlg');
+                next.disabled = state.page >= payload.pagination.pages;
+                next.addEventListener('click', function() {
+                    if (state.page < payload.pagination.pages) {
+                        state.page++;
+                        loadData();
+                    }
+                });
+                pager.appendChild(next);
+
+                container.appendChild(pager);
+            }
+        };
+
+        const renderFilters = function(container) {
+            const controls = document.createElement('div');
+            controls.className = 'bjlg-network-dashboard__filters';
+
+            const periodSelect = document.createElement('select');
+            periodSelect.className = 'bjlg-network-dashboard__filter';
+            [
+                { value: 'week', label: __('7 derniers jours', 'backup-jlg') },
+                { value: 'month', label: __('30 derniers jours', 'backup-jlg') },
+                { value: 'year', label: __('12 derniers mois', 'backup-jlg') },
+            ].forEach(function(option) {
+                const opt = document.createElement('option');
+                opt.value = option.value;
+                opt.textContent = option.label;
+                if (state.period === option.value) {
+                    opt.selected = true;
+                }
+                periodSelect.appendChild(opt);
+            });
+            periodSelect.addEventListener('change', function() {
+                state.period = periodSelect.value;
+                state.page = 1;
+                loadData();
+            });
+            controls.appendChild(periodSelect);
+
+            const statusSelect = document.createElement('select');
+            statusSelect.className = 'bjlg-network-dashboard__filter';
+            [
+                { value: 'all', label: __('Tous les statuts', 'backup-jlg') },
+                { value: 'healthy', label: __('Actifs', 'backup-jlg') },
+                { value: 'idle', label: __('Inactifs', 'backup-jlg') },
+                { value: 'failing', label: __('En alerte', 'backup-jlg') },
+            ].forEach(function(option) {
+                const opt = document.createElement('option');
+                opt.value = option.value;
+                opt.textContent = option.label;
+                if (state.status === option.value) {
+                    opt.selected = true;
+                }
+                statusSelect.appendChild(opt);
+            });
+            statusSelect.addEventListener('change', function() {
+                state.status = statusSelect.value;
+                state.page = 1;
+                loadData();
+            });
+            controls.appendChild(statusSelect);
+
+            const searchInput = document.createElement('input');
+            searchInput.type = 'search';
+            searchInput.className = 'bjlg-network-dashboard__filter';
+            searchInput.placeholder = __('Rechercher un site…', 'backup-jlg');
+            searchInput.value = state.search;
+            searchInput.addEventListener('input', function() {
+                const value = searchInput.value;
+                if (searchTimer) {
+                    window.clearTimeout(searchTimer);
+                }
+                searchTimer = window.setTimeout(function() {
+                    state.search = value;
+                    state.page = 1;
+                    loadData();
+                }, 300);
+            });
+            controls.appendChild(searchInput);
+
+            if (state.blogId) {
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'bjlg-network-dashboard__filter-chip';
+                chip.textContent = sprintf(__('Filtré sur le site #%s', 'backup-jlg'), state.blogId);
+                chip.addEventListener('click', function() {
+                    state.blogId = null;
+                    loadData();
+                });
+                controls.appendChild(chip);
+            }
+
+            const refreshButton = document.createElement('button');
+            refreshButton.type = 'button';
+            refreshButton.className = 'button';
+            refreshButton.textContent = __('Actualiser', 'backup-jlg');
+            refreshButton.addEventListener('click', function() {
+                loadData();
+            });
+            controls.appendChild(refreshButton);
+
+            container.appendChild(controls);
+        };
+
+        const render = function() {
             if (!panel) {
                 return;
             }
 
             panel.innerHTML = '';
 
-            const wrapper = document.createElement('div');
-            wrapper.className = 'bjlg-network-app__layout';
-
-            const selector = document.createElement('div');
-            selector.className = 'bjlg-network-app__controls';
-
-            const label = document.createElement('label');
-            label.setAttribute('for', 'bjlg-network-site-select');
-            label.textContent = __('Site du réseau', 'backup-jlg');
-            selector.appendChild(label);
-
-            const select = document.createElement('select');
-            select.id = 'bjlg-network-site-select';
-            select.className = 'bjlg-network-app__select';
-
-            list.forEach(function(site, index) {
-                const option = document.createElement('option');
-                option.value = String(site.id);
-                option.textContent = site.name || __('Site', 'backup-jlg') + ' #' + site.id;
-                option.setAttribute('data-index', String(index));
-                select.appendChild(option);
-            });
-
-            selector.appendChild(select);
-
-            const openButton = document.createElement('a');
-            openButton.className = 'button button-secondary';
-            openButton.id = 'bjlg-network-open-dashboard';
-            openButton.target = '_blank';
-            openButton.rel = 'noopener noreferrer';
-            openButton.textContent = __('Ouvrir le tableau de bord', 'backup-jlg');
-            selector.appendChild(openButton);
-
-            const status = document.createElement('div');
-            status.id = 'bjlg-network-site-status';
-            status.className = 'bjlg-network-app__status';
-
-            wrapper.appendChild(selector);
-            wrapper.appendChild(status);
-            panel.appendChild(wrapper);
-
-            const updateSelection = function(site) {
-                if (openButton) {
-                    openButton.href = site && site.admin_url ? site.admin_url : '#';
-                    openButton.setAttribute('aria-disabled', site && site.admin_url ? 'false' : 'true');
-                }
-                renderStatus(status, site || null);
-            };
-
-            select.addEventListener('change', function() {
-                const selectedIndex = select.selectedIndex;
-                const site = list[selectedIndex];
-                updateSelection(site);
-            });
-
-            if (list.length) {
-                select.selectedIndex = 0;
-                updateSelection(list[0]);
-                hideFallback();
-            } else {
-                select.disabled = true;
-                updateSelection(null);
-            }
-        };
-
-        const updateSites = function(list) {
-            if (!Array.isArray(list)) {
+            if (!networkEnabled) {
+                renderMessage(panel, __('Le mode réseau est désactivé pour Backup JLG.', 'backup-jlg'), 'warning');
                 return;
             }
 
-            sites = list;
-            mountInterface(sites);
+            const dashboard = document.createElement('div');
+            dashboard.className = 'bjlg-network-dashboard';
+
+            renderFilters(dashboard);
+            renderSummary(dashboard, sitesPayload);
+            renderSitesTable(dashboard, sitesPayload);
+            renderHistory(dashboard, historyPayload);
+
+            if (isLoading) {
+                const loadingNotice = document.createElement('p');
+                loadingNotice.className = 'bjlg-network-dashboard__loading';
+                loadingNotice.textContent = __('Chargement des données réseau…', 'backup-jlg');
+                dashboard.appendChild(loadingNotice);
+            } else if (lastError) {
+                renderMessage(dashboard, lastError, 'error');
+            }
+
+            panel.appendChild(dashboard);
         };
 
-        mountInterface(sites);
-
-        if (!networkEnabled) {
-            return;
-        }
-
-        if (!networkConfig || !networkConfig.enabled || !networkConfig.endpoints || !networkConfig.endpoints.sites) {
-            return;
-        }
-
-        if (!window.wp || !window.wp.apiFetch) {
-            return;
-        }
-
-        window.wp.apiFetch({
-            url: networkConfig.endpoints.sites,
-            headers: {
-                'X-WP-Nonce': bjlg_ajax.rest_nonce
+        const loadData = function() {
+            if (!networkEnabled || !endpoints.sites || !endpoints.history) {
+                render();
+                return;
             }
-        }).then(function(response) {
-            if (response && Array.isArray(response.sites)) {
-                updateSites(response.sites);
+
+            isLoading = true;
+            render();
+
+            const siteQuery = {
+                period: state.period,
+                status: state.status,
+                search: state.search,
+                page: state.page,
+                per_page: state.perPage,
+            };
+
+            if (state.blogId) {
+                siteQuery.blog_id = state.blogId;
             }
-        }).catch(function() {
-            // Leave fallback visible in case of errors.
-        });
+
+            const historyQuery = {
+                period: state.period,
+                limit: 25,
+            };
+
+            if (state.blogId) {
+                historyQuery.blog_id = state.blogId;
+            }
+
+            const sitesUrl = appendQuery(endpoints.sites, siteQuery);
+            const historyUrl = appendQuery(endpoints.history, historyQuery);
+
+            Promise.all([
+                fetchJSON(sitesUrl),
+                fetchJSON(historyUrl),
+            ]).then(function(responses) {
+                sitesPayload = responses[0];
+                historyPayload = responses[1];
+                lastError = '';
+            }).catch(function(error) {
+                lastError = error && error.message ? error.message : __('Impossible de charger les données réseau.', 'backup-jlg');
+            }).finally(function() {
+                isLoading = false;
+                render();
+            });
+        };
+
+        if (networkEnabled) {
+            hideFallback();
+            render();
+            loadData();
+        } else {
+            render();
+        }
     })();
 
     (function setupContrastToggle() {
