@@ -210,8 +210,17 @@ class BJLG_History {
             } else {
                 $entry['user_name'] = 'Système';
             }
+
+            if (
+                isset($entry['action_type'])
+                && $entry['action_type'] === 'sandbox_restore_validation'
+                && isset($entry['metadata'])
+                && is_array($entry['metadata'])
+            ) {
+                $entry['metadata_summary'] = self::format_restore_validation_metadata($entry['metadata']);
+            }
         }
-        
+
         return $results;
     }
     
@@ -592,5 +601,69 @@ class BJLG_History {
         $decoded = json_decode($metadata, true);
 
         return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private static function format_restore_validation_metadata(array $metadata): string
+    {
+        if (empty($metadata['report']) || !is_array($metadata['report'])) {
+            return '';
+        }
+
+        $report = $metadata['report'];
+        $parts = [];
+
+        if (!empty($report['backup_file']) && is_string($report['backup_file'])) {
+            $parts[] = sprintf(__('Archive : %s', 'backup-jlg'), basename($report['backup_file']));
+        }
+
+        if (!empty($report['objectives']['rto_human']) && is_string($report['objectives']['rto_human'])) {
+            $parts[] = sprintf(__('RTO ≈ %s', 'backup-jlg'), $report['objectives']['rto_human']);
+        }
+
+        if (!empty($report['objectives']['rpo_human']) && is_string($report['objectives']['rpo_human'])) {
+            $parts[] = sprintf(__('RPO ≈ %s', 'backup-jlg'), $report['objectives']['rpo_human']);
+        }
+
+        if (!empty($report['health']['summary']) && is_string($report['health']['summary'])) {
+            $parts[] = sprintf(__('Santé : %s', 'backup-jlg'), $report['health']['summary']);
+        }
+
+        if (!empty($report['issues']) && is_array($report['issues'])) {
+            $error_count = 0;
+            $warning_count = 0;
+
+            foreach ($report['issues'] as $issue) {
+                if (!is_array($issue)) {
+                    continue;
+                }
+
+                $type = isset($issue['type']) ? (string) $issue['type'] : '';
+
+                if (in_array($type, ['error', 'failure', 'exception', 'cleanup'], true)) {
+                    $error_count++;
+                } elseif ($type === 'warning') {
+                    $warning_count++;
+                }
+            }
+
+            if ($error_count > 0) {
+                $parts[] = sprintf(
+                    _n('%s incident critique', '%s incidents critiques', $error_count, 'backup-jlg'),
+                    number_format_i18n($error_count)
+                );
+            }
+
+            if ($warning_count > 0) {
+                $parts[] = sprintf(
+                    _n('%s avertissement', '%s avertissements', $warning_count, 'backup-jlg'),
+                    number_format_i18n($warning_count)
+                );
+            }
+        }
+
+        return implode(' | ', array_filter($parts));
     }
 }
