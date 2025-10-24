@@ -70,7 +70,8 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        bjlg_update_option('bjlg_notification_queue', []);
+        BJLG_Notification_Queue::create_tables();
+        BJLG_Notification_Queue::seed_queue([]);
         $GLOBALS['bjlg_test_scheduled_events']['single'] = [];
 
         $GLOBALS['current_user'] = (object) [
@@ -96,7 +97,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
     public function test_retry_entry_resets_channels_and_schedules_event(): void
     {
         $created = time() - 600;
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'entry-1',
                 'event' => 'backup_failed',
@@ -123,7 +124,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::retry_entry('entry-1'));
 
-        $queue = bjlg_get_option('bjlg_notification_queue');
+        $queue = BJLG_Notification_Queue::export_queue();
         $this->assertCount(1, $queue);
         $entry = $queue[0];
         $this->assertSame('entry-1', $entry['id']);
@@ -145,7 +146,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
     public function test_delete_entry_removes_entry(): void
     {
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'delete-me',
                 'event' => 'backup_complete',
@@ -166,13 +167,13 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         ]);
 
         $this->assertTrue(BJLG_Notification_Queue::delete_entry('delete-me'));
-        $queue = bjlg_get_option('bjlg_notification_queue');
+        $queue = BJLG_Notification_Queue::export_queue();
         $this->assertSame([], $queue);
     }
 
     public function test_acknowledge_channel_marks_entry_and_channel(): void
     {
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'ack-entry',
                 'event' => 'backup_failed',
@@ -194,7 +195,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::acknowledge_channel('ack-entry', 'email', 42));
 
-        $queue = bjlg_get_option('bjlg_notification_queue');
+        $queue = BJLG_Notification_Queue::export_queue();
         $this->assertCount(1, $queue);
         $entry = $queue[0];
         $this->assertArrayHasKey('acknowledged_at', $entry);
@@ -211,7 +212,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
     public function test_acknowledge_entry_marks_all_channels(): void
     {
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'ack-all',
                 'event' => 'backup_failed',
@@ -233,7 +234,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::acknowledge_entry('ack-all', 42));
 
-        $queue = bjlg_get_option('bjlg_notification_queue');
+        $queue = BJLG_Notification_Queue::export_queue();
         $entry = $queue[0];
         $this->assertArrayHasKey('acknowledged_at', $entry);
         $this->assertSame('Test Operator', $entry['acknowledged_by']);
@@ -259,7 +260,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
             $resolvedEntries[] = $entry;
         }, 10, 1);
 
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'resolve-me',
                 'event' => 'backup_failed',
@@ -281,7 +282,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::resolve_channel('resolve-me', 'email', 42, 'Email ok'));
 
-        $queue = bjlg_get_option('bjlg_notification_queue');
+        $queue = BJLG_Notification_Queue::export_queue();
         $entry = $queue[0];
         $this->assertArrayHasKey('resolution_notes', $entry);
         $this->assertStringContainsString('email', $entry['resolution_notes']);
@@ -290,7 +291,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::resolve_channel('resolve-me', 'slack', 42, 'Slack ok'));
 
-        $queue = bjlg_get_option('bjlg_notification_queue');
+        $queue = BJLG_Notification_Queue::export_queue();
         $entry = $queue[0];
         $this->assertGreaterThan(0, $entry['resolved_at']);
         $this->assertStringContainsString('slack', $entry['resolution_notes']);
@@ -304,7 +305,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
     public function test_trigger_manual_reminder_schedules_event(): void
     {
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'manual-reminder',
                 'event' => 'backup_failed',
@@ -326,7 +327,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
 
         $this->assertTrue(BJLG_Notification_Queue::trigger_manual_reminder('manual-reminder'));
 
-        $queue = bjlg_get_option('bjlg_notification_queue');
+        $queue = BJLG_Notification_Queue::export_queue();
         $this->assertCount(1, $queue);
         $entry = $queue[0];
         $this->assertArrayHasKey('reminders', $entry);
@@ -375,7 +376,7 @@ final class BJLG_NotificationQueueActionsTest extends TestCase
         $resolvedSummary = 'Incident rétabli après redémarrage du service.';
         $now = time();
 
-        bjlg_update_option('bjlg_notification_queue', [
+        BJLG_Notification_Queue::seed_queue([
             [
                 'id' => 'resolve-broadcast',
                 'event' => 'backup_failed',
