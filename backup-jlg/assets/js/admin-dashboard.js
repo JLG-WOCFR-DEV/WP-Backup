@@ -43,17 +43,20 @@ jQuery(function($) {
     const ajaxData = window.bjlg_ajax;
 
     const queueActionMap = {
-        'acknowledge-notification': { action: 'bjlg_notification_ack', param: 'entry_id' },
+        'acknowledge-notification': {
+            action: 'bjlg_notification_acknowledge',
+            param: 'entry_id',
+            promptField: 'summary',
+            prompt: __('Ajouter une note pour l’accusé ?', 'backup-jlg')
+        },
         'resolve-notification': {
             action: 'bjlg_notification_resolve',
             param: 'entry_id',
-            promptField: 'notes',
-            prompt: __('Ajoutez des notes de résolution (optionnel)', 'backup-jlg')
+            promptField: 'summary',
+            prompt: __('Consigner la résolution :', 'backup-jlg')
         },
         'retry-notification': { action: 'bjlg_notification_queue_retry', param: 'entry_id' },
         'clear-notification': { action: 'bjlg_notification_queue_delete', param: 'entry_id' },
-        'acknowledge-notification': { action: 'bjlg_notification_acknowledge', param: 'entry_id', summary: { required: false, prompt: __('Ajouter une note pour l’accusé ?', 'backup-jlg') } },
-        'resolve-notification': { action: 'bjlg_notification_resolve', param: 'entry_id', summary: { required: true, prompt: __('Consigner la résolution :', 'backup-jlg') } },
         'retry-remote-purge': { action: 'bjlg_remote_purge_retry', param: 'file' },
         'clear-remote-purge': { action: 'bjlg_remote_purge_delete', param: 'file' }
     };
@@ -811,6 +814,9 @@ jQuery(function($) {
                 if (entry.attempt_label) {
                     $('<span/>', { text: entry.attempt_label }).appendTo($primaryMeta);
                 }
+                if (entry.details && entry.details.resolution_status_label) {
+                    $('<span/>', { text: entry.details.resolution_status_label }).appendTo($primaryMeta);
+                }
 
                 const $timestamps = $('<p/>', { 'class': 'bjlg-queue-card__entry-meta', 'data-field': 'timestamps' }).appendTo($entry);
                 if (entry.created_relative) {
@@ -849,6 +855,30 @@ jQuery(function($) {
                         'data-field': 'resolved',
                         text: entry.details.resolved_label
                     }).appendTo($entry);
+                }
+
+                if (entry.details && entry.details.resolution_summary) {
+                    const summaryLines = String(entry.details.resolution_summary)
+                        .split(/\n+/)
+                        .map(function(line) { return line.trim(); })
+                        .filter(function(line) { return line.length; });
+
+                    if (summaryLines.length) {
+                        const $summaryWrapper = $('<div/>', {
+                            'class': 'bjlg-queue-card__entry-summary',
+                            'data-field': 'resolution-summary'
+                        }).appendTo($entry);
+
+                        $('<strong/>', {
+                            'class': 'bjlg-queue-card__entry-summary-label',
+                            text: __('Chronologie des actions', 'backup-jlg')
+                        }).appendTo($summaryWrapper);
+
+                        const $summaryList = $('<ul/>').appendTo($summaryWrapper);
+                        summaryLines.forEach(function(line) {
+                            $('<li/>', { text: line }).appendTo($summaryList);
+                        });
+                    }
                 }
 
                 if (entry.details && (entry.details.escalation_channels || entry.details.escalation_scenario)) {

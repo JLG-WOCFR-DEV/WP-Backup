@@ -1080,6 +1080,14 @@ class BJLG_Notifications {
             $entry['escalation'] = $escalation['meta'];
         }
 
+        if (!empty($entry['resolution']['summary'])) {
+            $entry['resolution_summary'] = (string) $entry['resolution']['summary'];
+
+            if (!empty($entry['escalation']) && is_array($entry['escalation'])) {
+                $entry['escalation']['resolution_summary'] = $entry['resolution']['summary'];
+            }
+        }
+
         $entry = $this->apply_quiet_hours_constraints($event, $entry);
 
         $queued = BJLG_Notification_Queue::enqueue($entry);
@@ -1099,16 +1107,23 @@ class BJLG_Notifications {
             ? __('Notification de test enregistrée.', 'backup-jlg')
             : sprintf(__('Notification générée pour "%s".', 'backup-jlg'), $title);
 
-        return [
+        $steps = [[
+            'timestamp' => $timestamp,
+            'actor' => __('Système', 'backup-jlg'),
+            'summary' => $summary,
+            'type' => 'created',
+        ]];
+
+        $resolution = [
             'acknowledged_at' => null,
             'resolved_at' => null,
-            'steps' => [[
-                'timestamp' => $timestamp,
-                'actor' => __('Système', 'backup-jlg'),
-                'summary' => $summary,
-                'type' => 'created',
-            ]],
+            'steps' => $steps,
+            'summary' => class_exists(__NAMESPACE__ . '\\BJLG_Notification_Queue')
+                ? BJLG_Notification_Queue::summarize_resolution_steps($steps)
+                : $summary,
         ];
+
+        return $resolution;
     }
 
     /**
