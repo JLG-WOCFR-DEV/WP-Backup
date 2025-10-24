@@ -19,6 +19,7 @@ Backup JLG est un plugin WordPress complet de sauvegarde et restauration qui com
 
 ### Automatisation & pilotage
 - Planification avancée : intervalles personnalisés, duplication, lancement immédiat, gestion des destinations secondaires et synchronisation Cron.【F:backup-jlg/includes/class-bjlg-scheduler.php†L35-L207】
+- Déclencheurs quasi temps réel (watcher inotify, webhooks applicatifs, binlogs MySQL) avec fenêtres de calme configurables et métriques dédiées pour tracer chaque lot d’événements.【F:backup-jlg/includes/class-bjlg-scheduler.php†L3005-L3394】【F:backup-jlg/includes/class-bjlg-admin.php†L4628-L4714】【F:backup-jlg/assets/js/admin-scheduling.js†L660-L838】
 - Nettoyage automatique quotidien avec rotation des logs, purge locale/distante, suppression de fichiers temporaires et historique configurable, déclenchable aussi à la demande.【F:backup-jlg/includes/class-bjlg-cleanup.php†L41-L142】
 - Table d’audit dédiée consignant chaque action (succès/échec), intégrée au tableau de bord et exposée via l’API.【F:backup-jlg/includes/class-bjlg-history.php†L16-L117】【F:backup-jlg/includes/class-bjlg-rest-api.php†L233-L284】
 - Escalade multi-niveaux entièrement configurable (email → Slack → SMS, etc.) avec modèles par gravité pour adapter l’introduction, les actions et la conclusion des messages selon la criticité.【F:backup-jlg/includes/class-bjlg-notifications.php†L600-L737】【F:backup-jlg/includes/class-bjlg-admin.php†L3290-L3361】

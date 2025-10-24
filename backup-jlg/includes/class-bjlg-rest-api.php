@@ -22,6 +22,7 @@ require_once __DIR__ . '/class-bjlg-history.php';
 require_once __DIR__ . '/class-bjlg-scheduler.php';
 require_once __DIR__ . '/class-bjlg-remote-storage-metrics.php';
 require_once __DIR__ . '/class-bjlg-rbac.php';
+require_once __DIR__ . '/class-bjlg-admin-advanced.php';
 
 class BJLG_REST_API {
     
@@ -299,6 +300,13 @@ class BJLG_REST_API {
                     'enum' => ['day', 'week', 'month', 'year']
                 ]
             ])
+        ]);
+
+        register_rest_route(self::API_NAMESPACE, '/network-metrics', [
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => [$this, 'get_network_metrics'],
+            'permission_callback' => [$this, 'check_permissions'],
+            'args' => $this->merge_site_args(),
         ]);
 
         register_rest_route(self::API_NAMESPACE, '/managed-vault/report', [
@@ -2512,6 +2520,141 @@ class BJLG_REST_API {
         return $sanitized;
     }
 
+    private function normalize_network_metrics(array $network): array {
+        $totals_raw = isset($network['totals']) && is_array($network['totals']) ? $network['totals'] : [];
+        $quotas_raw = isset($network['quotas']) && is_array($network['quotas']) ? $network['quotas'] : [];
+        $projections_raw = isset($network['projections']) && is_array($network['projections']) ? $network['projections'] : [];
+        $sla_raw = isset($network['sla']) && is_array($network['sla']) ? $network['sla'] : [];
+
+        $counts_raw = isset($projections_raw['counts']) && is_array($projections_raw['counts'])
+            ? $projections_raw['counts']
+            : [];
+
+        $counts = [
+            'critical' => $this->sanitize_int_value($counts_raw['critical'] ?? null, 0),
+            'warning' => $this->sanitize_int_value($counts_raw['warning'] ?? null, 0),
+            'watch' => $this->sanitize_int_value($counts_raw['watch'] ?? null, 0),
+            'success' => $this->sanitize_int_value($counts_raw['success'] ?? null, 0),
+            'neutral' => $this->sanitize_int_value($counts_raw['neutral'] ?? null, 0),
+        ];
+
+        return [
+            'totals' => [
+                'used_bytes' => $this->sanitize_int_value($totals_raw['used_bytes'] ?? null),
+                'quota_bytes' => $this->sanitize_int_value($totals_raw['quota_bytes'] ?? null),
+                'free_bytes' => $this->sanitize_int_value($totals_raw['free_bytes'] ?? null),
+                'destinations' => $this->sanitize_int_value($totals_raw['destinations'] ?? null, 0),
+                'regions' => $this->sanitize_int_value($totals_raw['regions'] ?? null, 0),
+            ],
+            'quotas' => [
+                'label' => $this->sanitize_string_field($quotas_raw['label'] ?? ''),
+                'intent' => $this->sanitize_intent_value($quotas_raw['intent'] ?? 'info'),
+                'used_bytes' => $this->sanitize_int_value($quotas_raw['used_bytes'] ?? null),
+                'quota_bytes' => $this->sanitize_int_value($quotas_raw['quota_bytes'] ?? null),
+                'free_bytes' => $this->sanitize_int_value($quotas_raw['free_bytes'] ?? null),
+                'utilization_ratio' => $this->sanitize_float_value($quotas_raw['utilization_ratio'] ?? null),
+                'utilization_percent' => $this->sanitize_float_value($quotas_raw['utilization_percent'] ?? null),
+            ],
+            'projections' => [
+                'label' => $this->sanitize_string_field($projections_raw['label'] ?? ''),
+                'intent' => $this->sanitize_intent_value($projections_raw['intent'] ?? 'info'),
+                'counts' => $counts,
+                'next_breach_seconds' => $this->sanitize_int_value($projections_raw['next_breach_seconds'] ?? null),
+                'next_breach_label' => $this->sanitize_string_field($projections_raw['next_breach_label'] ?? ''),
+            ],
+            'sla' => [
+                'label' => $this->sanitize_string_field($sla_raw['label'] ?? ''),
+                'intent' => $this->sanitize_intent_value($sla_raw['intent'] ?? 'info'),
+                'status' => $this->sanitize_status_value($sla_raw['status'] ?? 'unknown'),
+                'available_copies' => $this->sanitize_int_value($sla_raw['available_copies'] ?? null),
+                'expected_copies' => $this->sanitize_int_value($sla_raw['expected_copies'] ?? null),
+                'latency_ms' => $this->sanitize_int_value($sla_raw['latency_ms'] ?? null),
+                'rto_seconds' => $this->sanitize_float_value($sla_raw['rto_seconds'] ?? null),
+                'rpo_seconds' => $this->sanitize_float_value($sla_raw['rpo_seconds'] ?? null),
+                'rto_human' => $this->sanitize_string_field($sla_raw['rto_human'] ?? ''),
+                'rpo_human' => $this->sanitize_string_field($sla_raw['rpo_human'] ?? ''),
+                'validated_relative' => $this->sanitize_string_field($sla_raw['validated_relative'] ?? ''),
+            ],
+        ];
+    }
+
+    private function normalize_network_summary(array $summary): array {
+        return [
+            'network_quota_summary' => $this->sanitize_string_field($summary['network_quota_summary'] ?? ''),
+            'network_quota_intent' => $this->sanitize_intent_value($summary['network_quota_intent'] ?? 'info'),
+            'network_projection_summary' => $this->sanitize_string_field($summary['network_projection_summary'] ?? ''),
+            'network_projection_intent' => $this->sanitize_intent_value($summary['network_projection_intent'] ?? 'info'),
+            'network_sla_summary' => $this->sanitize_string_field($summary['network_sla_summary'] ?? ''),
+            'network_sla_intent' => $this->sanitize_intent_value($summary['network_sla_intent'] ?? 'info'),
+            'network_rto_human' => $this->sanitize_string_field($summary['network_rto_human'] ?? ''),
+            'network_rpo_human' => $this->sanitize_string_field($summary['network_rpo_human'] ?? ''),
+        ];
+    }
+
+    private function sanitize_string_field($value): string {
+        if (is_string($value)) {
+            return sanitize_text_field($value);
+        }
+
+        if (is_scalar($value)) {
+            return sanitize_text_field((string) $value);
+        }
+
+        return '';
+    }
+
+    private function sanitize_int_value($value, ?int $default = null): ?int {
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) round((float) $value);
+        }
+
+        return $default;
+    }
+
+    private function sanitize_float_value($value, ?float $default = null): ?float {
+        if (is_float($value) || is_int($value)) {
+            return (float) $value;
+        }
+
+        if (is_numeric($value)) {
+            return (float) $value;
+        }
+
+        return $default;
+    }
+
+    private function sanitize_intent_value($value, string $default = 'info'): string {
+        $intent = is_string($value) ? sanitize_key($value) : '';
+        if ($intent === '') {
+            $intent = $default;
+        }
+
+        $allowed = ['info', 'warning', 'danger', 'success', 'neutral'];
+        if (!in_array($intent, $allowed, true)) {
+            $intent = $default;
+        }
+
+        return $intent;
+    }
+
+    private function sanitize_status_value($value, string $default = 'unknown'): string {
+        $status = is_string($value) ? sanitize_key($value) : '';
+        if ($status === '') {
+            $status = $default;
+        }
+
+        $allowed = ['unknown', 'inactive', 'healthy', 'degraded', 'failed'];
+        if (!in_array($status, $allowed, true)) {
+            $status = $default;
+        }
+
+        return $status;
+    }
+
     private function prepare_settings_payload(array $params) {
         $validated = [];
 
@@ -3525,6 +3668,60 @@ class BJLG_REST_API {
                 'activity' => $snapshot['activity'],
                 'disk' => $snapshot['disk'],
                 'quota' => $snapshot['quota'],
+            ]);
+        });
+    }
+
+    public function get_network_metrics($request) {
+        return $this->with_request_site($request, function () {
+            if (!class_exists(__NAMESPACE__ . '\\BJLG_Admin_Advanced')) {
+                return rest_ensure_response([
+                    'status' => 'unavailable',
+                    'available' => false,
+                    'network' => [],
+                    'summary' => [],
+                ]);
+            }
+
+            try {
+                $advanced = new BJLG_Admin_Advanced();
+                $metrics = $advanced->get_dashboard_metrics();
+            } catch (\Throwable $exception) {
+                if (class_exists(BJLG_Debug::class)) {
+                    BJLG_Debug::log('REST network metrics error: ' . $exception->getMessage(), 'error');
+                }
+
+                return rest_ensure_response([
+                    'status' => 'error',
+                    'available' => false,
+                    'message' => __('Impossible de générer les métriques réseau.', 'backup-jlg'),
+                ]);
+            }
+
+            $network = isset($metrics['network']) && is_array($metrics['network']) ? $metrics['network'] : [];
+            $summary = isset($metrics['summary']) && is_array($metrics['summary']) ? $metrics['summary'] : [];
+
+            $normalized_network = $this->normalize_network_metrics($network);
+            $normalized_summary = $this->normalize_network_summary($summary);
+
+            $has_network_data = false;
+            if (!empty($normalized_network['totals']['destinations'])) {
+                $has_network_data = true;
+            }
+            if ($normalized_network['quotas']['used_bytes'] !== null || $normalized_network['quotas']['quota_bytes'] !== null) {
+                $has_network_data = true;
+            }
+            if (!empty($normalized_network['sla']['status']) && $normalized_network['sla']['status'] !== 'unknown') {
+                $has_network_data = true;
+            }
+
+            return rest_ensure_response([
+                'status' => 'ok',
+                'available' => $has_network_data,
+                'generated_at' => isset($metrics['generated_at']) ? sanitize_text_field((string) $metrics['generated_at']) : '',
+                'generated_at_unix' => current_time('timestamp'),
+                'network' => $normalized_network,
+                'summary' => $normalized_summary,
             ]);
         });
     }

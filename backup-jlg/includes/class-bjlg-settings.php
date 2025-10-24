@@ -65,6 +65,19 @@ class BJLG_Settings {
         'expected_copies' => 2,
     ];
 
+    private const DEFAULT_MANAGED_STORAGE_SETTINGS = [
+        'enabled' => false,
+        'contract_id' => '',
+        'plan' => 'standard',
+        'primary_region' => '',
+        'replica_regions' => [],
+        'soft_quota_gib' => 500,
+        'hard_quota_gib' => 1024,
+        'burst_percent' => 10,
+        'rto_minutes' => 30,
+        'rpo_minutes' => 60,
+    ];
+
     private const MANAGED_REPLICATION_PROVIDER_BLUEPRINT = [
         'aws_glacier' => [
             'label' => 'Amazon S3 Glacier',
@@ -266,6 +279,7 @@ class BJLG_Settings {
             'kms_key_id' => '',
             'enabled' => false,
         ],
+        'managed_storage' => self::DEFAULT_MANAGED_STORAGE_SETTINGS,
         'azure_blob' => [
             'account_name' => '',
             'account_key' => '',
@@ -924,6 +938,13 @@ class BJLG_Settings {
                 BJLG_Debug::log('Réglages de réplication managée sauvegardés.');
             }
 
+            if (!empty($_POST['managed_storage_submitted'])) {
+                $storage_settings = $this->sanitize_managed_storage_from_request($_POST);
+                $this->update_option_value('bjlg_managed_storage_settings', $storage_settings);
+                $saved_settings['managed_storage'] = $storage_settings;
+                BJLG_Debug::log('Réglages du stockage managé sauvegardés.');
+            }
+
             // --- Réglages Wasabi ---
             if (isset($_POST['wasabi_access_key']) || isset($_POST['wasabi_bucket'])) {
                 $wasabi_settings = [
@@ -1156,6 +1177,7 @@ class BJLG_Settings {
                 'webhook_backup_complete',
                 'webhook_backup_failed',
                 'webhook_cleanup_complete',
+                'webhook_sla_alert',
                 'webhook_secret',
             ];
 
@@ -1406,6 +1428,7 @@ class BJLG_Settings {
                     's3' => $this->get_section_settings_with_defaults('s3'),
                     'wasabi' => $this->get_section_settings_with_defaults('wasabi'),
                     'managed_vault' => $this->get_section_settings_with_defaults('managed_vault'),
+                    'managed_storage' => $this->get_section_settings_with_defaults('managed_storage'),
                     'dropbox' => $this->get_section_settings_with_defaults('dropbox'),
                     'onedrive' => $this->get_section_settings_with_defaults('onedrive'),
                     'pcloud' => $this->get_section_settings_with_defaults('pcloud'),
@@ -2055,6 +2078,48 @@ class BJLG_Settings {
 
                 return $sanitized;
 
+            case 'bjlg_managed_storage_settings':
+                $defaults = $this->default_settings['managed_storage'];
+                $sanitized = $defaults;
+
+                if (is_array($value)) {
+                    if (isset($value['contract_id'])) {
+                        $sanitized['contract_id'] = sanitize_text_field((string) $value['contract_id']);
+                    }
+                    if (isset($value['plan'])) {
+                        $plan = sanitize_key((string) $value['plan']);
+                        if (in_array($plan, ['standard', 'enterprise', 'dedicated'], true)) {
+                            $sanitized['plan'] = $plan;
+                        }
+                    }
+                    if (isset($value['primary_region'])) {
+                        $sanitized['primary_region'] = sanitize_text_field((string) $value['primary_region']);
+                    }
+                    if (isset($value['replica_regions'])) {
+                        $sanitized['replica_regions'] = $this->sanitize_region_input($value['replica_regions']);
+                    }
+                    if (isset($value['soft_quota_gib'])) {
+                        $sanitized['soft_quota_gib'] = max(1, (int) $value['soft_quota_gib']);
+                    }
+                    if (isset($value['hard_quota_gib'])) {
+                        $sanitized['hard_quota_gib'] = max($sanitized['soft_quota_gib'], (int) $value['hard_quota_gib']);
+                    }
+                    if (isset($value['burst_percent'])) {
+                        $sanitized['burst_percent'] = max(0, min(100, (int) $value['burst_percent']));
+                    }
+                    if (isset($value['rto_minutes'])) {
+                        $sanitized['rto_minutes'] = max(1, (int) $value['rto_minutes']);
+                    }
+                    if (isset($value['rpo_minutes'])) {
+                        $sanitized['rpo_minutes'] = max(0, (int) $value['rpo_minutes']);
+                    }
+                    if (isset($value['enabled'])) {
+                        $sanitized['enabled'] = $this->to_bool($value['enabled']);
+                    }
+                }
+
+                return $sanitized;
+
             case 'bjlg_azure_blob_settings':
                 $defaults = $this->default_settings['azure_blob'];
                 $sanitized = $defaults;
@@ -2465,7 +2530,8 @@ class BJLG_Settings {
             'onedrive' => 'bjlg_onedrive_settings',
             'pcloud' => 'bjlg_pcloud_settings',
             's3' => 'bjlg_s3_settings',
-            'managed_vault' => 'bjlg_managed_vault_settings',
+        'managed_vault' => 'bjlg_managed_vault_settings',
+        'managed_storage' => 'bjlg_managed_storage_settings',
             'wasabi' => 'bjlg_wasabi_settings',
             'azure_blob' => 'bjlg_azure_blob_settings',
             'backblaze_b2' => 'bjlg_backblaze_b2_settings',
@@ -3315,6 +3381,18 @@ class BJLG_Settings {
         return apply_filters('bjlg_default_managed_replication_settings', $defaults);
     }
 
+    public static function get_default_managed_storage_settings(): array {
+        /** @var array<string,mixed> $defaults */
+        $defaults = self::DEFAULT_MANAGED_STORAGE_SETTINGS;
+
+        /**
+         * Permet d’ajuster les réglages par défaut du stockage managé.
+         *
+         * @param array<string,mixed> $defaults
+         */
+        return apply_filters('bjlg_default_managed_storage_settings', $defaults);
+    }
+
     private static function sanitize_managed_replication_region(string $provider, string $region): string {
         $regions = self::get_managed_replication_region_choices($provider);
         $region_key = sanitize_key($region);
@@ -3336,7 +3414,7 @@ class BJLG_Settings {
     }
 
     public static function get_known_destination_ids() {
-        $destinations = ['google_drive', 'aws_s3', 'sftp', 'dropbox', 'onedrive', 'pcloud', 'wasabi', 'managed_vault'];
+        $destinations = ['google_drive', 'aws_s3', 'sftp', 'dropbox', 'onedrive', 'pcloud', 'wasabi', 'managed_vault', 'managed_storage'];
 
         /** @var array<int, string> $filtered */
         $filtered = apply_filters('bjlg_known_destination_ids', $destinations);
@@ -3383,6 +3461,7 @@ class BJLG_Settings {
             'sftp' => 'Serveur SFTP',
             'wasabi' => 'Wasabi',
             'managed_vault' => 'Managed Vault',
+            'managed_storage' => __('Stockage managé réseau', 'backup-jlg'),
             'azure_blob' => 'Azure Blob Storage',
             'backblaze_b2' => 'Backblaze B2',
             'managed_replication' => __('Stockage managé multi-régions', 'backup-jlg'),
@@ -3869,6 +3948,87 @@ class BJLG_Settings {
         }
 
         $settings['email_recipients'] = implode(', ', $email_validation['valid']);
+
+        return $settings;
+    }
+
+    private function sanitize_managed_storage_from_request(array $source): array {
+        $defaults = self::get_default_managed_storage_settings();
+
+        $enabled = !empty($source['managed_storage_enabled'])
+            ? $this->to_bool(wp_unslash($source['managed_storage_enabled']))
+            : false;
+
+        $contract_id = isset($source['managed_storage_contract_id'])
+            ? sanitize_text_field((string) wp_unslash($source['managed_storage_contract_id']))
+            : '';
+
+        $plan = isset($source['managed_storage_plan'])
+            ? sanitize_key((string) wp_unslash($source['managed_storage_plan']))
+            : $defaults['plan'];
+
+        if (!in_array($plan, ['standard', 'enterprise', 'dedicated'], true)) {
+            $plan = $defaults['plan'];
+        }
+
+        $primary_region = isset($source['managed_storage_primary_region'])
+            ? sanitize_text_field((string) wp_unslash($source['managed_storage_primary_region']))
+            : '';
+
+        $replica_input = isset($source['managed_storage_replica_regions'])
+            ? wp_unslash($source['managed_storage_replica_regions'])
+            : '';
+
+        if (is_array($replica_input)) {
+            $replica_input = implode(',', $replica_input);
+        }
+
+        $replica_regions = $this->sanitize_region_input($replica_input);
+
+        $soft_quota = isset($source['managed_storage_soft_quota_gib'])
+            ? max(1, (int) wp_unslash($source['managed_storage_soft_quota_gib']))
+            : $defaults['soft_quota_gib'];
+
+        $hard_quota = isset($source['managed_storage_hard_quota_gib'])
+            ? max($soft_quota, (int) wp_unslash($source['managed_storage_hard_quota_gib']))
+            : max($soft_quota, $defaults['hard_quota_gib']);
+
+        $burst_percent = isset($source['managed_storage_burst_percent'])
+            ? max(0, min(100, (int) wp_unslash($source['managed_storage_burst_percent'])))
+            : $defaults['burst_percent'];
+
+        $rto_minutes = isset($source['managed_storage_rto_minutes'])
+            ? max(1, (int) wp_unslash($source['managed_storage_rto_minutes']))
+            : $defaults['rto_minutes'];
+
+        $rpo_minutes = isset($source['managed_storage_rpo_minutes'])
+            ? max(0, (int) wp_unslash($source['managed_storage_rpo_minutes']))
+            : $defaults['rpo_minutes'];
+
+        $settings = [
+            'enabled' => $enabled,
+            'contract_id' => $contract_id,
+            'plan' => $plan,
+            'primary_region' => $primary_region,
+            'replica_regions' => $replica_regions,
+            'soft_quota_gib' => $soft_quota,
+            'hard_quota_gib' => $hard_quota,
+            'burst_percent' => $burst_percent,
+            'rto_minutes' => $rto_minutes,
+            'rpo_minutes' => $rpo_minutes,
+        ];
+
+        /**
+         * Permet à l’infrastructure d’enrichir ou de valider les réglages.
+         *
+         * @param array<string,mixed> $settings
+         * @param array<string,mixed> $source
+         */
+        $filtered = apply_filters('bjlg_sanitize_managed_storage_settings', $settings, $source);
+
+        if (is_array($filtered)) {
+            $settings = wp_parse_args($filtered, $settings);
+        }
 
         return $settings;
     }

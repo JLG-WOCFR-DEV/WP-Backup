@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stockage managé JLG – Contrats et SLA</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            color-scheme: light dark;
+        }
+        body {
+            margin: 0;
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            line-height: 1.65;
+            color: #1f2937;
+            background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+            padding: clamp(1.5rem, 4vw, 3rem);
+        }
+        main {
+            max-width: 960px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 18px;
+            box-shadow: 0 20px 35px -20px rgba(79, 70, 229, 0.35);
+            padding: clamp(1.75rem, 4vw, 3rem);
+        }
+        h1 {
+            font-size: clamp(2rem, 4vw, 2.8rem);
+            margin-bottom: 0.5rem;
+            color: #111827;
+        }
+        p.lead {
+            font-size: 1.1rem;
+            color: #4b5563;
+            margin-top: 0;
+        }
+        section {
+            margin-top: 2.5rem;
+        }
+        h2 {
+            font-size: clamp(1.4rem, 3vw, 1.9rem);
+            margin-bottom: 0.75rem;
+            color: #312e81;
+        }
+        ul, ol {
+            margin: 0;
+            padding-left: 1.25rem;
+        }
+        .pill {
+            display: inline-block;
+            padding: 0.35rem 0.75rem;
+            border-radius: 999px;
+            background: rgba(79, 70, 229, 0.12);
+            color: #4338ca;
+            font-weight: 600;
+            font-size: 0.875rem;
+            letter-spacing: 0.02em;
+            margin-bottom: 1.25rem;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1.25rem;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.08);
+        }
+        th, td {
+            padding: 0.9rem 1rem;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+            text-align: left;
+        }
+        th {
+            background: rgba(79, 70, 229, 0.08);
+            font-weight: 600;
+        }
+        footer {
+            margin-top: 3rem;
+            font-size: 0.85rem;
+            color: #6b7280;
+            text-align: center;
+        }
+        @media (max-width: 640px) {
+            body { padding: 1.25rem; }
+            th, td { font-size: 0.95rem; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <span class="pill">Programme Stockage Managé</span>
+    <h1>Contrats, coûts et limites</h1>
+    <p class="lead">Référence officielle pour la destination «&nbsp;stockage managé&nbsp;» opérée par l’équipe Backup JLG.</p>
+
+    <section>
+        <h2>Résumé du service</h2>
+        <table>
+            <tbody>
+            <tr><th>Couverture</th><td>Multi-région active (≥ 3 régions) avec réplication chiffrée.</td></tr>
+            <tr><th>SLA cible</th><td>RTO ≤ 45 min • RPO ≤ 15 min • Disponibilité ≥ 99,9 %.</td></tr>
+            <tr><th>Facturation</th><td>Forfait mensuel par palier + surconsommation à 0,12 €/Go.</td></tr>
+            <tr><th>Engagement</th><td>Contrat initial de 12 mois, renouvelable tacitement.</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>Paliers de capacité</h2>
+        <table>
+            <thead>
+            <tr><th>Palier</th><th>Capacité incluse</th><th>IOPS recommandées</th><th>Tarif HT</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>S1</td><td>1 To</td><td>1 500</td><td>390 €/mois</td></tr>
+            <tr><td>S2</td><td>3 To</td><td>3 500</td><td>890 €/mois</td></tr>
+            <tr><td>S3</td><td>8 To</td><td>7 000</td><td>1 990 €/mois</td></tr>
+            </tbody>
+        </table>
+        <p>Au-delà des volumes inclus, facturation proratisée à 0,12 €/Go/mois. Les alertes automatiques sont émises à 85 % et 95 % d’utilisation.</p>
+    </section>
+
+    <section>
+        <h2>SLA et obligations</h2>
+        <ul>
+            <li>Tests de restauration sandbox supervisés au minimum une fois par semaine.</li>
+            <li>Webhook <code>sla_alert</code> obligatoire pour les intégrations SOC/NOC.</li>
+            <li>Crédit de 10 % appliqué par tranche de 30 min dépassant les objectifs SLA.</li>
+            <li>Préavis de 15 jours pour toute maintenance impactant la disponibilité.</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>Onboarding accéléré</h2>
+        <ol>
+            <li>Audit de volumétrie via l’onglet <strong>Intégrations</strong> du plugin.</li>
+            <li>Signature numérique du contrat-cadre et choix du palier.</li>
+            <li>Provisioning automatisé + injection de la clé API dans WordPress.</li>
+            <li>Validation : réplication initiale + test RTO/RPO sandbox.</li>
+            <li>Activation des alertes SLA et transfert du dossier d’escalade.</li>
+        </ol>
+    </section>
+
+    <section>
+        <h2>Limites et exclusions</h2>
+        <ul>
+            <li>Purge légale requiert un préavis de 72 heures.</li>
+            <li>Archives > 2 To segmentées automatiquement (réhydratation supervisée).</li>
+            <li>Pas de prise en charge des workloads hors WordPress natif.</li>
+            <li>Bande passante sortante incluse : 5 To/mois (0,08 €/Go au-delà).</li>
+        </ul>
+    </section>
+
+    <section>
+        <h2>Ressources</h2>
+        <ul>
+            <li>API réseau : <code>/wp-json/backup-jlg/v1/network-metrics</code>.</li>
+            <li>Webhook SLA : configurez le champ <strong>Alerte SLA réseau</strong> dans les paramètres d’intégration.</li>
+            <li>Support 24/7 : <a href="https://support.backup-jlg.example/">support.backup-jlg.example</a>.</li>
+        </ul>
+    </section>
+
+    <footer>
+        Dernière mise à jour : 12 mars 2025 — Contact : managed-storage@backup-jlg.example
+    </footer>
+</main>
+</body>
+</html>

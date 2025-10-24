@@ -42,6 +42,16 @@ class BJLG_Incremental {
      */
     private static $latest_instance = null;
 
+    /**
+     * @var bool Indique si les hooks de capture temps réel sont enregistrés.
+     */
+    private static $realtime_hooks_registered = false;
+
+    /**
+     * @var array<string, int> Mémoire de débounce pour éviter les doublons très rapprochés.
+     */
+    private static $realtime_debounce = [];
+
     public function __construct() {
         $this->manifest_file = bjlg_get_backup_directory() . '.incremental-manifest.json';
         $this->load_manifest();
@@ -51,11 +61,13 @@ class BJLG_Incremental {
         // Hooks
         add_filter('bjlg_backup_type', [$this, 'determine_backup_type'], 10, 2);
         add_action('bjlg_backup_complete', [$this, 'update_manifest'], 10, 2);
-        
+
         // AJAX
         add_action('wp_ajax_bjlg_get_incremental_info', [$this, 'ajax_get_info']);
         add_action('wp_ajax_bjlg_reset_incremental', [$this, 'ajax_reset']);
         add_action('wp_ajax_bjlg_analyze_changes', [$this, 'ajax_analyze_changes']);
+
+        self::bootstrap_realtime_integrations();
     }
     
     /**
@@ -1409,18 +1421,126 @@ class BJLG_Incremental {
     public function verify_restore_chain() {
         $chain = $this->get_restore_chain();
         $missing = [];
-        
+
         foreach ($chain as $backup) {
             $filepath = bjlg_get_backup_directory() . $backup['file'];
             if (!file_exists($filepath)) {
                 $missing[] = $backup['file'];
             }
         }
-        
+
         return [
             'valid' => empty($missing),
             'missing' => $missing,
             'chain_length' => count($chain)
         ];
     }
+
+    public static function bootstrap_realtime_integrations(): void
+    {
+        if (self::$realtime_hooks_registered) {
+            return;
+        }
+
+        self::$realtime_hooks_registered = true;
+
+        if (function_exists('add_action')) {
+            add_action('bjlg_inotify_event', [self::class, 'handle_inotify_event'], 10, 2);
+            add_action('bjlg_application_webhook_event', [self::class, 'handle_application_webhook_event'], 10, 2);
+            add_action('bjlg_database_binlog_event', [self::class, 'handle_binlog_event'], 10, 2);
+        }
+    }
+
+    public static function notify_realtime_event(string $channel, array $payload = [], array $context = []): void
+    {
+        self::bootstrap_realtime_integrations();
+        self::record_realtime_signal($channel, $payload, $context);
+    }
+
+    public static function handle_inotify_event($event, $context = []): void
+    {
+        if (!is_array($event)) {
+            return;
+        }
+
+        $payload = [
+            'action' => isset($event['action']) ? (string) $event['action'] : '',
+            'path' => isset($event['path']) ? (string) $event['path'] : '',
+            'watch' => isset($event['watch']) ? (string) $event['watch'] : '',
+        ];
+
+        self::record_realtime_signal('inotify', $payload, is_array($context) ? $context : []);
+    }
+
+    public static function handle_application_webhook_event($event, $context = []): void
+    {
+        if (!is_array($event)) {
+            return;
+        }
+
+        $payload = [
+            'event' => isset($event['event']) ? (string) $event['event'] : '',
+            'source' => isset($event['source']) ? (string) $event['source'] : '',
+            'object' => isset($event['object']) ? (string) $event['object'] : '',
+        ];
+
+        self::record_realtime_signal('application_webhook', $payload, is_array($context) ? $context : []);
+    }
+
+    public static function handle_binlog_event($event, $context = []): void
+    {
+        if (!is_array($event)) {
+            return;
+        }
+
+        $payload = [
+            'table' => isset($event['table']) ? (string) $event['table'] : '',
+            'type' => isset($event['type']) ? (string) $event['type'] : '',
+        ];
+
+        self::record_realtime_signal('binlog', $payload, is_array($context) ? $context : []);
+    }
+
+    private static function record_realtime_signal(string $channel, array $payload, array $context = []): void
+    {
+        if (self::should_debounce_payload($channel, $payload)) {
+            return;
+        }
+
+        $context['source'] = isset($context['source']) ? $context['source'] : $channel;
+        BJLG_Backup::record_realtime_change($channel, $payload, $context);
+    }
+
+    private static function should_debounce_payload(string $channel, array $payload): bool
+    {
+        $hash = $channel . ':' . md5(self::hash_payload($payload));
+        $now = function_exists('current_time') ? (int) current_time('timestamp') : time();
+
+        foreach (self::$realtime_debounce as $stored_hash => $timestamp) {
+            if (($now - $timestamp) > 30) {
+                unset(self::$realtime_debounce[$stored_hash]);
+            }
+        }
+
+        if (isset(self::$realtime_debounce[$hash]) && ($now - self::$realtime_debounce[$hash]) < 2) {
+            return true;
+        }
+
+        self::$realtime_debounce[$hash] = $now;
+
+        return false;
+    }
+
+    private static function hash_payload(array $payload): string
+    {
+        if (function_exists('wp_json_encode')) {
+            $encoded = wp_json_encode($payload);
+        } else {
+            $encoded = json_encode($payload);
+        }
+
+        return is_string($encoded) ? $encoded : '';
+    }
 }
+
+BJLG_Incremental::bootstrap_realtime_integrations();
