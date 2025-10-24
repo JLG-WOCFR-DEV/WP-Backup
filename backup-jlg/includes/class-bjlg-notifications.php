@@ -968,11 +968,17 @@ class BJLG_Notifications {
         $timings = isset($report['timings']) && is_array($report['timings']) ? $report['timings'] : [];
         $sandbox = isset($report['sandbox']) && is_array($report['sandbox']) ? $report['sandbox'] : [];
         $cleanup = isset($sandbox['cleanup']) && is_array($sandbox['cleanup']) ? $sandbox['cleanup'] : [];
+        $health = isset($report['health']) && is_array($report['health']) ? $report['health'] : [];
+        $issues = isset($report['issues']) && is_array($report['issues']) ? $report['issues'] : [];
 
         $components = [];
         if (isset($report['components']) && is_array($report['components'])) {
             $components = array_map('strval', $report['components']);
         }
+
+        $sanitized_issues = $this->sanitize_validation_issues($issues);
+        $health_report = $this->sanitize_health_report($health);
+        $issue_summary = $this->summarize_validation_issues($sanitized_issues);
 
         return [
             'status' => $status,
@@ -991,8 +997,105 @@ class BJLG_Notifications {
             'sandbox_path' => isset($sandbox['base_path']) ? (string) $sandbox['base_path'] : '',
             'cleanup_performed' => !empty($cleanup['performed']),
             'cleanup_error' => isset($cleanup['error']) && $cleanup['error'] !== null ? (string) $cleanup['error'] : null,
+            'health' => $health_report,
+            'health_status' => $health_report['status'],
+            'health_summary' => $health_report['summary'],
+            'issues' => $sanitized_issues,
+            'issue_summary' => $issue_summary,
             'raw' => $report,
         ];
+    }
+
+    private function sanitize_health_report($health) {
+        if (!is_array($health)) {
+            return [
+                'status' => '',
+                'summary' => '',
+                'checked_at' => null,
+            ];
+        }
+
+        return [
+            'status' => isset($health['status']) ? (string) $health['status'] : '',
+            'summary' => isset($health['summary']) ? (string) $health['summary'] : '',
+            'checked_at' => isset($health['checked_at']) ? (int) $health['checked_at'] : null,
+        ];
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $issues
+     * @return array<int,array<string,string>>
+     */
+    private function sanitize_validation_issues(array $issues): array
+    {
+        $sanitized = [];
+
+        foreach ($issues as $issue) {
+            if (!is_array($issue)) {
+                continue;
+            }
+
+            $type = isset($issue['type']) ? (string) $issue['type'] : 'info';
+            $component = isset($issue['component']) ? (string) $issue['component'] : '';
+            $message = isset($issue['message']) ? (string) $issue['message'] : '';
+
+            if (function_exists('sanitize_key')) {
+                $type = sanitize_key($type);
+                $component = sanitize_key($component);
+            } else {
+                $type = preg_replace('/[^a-z0-9_\-]/i', '', strtolower($type));
+                $component = preg_replace('/[^a-z0-9_\-]/i', '', strtolower($component));
+            }
+
+            $sanitized[] = [
+                'type' => $type !== '' ? $type : 'info',
+                'component' => $component,
+                'message' => $message,
+            ];
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * @param array<int,array<string,string>> $issues
+     */
+    private function summarize_validation_issues(array $issues): string
+    {
+        if (empty($issues)) {
+            return '';
+        }
+
+        $error_count = 0;
+        $warning_count = 0;
+
+        foreach ($issues as $issue) {
+            $type = isset($issue['type']) ? (string) $issue['type'] : '';
+
+            if (in_array($type, ['error', 'failure', 'exception', 'cleanup'], true)) {
+                $error_count++;
+            } elseif ($type === 'warning') {
+                $warning_count++;
+            }
+        }
+
+        $parts = [];
+
+        if ($error_count > 0) {
+            $parts[] = sprintf(
+                _n('%s critique', '%s critiques', $error_count, 'backup-jlg'),
+                number_format_i18n($error_count)
+            );
+        }
+
+        if ($warning_count > 0) {
+            $parts[] = sprintf(
+                _n('%s avertissement', '%s avertissements', $warning_count, 'backup-jlg'),
+                number_format_i18n($warning_count)
+            );
+        }
+
+        return implode(' | ', $parts);
     }
 
     /**
@@ -1407,6 +1510,14 @@ class BJLG_Notifications {
 
                 if (!empty($context['message'])) {
                     $lines[] = __('Détails : ', 'backup-jlg') . $context['message'];
+                }
+
+                if (!empty($context['health_summary'])) {
+                    $lines[] = __('Health-check : ', 'backup-jlg') . $context['health_summary'];
+                }
+
+                if (!empty($context['issue_summary'])) {
+                    $lines[] = __('Incidents : ', 'backup-jlg') . $context['issue_summary'];
                 }
 
                 if (!empty($context['sandbox_path'])) {
