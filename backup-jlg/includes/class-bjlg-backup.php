@@ -2729,6 +2729,7 @@ class BJLG_Backup {
             'files' => [],
             'overall_status' => 'passed',
             'overall_message' => 'Toutes les vérifications ont réussi.',
+            'decryption' => $encrypted ? 'pending' : 'not_applicable',
         ];
 
         if (!is_readable($filepath)) {
@@ -2800,9 +2801,20 @@ class BJLG_Backup {
                 try {
                     $decryption = $this->encryption_handler->decrypt_to_temporary_copy($filepath, $password);
                 } catch (Exception $exception) {
-                    if (strpos($exception->getMessage(), 'Mot de passe requis') !== false) {
-                        throw new Exception($exception->getMessage() . ' Utilisez le filtre bjlg_post_backup_checks_password pour fournir le mot de passe avant la vérification.');
+                    $failure_message = $exception->getMessage();
+
+                    if (strpos($failure_message, 'Mot de passe requis') !== false) {
+                        $failure_message .= ' Utilisez le filtre bjlg_post_backup_checks_password pour fournir le mot de passe avant la vérification.';
+                        $results['decryption'] = 'failed';
+                        $results['overall_status'] = 'failed';
+                        $results['overall_message'] = $failure_message;
+
+                        throw new Exception($failure_message);
                     }
+
+                    $results['decryption'] = 'failed';
+                    $results['overall_status'] = 'failed';
+                    $results['overall_message'] = $failure_message;
 
                     throw $exception;
                 }
@@ -2817,11 +2829,16 @@ class BJLG_Backup {
                     : null;
 
                 if (!is_file($archive_for_checks)) {
+                    $results['decryption'] = 'failed';
+                    $results['overall_status'] = 'failed';
+                    $results['overall_message'] = 'La copie déchiffrée de la sauvegarde est introuvable.';
+
                     throw new Exception('La copie déchiffrée de la sauvegarde est introuvable.');
                 }
 
                 $temporary_files[] = $archive_for_checks;
                 BJLG_Debug::log('Vérification post-sauvegarde exécutée sur une copie déchiffrée temporaire.');
+                $results['decryption'] = 'passed';
             }
 
             $zip = $this->create_zip_archive();
