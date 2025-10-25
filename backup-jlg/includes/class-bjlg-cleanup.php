@@ -235,39 +235,66 @@ class BJLG_Cleanup {
         }
 
         $files_to_delete = [];
+        $normal_backups_with_mtime = [];
+        foreach ($normal_backups as $filepath) {
+            $mtime = $this->get_backup_mtime($filepath);
+            if ($mtime === null) {
+                continue;
+            }
+
+            $normal_backups_with_mtime[] = [
+                'path' => $filepath,
+                'mtime' => $mtime,
+            ];
+        }
+
+        $pre_restore_backups_with_mtime = [];
+        foreach ($pre_restore_backups as $filepath) {
+            $mtime = $this->get_backup_mtime($filepath);
+            if ($mtime === null) {
+                continue;
+            }
+
+            $pre_restore_backups_with_mtime[] = [
+                'path' => $filepath,
+                'mtime' => $mtime,
+            ];
+        }
+
+        $now = time();
 
         // Règle 1 : Nettoyage par ancienneté
         if ($retain_by_age_days > 0) {
             $age_limit_seconds = $retain_by_age_days * DAY_IN_SECONDS;
-            
-            foreach ($normal_backups as $filepath) {
-                if ((time() - filemtime($filepath)) > $age_limit_seconds) {
-                    $files_to_delete[] = $filepath;
-                    BJLG_Debug::log("Nettoyage par âge : Le fichier '" . basename($filepath) . "' est marqué pour suppression.");
+
+            foreach ($normal_backups_with_mtime as $backup) {
+                if (($now - $backup['mtime']) > $age_limit_seconds) {
+                    $files_to_delete[] = $backup['path'];
+                    BJLG_Debug::log("Nettoyage par âge : Le fichier '" . basename($backup['path']) . "' est marqué pour suppression.");
                 }
             }
         }
-        
+
         // Règle 2 : Nettoyage par nombre (seulement pour les sauvegardes normales)
-        if ($retain_by_number > 0 && count($normal_backups) > $retain_by_number) {
+        if ($retain_by_number > 0 && count($normal_backups_with_mtime) > $retain_by_number) {
             // Trier les fichiers du plus récent au plus ancien
-            usort($normal_backups, function($a, $b) {
-                return filemtime($b) - filemtime($a);
+            usort($normal_backups_with_mtime, function($a, $b) {
+                return $b['mtime'] <=> $a['mtime'];
             });
-            
+
             // Obtenir la liste des fichiers à supprimer (tous sauf les X plus récents)
-            $old_files = array_slice($normal_backups, $retain_by_number);
-            foreach ($old_files as $filepath) {
-                $files_to_delete[] = $filepath;
-                BJLG_Debug::log("Nettoyage par nombre : Le fichier '" . basename($filepath) . "' est marqué pour suppression.");
+            $old_files = array_slice($normal_backups_with_mtime, $retain_by_number);
+            foreach ($old_files as $backup) {
+                $files_to_delete[] = $backup['path'];
+                BJLG_Debug::log("Nettoyage par nombre : Le fichier '" . basename($backup['path']) . "' est marqué pour suppression.");
             }
         }
-        
+
         // Toujours supprimer les sauvegardes pré-restauration de plus de 7 jours
-        foreach ($pre_restore_backups as $filepath) {
-            if ((time() - filemtime($filepath)) > (7 * DAY_IN_SECONDS)) {
-                $files_to_delete[] = $filepath;
-                BJLG_Debug::log("Nettoyage : Suppression de l'ancienne sauvegarde pré-restauration '" . basename($filepath) . "'");
+        foreach ($pre_restore_backups_with_mtime as $backup) {
+            if (($now - $backup['mtime']) > (7 * DAY_IN_SECONDS)) {
+                $files_to_delete[] = $backup['path'];
+                BJLG_Debug::log("Nettoyage : Suppression de l'ancienne sauvegarde pré-restauration '" . basename($backup['path']) . "'");
             }
         }
 
@@ -285,8 +312,19 @@ class BJLG_Cleanup {
                 }
             }
         }
-        
+
         return $deleted_count;
+    }
+
+    private function get_backup_mtime($filepath) {
+        $timestamp = @filemtime($filepath);
+
+        if ($timestamp === false) {
+            BJLG_Debug::log("Nettoyage : impossible de récupérer la date de modification du fichier '" . basename($filepath) . "'. Le fichier est ignoré pour les règles de rétention.");
+            return null;
+        }
+
+        return $timestamp;
     }
 
     private function cleanup_expired_api_keys() {
