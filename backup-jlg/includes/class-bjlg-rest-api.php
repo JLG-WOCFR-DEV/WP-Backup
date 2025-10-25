@@ -4011,20 +4011,52 @@ class BJLG_REST_API {
                 $network_summary = BJLG_History::get_network_activity_summary($period, $history_filters);
             }
 
+            $disk_total = isset($storage_stats['disk_total']) ? $storage_stats['disk_total'] : 0;
+            $disk_free = isset($storage_stats['disk_free']) ? $storage_stats['disk_free'] : 0;
+
+            $disk_calculation_error = false;
+            $disk_usage_percent = null;
+
+            if (!is_numeric($disk_total) || $disk_total <= 0 || !is_numeric($disk_free)) {
+                $disk_calculation_error = true;
+            } else {
+                $disk_usage_percent = round((($disk_total - $disk_free) / $disk_total) * 100, 2);
+            }
+
+            if (!empty($storage_stats['disk_space_error'])) {
+                $disk_calculation_error = true;
+            }
+
+            $quota_snapshot = class_exists(BJLG_Remote_Storage_Metrics::class)
+                ? BJLG_Remote_Storage_Metrics::get_snapshot()
+                : [];
+
+            $response = [
+                'period' => $period,
+                'backups' => [
+                    'total' => isset($storage_stats['total_backups']) ? (int) $storage_stats['total_backups'] : 0,
+                    'total_size' => isset($storage_stats['total_size']) ? (int) $storage_stats['total_size'] : 0,
+                    'average_size' => $storage_stats['average_size'],
+                    'oldest' => $storage_stats['oldest_backup'],
+                    'newest' => $storage_stats['newest_backup'],
+                ],
+                'activity' => $history_stats,
+                'disk' => [
+                    'free' => $storage_stats['disk_free'],
+                    'total' => $storage_stats['disk_total'],
+                    'usage_percent' => $disk_usage_percent,
+                    'calculation_error' => $disk_calculation_error,
+                ],
+                'quota' => $this->summarize_remote_snapshot($quota_snapshot),
+                'timestamp' => current_time('c'),
+            ];
+
+            if ($network_summary !== null) {
+                $response['network'] = $network_summary;
+            }
+
             return rest_ensure_response($response);
         }, true);
-
-        return $this->with_request_site($request, function () use ($period, $site_id) {
-            $snapshot = $this->resolve_stats_snapshot($period);
-
-            return rest_ensure_response([
-                'period' => $period,
-                'backups' => $snapshot['backups'],
-                'activity' => $snapshot['activity'],
-                'disk' => $snapshot['disk'],
-                'quota' => $snapshot['quota'],
-            ]);
-        });
     }
 
     public function get_network_metrics($request) {
