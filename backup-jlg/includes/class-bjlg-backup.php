@@ -843,20 +843,16 @@ class BJLG_Backup {
             }
         }
 
-        if (function_exists('set_transient') && set_transient(self::TASK_LOCK_KEY, $payload, $ttl)) {
-            self::$in_memory_lock = $payload;
-
-            return true;
+        if (function_exists('set_transient')) {
+            BJLG_Debug::warning(
+                "Impossible d'acquérir le verrou de sauvegarde : aucune API atomique n'est disponible pour garantir l'exclusivité."
+            );
         }
 
-        $existing_payload = self::$in_memory_lock !== null
-            ? self::normalize_lock_payload(self::$in_memory_lock)
-            : null;
+        $existing_payload = self::get_lock_payload();
 
         if ($existing_payload === null || (int) $existing_payload['expires_at'] <= $now) {
-            self::$in_memory_lock = $payload;
-
-            return true;
+            return false;
         }
 
         return $existing_payload['owner'] === $task_id;
