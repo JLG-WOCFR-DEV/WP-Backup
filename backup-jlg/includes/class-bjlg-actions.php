@@ -884,7 +884,13 @@ class BJLG_Actions {
         status_header(200);
         header('Content-Type: application/octet-stream');
         header('Content-Disposition: attachment; filename="' . basename($filepath) . '"');
-        header('Content-Length: ' . filesize($filepath));
+
+        $filesize = @filesize($filepath);
+        if ($filesize !== false) {
+            header('Content-Length: ' . $filesize);
+        } else {
+            BJLG_Debug::log("Diffusion : taille inconnue pour le fichier '" . basename($filepath) . "'. Passage en mode flux sans Content-Length.");
+        }
         header('Content-Transfer-Encoding: binary');
         header('Connection: close');
 

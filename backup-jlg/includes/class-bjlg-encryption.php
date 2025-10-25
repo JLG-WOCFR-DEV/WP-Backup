@@ -138,20 +138,44 @@ class BJLG_Encryption {
      * Génère une nouvelle clé de chiffrement sécurisée
      */
     public function generate_encryption_key() {
+        $key = null;
+
         if (function_exists('random_bytes')) {
-            $key = random_bytes(self::KEY_LENGTH);
-        } else {
-            // Fallback pour PHP < 7.0
-            $key = openssl_random_pseudo_bytes(self::KEY_LENGTH);
+            try {
+                $key = random_bytes(self::KEY_LENGTH);
+            } catch (Exception $e) {
+                BJLG_Debug::error('Échec random_bytes lors de la génération de la clé de chiffrement : ' . $e->getMessage());
+            }
         }
-        
+
+        if ($key === null || $key === false || strlen($key) !== self::KEY_LENGTH) {
+            // Fallback pour PHP < 7.0
+            $key = false;
+
+            if (function_exists('openssl_random_pseudo_bytes')) {
+                $crypto_strong = true;
+                $key = openssl_random_pseudo_bytes(self::KEY_LENGTH, $crypto_strong);
+
+                if ($key === false || !$crypto_strong || strlen($key) !== self::KEY_LENGTH) {
+                    $key = false;
+                }
+            }
+        }
+
+        if ($key === false || $key === null || strlen($key) !== self::KEY_LENGTH) {
+            $message = "Impossible de générer une clé de chiffrement sécurisée.";
+            BJLG_Debug::error($message);
+            BJLG_History::log('encryption_key_generation_failed', 'error', $message);
+            throw new RuntimeException($message);
+        }
+
         // Sauvegarder la clé
         \bjlg_update_option('bjlg_encryption_key', base64_encode($key));
-        
+
         // Log l'événement
         BJLG_History::log('encryption_key_generated', 'info', 'Nouvelle clé de chiffrement générée');
         BJLG_Debug::log("Nouvelle clé de chiffrement AES-256 générée");
-        
+
         return $key;
     }
     
