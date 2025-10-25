@@ -1614,20 +1614,59 @@ class BJLG_REST_API {
             'admin_url' => '',
         ];
 
+        $details = null;
+
         if (function_exists('get_site')) {
             $details = get_site($site_id);
             if ($details) {
                 if (isset($details->blogname)) {
                     $site['name'] = (string) $details->blogname;
                 }
-                if (isset($details->domain) && isset($details->path)) {
-                    $site['url'] = 'https://' . $details->domain . $details->path;
-                }
             }
         }
 
         if ($site['url'] === '' && function_exists('get_site_url')) {
-            $site['url'] = (string) get_site_url($site_id);
+            $site_url = get_site_url($site_id);
+            if (is_string($site_url) && $site_url !== '') {
+                $site['url'] = $site_url;
+            }
+        }
+
+        if ($site['url'] === '' && function_exists('get_home_url')) {
+            $home_url = get_home_url($site_id);
+            if (is_string($home_url) && $home_url !== '') {
+                $site['url'] = $home_url;
+            }
+        }
+
+        if ($site['url'] === '' && function_exists('get_blog_option')) {
+            $home_option = get_blog_option($site_id, 'home');
+            if (is_string($home_option) && $home_option !== '') {
+                $site['url'] = $home_option;
+            } else {
+                $site_option = get_blog_option($site_id, 'siteurl');
+                if (is_string($site_option) && $site_option !== '') {
+                    $site['url'] = $site_option;
+                }
+            }
+        }
+
+        if ($site['url'] === '' && $details && isset($details->domain) && isset($details->path)) {
+            $scheme = 'http';
+
+            if (function_exists('get_network_option')) {
+                $network_url = get_network_option(null, 'siteurl');
+                if (is_string($network_url) && $network_url !== '') {
+                    $parsed_scheme = parse_url($network_url, PHP_URL_SCHEME);
+                    if (is_string($parsed_scheme) && $parsed_scheme !== '') {
+                        $scheme = $parsed_scheme;
+                    }
+                }
+            }
+
+            $domain = ltrim((string) $details->domain, '/');
+            $path = (string) $details->path;
+            $site['url'] = sprintf('%s://%s%s', $scheme, $domain, $path);
         }
 
         if ($site['name'] === '' && function_exists('__')) {

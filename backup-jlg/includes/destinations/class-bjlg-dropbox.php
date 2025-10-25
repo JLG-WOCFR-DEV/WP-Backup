@@ -241,9 +241,14 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
             throw new Exception('Dropbox n\'est pas configuré.');
         }
 
-        $contents = file_get_contents($filepath);
-        if ($contents === false) {
-            throw new Exception('Impossible de lire le fichier à envoyer vers Dropbox.');
+        $filesize = filesize($filepath);
+        if ($filesize === false) {
+            throw new Exception('Impossible de déterminer la taille du fichier à envoyer vers Dropbox.');
+        }
+
+        $stream = fopen($filepath, 'rb');
+        if (!is_resource($stream)) {
+            throw new Exception('Impossible d\'ouvrir le fichier de sauvegarde pour lecture (Dropbox).');
         }
 
         $dropbox_path = $this->build_dropbox_path(basename($filepath), $settings['folder']);
@@ -256,16 +261,23 @@ class BJLG_Dropbox implements BJLG_Destination_Interface {
                 'mute' => false,
                 'strict_conflict' => false,
             ]),
+            'Content-Length' => (string) $filesize,
         ];
 
         $args = [
             'method' => 'POST',
             'headers' => $headers,
-            'body' => $contents,
+            'body' => $stream,
             'timeout' => apply_filters('bjlg_dropbox_upload_timeout', 60, $dropbox_path),
         ];
 
-        $response = call_user_func($this->request_handler, 'https://content.dropboxapi.com/2/files/upload', $args);
+        try {
+            $response = call_user_func($this->request_handler, 'https://content.dropboxapi.com/2/files/upload', $args);
+        } finally {
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
+        }
 
         $this->guard_response($response, 'Envoi Dropbox échoué');
     }

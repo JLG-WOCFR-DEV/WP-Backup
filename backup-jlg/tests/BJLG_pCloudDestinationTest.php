@@ -23,7 +23,17 @@ final class BJLG_pCloudDestinationTest extends TestCase
     public function test_upload_file_streams_archive_to_pcloud(): void
     {
         $handler = function (string $url, array $args) {
-            $this->requests[] = ['url' => $url, 'args' => $args];
+            TestCase::assertArrayHasKey('body', $args);
+            TestCase::assertTrue(is_resource($args['body']), 'pCloud upload should provide a stream body.');
+            TestCase::assertSame('stream', get_resource_type($args['body']));
+            $contents = stream_get_contents($args['body']);
+            TestCase::assertIsString($contents);
+            TestCase::assertSame('pcloud-content', $contents);
+            rewind($args['body']);
+
+            $record_args = $args;
+            $record_args['__body_contents'] = $contents;
+            $this->requests[] = ['url' => $url, 'args' => $record_args];
 
             return [
                 'response' => ['code' => 200],
@@ -52,12 +62,14 @@ final class BJLG_pCloudDestinationTest extends TestCase
 
         $this->assertSame('https://api.pcloud.com/uploadfile', $request['url']);
         $this->assertSame('POST', strtoupper($request['args']['method']));
-        $this->assertSame('pcloud-content', $request['args']['body']);
+        $this->assertSame('pcloud-content', $request['args']['__body_contents']);
 
         $headers = $request['args']['headers'];
         $this->assertSame('Bearer pc-token', $headers['Authorization']);
         $this->assertSame('/Archives/' . basename($file), $headers['X-PCloud-Path']);
         $this->assertSame('1', $headers['X-PCloud-Overwrite']);
+        $this->assertArrayHasKey('Content-Length', $headers);
+        $this->assertSame((string) filesize($file), $headers['Content-Length']);
 
         if (is_file($file)) {
             unlink($file);

@@ -132,9 +132,14 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
             throw new Exception('pCloud n\'est pas configuré.');
         }
 
-        $contents = file_get_contents($filepath);
-        if ($contents === false) {
-            throw new Exception('Impossible de lire le fichier à envoyer vers pCloud.');
+        $filesize = filesize($filepath);
+        if ($filesize === false) {
+            throw new Exception('Impossible de déterminer la taille du fichier à envoyer vers pCloud.');
+        }
+
+        $stream = fopen($filepath, 'rb');
+        if (!is_resource($stream)) {
+            throw new Exception('Impossible d\'ouvrir le fichier de sauvegarde pour lecture (pCloud).');
         }
 
         $remote_path = $this->build_remote_path(basename($filepath), $settings['folder']);
@@ -146,12 +151,19 @@ class BJLG_PCloud implements BJLG_Destination_Interface {
                 'Content-Type' => 'application/octet-stream',
                 'X-PCloud-Path' => $remote_path,
                 'X-PCloud-Overwrite' => '1',
+                'Content-Length' => (string) $filesize,
             ],
-            'body' => $contents,
+            'body' => $stream,
             'timeout' => apply_filters('bjlg_pcloud_upload_timeout', 60, $remote_path),
         ];
 
-        $response = call_user_func($this->request_handler, 'https://api.pcloud.com/uploadfile', $args);
+        try {
+            $response = call_user_func($this->request_handler, 'https://api.pcloud.com/uploadfile', $args);
+        } finally {
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
+        }
         $this->guard_response($response, 'Envoi pCloud échoué');
     }
 
