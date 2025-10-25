@@ -155,69 +155,77 @@ class BJLG_Remote_Storage_Metrics {
             return \bjlg_get_option(self::OPTION_KEY, []);
         }
 
-        set_transient(self::LOCK_TRANSIENT, 1, 5 * MINUTE_IN_SECONDS);
+        $lock_acquired = set_transient(self::LOCK_TRANSIENT, 1, 5 * MINUTE_IN_SECONDS);
 
-        $previous_snapshot = \bjlg_get_option(self::OPTION_KEY, []);
-        $previous_destinations = [];
-        if (is_array($previous_snapshot) && !empty($previous_snapshot['destinations']) && is_array($previous_snapshot['destinations'])) {
-            foreach ($previous_snapshot['destinations'] as $previous_entry) {
-                if (!is_array($previous_entry) || empty($previous_entry['id'])) {
+        if (!$lock_acquired) {
+            BJLG_Debug::warning("Impossible de verrouiller la mise à jour des métriques distantes.");
+
+            return \bjlg_get_option(self::OPTION_KEY, []);
+        }
+
+        try {
+            $previous_snapshot = \bjlg_get_option(self::OPTION_KEY, []);
+            $previous_destinations = [];
+            if (is_array($previous_snapshot) && !empty($previous_snapshot['destinations']) && is_array($previous_snapshot['destinations'])) {
+                foreach ($previous_snapshot['destinations'] as $previous_entry) {
+                    if (!is_array($previous_entry) || empty($previous_entry['id'])) {
+                        continue;
+                    }
+
+                    $previous_destinations[(string) $previous_entry['id']] = $previous_entry;
+                }
+            }
+
+            $threshold_percent = class_exists(BJLG_Settings::class) ? (float) BJLG_Settings::get_storage_warning_threshold() : 85.0;
+            $threshold_percent = max(1.0, min(100.0, $threshold_percent));
+            $threshold_ratio = $threshold_percent / 100;
+
+            $results = [
+                'generated_at' => self::now(),
+                'destinations' => [],
+                'errors' => [],
+                'threshold_percent' => $threshold_percent,
+            ];
+
+            if (!class_exists(BJLG_Destination_Factory::class) || !class_exists(BJLG_Settings::class)) {
+                \bjlg_update_option(self::OPTION_KEY, $results);
+
+                return $results;
+            }
+
+            $known_ids = BJLG_Settings::get_known_destination_ids();
+            foreach ($known_ids as $destination_id) {
+                $destination = BJLG_Destination_Factory::create($destination_id);
+                if (!$destination instanceof BJLG_Destination_Interface) {
                     continue;
                 }
 
-                $previous_destinations[(string) $previous_entry['id']] = $previous_entry;
+                $previous_entry = $previous_destinations[$destination_id] ?? null;
+                $results['destinations'][] = self::collect_destination_snapshot(
+                    $destination_id,
+                    $destination,
+                    is_array($previous_entry) ? $previous_entry : null,
+                    $threshold_ratio
+                );
             }
-        }
 
-        $threshold_percent = class_exists(BJLG_Settings::class) ? (float) BJLG_Settings::get_storage_warning_threshold() : 85.0;
-        $threshold_percent = max(1.0, min(100.0, $threshold_percent));
-        $threshold_ratio = $threshold_percent / 100;
-
-        $results = [
-            'generated_at' => self::now(),
-            'destinations' => [],
-            'errors' => [],
-            'threshold_percent' => $threshold_percent,
-        ];
-
-        if (!class_exists(BJLG_Destination_Factory::class) || !class_exists(BJLG_Settings::class)) {
-            delete_transient(self::LOCK_TRANSIENT);
             \bjlg_update_option(self::OPTION_KEY, $results);
 
-            return $results;
-        }
+            /**
+             * Action déclenchée après la mise à jour des métriques distantes.
+             *
+             * @param array<string, mixed> $results
+             */
+            do_action('bjlg_remote_storage_metrics_refreshed', $results);
 
-        $known_ids = BJLG_Settings::get_known_destination_ids();
-        foreach ($known_ids as $destination_id) {
-            $destination = BJLG_Destination_Factory::create($destination_id);
-            if (!$destination instanceof BJLG_Destination_Interface) {
-                continue;
+            if (class_exists(__NAMESPACE__ . '\\BJLG_Webhooks')) {
+                BJLG_Webhooks::notify_storage_capacity($results);
             }
 
-            $previous_entry = $previous_destinations[$destination_id] ?? null;
-            $results['destinations'][] = self::collect_destination_snapshot(
-                $destination_id,
-                $destination,
-                is_array($previous_entry) ? $previous_entry : null,
-                $threshold_ratio
-            );
+            return $results;
+        } finally {
+            delete_transient(self::LOCK_TRANSIENT);
         }
-
-        \bjlg_update_option(self::OPTION_KEY, $results);
-        delete_transient(self::LOCK_TRANSIENT);
-
-        /**
-         * Action déclenchée après la mise à jour des métriques distantes.
-         *
-         * @param array<string, mixed> $results
-         */
-        do_action('bjlg_remote_storage_metrics_refreshed', $results);
-
-        if (class_exists(__NAMESPACE__ . '\\BJLG_Webhooks')) {
-            BJLG_Webhooks::notify_storage_capacity($results);
-        }
-
-        return $results;
     }
 
     /**

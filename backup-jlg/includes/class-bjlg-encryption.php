@@ -25,6 +25,9 @@ class BJLG_Encryption {
     const STRING_MAGIC = 'BJLGS1';
     const STRING_VERSION = 1;
     
+    /**
+     * @var string|null
+     */
     private $encryption_key;
     private $is_enabled;
     
@@ -47,9 +50,22 @@ class BJLG_Encryption {
     private function load_settings() {
         $settings = \bjlg_get_option('bjlg_encryption_settings', []);
         $this->is_enabled = $settings['enabled'] ?? false;
-        
+
         // Récupérer la clé depuis un endroit sécurisé
-        $this->encryption_key = $this->get_encryption_key();
+        $key = $this->get_encryption_key();
+
+        if (!is_string($key) || strlen($key) !== self::KEY_LENGTH) {
+            if ($this->is_enabled) {
+                BJLG_Debug::warning("Chiffrement désactivé : clé de chiffrement introuvable ou invalide.");
+            }
+
+            $this->is_enabled = false;
+            $this->encryption_key = null;
+
+            return;
+        }
+
+        $this->encryption_key = $key;
     }
     
     /**
@@ -74,7 +90,14 @@ class BJLG_Encryption {
         }
 
         // Option 3: Générer une nouvelle clé
-        return $this->generate_encryption_key();
+        try {
+            return $this->generate_encryption_key();
+        } catch (Exception $exception) {
+            BJLG_Debug::error('Impossible de générer une clé de chiffrement : ' . $exception->getMessage());
+            BJLG_History::log('encryption_key_generation_failed', 'error', $exception->getMessage());
+
+            return null;
+        }
     }
 
     /**
@@ -143,30 +166,23 @@ class BJLG_Encryption {
         if (function_exists('random_bytes')) {
             try {
                 $key = random_bytes(self::KEY_LENGTH);
-            } catch (Exception $e) {
-                BJLG_Debug::error('Échec random_bytes lors de la génération de la clé de chiffrement : ' . $e->getMessage());
+            } catch (Exception $exception) {
+                BJLG_Debug::warning('Échec de random_bytes lors de la génération de la clé : ' . $exception->getMessage());
             }
         }
 
-        if ($key === null || $key === false || strlen($key) !== self::KEY_LENGTH) {
-            // Fallback pour PHP < 7.0
-            $key = false;
-
+        if (!is_string($key) || strlen($key) !== self::KEY_LENGTH) {
+            $strong = false;
             if (function_exists('openssl_random_pseudo_bytes')) {
-                $crypto_strong = true;
-                $key = openssl_random_pseudo_bytes(self::KEY_LENGTH, $crypto_strong);
-
-                if ($key === false || !$crypto_strong || strlen($key) !== self::KEY_LENGTH) {
-                    $key = false;
+                $candidate = openssl_random_pseudo_bytes(self::KEY_LENGTH, $strong);
+                if ($candidate !== false && $strong === true && strlen($candidate) === self::KEY_LENGTH) {
+                    $key = $candidate;
                 }
             }
         }
 
-        if ($key === false || $key === null || strlen($key) !== self::KEY_LENGTH) {
-            $message = "Impossible de générer une clé de chiffrement sécurisée.";
-            BJLG_Debug::error($message);
-            BJLG_History::log('encryption_key_generation_failed', 'error', $message);
-            throw new RuntimeException($message);
+        if (!is_string($key) || strlen($key) !== self::KEY_LENGTH) {
+            throw new Exception("Impossible de générer une clé de chiffrement sécurisée.");
         }
 
         // Sauvegarder la clé
@@ -229,9 +245,11 @@ class BJLG_Encryption {
                 }
             }
 
-            $key = $uses_password
+            $key_material = $uses_password
                 ? $this->derive_key_from_password($password, $salt)
                 : $this->encryption_key;
+
+            list($encryption_key, $authentication_key) = $this->expand_key_material($key_material);
 
             $block_size = openssl_cipher_iv_length(self::CIPHER_METHOD);
             if (!$block_size) {
@@ -239,7 +257,7 @@ class BJLG_Encryption {
             }
             $chunk_size = $block_size * 4096; // Lecture par blocs (64 Ko)
 
-            $hmac_context = hash_init('sha256', HASH_HMAC, $key);
+            $hmac_context = hash_init('sha256', HASH_HMAC, $authentication_key);
 
             $flags = 0;
 
@@ -296,7 +314,7 @@ class BJLG_Encryption {
                         $encrypted_chunk = openssl_encrypt(
                             $plain_chunk,
                             self::CIPHER_METHOD,
-                            $key,
+                            $encryption_key,
                             OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
                             $current_iv
                         );
@@ -324,7 +342,7 @@ class BJLG_Encryption {
             $final_chunk = openssl_encrypt(
                 $buffer,
                 self::CIPHER_METHOD,
-                $key,
+                $encryption_key,
                 OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
                 $current_iv
             );
@@ -513,9 +531,11 @@ class BJLG_Encryption {
                 throw new Exception("Mot de passe requis pour ce fichier chiffré");
             }
 
-            $key = $uses_password
+            $key_material = $uses_password
                 ? $this->derive_key_from_password($password, $version >= 2 ? $salt : null)
                 : $this->encryption_key;
+
+            list($encryption_key, $authentication_key) = $this->expand_key_material($key_material);
 
             $block_size = openssl_cipher_iv_length(self::CIPHER_METHOD);
             if (!$block_size) {
@@ -531,7 +551,7 @@ class BJLG_Encryption {
                 throw new Exception("Impossible d'écrire le fichier déchiffré");
             }
 
-            $hmac_context = hash_init('sha256', HASH_HMAC, $key);
+            $hmac_context = hash_init('sha256', HASH_HMAC, $authentication_key);
 
             $buffer = '';
             $current_iv = $iv;
@@ -561,7 +581,7 @@ class BJLG_Encryption {
                         $decrypted_chunk = openssl_decrypt(
                             $cipher_chunk,
                             self::CIPHER_METHOD,
-                            $key,
+                            $encryption_key,
                             OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
                             $current_iv
                         );
@@ -592,7 +612,7 @@ class BJLG_Encryption {
             $final_chunk = openssl_decrypt(
                 $buffer,
                 self::CIPHER_METHOD,
-                $key,
+                $encryption_key,
                 OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
                 $current_iv
             );
@@ -773,11 +793,27 @@ class BJLG_Encryption {
      * @return string|false
      */
     private function generate_password_salt() {
-        $salt = function_exists('random_bytes')
-            ? random_bytes(self::PASSWORD_SALT_LENGTH)
-            : openssl_random_pseudo_bytes(self::PASSWORD_SALT_LENGTH);
+        $salt = null;
 
-        if ($salt === false || strlen($salt) !== self::PASSWORD_SALT_LENGTH) {
+        if (function_exists('random_bytes')) {
+            try {
+                $salt = random_bytes(self::PASSWORD_SALT_LENGTH);
+            } catch (Exception $exception) {
+                BJLG_Debug::warning('Échec de random_bytes pour la génération du sel : ' . $exception->getMessage());
+            }
+        }
+
+        if (!is_string($salt) || strlen($salt) !== self::PASSWORD_SALT_LENGTH) {
+            $strong = false;
+            if (function_exists('openssl_random_pseudo_bytes')) {
+                $candidate = openssl_random_pseudo_bytes(self::PASSWORD_SALT_LENGTH, $strong);
+                if ($candidate !== false && $strong === true && strlen($candidate) === self::PASSWORD_SALT_LENGTH) {
+                    $salt = $candidate;
+                }
+            }
+        }
+
+        if (!is_string($salt) || strlen($salt) !== self::PASSWORD_SALT_LENGTH) {
             return false;
         }
 
@@ -790,18 +826,77 @@ class BJLG_Encryption {
     private function derive_key_from_password($password, $salt = null) {
         if ($salt === null) {
             $salt = \bjlg_get_option('bjlg_encryption_salt');
-            if (!$salt) {
-                $salt = openssl_random_pseudo_bytes(self::PASSWORD_SALT_LENGTH);
+
+            if (!is_string($salt) || strlen($salt) !== self::PASSWORD_SALT_LENGTH) {
+                $salt = $this->generate_password_salt();
+
+                if ($salt === false) {
+                    throw new Exception("Impossible de générer un sel sécurisé pour la dérivation de mot de passe");
+                }
+
                 \bjlg_update_option('bjlg_encryption_salt', $salt);
             }
         }
 
-        if (!is_string($salt) || $salt === '') {
+        if (!is_string($salt) || strlen($salt) !== self::PASSWORD_SALT_LENGTH) {
             throw new Exception("Sel de dérivation de clé invalide");
         }
 
         // Utiliser PBKDF2 pour dériver la clé
         return hash_pbkdf2('sha256', $password, $salt, 10000, self::KEY_LENGTH, true);
+    }
+
+    /**
+     * Dérive deux clés indépendantes pour le chiffrement et le HMAC.
+     *
+     * @param string $key_material
+     * @return array{0: string, 1: string}
+     * @throws Exception
+     */
+    private function expand_key_material($key_material) {
+        if (!is_string($key_material) || $key_material === '') {
+            throw new Exception('Matériel de clé invalide.');
+        }
+
+        $encryption_key = self::hkdf($key_material, self::KEY_LENGTH, 'bjlg-encryption:aes');
+        $authentication_key = self::hkdf($key_material, self::KEY_LENGTH, 'bjlg-encryption:hmac');
+
+        return [$encryption_key, $authentication_key];
+    }
+
+    /**
+     * Implémentation locale de HKDF (RFC 5869) utilisant SHA-256.
+     *
+     * @param string $input_key_material
+     * @param int    $length
+     * @param string $info
+     * @return string
+     * @throws Exception
+     */
+    private static function hkdf($input_key_material, $length, $info) {
+        $hash_length = 32;
+
+        if (!is_string($input_key_material) || $input_key_material === '') {
+            throw new Exception('Matériel de clé HKDF invalide.');
+        }
+
+        if (!is_int($length) || $length < 1 || $length > 255 * $hash_length) {
+            throw new Exception('Longueur HKDF invalide.');
+        }
+
+        $salt = str_repeat("\0", $hash_length);
+        $prk = hash_hmac('sha256', $input_key_material, $salt, true);
+        $output_key_material = '';
+        $previous_block = '';
+        $block_index = 1;
+
+        while (strlen($output_key_material) < $length) {
+            $previous_block = hash_hmac('sha256', $previous_block . $info . chr($block_index), $prk, true);
+            $output_key_material .= $previous_block;
+            $block_index++;
+        }
+
+        return substr($output_key_material, 0, $length);
     }
     
     /**
@@ -811,6 +906,12 @@ class BJLG_Encryption {
         if (!$this->is_enabled) {
             return $plaintext;
         }
+
+        if (!is_string($this->encryption_key)) {
+            return false;
+        }
+
+        list($encryption_key, $authentication_key) = $this->expand_key_material($this->encryption_key);
 
         $iv = function_exists('random_bytes')
             ? random_bytes(self::IV_LENGTH)
@@ -823,7 +924,7 @@ class BJLG_Encryption {
         $ciphertext = openssl_encrypt(
             $plaintext,
             self::CIPHER_METHOD,
-            $this->encryption_key,
+            $encryption_key,
             OPENSSL_RAW_DATA,
             $iv
         );
@@ -832,7 +933,7 @@ class BJLG_Encryption {
             return false;
         }
 
-        $hmac = hash_hmac('sha256', $iv . $ciphertext, $this->encryption_key, true);
+        $hmac = hash_hmac('sha256', $iv . $ciphertext, $authentication_key, true);
 
         $payload = self::STRING_MAGIC . chr(self::STRING_VERSION) . $iv . $hmac . $ciphertext;
 
@@ -846,7 +947,13 @@ class BJLG_Encryption {
         if (!$this->is_enabled) {
             return $encrypted;
         }
-        
+
+        if (!is_string($this->encryption_key)) {
+            return false;
+        }
+
+        list($encryption_key, $authentication_key) = $this->expand_key_material($this->encryption_key);
+
         $data = base64_decode($encrypted, true);
 
         if ($data === false) {
@@ -877,7 +984,7 @@ class BJLG_Encryption {
 
             $ciphertext = substr($data, $offset);
 
-            $calculated_hmac = hash_hmac('sha256', $iv . $ciphertext, $this->encryption_key, true);
+            $calculated_hmac = hash_hmac('sha256', $iv . $ciphertext, $authentication_key, true);
 
             if (!hash_equals($stored_hmac, $calculated_hmac)) {
                 return false;
@@ -894,12 +1001,12 @@ class BJLG_Encryption {
         return openssl_decrypt(
             $ciphertext,
             self::CIPHER_METHOD,
-            $this->encryption_key,
+            $encryption_key,
             OPENSSL_RAW_DATA,
             $iv
         );
     }
-    
+
     /**
      * AJAX: Génère une nouvelle clé
      */
@@ -909,7 +1016,17 @@ class BJLG_Encryption {
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
         
-        $key = $this->generate_encryption_key();
+        try {
+            $key = $this->generate_encryption_key();
+        } catch (Exception $exception) {
+            BJLG_History::log('encryption_key_generation_failed', 'error', $exception->getMessage());
+            wp_send_json_error([
+                'message' => 'Impossible de générer une clé sécurisée : ' . $exception->getMessage(),
+            ]);
+
+            return;
+        }
+
         $key_base64 = base64_encode($key);
         
         // Instruction pour wp-config.php
@@ -931,6 +1048,10 @@ class BJLG_Encryption {
             wp_send_json_error(['message' => 'Permission refusée']);
         }
         check_ajax_referer('bjlg_nonce', 'nonce');
+
+        if (!$this->is_enabled || !is_string($this->encryption_key)) {
+            wp_send_json_error(['message' => 'Le chiffrement n\'est pas activé ou la clé est indisponible.']);
+        }
 
         try {
             // Créer un fichier test
@@ -1056,7 +1177,9 @@ class BJLG_Encryption {
             $stored_hmac = $header['hmac'];
             $salt = $header['salt'];
 
-            $key = $this->derive_key_from_password($password, $version >= 2 ? $salt : null);
+            $key_material = $this->derive_key_from_password($password, $version >= 2 ? $salt : null);
+
+            list($encryption_key, $authentication_key) = $this->expand_key_material($key_material);
 
             $block_size = openssl_cipher_iv_length(self::CIPHER_METHOD);
             if (!$block_size) {
@@ -1064,7 +1187,7 @@ class BJLG_Encryption {
             }
 
             $chunk_size = $block_size * 4096;
-            $hmac_context = hash_init('sha256', HASH_HMAC, $key);
+            $hmac_context = hash_init('sha256', HASH_HMAC, $authentication_key);
             $buffer = '';
             $current_iv = $iv;
 
@@ -1094,7 +1217,7 @@ class BJLG_Encryption {
                         $decrypted_chunk = openssl_decrypt(
                             $cipher_chunk,
                             self::CIPHER_METHOD,
-                            $key,
+                            $encryption_key,
                             OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
                             $current_iv
                         );
@@ -1121,7 +1244,7 @@ class BJLG_Encryption {
             $final_chunk = openssl_decrypt(
                 $buffer,
                 self::CIPHER_METHOD,
-                $key,
+                $encryption_key,
                 OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
                 $current_iv
             );
