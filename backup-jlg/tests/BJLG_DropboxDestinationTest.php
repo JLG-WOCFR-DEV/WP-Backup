@@ -23,7 +23,17 @@ final class BJLG_DropboxDestinationTest extends TestCase
     public function test_upload_file_sends_archive_to_dropbox(): void
     {
         $handler = function (string $url, array $args) {
-            $this->requests[] = ['url' => $url, 'args' => $args];
+            TestCase::assertArrayHasKey('body', $args);
+            TestCase::assertTrue(is_resource($args['body']), 'Dropbox upload should provide a stream body.');
+            TestCase::assertSame('stream', get_resource_type($args['body']));
+            $contents = stream_get_contents($args['body']);
+            TestCase::assertIsString($contents);
+            TestCase::assertSame('dropbox-archive', $contents);
+            rewind($args['body']);
+
+            $record_args = $args;
+            $record_args['__body_contents'] = $contents;
+            $this->requests[] = ['url' => $url, 'args' => $record_args];
 
             return [
                 'response' => ['code' => 200],
@@ -52,7 +62,7 @@ final class BJLG_DropboxDestinationTest extends TestCase
 
         $this->assertSame('https://content.dropboxapi.com/2/files/upload', $request['url']);
         $this->assertSame('POST', $request['args']['method']);
-        $this->assertSame('dropbox-archive', $request['args']['body']);
+        $this->assertSame('dropbox-archive', $request['args']['__body_contents']);
 
         $headers = $request['args']['headers'];
         $this->assertArrayHasKey('Authorization', $headers);
@@ -62,6 +72,8 @@ final class BJLG_DropboxDestinationTest extends TestCase
         $apiArgs = json_decode((string) $headers['Dropbox-API-Arg'], true);
         $this->assertSame('/Backups/' . basename($file), $apiArgs['path']);
         $this->assertSame('application/octet-stream', $headers['Content-Type']);
+        $this->assertArrayHasKey('Content-Length', $headers);
+        $this->assertSame((string) filesize($file), $headers['Content-Length']);
 
         if (is_file($file)) {
             unlink($file);
