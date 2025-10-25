@@ -199,7 +199,7 @@ class BJLG_Actions {
     public function handle_download_request() {
         $token = isset($_REQUEST['token']) ? sanitize_text_field(wp_unslash($_REQUEST['token'])) : '';
 
-        $validation = $this->validate_download_token($token);
+        $validation = self::validate_download_token($token);
         if (is_wp_error($validation)) {
             $this->log_download_event(
                 'backup_download_failure',
@@ -219,7 +219,7 @@ class BJLG_Actions {
 
         delete_transient($transient_key);
 
-        $this->stream_backup_file($filepath);
+        self::stream_backup_file($filepath);
 
         if ($delete_after_download && file_exists($filepath)) {
             if (!@unlink($filepath)) {
@@ -238,7 +238,7 @@ class BJLG_Actions {
 
         $token = sanitize_text_field(wp_unslash($_GET['bjlg_download']));
 
-        $validation = $this->validate_download_token($token);
+        $validation = self::validate_download_token($token);
         if (is_wp_error($validation)) {
             $this->log_download_event(
                 'backup_download_failure',
@@ -259,7 +259,7 @@ class BJLG_Actions {
 
         delete_transient($transient_key);
 
-        $this->stream_backup_file($filepath);
+        self::stream_backup_file($filepath);
 
         if ($delete_after_download && file_exists($filepath)) {
             if (!@unlink($filepath)) {
@@ -274,7 +274,7 @@ class BJLG_Actions {
      * @param string $token
      * @return array{0: string, 1: string, 2?: bool}|WP_Error
      */
-    private function validate_download_token($token) {
+    public static function validate_download_token($token) {
         if (empty($token)) {
             return new WP_Error('bjlg_missing_token', 'Token de téléchargement manquant.', ['status' => 400]);
         }
@@ -860,7 +860,7 @@ class BJLG_Actions {
      *
      * @param string $filepath
      */
-    private function stream_backup_file($filepath) {
+    public static function stream_backup_file($filepath) {
         $short_circuit = apply_filters('bjlg_pre_stream_backup', null, $filepath);
 
         if ($short_circuit !== null) {

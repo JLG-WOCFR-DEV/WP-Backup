@@ -589,6 +589,8 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
                 $first = $response['backups'][0];
                 $this->assertArrayHasKey('download_rest_url', $first);
+                $this->assertArrayHasKey('download_rest_stream_url', $first);
+                $this->assertStringContainsString('stream=1', (string) $first['download_rest_stream_url']);
                 $this->assertArrayNotHasKey('download_token', $first);
                 $this->assertArrayNotHasKey('download_url', $first);
                 $this->assertSame([], $GLOBALS['bjlg_test_transients']);
@@ -637,6 +639,9 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
                 $this->assertArrayHasKey('download_token', $first);
                 $this->assertArrayHasKey('download_url', $first);
                 $this->assertArrayHasKey('download_expires_in', $first);
+                $this->assertArrayHasKey('download_rest_stream_url', $first);
+                $this->assertStringContainsString((string) $first['download_token'], (string) $first['download_rest_stream_url']);
+                $this->assertStringContainsString('stream=1', (string) $first['download_rest_stream_url']);
                 $this->assertNotEmpty($GLOBALS['bjlg_test_transients']);
             } finally {
                 $this->deleteBackupIfExists($backup);
@@ -1457,6 +1462,8 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             $this->assertSame($filename, $initial_response['filename']);
             $this->assertStringEndsWith('.zip.enc', (string) $initial_response['filename']);
             $this->assertArrayHasKey('download_url', $initial_response);
+            $this->assertArrayHasKey('download_rest_stream_url', $initial_response);
+            $this->assertArrayHasKey('download_rest_url', $initial_response);
             $this->assertArrayHasKey('download_token', $initial_response);
             $this->assertArrayHasKey('size', $initial_response);
 
@@ -1464,6 +1471,8 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
             $token = (string) $initial_response['download_token'];
             $this->assertNotSame('', $token);
+            $this->assertStringContainsString($token, (string) $initial_response['download_rest_stream_url']);
+            $this->assertStringContainsString('stream=1', (string) $initial_response['download_rest_stream_url']);
 
             $parsed_url = parse_url((string) $initial_response['download_url']);
             $this->assertIsArray($parsed_url);
@@ -1869,6 +1878,66 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             if (file_exists($filepath)) {
                 unlink($filepath);
             }
+        }
+    }
+
+    public function test_download_backup_streams_file_via_rest_when_requested(): void
+    {
+        $GLOBALS['bjlg_test_transients'] = [];
+
+        $api = new BJLG\BJLG_REST_API();
+
+        $backup = $this->createBackupWithComponents(['db']);
+        $filename = basename($backup);
+
+        $request_factory = function ($id, $token = null, $stream = null) {
+            return new class($id, $token, $stream) {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct($id, $token, $stream)
+                {
+                    $this->params = [
+                        'id' => $id,
+                        'token' => $token,
+                        'stream' => $stream,
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+        };
+
+        $captured_paths = [];
+
+        add_filter('bjlg_pre_stream_backup', function ($value, $filepath) use (&$captured_paths) {
+            $captured_paths[] = $filepath;
+
+            return true;
+        }, 10, 2);
+
+        try {
+            $initial = $api->download_backup($request_factory($filename));
+
+            $this->assertIsArray($initial);
+            $this->assertArrayHasKey('download_token', $initial);
+
+            $token = (string) $initial['download_token'];
+            $this->assertArrayHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
+
+            $stream_request = $request_factory($filename, $token, '1');
+            $result = $api->download_backup($stream_request);
+
+            $this->assertNull($result);
+            $this->assertNotEmpty($captured_paths);
+            $this->assertSame(realpath($backup), realpath((string) $captured_paths[0]));
+            $this->assertArrayNotHasKey('bjlg_download_' . $token, $GLOBALS['bjlg_test_transients']);
+        } finally {
+            unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_pre_stream_backup']);
+            $this->deleteBackupIfExists($backup);
         }
     }
 

@@ -222,6 +222,10 @@ class BJLG_REST_API {
                 'token' => [
                     'required' => false,
                     'type' => 'string'
+                ],
+                'stream' => [
+                    'required' => false,
+                    'type' => 'boolean'
                 ]
             ])
         ]);
@@ -621,16 +625,9 @@ class BJLG_REST_API {
      * Vérification des permissions de base
      */
     public function check_permissions($request) {
-        // Vérifier le rate limiting si disponible
-        if ($this->rate_limiter && !$this->rate_limiter->check($request)) {
-            return new WP_Error(
-                'rate_limit_exceeded',
-                'Trop de requêtes. Veuillez patienter.',
-                ['status' => 429]
-            );
-        }
+        $rate_identifier = null;
 
-        $result = $this->with_request_site($request, function () use ($request) {
+        $result = $this->with_request_site($request, function () use ($request, &$rate_identifier) {
             // Vérifier l'authentification via API Key
             $api_key = $request->get_header('X-API-Key');
             if ($api_key) {
@@ -640,15 +637,19 @@ class BJLG_REST_API {
                     return $verified_user;
                 }
 
-                if (!$verified_user) {
-                    return false;
+                if ($verified_user) {
+                    if ($this->rate_limiter) {
+                        $rate_identifier = $this->rate_limiter->fingerprint_api_key($api_key);
+                    }
+
+                    if (function_exists('wp_set_current_user') && is_object($verified_user) && isset($verified_user->ID)) {
+                        wp_set_current_user((int) $verified_user->ID);
+                    }
+
+                    return true;
                 }
 
-                if (function_exists('wp_set_current_user') && is_object($verified_user) && isset($verified_user->ID)) {
-                    wp_set_current_user((int) $verified_user->ID);
-                }
-
-                return true;
+                return false;
             }
 
             // Vérifier l'authentification via Bearer Token
@@ -661,12 +662,23 @@ class BJLG_REST_API {
                     return $jwt_check;
                 }
 
-                return true;
+                if ($jwt_check && $this->rate_limiter) {
+                    $rate_identifier = $this->rate_limiter->fingerprint_jwt($token);
+                }
+
+                return (bool) $jwt_check;
             }
 
-            // Vérifier l'authentification WordPress standard
             return \bjlg_can_manage_backups();
         }, true);
+
+        if ($this->rate_limiter && !$this->rate_limiter->check($request, $rate_identifier)) {
+            return new WP_Error(
+                'rate_limit_exceeded',
+                'Trop de requêtes. Veuillez patienter.',
+                ['status' => 429]
+            );
+        }
 
         return $result;
     }
@@ -691,12 +703,14 @@ class BJLG_REST_API {
     }
 
     public function check_rbac_permissions($request) {
-        if ($this->rate_limiter && !$this->rate_limiter->check($request)) {
-            return new WP_Error(
-                'rate_limit_exceeded',
-                __('Trop de requêtes. Veuillez patienter.', 'backup-jlg'),
-                ['status' => 429]
-            );
+        $permissions_check = $this->check_permissions($request);
+
+        if (is_wp_error($permissions_check)) {
+            return $permissions_check;
+        }
+
+        if (!$permissions_check) {
+            return false;
         }
 
         return $this->with_request_site($request, function () use ($request) {
@@ -2504,7 +2518,6 @@ class BJLG_REST_API {
             $page = max(1, (int) $page);
             $per_page = max(1, min(100, (int) $per_page));
 
-            $backups = [];
             $files = glob(bjlg_get_backup_directory() . '*.zip*');
 
             if (empty($files)) {
@@ -2519,9 +2532,17 @@ class BJLG_REST_API {
                 ]);
             }
 
-            $manifests_cache = [];
+            $entries = array_map(function ($file) {
+                return [
+                    'path' => $file,
+                    'basename' => basename($file),
+                    'size' => $this->safe_filesize($file),
+                    'mtime' => $this->safe_filemtime($file),
+                    'manifest' => null,
+                    'manifest_loaded' => false,
+                ];
+            }, $files);
 
-            // Déterminer les composants associés à certains filtres "type"
             $component_filters = [];
             if ($type === 'database') {
                 $component_filters = ['db'];
@@ -2529,70 +2550,34 @@ class BJLG_REST_API {
                 $component_filters = ['plugins', 'themes', 'uploads'];
             }
 
-            // Filtrer par type
             if ($type !== 'all') {
-                $files = array_filter($files, function ($file) use ($type, $component_filters, &$manifests_cache) {
-                    $manifest = $this->get_backup_manifest($file);
+            $entries = $this->filter_backup_entries_by_type($entries, $type, $component_filters);
+        }
 
-                    if ($manifest !== null) {
-                        $manifests_cache[$file] = $manifest;
-                    }
+        $this->sort_backup_entries($entries, $sort);
 
-                    if (!empty($component_filters)) {
-                        $contains = [];
-                        $has_manifest_components = false;
-                        if (is_array($manifest) && isset($manifest['contains']) && is_array($manifest['contains'])) {
-                            $contains = $manifest['contains'];
-                            $has_manifest_components = true;
-                        }
-
-                        if (!empty(array_intersect($component_filters, $contains))) {
-                            return true;
-                        }
-
-                        if ($has_manifest_components) {
-                            return false;
-                        }
-
-                        $filename = basename($file);
-
-                        // Vérifier également les conventions de nommage historiques
-                        $aliases = $component_filters;
-                        if ($type === 'database') {
-                            $aliases[] = 'database';
-                        } elseif ($type === 'files') {
-                            $aliases[] = 'files';
-                        }
-
-                        foreach (array_unique($aliases) as $component) {
-                            if (strpos($filename, $component) !== false) {
-                                return true;
-                            }
-                        }
-
-                        return false;
-                    }
-
-                    return $this->backup_matches_type($file, $type, $manifest);
-                });
-            }
-
-            // Trier
-            $this->sort_files($files, $sort);
-
-            // Pagination
-            $total = count($files);
+            $total = count($entries);
             $offset = ($page - 1) * $per_page;
-            $files = array_slice($files, $offset, $per_page);
+            $page_entries = array_slice($entries, $offset, $per_page);
 
-            // Construire la réponse
-            foreach ($files as $file) {
-                $manifest = $manifests_cache[$file] ?? null;
-                if ($manifest === null) {
-                    $manifest = $this->get_backup_manifest($file);
+            $backups = [];
+
+            foreach ($page_entries as $entry) {
+                $manifest = $entry['manifest'];
+
+                if ($manifest === null && empty($entry['manifest_loaded'])) {
+                    $manifest = $this->get_backup_manifest($entry['path']);
                 }
 
-                $backups[] = $this->format_backup_data($file, $manifest, (bool) $with_token);
+                $backups[] = $this->format_backup_data(
+                    $entry['path'],
+                    $manifest,
+                    (bool) $with_token,
+                    [
+                        'size' => $entry['size'],
+                        'mtime' => $entry['mtime'],
+                    ]
+                );
             }
 
             $response = rest_ensure_response([
@@ -3287,7 +3272,12 @@ class BJLG_REST_API {
                 $with_token = false;
             }
 
-            return rest_ensure_response($this->format_backup_data($filepath, null, (bool) $with_token));
+            $metadata = [
+                'size' => $this->safe_filesize($filepath),
+                'mtime' => $this->safe_filemtime($filepath),
+            ];
+
+            return rest_ensure_response($this->format_backup_data($filepath, null, (bool) $with_token, $metadata));
         });
     }
     
@@ -3337,6 +3327,11 @@ class BJLG_REST_API {
     public function download_backup($request) {
         return $this->with_request_site($request, function () use ($request) {
             $token = $request->get_param('token');
+            $stream = $this->interpret_boolean($request->get_param('stream'));
+
+            if ($stream === null) {
+                $stream = false;
+            }
 
             $filepath = BJLG_Backup_Path_Resolver::resolve($request->get_param('id'));
 
@@ -3388,6 +3383,7 @@ class BJLG_REST_API {
                 } else {
                     $payload = $base_payload;
                 }
+
                 $persisted = set_transient($transient_key, $payload, $transient_ttl);
 
                 if ($persisted === false) {
@@ -3448,7 +3444,74 @@ class BJLG_REST_API {
                 );
             }
 
+            $filename = basename($filepath);
+
+            if ($stream) {
+                if (empty($token)) {
+                    return new WP_Error(
+                        'bjlg_missing_token',
+                        __('Un token de téléchargement valide est requis pour le streaming direct.', 'backup-jlg'),
+                        ['status' => 400]
+                    );
+                }
+
+                $validation = BJLG_Actions::validate_download_token($token);
+
+                if (is_wp_error($validation)) {
+                    return $validation;
+                }
+
+                list($validated_path, $transient_key, $delete_after_download) = array_pad($validation, 3, false);
+
+                $normalized_validated = $this->normalize_backup_path($validated_path);
+                $normalized_requested = $this->normalize_backup_path($filepath);
+
+                if ($normalized_validated === null || $normalized_requested === null
+                    || $normalized_validated !== $normalized_requested
+                ) {
+                    return new WP_Error(
+                        'bjlg_invalid_token',
+                        __('Le token fourni ne correspond pas à cette sauvegarde.', 'backup-jlg'),
+                        ['status' => 403]
+                    );
+                }
+
+                delete_transient($transient_key);
+
+                BJLG_History::log(
+                    'backup_download_success',
+                    'success',
+                    sprintf(
+                        'Token: %s | Fichier: %s',
+                        $token,
+                        $filename
+                    ),
+                    function_exists('get_current_user_id') ? get_current_user_id() : null
+                );
+
+                BJLG_Actions::stream_backup_file($validated_path);
+
+                if ($delete_after_download && file_exists($validated_path)) {
+                    if (!@unlink($validated_path)) {
+                        BJLG_Debug::error(sprintf(
+                            'Impossible de supprimer le fichier "%s" après téléchargement.',
+                            $validated_path
+                        ));
+                    }
+                }
+
+                return null;
+            }
+
             $download_url = BJLG_Actions::build_download_url($download_token);
+            $rest_download_base = $this->build_rest_download_url($filename);
+            $rest_download_stream = $this->build_rest_download_url(
+                $filename,
+                [
+                    'token' => $download_token,
+                    'stream' => '1',
+                ]
+            );
 
             BJLG_History::log(
                 'backup_download_link_issued',
@@ -3456,16 +3519,18 @@ class BJLG_REST_API {
                 sprintf(
                     'Token: %s | Fichier: %s',
                     $download_token,
-                    basename($filepath)
+                    $filename
                 ),
                 function_exists('get_current_user_id') ? get_current_user_id() : null
             );
 
             return rest_ensure_response([
                 'download_url' => $download_url,
+                'download_rest_url' => $rest_download_base,
+                'download_rest_stream_url' => $rest_download_stream,
                 'expires_in' => $transient_ttl,
                 'download_token' => $download_token,
-                'filename' => basename($filepath),
+                'filename' => $filename,
                 'size' => $size
             ]);
         });
@@ -3947,7 +4012,7 @@ class BJLG_REST_API {
             }
 
             return rest_ensure_response($response);
-        }
+        }, true);
 
         return $this->with_request_site($request, function () use ($period, $site_id) {
             $snapshot = $this->resolve_stats_snapshot($period);
@@ -4098,21 +4163,22 @@ class BJLG_REST_API {
 
         $limit = max(1, min(500, (int) $limit));
 
-        $context = $this->get_requested_context($request);
-        $site_id = $this->get_requested_site_id($request);
+        $filters_copy = $filters;
 
+        return $this->with_request_site($request, function () use ($request, $filters_copy, $limit) {
             $context = $this->get_requested_context($request);
             $site_id = $this->get_requested_site_id($request);
 
-            $limit = max(1, min(500, (int) $limit));
+            $effective_filters = $filters_copy;
 
             if ($context === 'network') {
                 if ($site_id) {
-                    $filters['blog_id'] = $site_id;
+                    $effective_filters['blog_id'] = $site_id;
                 }
-                $history = BJLG_History::get_history($limit, $filters, 0);
+
+                $history = BJLG_History::get_history($limit, $effective_filters, 0);
             } else {
-                $history = BJLG_History::get_history($limit, $filters, $site_id ?: null);
+                $history = BJLG_History::get_history($limit, $effective_filters, $site_id ?: null);
             }
 
             return rest_ensure_response([
@@ -4833,65 +4899,282 @@ class BJLG_REST_API {
     }
     
     /**
-     * Formate les données d'une sauvegarde
+     * Construit une URL REST de téléchargement pour une sauvegarde.
+     *
+     * @param string $filename
+     * @param array<string, scalar> $query
+     * @return string
      */
-    private function format_backup_data($filepath, $manifest = null, $include_token = false) {
+    private function build_rest_download_url($filename, array $query = []) {
+        $rest_path = sprintf('%s/backups/%s/download', self::API_NAMESPACE, rawurlencode($filename));
+        $base_url = function_exists('rest_url')
+            ? rest_url($rest_path)
+            : '/' . ltrim($rest_path, '/');
+
+        if (empty($query)) {
+            return $base_url;
+        }
+
+        $query_string = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+
+        if ($query_string === '') {
+            return $base_url;
+        }
+
+        $separator = strpos($base_url, '?') === false ? '?' : '&';
+
+        return $base_url . $separator . $query_string;
+    }
+
+    /**
+     * Retourne la taille du fichier sans générer d'erreur.
+     *
+     * @param string $path
+     * @return int|null
+     */
+    private function safe_filesize($path) {
+        if (!is_string($path) || $path === '') {
+            return null;
+        }
+
+        $size = @filesize($path);
+
+        if ($size === false) {
+            return null;
+        }
+
+        return (int) $size;
+    }
+
+    /**
+     * Retourne la date de modification du fichier sans générer d'erreur.
+     *
+     * @param string $path
+     * @return int|null
+     */
+    private function safe_filemtime($path) {
+        if (!is_string($path) || $path === '') {
+            return null;
+        }
+
+        $timestamp = @filemtime($path);
+
+        if ($timestamp === false) {
+            return null;
+        }
+
+        return (int) $timestamp;
+    }
+
+    /**
+     * Filtre les entrées de sauvegarde en fonction du type demandé.
+     *
+     * @param array<int, array<string, mixed>> $entries
+     * @param string $type
+     * @param array<int, string> $component_filters
+     * @return array<int, array<string, mixed>>
+     */
+    private function filter_backup_entries_by_type(array $entries, $type, array $component_filters = []) {
+        if ($type === 'all') {
+            return $entries;
+        }
+
+        $filtered = [];
+
+        foreach ($entries as &$entry) {
+            if (empty($entry['manifest_loaded'])) {
+                $entry['manifest'] = $this->get_backup_manifest($entry['path']);
+                $entry['manifest_loaded'] = true;
+            }
+
+            $manifest = $entry['manifest'];
+
+            if (!empty($component_filters)) {
+                $contains = [];
+                $has_manifest_components = false;
+
+                if (is_array($manifest) && isset($manifest['contains']) && is_array($manifest['contains'])) {
+                    $contains = $manifest['contains'];
+                    $has_manifest_components = true;
+                }
+
+                if (!empty(array_intersect($component_filters, $contains))) {
+                    $filtered[] = $entry;
+                    continue;
+                }
+
+                if ($has_manifest_components) {
+                    continue;
+                }
+
+                $aliases = $component_filters;
+
+                if ($type === 'database') {
+                    $aliases[] = 'database';
+                } elseif ($type === 'files') {
+                    $aliases[] = 'files';
+                }
+
+                $filename = $entry['basename'];
+
+                foreach (array_unique($aliases) as $component) {
+                    if ($component === '') {
+                        continue;
+                    }
+
+                    if (strpos($filename, $component) !== false) {
+                        $filtered[] = $entry;
+                        continue 2;
+                    }
+                }
+
+                continue;
+            }
+
+            if ($this->backup_matches_type($entry['path'], $type, $manifest)) {
+                $filtered[] = $entry;
+            }
+        }
+
+        unset($entry);
+
+        return array_values($filtered);
+    }
+
+    /**
+     * Trie les entrées de sauvegarde selon le critère demandé.
+     *
+     * @param array<int, array<string, mixed>> $entries
+     * @param string $sort
+     * @return void
+     */
+    private function sort_backup_entries(array &$entries, $sort) {
+        usort($entries, function (array $a, array $b) use ($sort) {
+            $aMtime = isset($a['mtime']) && is_numeric($a['mtime']) ? (int) $a['mtime'] : null;
+            $bMtime = isset($b['mtime']) && is_numeric($b['mtime']) ? (int) $b['mtime'] : null;
+            $aSize = isset($a['size']) && is_numeric($a['size']) ? (int) $a['size'] : null;
+            $bSize = isset($b['size']) && is_numeric($b['size']) ? (int) $b['size'] : null;
+
+            switch ($sort) {
+                case 'date_asc':
+                    $comparison = ($aMtime ?? 0) <=> ($bMtime ?? 0);
+                    break;
+                case 'size_asc':
+                    $comparison = ($aSize ?? 0) <=> ($bSize ?? 0);
+                    break;
+                case 'size_desc':
+                    $comparison = ($bSize ?? 0) <=> ($aSize ?? 0);
+                    break;
+                case 'date_desc':
+                default:
+                    $comparison = ($bMtime ?? 0) <=> ($aMtime ?? 0);
+                    break;
+            }
+
+            if ($comparison !== 0) {
+                return $comparison;
+            }
+
+            return strcmp((string) ($a['basename'] ?? ''), (string) ($b['basename'] ?? ''));
+        });
+    }
+
+    /**
+     * Formate les données d'une sauvegarde
+     *
+     * @param string $filepath
+     * @param array<string, mixed>|null $manifest
+     * @param bool $include_token
+     * @param array<string, mixed> $metadata
+     * @return array<string, mixed>
+     */
+    private function format_backup_data($filepath, $manifest = null, $include_token = false, array $metadata = []) {
         $filename = basename($filepath);
         $is_encrypted = (substr($filename, -4) === '.enc');
-
-        $type = 'standard';
-        if (strpos($filename, 'full') !== false) {
-            $type = 'full';
-        } elseif (strpos($filename, 'incremental') !== false) {
-            $type = 'incremental';
-        } elseif (strpos($filename, 'pre-restore') !== false) {
-            $type = 'pre-restore';
-        }
 
         if ($manifest === null) {
             $manifest = $this->get_backup_manifest($filepath);
         }
 
-        $rest_download_route = sprintf(
-            '/%s/backups/%s/download',
-            self::API_NAMESPACE,
-            rawurlencode($filename)
-        );
-
-        $rest_download_url = function_exists('rest_url')
-            ? rest_url(ltrim($rest_download_route, '/'))
-            : $rest_download_route;
-
-        $filesize = @filesize($filepath);
-        if ($filesize === false) {
-            $filesize = null;
-            $size_formatted = null;
-        } else {
-            $size_formatted = size_format($filesize);
+        $type = 'standard';
+        if (is_array($manifest)) {
+            $manifest_type = $manifest['type'] ?? null;
+            if (is_string($manifest_type) && $manifest_type !== '') {
+                $type = $manifest_type;
+            }
         }
 
-        $filemtime = @filemtime($filepath);
-        if ($filemtime === false) {
-            $created_at = null;
-            $modified_at = null;
+        if ($type === 'standard') {
+            if (strpos($filename, 'full') !== false) {
+                $type = 'full';
+            } elseif (strpos($filename, 'incremental') !== false) {
+                $type = 'incremental';
+            } elseif (strpos($filename, 'pre-restore') !== false) {
+                $type = 'pre-restore';
+            }
+        }
+
+        if (array_key_exists('size', $metadata)) {
+            $size = $metadata['size'];
+            if ($size !== null && is_numeric($size)) {
+                $size = (int) $size;
+            } elseif ($size !== null) {
+                $size = null;
+            }
         } else {
-            $timestamp = date('c', $filemtime);
+            $size = $this->safe_filesize($filepath);
+        }
+
+        if (array_key_exists('mtime', $metadata)) {
+            $mtime = $metadata['mtime'];
+            if ($mtime !== null && is_numeric($mtime)) {
+                $mtime = (int) $mtime;
+            } elseif ($mtime !== null) {
+                $mtime = null;
+            }
+        } else {
+            $mtime = $this->safe_filemtime($filepath);
+        }
+
+        $size_formatted = null;
+        if ($size !== null) {
+            if (function_exists('size_format')) {
+                $size_formatted = size_format($size);
+            } else {
+                $size_formatted = (string) $size;
+            }
+        }
+
+        $created_at = null;
+        $modified_at = null;
+
+        if ($mtime !== null) {
+            $timestamp = date('c', $mtime);
             $created_at = $timestamp;
             $modified_at = $timestamp;
         }
+
+        $components = [];
+        if (is_array($manifest) && isset($manifest['contains']) && is_array($manifest['contains'])) {
+            $components = $manifest['contains'];
+        }
+
+        $rest_download_url = $this->build_rest_download_url($filename);
+        $rest_stream_url = $this->build_rest_download_url($filename, ['stream' => '1']);
 
         $data = [
             'id' => $filename,
             'filename' => $filename,
             'type' => $type,
-            'size' => $filesize,
+            'size' => $size,
             'size_formatted' => $size_formatted,
             'created_at' => $created_at,
             'modified_at' => $modified_at,
             'is_encrypted' => $is_encrypted,
-            'components' => $manifest['contains'] ?? [],
+            'components' => $components,
             'download_rest_url' => $rest_download_url,
-            'manifest' => $manifest
+            'download_rest_stream_url' => $rest_stream_url,
+            'manifest' => $manifest,
         ];
 
         if ($include_token) {
@@ -4918,6 +5201,13 @@ class BJLG_REST_API {
                 $data['download_url'] = $download_url;
                 $data['download_token'] = $download_token;
                 $data['download_expires_in'] = $token_ttl;
+                $data['download_rest_stream_url'] = $this->build_rest_download_url(
+                    $filename,
+                    [
+                        'token' => $download_token,
+                        'stream' => '1',
+                    ]
+                );
             }
         }
 
@@ -5003,34 +5293,6 @@ class BJLG_REST_API {
         }
         
         return null;
-    }
-    
-    /**
-     * Trie les fichiers selon le critère
-     */
-    private function sort_files(&$files, $sort) {
-        switch ($sort) {
-            case 'date_asc':
-                usort($files, function($a, $b) {
-                    return filemtime($a) - filemtime($b);
-                });
-                break;
-            case 'date_desc':
-                usort($files, function($a, $b) {
-                    return filemtime($b) - filemtime($a);
-                });
-                break;
-            case 'size_asc':
-                usort($files, function($a, $b) {
-                    return filesize($a) - filesize($b);
-                });
-                break;
-            case 'size_desc':
-                usort($files, function($a, $b) {
-                    return filesize($b) - filesize($a);
-                });
-                break;
-        }
     }
     
     /**

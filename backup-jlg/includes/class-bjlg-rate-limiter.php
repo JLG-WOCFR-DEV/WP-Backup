@@ -18,8 +18,10 @@ class BJLG_Rate_Limiter {
     /**
      * Vérifie si la requête dépasse les limites
      */
-    public function check($request) {
-        $client_id = $this->get_client_identifier($request);
+    public function check($request, $client_identifier = null) {
+        $client_id = is_string($client_identifier) && $client_identifier !== ''
+            ? $client_identifier
+            : $this->get_client_identifier($request);
 
         // Vérifier le taux par minute
         $minute_key = 'bjlg_rate_' . $client_id . '_' . date('YmdHi');
@@ -50,21 +52,20 @@ class BJLG_Rate_Limiter {
      * Obtient l'identifiant unique du client
      */
     private function get_client_identifier($request) {
-        // Utiliser l'API key si présente
-        $api_key = $request->get_header('X-API-Key');
-        if ($api_key) {
-            return md5('key_' . $api_key);
-        }
-
-        // Utiliser le token JWT si présent
-        $auth_header = $request->get_header('Authorization');
-        if ($auth_header && strpos($auth_header, 'Bearer ') === 0) {
-            $token = substr($auth_header, 7);
-            return md5('token_' . $token);
-        }
-
-        // Sinon utiliser l'IP
         $ip = $this->get_client_ip();
+
+        return md5('ip_' . $ip);
+    }
+
+    public function fingerprint_api_key($api_key) {
+        return md5('key_' . $api_key);
+    }
+
+    public function fingerprint_jwt($token) {
+        return md5('token_' . $token);
+    }
+
+    public function fingerprint_ip($ip) {
         return md5('ip_' . $ip);
     }
 
