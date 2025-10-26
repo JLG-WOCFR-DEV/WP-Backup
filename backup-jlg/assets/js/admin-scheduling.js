@@ -1311,6 +1311,7 @@ jQuery(function($) {
         }
 
         const view = state.timelineView || 'week';
+        syncTimelineViewButtons(view);
         const schedules = Array.isArray(state.schedules) ? state.schedules : [];
         const nextRuns = state.nextRuns || {};
 
@@ -5031,6 +5032,7 @@ jQuery(function($) {
                 return;
             }
             state.timelineView = view;
+            syncTimelineViewButtons(view);
             renderTimeline();
         });
     }
