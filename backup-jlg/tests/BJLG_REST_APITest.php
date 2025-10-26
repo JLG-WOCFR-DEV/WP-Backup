@@ -479,20 +479,20 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
         {
             $api = new BJLG\BJLG_REST_API();
 
-            $files = [];
-            $totalBackups = 53;
-            $now = time();
+            $directory = bjlg_get_backup_directory();
+            $totalFiles = 75;
+            $baseTime = time();
+            $created = [];
 
-            for ($i = 0; $i < $totalBackups; $i++) {
-                $filename = bjlg_get_backup_directory() . sprintf('bjlg-paginated-%03d.zip', $i);
-                file_put_contents($filename, (string) $i);
-                touch($filename, $now - $i);
-                $files[] = $filename;
+            for ($i = 0; $i < $totalFiles; $i++) {
+                $filename = $directory . sprintf('bjlg-bulk-%03d.zip', $i);
+                file_put_contents($filename, 'data');
+                touch($filename, $baseTime - $i);
+                $created[] = $filename;
             }
 
             $page = 3;
-            $perPage = 5;
-            $offset = ($page - 1) * $perPage;
+            $perPage = 7;
 
             $request = new class($page, $perPage) {
                 /** @var array<string, mixed> */
@@ -519,30 +519,44 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
 
                 $this->assertIsArray($response);
                 $this->assertArrayHasKey('backups', $response);
-                $this->assertCount($perPage, $response['backups']);
                 $this->assertArrayHasKey('pagination', $response);
-                $this->assertSame($totalBackups, $response['pagination']['total']);
-                $this->assertSame((int) ceil($totalBackups / $perPage), $response['pagination']['pages']);
 
-                $sorted = $files;
-                usort($sorted, static function ($a, $b) {
-                    $mtimeComparison = filemtime($b) <=> filemtime($a);
+                $this->assertSame($totalFiles, $response['pagination']['total']);
+                $this->assertSame($perPage, $response['pagination']['per_page']);
+                $this->assertSame($page, $response['pagination']['current_page']);
+                $this->assertSame((int) ceil($totalFiles / $perPage), (int) $response['pagination']['pages']);
 
-                    if ($mtimeComparison !== 0) {
-                        return $mtimeComparison;
+                $this->assertCount($perPage, $response['backups']);
+
+                $expectedEntries = array_map(static function (string $path) {
+                    return [
+                        'basename' => basename($path),
+                        'mtime' => filemtime($path),
+                    ];
+                }, $created);
+
+                usort($expectedEntries, static function (array $a, array $b) {
+                    $comparison = ($b['mtime'] ?? 0) <=> ($a['mtime'] ?? 0);
+
+                    if ($comparison !== 0) {
+                        return $comparison;
                     }
 
-                    return strcmp(basename($a), basename($b));
+                    return strcmp((string) ($a['basename'] ?? ''), (string) ($b['basename'] ?? ''));
                 });
 
-                $expected = array_slice($sorted, $offset, $perPage);
-                $actual = array_map(static function ($backup) {
+                $expectedSlice = array_slice($expectedEntries, ($page - 1) * $perPage, $perPage);
+                $expectedFilenames = array_map(static function (array $entry) {
+                    return $entry['basename'];
+                }, $expectedSlice);
+
+                $actualFilenames = array_map(static function (array $backup) {
                     return $backup['filename'] ?? null;
                 }, $response['backups']);
 
-                $this->assertSame(array_map('basename', $expected), $actual);
+                $this->assertSame($expectedFilenames, $actualFilenames);
             } finally {
-                foreach ($files as $file) {
+                foreach ($created as $file) {
                     if (file_exists($file)) {
                         unlink($file);
                     }
