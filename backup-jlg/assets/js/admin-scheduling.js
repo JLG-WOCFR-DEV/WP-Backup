@@ -1283,12 +1283,28 @@ jQuery(function($) {
         return events;
     }
 
+    function syncTimelineViewButtons(activeView) {
+        if (!$timeline.length) {
+            return;
+        }
+
+        $timeline.find('[data-role="timeline-view"]').each(function() {
+            const $button = $(this);
+            const buttonView = ($button.data('view') || '').toString();
+            const isActive = buttonView === activeView;
+
+            $button.toggleClass('is-active', isActive);
+            $button.attr('aria-pressed', isActive ? 'true' : 'false');
+        });
+    }
+
     function renderTimeline() {
         if (!$timeline.length) {
             return;
         }
 
         const view = state.timelineView || 'week';
+        syncTimelineViewButtons(view);
         const schedules = Array.isArray(state.schedules) ? state.schedules : [];
         const nextRuns = state.nextRuns || {};
 
@@ -5009,6 +5025,7 @@ jQuery(function($) {
                 return;
             }
             state.timelineView = view;
+            syncTimelineViewButtons(view);
             renderTimeline();
         });
     }

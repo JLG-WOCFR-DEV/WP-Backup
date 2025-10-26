@@ -4046,8 +4046,8 @@ class BJLG_Admin {
                         <strong>Timeline des occurrences</strong>
                     </div>
                     <div class="bjlg-schedule-timeline__controls" role="group" aria-label="Changer la vue de la timeline">
-                        <button type="button" class="button button-secondary is-active" data-role="timeline-view" data-view="week">Semaine</button>
-                        <button type="button" class="button button-secondary" data-role="timeline-view" data-view="month">Mois</button>
+                        <button type="button" class="button button-secondary is-active" data-role="timeline-view" data-view="week" aria-pressed="true">Semaine</button>
+                        <button type="button" class="button button-secondary" data-role="timeline-view" data-view="month" aria-pressed="false">Mois</button>
                     </div>
                 </header>
                 <div class="bjlg-schedule-timeline__legend">
