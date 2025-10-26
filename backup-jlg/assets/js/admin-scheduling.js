@@ -1283,19 +1283,26 @@ jQuery(function($) {
         return events;
     }
 
-    function syncTimelineViewButtons(activeView) {
+    function syncTimelineViewButtons(view) {
         if (!$timeline.length) {
             return;
         }
 
-        $timeline.find('[data-role="timeline-view"]').each(function() {
-            const $button = $(this);
-            const buttonView = ($button.data('view') || '').toString();
-            const isActive = buttonView === activeView;
+        const $buttons = $timeline.find('[data-role="timeline-view"]');
+        if (!$buttons.length) {
+            return;
+        }
 
-            $button.toggleClass('is-active', isActive);
-            $button.attr('aria-pressed', isActive ? 'true' : 'false');
-        });
+        $buttons.removeClass('is-active').attr('aria-pressed', 'false');
+
+        let $activeButton = $buttons.filter('[data-view="' + view + '"]').first();
+        if (!$activeButton.length && $buttons.length) {
+            $activeButton = $buttons.first();
+        }
+
+        if ($activeButton.length) {
+            $activeButton.addClass('is-active').attr('aria-pressed', 'true');
+        }
     }
 
     function renderTimeline() {
@@ -1418,8 +1425,7 @@ jQuery(function($) {
 
         $empty.prop('hidden', events.length > 0);
 
-        $timeline.find('[data-role="timeline-view"]').removeClass('is-active');
-        $timeline.find('[data-role="timeline-view"][data-view="' + view + '"]').addClass('is-active');
+        syncTimelineViewButtons(view);
     }
 
     function updateState(schedules, nextRuns, options) {
@@ -5021,6 +5027,7 @@ jQuery(function($) {
             if (!view || !Object.prototype.hasOwnProperty.call(timelineRanges, view)) {
                 return;
             }
+            syncTimelineViewButtons(view);
             if (state.timelineView === view) {
                 return;
             }
