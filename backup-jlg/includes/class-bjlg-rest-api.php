@@ -2518,9 +2518,9 @@ class BJLG_REST_API {
             $page = max(1, (int) $page);
             $per_page = max(1, min(100, (int) $per_page));
 
-            $files = glob(bjlg_get_backup_directory() . '*.zip*');
+            $directory = bjlg_get_backup_directory();
 
-            if (empty($files)) {
+            if (!is_dir($directory)) {
                 return rest_ensure_response([
                     'backups' => [],
                     'pagination' => [
@@ -2532,16 +2532,24 @@ class BJLG_REST_API {
                 ]);
             }
 
-            $entries = array_map(function ($file) {
-                return [
-                    'path' => $file,
-                    'basename' => basename($file),
-                    'size' => $this->safe_filesize($file),
-                    'mtime' => $this->safe_filemtime($file),
-                    'manifest' => null,
-                    'manifest_loaded' => false,
-                ];
-            }, $files);
+            try {
+                $iterator = new \FilesystemIterator(
+                    $directory,
+                    \FilesystemIterator::SKIP_DOTS | \FilesystemIterator::CURRENT_AS_FILEINFO
+                );
+            } catch (\UnexpectedValueException $exception) {
+                return rest_ensure_response([
+                    'backups' => [],
+                    'pagination' => [
+                        'total' => 0,
+                        'pages' => 0,
+                        'current_page' => $page,
+                        'per_page' => $per_page
+                    ]
+                ]);
+            }
+
+            $regex = new \RegexIterator($iterator, '/(?:\\.zip(?:\\..*)?)$/i');
 
             $component_filters = [];
             if ($type === 'database') {
@@ -2550,15 +2558,69 @@ class BJLG_REST_API {
                 $component_filters = ['plugins', 'themes', 'uploads'];
             }
 
-            if ($type !== 'all') {
-            $entries = $this->filter_backup_entries_by_type($entries, $type, $component_filters);
-        }
+            $offset = max(0, ($page - 1) * $per_page);
+            $preceding_entries = [];
+            $page_entries = [];
+            $total = 0;
 
-        $this->sort_backup_entries($entries, $sort);
+            foreach ($regex as $fileinfo) {
+                if (!$fileinfo instanceof \SplFileInfo) {
+                    continue;
+                }
 
-            $total = count($entries);
-            $offset = ($page - 1) * $per_page;
-            $page_entries = array_slice($entries, $offset, $per_page);
+                if (!$fileinfo->isFile()) {
+                    continue;
+                }
+
+                $entry = $this->create_backup_entry_from_fileinfo($fileinfo);
+
+                if ($type !== 'all' && !$this->should_include_backup_entry($entry, $type, $component_filters)) {
+                    continue;
+                }
+
+                $total++;
+
+                if ($offset > 0) {
+                    if (count($preceding_entries) < $offset) {
+                        $this->insert_sorted_entry_with_limit($preceding_entries, $entry, $offset, $sort);
+                        continue;
+                    }
+
+                    $candidate = $this->insert_sorted_entry_with_limit($preceding_entries, $entry, $offset, $sort);
+
+                    if ($candidate === null) {
+                        continue;
+                    }
+
+                    $entry_for_page = $candidate;
+                } else {
+                    $entry_for_page = $entry;
+                }
+
+                $rejected = $this->insert_sorted_entry_with_limit($page_entries, $entry_for_page, $per_page, $sort);
+
+                if ($rejected !== null) {
+                    // The rejected entry is outside the requested page range and can be discarded.
+                    continue;
+                }
+            }
+
+            if ($total === 0) {
+                return rest_ensure_response([
+                    'backups' => [],
+                    'pagination' => [
+                        'total' => 0,
+                        'pages' => 0,
+                        'current_page' => $page,
+                        'per_page' => $per_page
+                    ]
+                ]);
+            }
+
+            if (!empty($page_entries)) {
+                $page_entries = array_values($page_entries);
+                $this->sort_backup_entries($page_entries, $sort);
+            }
 
             $backups = [];
 
@@ -4967,6 +5029,112 @@ class BJLG_REST_API {
     }
 
     /**
+     * Crée une représentation d'une sauvegarde à partir d'un SplFileInfo.
+     *
+     * @param \SplFileInfo $fileinfo
+     * @return array<string, mixed>
+     */
+    private function create_backup_entry_from_fileinfo(\SplFileInfo $fileinfo) {
+        $path = $fileinfo->getPathname();
+
+        return [
+            'path' => $path,
+            'basename' => $fileinfo->getBasename(),
+            'size' => $this->safe_filesize($path),
+            'mtime' => $this->safe_filemtime($path),
+            'manifest' => null,
+            'manifest_loaded' => false,
+        ];
+    }
+
+    /**
+     * Insère une entrée dans une liste triée en respectant une taille maximale.
+     *
+     * @param array<int, array<string, mixed>> $entries
+     * @param array<string, mixed> $entry
+     * @param int $limit
+     * @param string $sort
+     * @return array<string, mixed>|null
+     */
+    private function insert_sorted_entry_with_limit(array &$entries, array $entry, $limit, $sort) {
+        if (!is_int($limit) || $limit <= 0) {
+            return $entry;
+        }
+
+        $count = count($entries);
+        $position = $count;
+
+        for ($i = 0; $i < $count; $i++) {
+            $comparison = $this->compare_backup_entries($entry, $entries[$i], $sort);
+
+            if ($comparison < 0) {
+                $position = $i;
+                break;
+            }
+        }
+
+        if ($position === $count) {
+            if ($count >= $limit) {
+                return $entry;
+            }
+
+            $entries[] = $entry;
+
+            return null;
+        }
+
+        array_splice($entries, $position, 0, [$entry]);
+
+        if ($count + 1 > $limit) {
+            $demoted = array_pop($entries);
+
+            return $demoted;
+        }
+
+        return null;
+    }
+
+    /**
+     * Compare deux entrées de sauvegarde selon l'ordre demandé.
+     *
+     * @param array<string, mixed> $a
+     * @param array<string, mixed> $b
+     * @param string $sort
+     * @return int
+     */
+    private function compare_backup_entries(array $a, array $b, $sort) {
+        $aMtime = isset($a['mtime']) && is_numeric($a['mtime']) ? (int) $a['mtime'] : null;
+        $bMtime = isset($b['mtime']) && is_numeric($b['mtime']) ? (int) $b['mtime'] : null;
+        $aSize = isset($a['size']) && is_numeric($a['size']) ? (int) $a['size'] : null;
+        $bSize = isset($b['size']) && is_numeric($b['size']) ? (int) $b['size'] : null;
+
+        switch ($sort) {
+            case 'date_asc':
+                $comparison = ($aMtime ?? 0) <=> ($bMtime ?? 0);
+                break;
+            case 'size_asc':
+                $comparison = ($aSize ?? 0) <=> ($bSize ?? 0);
+                break;
+            case 'size_desc':
+                $comparison = ($bSize ?? 0) <=> ($aSize ?? 0);
+                break;
+            case 'date_desc':
+            default:
+                $comparison = ($bMtime ?? 0) <=> ($aMtime ?? 0);
+                break;
+        }
+
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+
+        $aName = (string) ($a['basename'] ?? '');
+        $bName = (string) ($b['basename'] ?? '');
+
+        return strcmp($aName, $bName);
+    }
+
+    /**
      * Filtre les entrées de sauvegarde en fonction du type demandé.
      *
      * @param array<int, array<string, mixed>> $entries
@@ -4982,56 +5150,7 @@ class BJLG_REST_API {
         $filtered = [];
 
         foreach ($entries as &$entry) {
-            if (empty($entry['manifest_loaded'])) {
-                $entry['manifest'] = $this->get_backup_manifest($entry['path']);
-                $entry['manifest_loaded'] = true;
-            }
-
-            $manifest = $entry['manifest'];
-
-            if (!empty($component_filters)) {
-                $contains = [];
-                $has_manifest_components = false;
-
-                if (is_array($manifest) && isset($manifest['contains']) && is_array($manifest['contains'])) {
-                    $contains = $manifest['contains'];
-                    $has_manifest_components = true;
-                }
-
-                if (!empty(array_intersect($component_filters, $contains))) {
-                    $filtered[] = $entry;
-                    continue;
-                }
-
-                if ($has_manifest_components) {
-                    continue;
-                }
-
-                $aliases = $component_filters;
-
-                if ($type === 'database') {
-                    $aliases[] = 'database';
-                } elseif ($type === 'files') {
-                    $aliases[] = 'files';
-                }
-
-                $filename = $entry['basename'];
-
-                foreach (array_unique($aliases) as $component) {
-                    if ($component === '') {
-                        continue;
-                    }
-
-                    if (strpos($filename, $component) !== false) {
-                        $filtered[] = $entry;
-                        continue 2;
-                    }
-                }
-
-                continue;
-            }
-
-            if ($this->backup_matches_type($entry['path'], $type, $manifest)) {
+            if ($this->should_include_backup_entry($entry, $type, $component_filters)) {
                 $filtered[] = $entry;
             }
         }
@@ -5039,6 +5158,69 @@ class BJLG_REST_API {
         unset($entry);
 
         return array_values($filtered);
+    }
+
+    /**
+     * Détermine si une entrée de sauvegarde doit être incluse selon le type demandé.
+     *
+     * @param array<string, mixed> $entry
+     * @param string $type
+     * @param array<int, string> $component_filters
+     * @return bool
+     */
+    private function should_include_backup_entry(array &$entry, $type, array $component_filters = []) {
+        if ($type === 'all') {
+            return true;
+        }
+
+        if (empty($entry['manifest_loaded'])) {
+            $entry['manifest'] = $this->get_backup_manifest($entry['path']);
+            $entry['manifest_loaded'] = true;
+        }
+
+        $manifest = $entry['manifest'];
+
+        if (!empty($component_filters)) {
+            $contains = [];
+            $has_manifest_components = false;
+
+            if (is_array($manifest) && isset($manifest['contains']) && is_array($manifest['contains'])) {
+                $contains = $manifest['contains'];
+                $has_manifest_components = true;
+            }
+
+            if (!empty(array_intersect($component_filters, $contains))) {
+                return true;
+            }
+
+            if ($has_manifest_components) {
+                return false;
+            }
+
+            $aliases = $component_filters;
+
+            if ($type === 'database') {
+                $aliases[] = 'database';
+            } elseif ($type === 'files') {
+                $aliases[] = 'files';
+            }
+
+            $filename = $entry['basename'];
+
+            foreach (array_unique($aliases) as $component) {
+                if ($component === '') {
+                    continue;
+                }
+
+                if (strpos($filename, $component) !== false) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return $this->backup_matches_type($entry['path'], $type, $manifest);
     }
 
     /**
@@ -5050,32 +5232,7 @@ class BJLG_REST_API {
      */
     private function sort_backup_entries(array &$entries, $sort) {
         usort($entries, function (array $a, array $b) use ($sort) {
-            $aMtime = isset($a['mtime']) && is_numeric($a['mtime']) ? (int) $a['mtime'] : null;
-            $bMtime = isset($b['mtime']) && is_numeric($b['mtime']) ? (int) $b['mtime'] : null;
-            $aSize = isset($a['size']) && is_numeric($a['size']) ? (int) $a['size'] : null;
-            $bSize = isset($b['size']) && is_numeric($b['size']) ? (int) $b['size'] : null;
-
-            switch ($sort) {
-                case 'date_asc':
-                    $comparison = ($aMtime ?? 0) <=> ($bMtime ?? 0);
-                    break;
-                case 'size_asc':
-                    $comparison = ($aSize ?? 0) <=> ($bSize ?? 0);
-                    break;
-                case 'size_desc':
-                    $comparison = ($bSize ?? 0) <=> ($aSize ?? 0);
-                    break;
-                case 'date_desc':
-                default:
-                    $comparison = ($bMtime ?? 0) <=> ($aMtime ?? 0);
-                    break;
-            }
-
-            if ($comparison !== 0) {
-                return $comparison;
-            }
-
-            return strcmp((string) ($a['basename'] ?? ''), (string) ($b['basename'] ?? ''));
+            return $this->compare_backup_entries($a, $b, $sort);
         });
     }
 

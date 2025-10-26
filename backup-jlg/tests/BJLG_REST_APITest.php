@@ -475,6 +475,95 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             }
         }
 
+        public function test_get_backups_paginates_large_directories(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+
+            $directory = bjlg_get_backup_directory();
+            $totalFiles = 75;
+            $baseTime = time();
+            $created = [];
+
+            for ($i = 0; $i < $totalFiles; $i++) {
+                $filename = $directory . sprintf('bjlg-bulk-%03d.zip', $i);
+                file_put_contents($filename, 'data');
+                touch($filename, $baseTime - $i);
+                $created[] = $filename;
+            }
+
+            $page = 3;
+            $perPage = 7;
+
+            $request = new class($page, $perPage) {
+                /** @var array<string, mixed> */
+                private $params;
+
+                public function __construct(int $page, int $perPage)
+                {
+                    $this->params = [
+                        'page' => $page,
+                        'per_page' => $perPage,
+                        'type' => 'all',
+                        'sort' => 'date_desc',
+                    ];
+                }
+
+                public function get_param($key)
+                {
+                    return $this->params[$key] ?? null;
+                }
+            };
+
+            try {
+                $response = $api->get_backups($request);
+
+                $this->assertIsArray($response);
+                $this->assertArrayHasKey('backups', $response);
+                $this->assertArrayHasKey('pagination', $response);
+
+                $this->assertSame($totalFiles, $response['pagination']['total']);
+                $this->assertSame($perPage, $response['pagination']['per_page']);
+                $this->assertSame($page, $response['pagination']['current_page']);
+                $this->assertSame((int) ceil($totalFiles / $perPage), (int) $response['pagination']['pages']);
+
+                $this->assertCount($perPage, $response['backups']);
+
+                $expectedEntries = array_map(static function (string $path) {
+                    return [
+                        'basename' => basename($path),
+                        'mtime' => filemtime($path),
+                    ];
+                }, $created);
+
+                usort($expectedEntries, static function (array $a, array $b) {
+                    $comparison = ($b['mtime'] ?? 0) <=> ($a['mtime'] ?? 0);
+
+                    if ($comparison !== 0) {
+                        return $comparison;
+                    }
+
+                    return strcmp((string) ($a['basename'] ?? ''), (string) ($b['basename'] ?? ''));
+                });
+
+                $expectedSlice = array_slice($expectedEntries, ($page - 1) * $perPage, $perPage);
+                $expectedFilenames = array_map(static function (array $entry) {
+                    return $entry['basename'];
+                }, $expectedSlice);
+
+                $actualFilenames = array_map(static function (array $backup) {
+                    return $backup['filename'] ?? null;
+                }, $response['backups']);
+
+                $this->assertSame($expectedFilenames, $actualFilenames);
+            } finally {
+                foreach ($created as $file) {
+                    if (file_exists($file)) {
+                        unlink($file);
+                    }
+                }
+            }
+        }
+
         public function test_get_backups_filters_database_and_files_types(): void
         {
             $api = new BJLG\BJLG_REST_API();
