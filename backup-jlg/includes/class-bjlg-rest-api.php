@@ -6,7 +6,13 @@ namespace BJLG;
  * Fichier : includes/class-bjlg-rest-api.php
  */
 
+use ArrayIterator;
 use Exception;
+use FilesystemIterator;
+use RegexIterator;
+use SplFileInfo;
+use SplPriorityQueue;
+use UnexpectedValueException;
 use WP_Error;
 use WP_REST_Server;
 use ZipArchive;
@@ -2624,7 +2630,7 @@ class BJLG_REST_API {
 
             $backups = [];
 
-            foreach ($page_entries as $entry) {
+            foreach ($entries as $entry) {
                 $manifest = $entry['manifest'];
 
                 if ($manifest === null && empty($entry['manifest_loaded'])) {
@@ -2646,7 +2652,7 @@ class BJLG_REST_API {
                 'backups' => $backups,
                 'pagination' => [
                     'total' => $total,
-                    'pages' => ceil($total / $per_page),
+                    'pages' => (int) ceil($total / $per_page),
                     'current_page' => $page,
                     'per_page' => $per_page
                 ]
@@ -5224,11 +5230,12 @@ class BJLG_REST_API {
     }
 
     /**
-     * Trie les entrées de sauvegarde selon le critère demandé.
+     * Compare deux entrées de sauvegarde selon l'option de tri demandée.
      *
-     * @param array<int, array<string, mixed>> $entries
+     * @param array<string, mixed> $a
+     * @param array<string, mixed> $b
      * @param string $sort
-     * @return void
+     * @return int
      */
     private function sort_backup_entries(array &$entries, $sort) {
         usort($entries, function (array $a, array $b) use ($sort) {
