@@ -103,6 +103,7 @@ final class BJLG_BackupTest extends TestCase
             'recurring' => [],
             'single' => [],
         ];
+        $GLOBALS['bjlg_test_options'] = [];
         $GLOBALS['bjlg_test_set_transient_mock'] = null;
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
 
@@ -119,6 +120,7 @@ final class BJLG_BackupTest extends TestCase
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
         $_POST = [];
 
+        $GLOBALS['bjlg_test_options'] = [];
         $lock_property = new ReflectionProperty(BJLG\BJLG_Backup::class, 'in_memory_lock');
         $lock_property->setAccessible(true);
         $lock_property->setValue(null, null);
@@ -182,6 +184,40 @@ final class BJLG_BackupTest extends TestCase
         );
 
         BJLG\BJLG_Backup::release_task_slot($task_one);
+    }
+
+    public function test_reserve_task_slot_recovers_from_expired_option_lock(): void
+    {
+        $current_time = time();
+        $stale_task_id = 'bjlg_backup_' . md5('stale-lock');
+        $task_id = 'bjlg_backup_' . md5('fresh-lock');
+        $option_name = '_transient_bjlg_backup_task_lock';
+        $timeout_name = '_transient_timeout_bjlg_backup_task_lock';
+
+        $expired_payload = [
+            'owner' => $stale_task_id,
+            'acquired_at' => $current_time - 3600,
+            'initialized' => true,
+            'expires_at' => $current_time - 30,
+        ];
+        $GLOBALS['bjlg_test_options'][$option_name] = $expired_payload;
+        $GLOBALS['bjlg_test_options'][$timeout_name] = $current_time - 30;
+        $GLOBALS['bjlg_test_transients']['bjlg_backup_task_lock'] = $expired_payload;
+
+        $this->assertTrue(
+            BJLG\BJLG_Backup::reserve_task_slot($task_id),
+            'The new task should reclaim the lock when the previous payload expired.'
+        );
+
+        $stored_payload = $GLOBALS['bjlg_test_options'][$option_name] ?? null;
+        $this->assertIsArray($stored_payload);
+        $this->assertSame($task_id, $stored_payload['owner']);
+
+        $stored_timeout = $GLOBALS['bjlg_test_options'][$timeout_name] ?? 0;
+        $this->assertIsInt($stored_timeout);
+        $this->assertGreaterThan(time(), $stored_timeout, 'The timeout should be refreshed for the new owner.');
+
+        BJLG\BJLG_Backup::release_task_slot($task_id);
     }
 
     public function test_progress_updates_refresh_lock_and_keep_owner(): void
