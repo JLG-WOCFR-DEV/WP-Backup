@@ -184,6 +184,42 @@ final class BJLG_BackupTest extends TestCase
         BJLG\BJLG_Backup::release_task_slot($task_one);
     }
 
+    public function test_reserve_task_slot_reclaims_expired_option_lock(): void
+    {
+        $task_id = 'bjlg_backup_' . md5('expired-lock');
+        $stale_payload = [
+            'owner' => 'bjlg_backup_' . md5('stale'),
+            'acquired_at' => time() - 3600,
+            'initialized' => true,
+            'expires_at' => time() - 30,
+        ];
+
+        $option_name = '_transient_bjlg_backup_task_lock';
+        $timeout_name = '_transient_timeout_bjlg_backup_task_lock';
+
+        $GLOBALS['bjlg_test_options'][$option_name] = $stale_payload;
+        $GLOBALS['bjlg_test_options'][$timeout_name] = $stale_payload['expires_at'];
+        $GLOBALS['bjlg_test_transients']['bjlg_backup_task_lock'] = $stale_payload;
+
+        $this->assertTrue(
+            BJLG\BJLG_Backup::reserve_task_slot($task_id),
+            'The first task after expiration should reclaim the lock.'
+        );
+
+        $stored_payload = $GLOBALS['bjlg_test_options'][$option_name] ?? null;
+
+        $this->assertIsArray($stored_payload, 'The lock payload should be recreated in options.');
+        $this->assertSame(
+            $task_id,
+            $stored_payload['owner'],
+            'The lock owner should be updated to the requesting task.'
+        );
+        $this->assertGreaterThan(time(), $stored_payload['expires_at'], 'The lock expiration should be extended.');
+        $this->assertGreaterThan(time(), $GLOBALS['bjlg_test_options'][$timeout_name]);
+
+        BJLG\BJLG_Backup::release_task_slot($task_id);
+    }
+
     public function test_progress_updates_refresh_lock_and_keep_owner(): void
     {
         $task_id = 'bjlg_backup_' . md5('lock-refresh');
