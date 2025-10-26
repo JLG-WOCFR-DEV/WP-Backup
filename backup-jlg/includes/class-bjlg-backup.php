@@ -823,6 +823,8 @@ class BJLG_Backup {
             }
         }
 
+        $existing_payload = null;
+
         if (function_exists('add_option')) {
             $option_name = '_transient_' . self::TASK_LOCK_KEY;
             $timeout_name = '_transient_timeout_' . self::TASK_LOCK_KEY;
@@ -873,6 +875,37 @@ class BJLG_Backup {
 
                 return true;
             }
+
+            $existing_payload = self::get_lock_payload();
+
+            if ($existing_payload !== null && (int) $existing_payload['expires_at'] <= $now) {
+                if (function_exists('delete_option')) {
+                    delete_option($option_name);
+                    delete_option($timeout_name);
+                } else {
+                    self::delete_lock_payload();
+                }
+
+                self::$in_memory_lock = null;
+
+                $retry_added = add_option($option_name, $payload, '', 'no');
+
+                if ($retry_added) {
+                    $expires_at = $payload['expires_at'];
+
+                    if (!add_option($timeout_name, $expires_at, '', 'no')) {
+                        if (function_exists('update_option')) {
+                            update_option($timeout_name, $expires_at);
+                        }
+                    }
+
+                    self::$in_memory_lock = $payload;
+
+                    return true;
+                }
+
+                $existing_payload = self::get_lock_payload();
+            }
         }
 
         if (function_exists('set_transient')) {
@@ -881,7 +914,9 @@ class BJLG_Backup {
             );
         }
 
-        $existing_payload = self::get_lock_payload();
+        if ($existing_payload === null) {
+            $existing_payload = self::get_lock_payload();
+        }
 
         if ($existing_payload === null || (int) $existing_payload['expires_at'] <= $now) {
             return false;

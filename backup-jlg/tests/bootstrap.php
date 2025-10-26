@@ -1266,6 +1266,30 @@ if (!function_exists('add_option')) {
     }
 }
 
+if (!function_exists('delete_option')) {
+    function delete_option($option) {
+        if (isset($GLOBALS['bjlg_test_options'][$option])) {
+            unset($GLOBALS['bjlg_test_options'][$option]);
+        }
+
+        if (strpos($option, '_transient_timeout_') === 0) {
+            $transient = substr($option, strlen('_transient_timeout_'));
+            unset($GLOBALS['bjlg_test_options']['_transient_timeout_' . $transient]);
+
+            return true;
+        }
+
+        if (strpos($option, '_transient_') === 0) {
+            $transient = substr($option, strlen('_transient_'));
+            unset($GLOBALS['bjlg_test_transients'][$transient]);
+            unset($GLOBALS['bjlg_test_options']['_transient_' . $transient]);
+            unset($GLOBALS['bjlg_test_options']['_transient_timeout_' . $transient]);
+        }
+
+        return true;
+    }
+}
+
 if (!function_exists('bjlg_delete_option')) {
     function bjlg_delete_option($option) {
         if (isset($GLOBALS['bjlg_test_options'][$option])) {
