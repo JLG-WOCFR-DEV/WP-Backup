@@ -103,6 +103,7 @@ final class BJLG_BackupTest extends TestCase
             'recurring' => [],
             'single' => [],
         ];
+        $GLOBALS['bjlg_test_options'] = [];
         $GLOBALS['bjlg_test_set_transient_mock'] = null;
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
 
@@ -119,6 +120,7 @@ final class BJLG_BackupTest extends TestCase
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
         $_POST = [];
 
+        $GLOBALS['bjlg_test_options'] = [];
         $lock_property = new ReflectionProperty(BJLG\BJLG_Backup::class, 'in_memory_lock');
         $lock_property->setAccessible(true);
         $lock_property->setValue(null, null);

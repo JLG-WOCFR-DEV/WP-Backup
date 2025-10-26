@@ -830,6 +830,38 @@ class BJLG_Backup {
             $timeout_name = '_transient_timeout_' . self::TASK_LOCK_KEY;
             $added = add_option($option_name, $payload, '', 'no');
 
+            if (!$added) {
+                $existing_payload = null;
+                $existing_timeout = null;
+
+                if (function_exists('get_option')) {
+                    $existing_payload = get_option($option_name, null);
+                    $existing_timeout = get_option($timeout_name, null);
+                }
+
+                $normalized_payload = self::normalize_lock_payload($existing_payload);
+                $expiration = null;
+
+                if (is_numeric($existing_timeout)) {
+                    $expiration = (int) $existing_timeout;
+                } elseif ($normalized_payload !== null) {
+                    $expiration = (int) $normalized_payload['expires_at'];
+                }
+
+                if ($expiration !== null && $expiration <= $now) {
+                    if (function_exists('delete_transient')) {
+                        delete_transient(self::TASK_LOCK_KEY);
+                    } elseif (function_exists('delete_option')) {
+                        delete_option($option_name);
+                        delete_option($timeout_name);
+                    }
+
+                    self::$in_memory_lock = null;
+
+                    $added = add_option($option_name, $payload, '', 'no');
+                }
+            }
+
             if ($added) {
                 $expires_at = $payload['expires_at'];
 
