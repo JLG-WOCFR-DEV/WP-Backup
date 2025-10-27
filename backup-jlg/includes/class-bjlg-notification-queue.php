@@ -188,84 +188,6 @@ class BJLG_Notification_Queue {
     }
 
     /**
-     * Creates or upgrades the database tables backing the notification queue.
-     */
-    public static function create_tables(): void {
-        $db = self::db();
-        if (!$db) {
-            return;
-        }
-
-        $charset_collate = '';
-        if (method_exists($db, 'get_charset_collate')) {
-            $charset_collate = (string) $db->get_charset_collate();
-        }
-
-        $queue_table = self::table_name();
-        $meta_table = self::meta_table_name();
-
-        $queue_sql = "CREATE TABLE {$queue_table} (
-            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-            entry_id varchar(191) NOT NULL,
-            event varchar(191) NOT NULL DEFAULT '',
-            title text NULL,
-            subject text NULL,
-            severity varchar(20) NOT NULL DEFAULT '',
-            created_at bigint(20) unsigned NOT NULL DEFAULT 0,
-            next_attempt_at bigint(20) unsigned NOT NULL DEFAULT 0,
-            last_attempt_at bigint(20) unsigned NOT NULL DEFAULT 0,
-            updated_at bigint(20) unsigned NOT NULL DEFAULT 0,
-            acknowledged_by varchar(191) NOT NULL DEFAULT '',
-            acknowledged_at bigint(20) unsigned NOT NULL DEFAULT 0,
-            resolved_at bigint(20) unsigned NOT NULL DEFAULT 0,
-            resolution_summary text NULL,
-            resolution_status varchar(50) NOT NULL DEFAULT '',
-            resolution_acknowledged_at bigint(20) unsigned NOT NULL DEFAULT 0,
-            resolution_resolved_at bigint(20) unsigned NOT NULL DEFAULT 0,
-            resolution_notes longtext NULL,
-            reminder_attempts int NOT NULL DEFAULT 0,
-            reminder_next_at bigint(20) unsigned NOT NULL DEFAULT 0,
-            reminder_last_triggered_at bigint(20) unsigned NOT NULL DEFAULT 0,
-            reminder_base_interval int NOT NULL DEFAULT 0,
-            reminder_active tinyint(1) NOT NULL DEFAULT 1,
-            reminder_backoff_multiplier float NOT NULL DEFAULT 0,
-            reminder_max_interval int NOT NULL DEFAULT 0,
-            last_error text NULL,
-            quiet_until bigint(20) unsigned NOT NULL DEFAULT 0,
-            reminders_payload longtext NULL,
-            resolution_payload longtext NULL,
-            escalation_payload longtext NULL,
-            quiet_hours_payload longtext NULL,
-            payload longtext NOT NULL,
-            PRIMARY KEY  (id),
-            UNIQUE KEY entry_id (entry_id),
-            KEY reminder_next_at (reminder_next_at),
-            KEY resolution_status (resolution_status)
-        ) {$charset_collate};";
-
-        $meta_sql = "CREATE TABLE {$meta_table} (
-            meta_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-            entry_id varchar(191) NOT NULL,
-            meta_key varchar(191) NOT NULL,
-            meta_value longtext NULL,
-            meta_order int NOT NULL DEFAULT 0,
-            PRIMARY KEY  (meta_id),
-            KEY entry_id (entry_id),
-            KEY meta_key (meta_key)
-        ) {$charset_collate};";
-
-        if (function_exists('dbDelta')) {
-            dbDelta($queue_sql);
-            dbDelta($meta_sql);
-        } elseif (method_exists($db, 'query')) {
-            $db->query($queue_sql);
-            $db->query($meta_sql);
-        }
-
-        self::maybe_migrate_from_option();
-    }
-
-    /**
      * Seeds the queue with the provided entries. Intended for tests and migrations.
      *
      * @internal
@@ -1465,33 +1387,18 @@ class BJLG_Notification_Queue {
     private static function get_queue_from_option() {
         $queue = bjlg_get_option(self::OPTION, []);
 
-        if (!is_array($rows)) {
+        if (!is_array($queue)) {
             return [];
         }
 
-        $entries = [];
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
+        $normalized = [];
+        foreach ($queue as $entry) {
+            if (is_array($entry)) {
+                $normalized[] = $entry;
             }
-
-            $payload = isset($row['payload']) ? $row['payload'] : '';
-            $entry = self::decode_json($payload);
-            if (!is_array($entry) || empty($entry)) {
-                continue;
-            }
-
-            if (!isset($entry['id']) && isset($row['entry_id'])) {
-                $entry['id'] = (string) $row['entry_id'];
-            }
-
-            $entry = self::hydrate_resolution_from_meta($entry, isset($row['entry_id']) ? (string) $row['entry_id'] : '');
-            $entries[] = $entry;
         }
 
-        self::$table_cache = $normalized;
-
-        return $normalized;
+        return array_values($normalized);
     }
 
     /**
