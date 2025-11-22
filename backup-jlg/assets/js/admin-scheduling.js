@@ -3216,8 +3216,6 @@ jQuery(function($) {
 
         renderCronGuardrails(helper, expression);
 
-        renderCronGuardrails(helper, expression);
-
         if ($item && typeof $item.data === 'function') {
             $item.data('cronImpact', impactData);
             if (payload && Array.isArray(payload.next_runs) && payload.next_runs.length) {
@@ -3526,7 +3524,16 @@ jQuery(function($) {
     function createScheduleBadgeElement(badge) {
         const classes = Array.isArray(badge.classes) ? badge.classes.slice() : [];
         classes.unshift('bjlg-badge');
-        const $badge = $('<span/>', { class: classes.join(' '), text: badge.label });
+
+        const attributes = { class: classes.join(' '), text: badge.label };
+        if (badge.title) {
+            attributes.title = badge.title;
+        }
+        if (badge.ariaLabel) {
+            attributes['aria-label'] = badge.ariaLabel;
+        }
+
+        const $badge = $('<span/>', attributes);
         const styles = $.extend({}, badgeStyles, { backgroundColor: badge.color || '#4b5563' });
         $badge.css(styles);
         return $badge;
@@ -3985,6 +3992,8 @@ jQuery(function($) {
             }
         }
 
+        const guardrailBadges = buildCronGuardrailBadges(data);
+
         const components = Array.isArray(data.components) ? data.components : [];
         const componentBadges = [];
         const seenComponents = new Set();
@@ -4052,7 +4061,7 @@ jQuery(function($) {
             destinationBadges.push({ label: 'Stockage local', color: '#4b5563', classes: ['bjlg-badge-destination'] });
         }
 
-        return [
+        const groups = [
             { title: 'Fréquence', badges: frequencyBadges.length ? frequencyBadges : [{ label: '—', color: '#4b5563', classes: ['bjlg-badge-recurrence'] }] },
             { title: 'Composants', badges: componentBadges },
             { title: 'Options', badges: optionBadges },
@@ -4061,6 +4070,46 @@ jQuery(function($) {
             { title: 'Contrôles', badges: controlBadges },
             { title: 'Destinations', badges: destinationBadges }
         ];
+
+        if (guardrailBadges.length) {
+            groups.splice(1, 0, { title: 'Garde-fous Cron', badges: guardrailBadges });
+        }
+
+        return groups;
+    }
+
+    function buildCronGuardrailBadges(data) {
+        if (!data || (data.recurrence || '').toString() !== 'custom') {
+            return [];
+        }
+
+        const expression = (data.custom_cron || '').toString().trim();
+        if (!expression) {
+            return [{
+                label: 'Expression requise',
+                color: '#f43f5e',
+                classes: ['bjlg-badge-guardrail', 'bjlg-badge-state-off'],
+                title: 'Renseignez une expression Cron pour évaluer les garde-fous.',
+                ariaLabel: 'Expression Cron manquante'
+            }];
+        }
+
+        const stateColors = { error: '#ef4444', warning: '#f59e0b', info: '#0ea5e9', success: '#22c55e' };
+        const guardrails = evaluateCronGuardrails(expression);
+        if (!Array.isArray(guardrails) || !guardrails.length) {
+            return [];
+        }
+
+        return guardrails.map(function(entry) {
+            return {
+                label: entry.label || '',
+                color: stateColors[entry.state] || '#0ea5e9',
+                classes: ['bjlg-badge-guardrail'],
+                title: entry.message || ''
+            };
+        }).filter(function(badge) {
+            return !!badge.label;
+        });
     }
 
     const recommendationState = typeof WeakMap === 'function' ? new WeakMap() : null;
