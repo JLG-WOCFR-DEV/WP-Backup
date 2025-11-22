@@ -7918,6 +7918,10 @@ class BJLG_Admin {
                                             <span class="bjlg-cron-risk__badge" data-cron-risk-label></span>
                                             <p class="bjlg-cron-risk__message" data-cron-risk-message></p>
                                         </section>
+                                        <section class="bjlg-cron-assistant__guardrails" data-cron-guardrails hidden>
+                                            <strong class="bjlg-cron-assistant__title"><?php esc_html_e('Garde-fous', 'backup-jlg'); ?></strong>
+                                            <ul class="bjlg-cron-guardrails" data-cron-guardrail-list></ul>
+                                        </section>
                                         <div class="bjlg-cron-assistant__history" data-cron-history>
                                             <div class="bjlg-cron-history__header">
                                                 <strong class="bjlg-cron-assistant__title"><?php esc_html_e('Expressions récentes', 'backup-jlg'); ?></strong>
