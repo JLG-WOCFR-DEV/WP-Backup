@@ -2448,20 +2448,7 @@ jQuery(function($) {
         const statuses = [];
 
         if (!normalized) {
-            return [
-                {
-                    id: 'format',
-                    label: 'Format attendu',
-                    state: 'info',
-                    message: '5 champs : minute, heure, jour du mois, mois, jour de semaine.'
-                },
-                {
-                    id: 'cadence',
-                    label: 'Cadence minimale',
-                    state: 'info',
-                    message: 'Privilégiez un intervalle ≥ 5 minutes pour limiter la charge.'
-                }
-            ];
+            return statuses;
         }
 
         const hasErrors = Array.isArray(analysis.errors) && analysis.errors.length > 0;
@@ -2479,6 +2466,10 @@ jQuery(function($) {
             state: hasErrors ? 'error' : 'success',
             message: hasErrors ? analysis.errors[0] : 'Expression compatible avec WP-Cron.'
         });
+
+        if (hasErrors) {
+            return statuses;
+        }
 
         statuses.push({
             id: 'cadence',
