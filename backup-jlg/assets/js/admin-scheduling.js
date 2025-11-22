@@ -2413,6 +2413,80 @@ jQuery(function($) {
         return null;
     }
 
+    function countCronValues(field, min, max) {
+        const normalized = (field || '').toString().trim().toLowerCase();
+        const lower = typeof min === 'number' ? min : 0;
+        const upper = typeof max === 'number' ? max : lower;
+        if (!normalized || normalized === '*' || normalized === '?') {
+            return Math.max(1, upper - lower + 1);
+        }
+
+        let total = 0;
+        const addRange = function(start, end, step) {
+            const safeStart = Math.max(lower, start);
+            const safeEnd = Math.min(upper, end);
+            if (safeEnd < safeStart) {
+                return;
+            }
+            const increment = step && step > 0 ? step : 1;
+            total += Math.floor((safeEnd - safeStart) / increment) + 1;
+        };
+
+        normalized.split(',').forEach(function(segment) {
+            const rangeMatch = segment.match(/^(\d+)-(\d+)(?:\/(\d+))?$/);
+            if (rangeMatch) {
+                addRange(parseInt(rangeMatch[1], 10), parseInt(rangeMatch[2], 10), parseInt(rangeMatch[3], 10));
+                return;
+            }
+
+            const stepMatch = segment.match(/^\*\/(\d+)$/);
+            if (stepMatch) {
+                addRange(lower, upper, parseInt(stepMatch[1], 10));
+                return;
+            }
+
+            const value = parseInt(segment, 10);
+            if (!Number.isNaN(value) && value >= lower && value <= upper) {
+                total += 1;
+            }
+        });
+
+        if (!total) {
+            return Math.max(1, upper - lower + 1);
+        }
+
+        return Math.min(total, Math.max(1, upper - lower + 1));
+    }
+
+    function estimateCronLoad(expression) {
+        const normalized = normalizeCronExpression(expression);
+        const parts = normalized.split(/\s+/);
+        if (parts.length !== cronFieldCount) {
+            return { runsPerDay: null, dayCoverage: null };
+        }
+
+        const minuteField = parts[0];
+        const hourField = parts[1];
+        const dayOfMonthField = parts[2];
+        const dayOfWeekField = parts[4];
+
+        const minuteInterval = estimateMinuteInterval(minuteField);
+        const minuteCount = minuteInterval ? Math.max(1, Math.floor(60 / minuteInterval)) : countCronValues(minuteField, 0, 59);
+        const hourInterval = getCronStepValue(hourField);
+        const hourCount = hourInterval ? Math.max(1, Math.floor(24 / hourInterval)) : countCronValues(hourField, 0, 23);
+
+        let dayFactor = 1;
+        if (dayOfWeekField !== '*' && dayOfWeekField !== '?') {
+            dayFactor = Math.max(1, countCronValues(dayOfWeekField, 0, 6)) / 7;
+        } else if (dayOfMonthField !== '*' && dayOfMonthField !== '?') {
+            dayFactor = Math.max(1, Math.min(31, countCronValues(dayOfMonthField, 1, 31))) / 30;
+        }
+
+        const runsPerDay = Math.max(1, Math.round(minuteCount * hourCount * dayFactor));
+
+        return { runsPerDay: runsPerDay, dayCoverage: Math.max(0, Math.min(1, dayFactor)) };
+    }
+
     function renderCronLocalWarnings($item, expression) {
         const helper = getCronAssistantHelper($item);
         if (!helper || !helper.container.length) {
@@ -2488,6 +2562,35 @@ jQuery(function($) {
                 ? 'Choisissez soit le jour du mois soit le jour de semaine pour clarifier l’exécution.'
                 : 'Un seul des champs jour est filtré, l’intention est claire.'
         });
+
+        const loadEstimation = estimateCronLoad(normalized);
+        if (loadEstimation.runsPerDay !== null) {
+            const runs = loadEstimation.runsPerDay;
+            const cadenceState = runs >= 288 ? 'error' : (runs >= 96 ? 'warning' : 'success');
+            const cadenceMessage = runs >= 288
+                ? 'Expression équivalente à une exécution toutes les 5 minutes : vérifiez la charge serveur.'
+                : runs >= 96
+                    ? 'Plus de 96 exécutions quotidiennes estimées : vérifiez que la fréquence est intentionnelle.'
+                    : runs + ' exécution' + (runs > 1 ? 's' : '') + ' quotidienne' + (runs > 1 ? 's' : '') + ' estimée' + (runs > 1 ? 's' : '') + '.';
+            statuses.push({
+                id: 'volume',
+                label: 'Volume quotidien',
+                state: cadenceState,
+                message: cadenceMessage
+            });
+
+            if (loadEstimation.dayCoverage !== null && loadEstimation.dayCoverage < 1) {
+                const coveragePercent = Math.round(loadEstimation.dayCoverage * 100);
+                statuses.push({
+                    id: 'coverage',
+                    label: 'Couverture hebdomadaire',
+                    state: 'info',
+                    message: coveragePercent >= 100
+                        ? 'Couverture complète sur la semaine.'
+                        : coveragePercent + '% des jours de la semaine ciblés.'
+                });
+            }
+        }
 
         return statuses;
     }
@@ -2797,6 +2900,51 @@ jQuery(function($) {
         return label;
     }
 
+    function resolveRiskLevelFromRuns(runsPerDay) {
+        const value = Number(runsPerDay);
+        if (!Number.isFinite(value) || value <= 0) {
+            return 'unknown';
+        }
+        const medium = Number(cronRiskThresholds.medium) || 96;
+        const high = Number(cronRiskThresholds.high) || 288;
+        if (value >= high) {
+            return 'high';
+        }
+        if (value >= medium) {
+            return 'medium';
+        }
+        return 'low';
+    }
+
+    function buildLocalCronImpact($item, expression) {
+        const loadEstimation = estimateCronLoad(expression);
+        if (!loadEstimation || loadEstimation.runsPerDay === null) {
+            return null;
+        }
+
+        const reasons = [];
+        const components = collectSelectedComponents($item);
+        const runsPerDay = loadEstimation.runsPerDay;
+
+        if (runsPerDay > 0) {
+            reasons.push('≈ ' + runsPerDay + ' exécutions / jour');
+        }
+        if (loadEstimation.dayCoverage !== null && loadEstimation.dayCoverage < 1) {
+            reasons.push(Math.round(loadEstimation.dayCoverage * 100) + '% des jours ciblés');
+        }
+        if (components.length) {
+            reasons.push('Composants : ' + components.map(formatComponentLabel).join(', '));
+        }
+
+        return {
+            runs_per_day: runsPerDay,
+            risk: {
+                level: resolveRiskLevelFromRuns(runsPerDay),
+                reasons: reasons
+            }
+        };
+    }
+
     function updateCronRiskDisplay(helper, impact) {
         if (!helper || !helper.risk || !helper.risk.length) {
             return;
@@ -2937,7 +3085,10 @@ jQuery(function($) {
         }
         const storedImpact = $item && typeof $item.data === 'function' ? $item.data('cronImpact') : null;
         const resolvedImpact = typeof impact !== 'undefined' ? impact : storedImpact;
-        updateCronRiskDisplay(helper, resolvedImpact || null);
+        const $input = $item.find('[data-field="custom_cron"]');
+        const expression = $input.length ? $input.val() : '';
+        const fallbackImpact = buildLocalCronImpact($item, expression);
+        updateCronRiskDisplay(helper, resolvedImpact || fallbackImpact || null);
     }
 
     function initializeCronHistory(helper, $item) {
@@ -3061,6 +3212,9 @@ jQuery(function($) {
 
         const expression = payload && payload.expression ? payload.expression : '';
         const impactData = payload && payload.impact ? payload.impact : null;
+        const fallbackImpact = buildLocalCronImpact($item, expression);
+
+        renderCronGuardrails(helper, expression);
 
         renderCronGuardrails(helper, expression);
 
@@ -3077,7 +3231,7 @@ jQuery(function($) {
             updateCronAssistantContext($input);
         }
         const localSeverity = renderCronLocalWarnings($item, expression);
-        updateCronRiskDisplay(helper, impactData);
+        updateCronRiskDisplay(helper, impactData || fallbackImpact);
 
         if (!payload || !payload.expression) {
             if ($preview.length) {
