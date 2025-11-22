@@ -3216,6 +3216,8 @@ jQuery(function($) {
 
         renderCronGuardrails(helper, expression);
 
+        renderCronGuardrails(helper, expression);
+
         if ($item && typeof $item.data === 'function') {
             $item.data('cronImpact', impactData);
             if (payload && Array.isArray(payload.next_runs) && payload.next_runs.length) {
