@@ -4391,3 +4391,38 @@ border-color: #d1d5db;
     border-color: #dc2626 !important;
     box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.2);
 }
+
+.bjlg-schedule-recommendations__scenario {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    background: #f8fafc;
+}
+
+.bjlg-schedule-recommendations__scenario-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.bjlg-schedule-recommendations__scenario-header strong {
+    font-size: 14px;
+}
+
+.bjlg-schedule-recommendations__scenario-meta {
+    color: #475569;
+}
+
+.bjlg-schedule-recommendations__scenario-description {
+    margin: 6px 0 10px 0;
+    color: #111827;
+}
+
+.bjlg-schedule-recommendations__scenario-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}

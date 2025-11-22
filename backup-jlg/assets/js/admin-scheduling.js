@@ -2087,6 +2087,68 @@ jQuery(function($) {
         updateNextRunPreviewForItem($item, true);
     }
 
+    function applySuggestedAdjustments($item, adjustments) {
+        if (!$item || !adjustments || typeof adjustments !== 'object') {
+            return;
+        }
+        const $recurrence = $item.find('[data-field="recurrence"]');
+        const $customCron = $item.find('[data-field="custom_cron"]');
+        const $time = $item.find('[data-field="time"]');
+        const $day = $item.find('[data-field="day"]');
+        const $label = $item.find('[data-field="label"]');
+
+        if ($label.length && !$label.val() && adjustments.label) {
+            $label.val(adjustments.label).trigger('input');
+        }
+
+        if (adjustments.custom_cron && $customCron.length) {
+            $customCron.val(adjustments.custom_cron).trigger('input').trigger('change');
+            if ($recurrence.length) {
+                const current = ($recurrence.val() || '').toString();
+                $item.find('[data-field="previous_recurrence"]').val(current);
+                $recurrence.val('custom').trigger('change');
+            }
+        } else if (adjustments.recurrence && $recurrence.length) {
+            $recurrence.val(adjustments.recurrence).trigger('change');
+        }
+
+        if (adjustments.time && $time.length) {
+            $time.val(adjustments.time).trigger('change');
+        }
+
+        if (adjustments.day && $day.length) {
+            $day.val(adjustments.day).trigger('change');
+        }
+
+        if (Array.isArray(adjustments.components)) {
+            const desiredComponents = new Set(adjustments.components.map(function(entry) { return entry.toString(); }));
+            $item.find('[data-field="components"]').each(function() {
+                const $checkbox = $(this);
+                const value = ($checkbox.val() || '').toString();
+                $checkbox.prop('checked', desiredComponents.has(value));
+            }).trigger('change');
+        }
+
+        if (typeof adjustments.incremental === 'boolean') {
+            const $incremental = $item.find('[data-field="incremental"]');
+            if ($incremental.length) {
+                $incremental.prop('checked', adjustments.incremental).trigger('change');
+            }
+        }
+
+        if (typeof adjustments.encrypt === 'boolean') {
+            const $encrypt = $item.find('[data-field="encrypt"]');
+            if ($encrypt.length) {
+                $encrypt.prop('checked', adjustments.encrypt).trigger('change');
+            }
+        }
+
+        setScheduleMacro($item, adjustments.scenario_id || '');
+        markScheduleDirty($item);
+        updateScheduleSummaryForItem($item);
+        updateNextRunPreviewForItem($item, true);
+    }
+
     function buildCronScenarioPanel($container, $item) {
         if (!$container || !$container.length || $container.data('initialized')) {
             return;
@@ -4175,6 +4237,29 @@ jQuery(function($) {
         neutral: 'bjlg-badge-bg-slate'
     };
 
+    function findScenarioById(scenarioId) {
+        if (!scenarioId) {
+            return null;
+        }
+        if (cronScenarioMap && cronScenarioMap.has && cronScenarioMap.has(scenarioId)) {
+            return cronScenarioMap.get(scenarioId);
+        }
+        if (!Array.isArray(cronScenarios)) {
+            return null;
+        }
+        for (let index = 0; index < cronScenarios.length; index++) {
+            const candidate = cronScenarios[index];
+            if (!candidate || typeof candidate !== 'object') {
+                continue;
+            }
+            const key = (candidate.id || candidate.expression || candidate.label || '').toString();
+            if (key === scenarioId) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
     function summarizeForecastForDisplay(forecast) {
         const summary = { badges: [], tips: [], loadLevel: 'low', scenario: null };
         if (!forecast || typeof forecast !== 'object') {
@@ -4254,13 +4339,27 @@ jQuery(function($) {
         }
 
         if (forecast.suggested_adjustments && typeof forecast.suggested_adjustments === 'object') {
-            summary.scenario = forecast.suggested_adjustments;
-            if (forecast.suggested_adjustments.label) {
-                summary.tips.unshift({
-                    text: __('Scénario suggéré : ', 'backup-jlg') + forecast.suggested_adjustments.label,
-                    variant: 'success'
-                });
-            }
+            const suggested = forecast.suggested_adjustments;
+            summary.scenario = {
+                label: suggested.label || __('Scénario recommandé', 'backup-jlg'),
+                adjustments: suggested,
+                variant: loadVariants[loadLevel] || 'info',
+                meta: loadLabels[loadLevel] || '',
+                description: suggested.description || __('Ajustez la cadence et la couverture selon l\'analyse.', 'backup-jlg'),
+                share_payload: {
+                    label: suggested.label || '',
+                    recurrence: suggested.recurrence || '',
+                    time: suggested.time || '',
+                    day: suggested.day || '',
+                    custom_cron: suggested.custom_cron || '',
+                    components: Array.isArray(suggested.components) ? suggested.components : [],
+                    incremental: typeof suggested.incremental === 'boolean' ? suggested.incremental : undefined
+                }
+            };
+            summary.tips.unshift({
+                text: __('Scénario suggéré : ', 'backup-jlg') + (suggested.label || ''),
+                variant: 'success'
+            });
         }
 
         return summary;
@@ -4299,6 +4398,7 @@ jQuery(function($) {
         const $badges = $panel.find('[data-role="recommendation-badges"]');
         const $tips = $panel.find('[data-role="recommendation-tips"]');
         const $empty = $panel.find('[data-role="recommendation-empty"]');
+        const $scenario = $panel.find('[data-role="recommendation-scenario"]');
 
         if ($badges.length) {
             $badges.empty();
@@ -4306,11 +4406,19 @@ jQuery(function($) {
         if ($tips.length) {
             $tips.empty();
         }
+        if ($scenario.length) {
+            $scenario.data('scenario', null);
+            $scenario.attr('hidden', 'hidden').hide();
+            $scenario.find('[data-role="recommendation-scenario-title"]').text('');
+            $scenario.find('[data-role="recommendation-scenario-meta"]').text('');
+            $scenario.find('[data-role="recommendation-scenario-description"]').text('');
+        }
 
         const hasBadges = summary && Array.isArray(summary.badges) && summary.badges.length;
         const hasTips = summary && Array.isArray(summary.tips) && summary.tips.length;
+        const hasScenario = summary && summary.scenario && typeof summary.scenario === 'object';
 
-        if (!hasBadges && !hasTips) {
+        if (!hasBadges && !hasTips && !hasScenario) {
             if ($empty.length) {
                 $empty.text(__('Modifiez la planification pour obtenir des recommandations.', 'backup-jlg')).show();
             }
@@ -4350,6 +4458,23 @@ jQuery(function($) {
                     text: tip.text
                 }).appendTo($tips);
             });
+        }
+
+        if (hasScenario && $scenario.length) {
+            const scenario = summary.scenario;
+            const title = scenario.label || __('Scénario recommandé', 'backup-jlg');
+            const meta = scenario.meta || '';
+            const description = scenario.description || '';
+
+            $scenario.find('[data-role="recommendation-scenario-title"]').text(title);
+            if (meta) {
+                $scenario.find('[data-role="recommendation-scenario-meta"]').text(meta);
+            }
+            if (description) {
+                $scenario.find('[data-role="recommendation-scenario-description"]').text(description);
+            }
+            $scenario.data('scenario', scenario);
+            $scenario.removeAttr('hidden').show();
         }
     }
 
@@ -5231,6 +5356,44 @@ jQuery(function($) {
         const $item = $button.closest('.bjlg-schedule-item');
         const scheduleId = ($item.find('[data-field="id"]').val() || '').toString();
         submitRunSchedule(scheduleId, $button, $item);
+    });
+
+    // Application de la recommandation
+    $scheduleForm.on('click', '[data-action="apply-recommended-scenario"]', function(event) {
+        event.preventDefault();
+        const $button = $(this);
+        const $item = $button.closest('.bjlg-schedule-item');
+        const $panel = $button.closest('[data-field="recommendations"]');
+        const scenario = $panel.find('[data-role="recommendation-scenario"]').data('scenario');
+        if (!scenario || !scenario.adjustments) {
+            return;
+        }
+        const mapped = findScenarioById(scenario.adjustments.scenario_id || '');
+        if (mapped) {
+            applyCronScenario($item, mapped);
+        } else {
+            applySuggestedAdjustments($item, scenario.adjustments);
+        }
+        renderScheduleFeedback('info', __('Recommandation appliquée.', 'backup-jlg'), []);
+    });
+
+    // Partage de la recommandation
+    $scheduleForm.on('click', '[data-action="share-recommended-scenario"]', function(event) {
+        event.preventDefault();
+        const $button = $(this);
+        const $panel = $button.closest('[data-field="recommendations"]');
+        const scenario = $panel.find('[data-role="recommendation-scenario"]').data('scenario');
+        if (!scenario) {
+            return;
+        }
+        const helper = getCronAssistantHelper($button.closest('.bjlg-schedule-item'));
+        if (scenario.share_payload) {
+            shareScenario({ share_payload: scenario.share_payload, label: scenario.label || '' }, helper);
+            return;
+        }
+        if (scenario.adjustments) {
+            shareScenario({ share_payload: scenario.adjustments, label: scenario.label || '' }, helper);
+        }
     });
 
     // Soumission du formulaire
