@@ -4214,6 +4214,109 @@ border-color: #d1d5db;
     gap: 6px;
 }
 
+.bjlg-cron-assistant__guardrails {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+}
+
+.bjlg-cron-guardrails {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+}
+
+.bjlg-cron-guardrail {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.bjlg-cron-guardrail:last-child {
+    margin-bottom: 0;
+}
+
+.bjlg-cron-guardrail__badge {
+    width: 10px;
+    height: 10px;
+    border-radius: 9999px;
+    margin-top: 6px;
+    background-color: #cbd5e1;
+    flex-shrink: 0;
+}
+
+.bjlg-cron-guardrail__badge--success {
+    background-color: #16a34a;
+}
+
+.bjlg-cron-guardrail__badge--warning {
+    background-color: #f59e0b;
+}
+
+.bjlg-cron-guardrail__badge--error {
+    background-color: #dc2626;
+}
+
+.bjlg-cron-guardrail__badge--info {
+    background-color: #0ea5e9;
+}
+
+.bjlg-cron-guardrail__label {
+    display: block;
+    margin: 0 0 2px;
+    color: #0f172a;
+}
+
+.bjlg-cron-guardrail__message {
+    margin: 0;
+    color: #475569;
+}
+
+.bjlg-cron-guardrail-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0;
+}
+
+.bjlg-cron-guardrail-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    line-height: 1.2;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    color: #0f172a;
+}
+
+.bjlg-cron-guardrail-chip--success {
+    border-color: #bbf7d0;
+    background: #ecfdf3;
+    color: #166534;
+}
+
+.bjlg-cron-guardrail-chip--warning {
+    border-color: #fed7aa;
+    background: #fffbeb;
+    color: #92400e;
+}
+
+.bjlg-cron-guardrail-chip--error {
+    border-color: #fecdd3;
+    background: #fff1f2;
+    color: #991b1b;
+}
+
+.bjlg-cron-guardrail-chip--info {
+    border-color: #bae6fd;
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
 .bjlg-cron-assistant__examples {
     display: flex;
     flex-wrap: wrap;
@@ -4287,4 +4390,39 @@ border-color: #d1d5db;
 .bjlg-field-error {
     border-color: #dc2626 !important;
     box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.2);
+}
+
+.bjlg-schedule-recommendations__scenario {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    background: #f8fafc;
+}
+
+.bjlg-schedule-recommendations__scenario-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.bjlg-schedule-recommendations__scenario-header strong {
+    font-size: 14px;
+}
+
+.bjlg-schedule-recommendations__scenario-meta {
+    color: #475569;
+}
+
+.bjlg-schedule-recommendations__scenario-description {
+    margin: 6px 0 10px 0;
+    color: #111827;
+}
+
+.bjlg-schedule-recommendations__scenario-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
 }

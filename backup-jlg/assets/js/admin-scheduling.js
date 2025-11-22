@@ -301,7 +301,7 @@ jQuery(function($) {
     }
 
     function analyzeCronExpression(expression) {
-        const result = { errors: [], warnings: [] };
+        const result = { errors: [], warnings: [], messages: [], severity: 'success' };
         const sanitized = (expression || '').toString().trim();
 
         if (!sanitized) {
@@ -314,6 +314,8 @@ jQuery(function($) {
 
         if (!cronAllowedPattern.test(sanitized)) {
             result.errors.push('L’expression contient des caractères non pris en charge. Utilisez uniquement les chiffres, espaces et symboles Cron classiques (* , - /).');
+            result.messages = result.errors.slice();
+            result.severity = 'error';
             return result;
         }
 
@@ -325,6 +327,8 @@ jQuery(function($) {
             } else {
                 result.errors.push('Expression trop longue : limitez-vous à 5 segments (minute, heure, jour du mois, mois, jour de semaine).');
             }
+            result.messages = result.errors.slice();
+            result.severity = 'error';
             return result;
         }
 
@@ -348,43 +352,41 @@ jQuery(function($) {
             result.errors.push('Jours de semaine non reconnus : ' + invalidDays.join(', ') + '. Utilisez sun–sat ou leurs équivalents numériques.');
         }
 
-        if (result.errors.length) {
-            return result;
-        }
+        if (!result.errors.length) {
+            const invalidMinuteValues = collectOutOfRangeNumbers(minuteField, 0, 59);
+            if (invalidMinuteValues.length) {
+                result.errors.push('Segment minutes : valeurs hors plage 0–59 détectées (' + invalidMinuteValues.join(', ') + ').');
+            }
 
-        const invalidMinuteValues = collectOutOfRangeNumbers(minuteField, 0, 59);
-        if (invalidMinuteValues.length) {
-            result.errors.push('Segment minutes : valeurs hors plage 0–59 détectées (' + invalidMinuteValues.join(', ') + ').');
-        }
+            const invalidHourValues = collectOutOfRangeNumbers(hourField, 0, 23);
+            if (invalidHourValues.length) {
+                result.errors.push('Segment heures : valeurs hors plage 0–23 détectées (' + invalidHourValues.join(', ') + ').');
+            }
 
-        const invalidHourValues = collectOutOfRangeNumbers(hourField, 0, 23);
-        if (invalidHourValues.length) {
-            result.errors.push('Segment heures : valeurs hors plage 0–23 détectées (' + invalidHourValues.join(', ') + ').');
-        }
+            const invalidDayOfMonthValues = collectOutOfRangeNumbers(dayOfMonthField.replace(/L-?/gi, ''), 1, 31);
+            if (invalidDayOfMonthValues.length) {
+                result.errors.push('Segment jours du mois : valeurs hors plage 1–31 détectées (' + invalidDayOfMonthValues.join(', ') + ').');
+            }
 
-        const invalidDayOfMonthValues = collectOutOfRangeNumbers(dayOfMonthField.replace(/L-?/gi, ''), 1, 31);
-        if (invalidDayOfMonthValues.length) {
-            result.errors.push('Segment jours du mois : valeurs hors plage 1–31 détectées (' + invalidDayOfMonthValues.join(', ') + ').');
-        }
+            const invalidMonthValues = collectOutOfRangeNumbers(monthField, 1, 12);
+            if (invalidMonthValues.length) {
+                result.errors.push('Segment mois : valeurs hors plage 1–12 détectées (' + invalidMonthValues.join(', ') + ').');
+            }
 
-        const invalidMonthValues = collectOutOfRangeNumbers(monthField, 1, 12);
-        if (invalidMonthValues.length) {
-            result.errors.push('Segment mois : valeurs hors plage 1–12 détectées (' + invalidMonthValues.join(', ') + ').');
-        }
+            const invalidDayOfWeekValues = collectOutOfRangeNumbers(dayOfWeekField, 0, 7);
+            if (invalidDayOfWeekValues.length) {
+                result.errors.push('Segment jours de semaine : valeurs hors plage 0–7 détectées (' + invalidDayOfWeekValues.join(', ') + ').');
+            }
 
-        const invalidDayOfWeekValues = collectOutOfRangeNumbers(dayOfWeekField, 0, 7);
-        if (invalidDayOfWeekValues.length) {
-            result.errors.push('Segment jours de semaine : valeurs hors plage 0–7 détectées (' + invalidDayOfWeekValues.join(', ') + ').');
-        }
-
-        const invalidSteps = []
-            .concat(collectInvalidSteps(minuteField))
-            .concat(collectInvalidSteps(hourField))
-            .concat(collectInvalidSteps(dayOfMonthField))
-            .concat(collectInvalidSteps(monthField))
-            .concat(collectInvalidSteps(dayOfWeekField));
-        if (invalidSteps.length) {
-            result.errors.push('Les pas doivent être supérieurs ou égaux à 1 : vérifiez les segments contenant "/0" ou similaires.');
+            const invalidSteps = []
+                .concat(collectInvalidSteps(minuteField))
+                .concat(collectInvalidSteps(hourField))
+                .concat(collectInvalidSteps(dayOfMonthField))
+                .concat(collectInvalidSteps(monthField))
+                .concat(collectInvalidSteps(dayOfWeekField));
+            if (invalidSteps.length) {
+                result.errors.push('Les pas doivent être supérieurs ou égaux à 1 : vérifiez les segments contenant "/0" ou similaires.');
+            }
         }
 
         const minuteHasWildcard = minuteField.indexOf('*') !== -1;
@@ -402,6 +404,9 @@ jQuery(function($) {
         if (dayOfMonthField !== '*' && dayOfMonthField !== '?' && dayOfWeekField !== '*' && dayOfWeekField !== '?') {
             result.warnings.push('Jour du mois et jour de semaine sont définis : Cron interprète ces segments avec un OU logique.');
         }
+
+        result.messages = result.errors.concat(result.warnings);
+        result.severity = result.errors.length ? 'error' : (result.warnings.length ? 'warning' : 'success');
 
         return result;
     }
@@ -2082,6 +2087,68 @@ jQuery(function($) {
         updateNextRunPreviewForItem($item, true);
     }
 
+    function applySuggestedAdjustments($item, adjustments) {
+        if (!$item || !adjustments || typeof adjustments !== 'object') {
+            return;
+        }
+        const $recurrence = $item.find('[data-field="recurrence"]');
+        const $customCron = $item.find('[data-field="custom_cron"]');
+        const $time = $item.find('[data-field="time"]');
+        const $day = $item.find('[data-field="day"]');
+        const $label = $item.find('[data-field="label"]');
+
+        if ($label.length && !$label.val() && adjustments.label) {
+            $label.val(adjustments.label).trigger('input');
+        }
+
+        if (adjustments.custom_cron && $customCron.length) {
+            $customCron.val(adjustments.custom_cron).trigger('input').trigger('change');
+            if ($recurrence.length) {
+                const current = ($recurrence.val() || '').toString();
+                $item.find('[data-field="previous_recurrence"]').val(current);
+                $recurrence.val('custom').trigger('change');
+            }
+        } else if (adjustments.recurrence && $recurrence.length) {
+            $recurrence.val(adjustments.recurrence).trigger('change');
+        }
+
+        if (adjustments.time && $time.length) {
+            $time.val(adjustments.time).trigger('change');
+        }
+
+        if (adjustments.day && $day.length) {
+            $day.val(adjustments.day).trigger('change');
+        }
+
+        if (Array.isArray(adjustments.components)) {
+            const desiredComponents = new Set(adjustments.components.map(function(entry) { return entry.toString(); }));
+            $item.find('[data-field="components"]').each(function() {
+                const $checkbox = $(this);
+                const value = ($checkbox.val() || '').toString();
+                $checkbox.prop('checked', desiredComponents.has(value));
+            }).trigger('change');
+        }
+
+        if (typeof adjustments.incremental === 'boolean') {
+            const $incremental = $item.find('[data-field="incremental"]');
+            if ($incremental.length) {
+                $incremental.prop('checked', adjustments.incremental).trigger('change');
+            }
+        }
+
+        if (typeof adjustments.encrypt === 'boolean') {
+            const $encrypt = $item.find('[data-field="encrypt"]');
+            if ($encrypt.length) {
+                $encrypt.prop('checked', adjustments.encrypt).trigger('change');
+            }
+        }
+
+        setScheduleMacro($item, adjustments.scenario_id || '');
+        markScheduleDirty($item);
+        updateScheduleSummaryForItem($item);
+        updateNextRunPreviewForItem($item, true);
+    }
+
     function buildCronScenarioPanel($container, $item) {
         if (!$container || !$container.length || $container.data('initialized')) {
             return;
@@ -2194,6 +2261,10 @@ jQuery(function($) {
                 if (entry.description) {
                     $('<p/>', { class: 'description', text: entry.description }).appendTo($macro);
                 }
+                const guardrailChips = buildCronGuardrailChips(entry.expression || scenario.expression || '');
+                if (guardrailChips) {
+                    $macro.append(guardrailChips);
+                }
                 const $actions = $('<div/>', { class: 'bjlg-cron-catalog__macro-actions' });
                 $('<button/>', {
                     type: 'button',
@@ -2289,6 +2360,10 @@ jQuery(function($) {
             }
             if (metaParts.length) {
                 $('<p/>', { class: 'bjlg-schedule-preset__meta', text: metaParts.join(' • ') }).appendTo($card);
+            }
+            const guardrailChips = buildCronGuardrailChips(scenario.expression);
+            if (guardrailChips) {
+                $card.append(guardrailChips);
             }
             const $actions = $('<div/>', { class: 'bjlg-schedule-preset__actions' });
             $('<button/>', {
@@ -2408,53 +2483,78 @@ jQuery(function($) {
         return null;
     }
 
-    function analyzeCronExpression(expression) {
-        const result = { severity: 'success', messages: [] };
-        const trimmed = (expression || '').toString().trim();
-        if (!trimmed) {
-            return result;
+    function countCronValues(field, min, max) {
+        const normalized = (field || '').toString().trim().toLowerCase();
+        const lower = typeof min === 'number' ? min : 0;
+        const upper = typeof max === 'number' ? max : lower;
+        if (!normalized || normalized === '*' || normalized === '?') {
+            return Math.max(1, upper - lower + 1);
         }
 
-        if (!cronAllowedPattern.test(trimmed)) {
-            result.severity = 'error';
-            result.messages.push('Certains caractères ne sont pas pris en charge.');
-            return result;
+        let total = 0;
+        const addRange = function(start, end, step) {
+            const safeStart = Math.max(lower, start);
+            const safeEnd = Math.min(upper, end);
+            if (safeEnd < safeStart) {
+                return;
+            }
+            const increment = step && step > 0 ? step : 1;
+            total += Math.floor((safeEnd - safeStart) / increment) + 1;
+        };
+
+        normalized.split(',').forEach(function(segment) {
+            const rangeMatch = segment.match(/^(\d+)-(\d+)(?:\/(\d+))?$/);
+            if (rangeMatch) {
+                addRange(parseInt(rangeMatch[1], 10), parseInt(rangeMatch[2], 10), parseInt(rangeMatch[3], 10));
+                return;
+            }
+
+            const stepMatch = segment.match(/^\*\/(\d+)$/);
+            if (stepMatch) {
+                addRange(lower, upper, parseInt(stepMatch[1], 10));
+                return;
+            }
+
+            const value = parseInt(segment, 10);
+            if (!Number.isNaN(value) && value >= lower && value <= upper) {
+                total += 1;
+            }
+        });
+
+        if (!total) {
+            return Math.max(1, upper - lower + 1);
         }
 
-        const fields = trimmed.split(/\s+/);
-        if (fields.length !== cronFieldCount) {
-            result.severity = 'error';
-            result.messages.push('Utilisez exactement cinq champs (minute, heure, jour, mois, jour de semaine).');
-            return result;
+        return Math.min(total, Math.max(1, upper - lower + 1));
+    }
+
+    function estimateCronLoad(expression) {
+        const normalized = normalizeCronExpression(expression);
+        const parts = normalized.split(/\s+/);
+        if (parts.length !== cronFieldCount) {
+            return { runsPerDay: null, dayCoverage: null };
         }
 
-        const minuteField = fields[0];
-        const hourField = fields[1];
-        const dayOfMonthField = fields[2];
-        const dayOfWeekField = fields[4];
+        const minuteField = parts[0];
+        const hourField = parts[1];
+        const dayOfMonthField = parts[2];
+        const dayOfWeekField = parts[4];
 
         const minuteInterval = estimateMinuteInterval(minuteField);
-        const isHourWildcard = isWildcardCronField(hourField);
+        const minuteCount = minuteInterval ? Math.max(1, Math.floor(60 / minuteInterval)) : countCronValues(minuteField, 0, 59);
+        const hourInterval = getCronStepValue(hourField);
+        const hourCount = hourInterval ? Math.max(1, Math.floor(24 / hourInterval)) : countCronValues(hourField, 0, 23);
 
-        if (minuteInterval !== null && minuteInterval < 5 && isHourWildcard) {
-            const label = minuteInterval === 1 ? 'toutes les minutes' : 'toutes les ' + minuteInterval + ' minutes';
-            result.messages.push('L’expression exécute la sauvegarde ' + label + '. Vérifiez que l’environnement peut absorber cette cadence.');
+        let dayFactor = 1;
+        if (dayOfWeekField !== '*' && dayOfWeekField !== '?') {
+            dayFactor = Math.max(1, countCronValues(dayOfWeekField, 0, 6)) / 7;
+        } else if (dayOfMonthField !== '*' && dayOfMonthField !== '?') {
+            dayFactor = Math.max(1, Math.min(31, countCronValues(dayOfMonthField, 1, 31))) / 30;
         }
 
-        const isDayOfMonthRestricted = !isWildcardCronField(dayOfMonthField) && dayOfMonthField !== '*';
-        const isDayOfWeekRestricted = !isWildcardCronField(dayOfWeekField) && dayOfWeekField !== '*';
+        const runsPerDay = Math.max(1, Math.round(minuteCount * hourCount * dayFactor));
 
-        if (isDayOfMonthRestricted && isDayOfWeekRestricted) {
-            result.messages.push('Les champs « jour du mois » et « jour de semaine » sont tous deux filtrés. La sauvegarde ne s’exécutera que lorsque les deux conditions sont réunies.');
-        }
-
-        if (result.messages.length) {
-            result.severity = result.messages.some(function(message) {
-                return /ne s’exécutera/.test(message);
-            }) ? 'warning' : 'warning';
-        }
-
-        return result;
+        return { runsPerDay: runsPerDay, dayCoverage: Math.max(0, Math.min(1, dayFactor)) };
     }
 
     function renderCronLocalWarnings($item, expression) {
@@ -2484,6 +2584,175 @@ jQuery(function($) {
         });
 
         return analysis.severity;
+    }
+
+    function evaluateCronGuardrails(expression) {
+        const normalized = normalizeCronExpression(expression);
+        const analysis = analyzeCronExpression(normalized);
+        const statuses = [];
+
+        if (!normalized) {
+            return statuses;
+        }
+
+        const hasErrors = Array.isArray(analysis.errors) && analysis.errors.length > 0;
+        const warnings = Array.isArray(analysis.warnings) ? analysis.warnings : [];
+        const cadenceWarning = warnings.some(function(message) {
+            return /Cadence très fréquente|chaque minute/.test(message || '');
+        });
+        const dualDayWarning = warnings.some(function(message) {
+            return /Jour du mois et jour de semaine/.test(message || '');
+        });
+
+        statuses.push({
+            id: 'syntax',
+            label: 'Syntaxe valide',
+            state: hasErrors ? 'error' : 'success',
+            message: hasErrors ? analysis.errors[0] : 'Expression compatible avec WP-Cron.'
+        });
+
+        if (hasErrors) {
+            return statuses;
+        }
+
+        statuses.push({
+            id: 'cadence',
+            label: 'Cadence maîtrisée',
+            state: cadenceWarning ? 'warning' : 'success',
+            message: cadenceWarning
+                ? 'Réduisez la fréquence ou limitez la plage horaire pour éviter une saturation.'
+                : 'Intervalle supérieur ou égal à 5 minutes.'
+        });
+
+        statuses.push({
+            id: 'day-filter',
+            label: 'Jour unique',
+            state: dualDayWarning ? 'warning' : 'success',
+            message: dualDayWarning
+                ? 'Choisissez soit le jour du mois soit le jour de semaine pour clarifier l’exécution.'
+                : 'Un seul des champs jour est filtré, l’intention est claire.'
+        });
+
+        const loadEstimation = estimateCronLoad(normalized);
+        if (loadEstimation.runsPerDay !== null) {
+            const runs = loadEstimation.runsPerDay;
+            const cadenceState = runs >= 288 ? 'error' : (runs >= 96 ? 'warning' : 'success');
+            const cadenceMessage = runs >= 288
+                ? 'Expression équivalente à une exécution toutes les 5 minutes : vérifiez la charge serveur.'
+                : runs >= 96
+                    ? 'Plus de 96 exécutions quotidiennes estimées : vérifiez que la fréquence est intentionnelle.'
+                    : runs + ' exécution' + (runs > 1 ? 's' : '') + ' quotidienne' + (runs > 1 ? 's' : '') + ' estimée' + (runs > 1 ? 's' : '') + '.';
+            statuses.push({
+                id: 'volume',
+                label: 'Volume quotidien',
+                state: cadenceState,
+                message: cadenceMessage
+            });
+
+            if (loadEstimation.dayCoverage !== null && loadEstimation.dayCoverage < 1) {
+                const coveragePercent = Math.round(loadEstimation.dayCoverage * 100);
+                statuses.push({
+                    id: 'coverage',
+                    label: 'Couverture hebdomadaire',
+                    state: 'info',
+                    message: coveragePercent >= 100
+                        ? 'Couverture complète sur la semaine.'
+                        : coveragePercent + '% des jours de la semaine ciblés.'
+                });
+            }
+        }
+
+        return statuses;
+    }
+
+    function buildCronGuardrailChips(expression) {
+        const statuses = evaluateCronGuardrails(expression);
+        if (!Array.isArray(statuses) || !statuses.length) {
+            return null;
+        }
+
+        const $chips = $('<div/>', { class: 'bjlg-cron-guardrail-chips', role: 'list' });
+
+        const getStateClass = function(state) {
+            if (state === 'error') {
+                return 'bjlg-cron-guardrail-chip--error';
+            }
+            if (state === 'warning') {
+                return 'bjlg-cron-guardrail-chip--warning';
+            }
+            if (state === 'success') {
+                return 'bjlg-cron-guardrail-chip--success';
+            }
+            return 'bjlg-cron-guardrail-chip--info';
+        };
+
+        statuses.forEach(function(entry) {
+            if (!entry || !entry.label) {
+                return;
+            }
+            const attributes = {
+                class: 'bjlg-cron-guardrail-chip ' + getStateClass(entry.state),
+                text: entry.label,
+                role: 'listitem'
+            };
+            if (entry.message) {
+                attributes.title = entry.message;
+                attributes['aria-label'] = entry.message;
+            } else {
+                attributes['aria-label'] = entry.label;
+            }
+            $('<span/>', attributes).appendTo($chips);
+        });
+
+        if (!$chips.children().length) {
+            return null;
+        }
+
+        return $chips;
+    }
+
+    function renderCronGuardrails(helper, expression) {
+        if (!helper || !helper.guardrails || !helper.guardrailList) {
+            return;
+        }
+
+        const statuses = evaluateCronGuardrails(expression);
+        const list = helper.guardrailList;
+
+        list.empty();
+
+        if (!Array.isArray(statuses) || !statuses.length) {
+            helper.guardrails.attr('hidden', 'hidden');
+            return;
+        }
+
+        const getBadgeClass = function(state) {
+            if (state === 'error') {
+                return 'bjlg-cron-guardrail__badge--error';
+            }
+            if (state === 'warning') {
+                return 'bjlg-cron-guardrail__badge--warning';
+            }
+            if (state === 'info') {
+                return 'bjlg-cron-guardrail__badge--info';
+            }
+            return 'bjlg-cron-guardrail__badge--success';
+        };
+
+        statuses.forEach(function(entry) {
+            const itemClass = 'bjlg-cron-guardrail bjlg-cron-guardrail--' + (entry.state || 'info');
+            const $item = $('<li/>', { class: itemClass });
+            $('<span/>', { class: 'bjlg-cron-guardrail__badge ' + getBadgeClass(entry.state) }).appendTo($item);
+            const $content = $('<div/>', { class: 'bjlg-cron-guardrail__content' });
+            $('<strong/>', { class: 'bjlg-cron-guardrail__label', text: entry.label || '' }).appendTo($content);
+            if (entry.message) {
+                $('<p/>', { class: 'bjlg-cron-guardrail__message', text: entry.message }).appendTo($content);
+            }
+            $item.append($content);
+            list.append($item);
+        });
+
+        helper.guardrails.removeAttr('hidden').show();
     }
 
     function formatShareFailureMessage(shareText) {
@@ -2574,6 +2843,8 @@ jQuery(function($) {
             catalog: $assistant.find('[data-cron-catalog]'),
             catalogList: $assistant.find('[data-cron-catalog-list]'),
             catalogEmpty: $assistant.find('[data-cron-catalog-empty]'),
+            guardrails: $assistant.find('[data-cron-guardrails]'),
+            guardrailList: $assistant.find('[data-cron-guardrail-list]'),
         };
     }
 
@@ -2745,6 +3016,51 @@ jQuery(function($) {
         return label;
     }
 
+    function resolveRiskLevelFromRuns(runsPerDay) {
+        const value = Number(runsPerDay);
+        if (!Number.isFinite(value) || value <= 0) {
+            return 'unknown';
+        }
+        const medium = Number(cronRiskThresholds.medium) || 96;
+        const high = Number(cronRiskThresholds.high) || 288;
+        if (value >= high) {
+            return 'high';
+        }
+        if (value >= medium) {
+            return 'medium';
+        }
+        return 'low';
+    }
+
+    function buildLocalCronImpact($item, expression) {
+        const loadEstimation = estimateCronLoad(expression);
+        if (!loadEstimation || loadEstimation.runsPerDay === null) {
+            return null;
+        }
+
+        const reasons = [];
+        const components = collectSelectedComponents($item);
+        const runsPerDay = loadEstimation.runsPerDay;
+
+        if (runsPerDay > 0) {
+            reasons.push('≈ ' + runsPerDay + ' exécutions / jour');
+        }
+        if (loadEstimation.dayCoverage !== null && loadEstimation.dayCoverage < 1) {
+            reasons.push(Math.round(loadEstimation.dayCoverage * 100) + '% des jours ciblés');
+        }
+        if (components.length) {
+            reasons.push('Composants : ' + components.map(formatComponentLabel).join(', '));
+        }
+
+        return {
+            runs_per_day: runsPerDay,
+            risk: {
+                level: resolveRiskLevelFromRuns(runsPerDay),
+                reasons: reasons
+            }
+        };
+    }
+
     function updateCronRiskDisplay(helper, impact) {
         if (!helper || !helper.risk || !helper.risk.length) {
             return;
@@ -2885,7 +3201,10 @@ jQuery(function($) {
         }
         const storedImpact = $item && typeof $item.data === 'function' ? $item.data('cronImpact') : null;
         const resolvedImpact = typeof impact !== 'undefined' ? impact : storedImpact;
-        updateCronRiskDisplay(helper, resolvedImpact || null);
+        const $input = $item.find('[data-field="custom_cron"]');
+        const expression = $input.length ? $input.val() : '';
+        const fallbackImpact = buildLocalCronImpact($item, expression);
+        updateCronRiskDisplay(helper, resolvedImpact || fallbackImpact || null);
     }
 
     function initializeCronHistory(helper, $item) {
@@ -3009,6 +3328,9 @@ jQuery(function($) {
 
         const expression = payload && payload.expression ? payload.expression : '';
         const impactData = payload && payload.impact ? payload.impact : null;
+        const fallbackImpact = buildLocalCronImpact($item, expression);
+
+        renderCronGuardrails(helper, expression);
 
         if ($item && typeof $item.data === 'function') {
             $item.data('cronImpact', impactData);
@@ -3023,7 +3345,7 @@ jQuery(function($) {
             updateCronAssistantContext($input);
         }
         const localSeverity = renderCronLocalWarnings($item, expression);
-        updateCronRiskDisplay(helper, impactData);
+        updateCronRiskDisplay(helper, impactData || fallbackImpact);
 
         if (!payload || !payload.expression) {
             if ($preview.length) {
@@ -3318,7 +3640,16 @@ jQuery(function($) {
     function createScheduleBadgeElement(badge) {
         const classes = Array.isArray(badge.classes) ? badge.classes.slice() : [];
         classes.unshift('bjlg-badge');
-        const $badge = $('<span/>', { class: classes.join(' '), text: badge.label });
+
+        const attributes = { class: classes.join(' '), text: badge.label };
+        if (badge.title) {
+            attributes.title = badge.title;
+        }
+        if (badge.ariaLabel) {
+            attributes['aria-label'] = badge.ariaLabel;
+        }
+
+        const $badge = $('<span/>', attributes);
         const styles = $.extend({}, badgeStyles, { backgroundColor: badge.color || '#4b5563' });
         $badge.css(styles);
         return $badge;
@@ -3777,6 +4108,8 @@ jQuery(function($) {
             }
         }
 
+        const guardrailBadges = buildCronGuardrailBadges(data);
+
         const components = Array.isArray(data.components) ? data.components : [];
         const componentBadges = [];
         const seenComponents = new Set();
@@ -3844,7 +4177,7 @@ jQuery(function($) {
             destinationBadges.push({ label: 'Stockage local', color: '#4b5563', classes: ['bjlg-badge-destination'] });
         }
 
-        return [
+        const groups = [
             { title: 'Fréquence', badges: frequencyBadges.length ? frequencyBadges : [{ label: '—', color: '#4b5563', classes: ['bjlg-badge-recurrence'] }] },
             { title: 'Composants', badges: componentBadges },
             { title: 'Options', badges: optionBadges },
@@ -3853,6 +4186,46 @@ jQuery(function($) {
             { title: 'Contrôles', badges: controlBadges },
             { title: 'Destinations', badges: destinationBadges }
         ];
+
+        if (guardrailBadges.length) {
+            groups.splice(1, 0, { title: 'Garde-fous Cron', badges: guardrailBadges });
+        }
+
+        return groups;
+    }
+
+    function buildCronGuardrailBadges(data) {
+        if (!data || (data.recurrence || '').toString() !== 'custom') {
+            return [];
+        }
+
+        const expression = (data.custom_cron || '').toString().trim();
+        if (!expression) {
+            return [{
+                label: 'Expression requise',
+                color: '#f43f5e',
+                classes: ['bjlg-badge-guardrail', 'bjlg-badge-state-off'],
+                title: 'Renseignez une expression Cron pour évaluer les garde-fous.',
+                ariaLabel: 'Expression Cron manquante'
+            }];
+        }
+
+        const stateColors = { error: '#ef4444', warning: '#f59e0b', info: '#0ea5e9', success: '#22c55e' };
+        const guardrails = evaluateCronGuardrails(expression);
+        if (!Array.isArray(guardrails) || !guardrails.length) {
+            return [];
+        }
+
+        return guardrails.map(function(entry) {
+            return {
+                label: entry.label || '',
+                color: stateColors[entry.state] || '#0ea5e9',
+                classes: ['bjlg-badge-guardrail'],
+                title: entry.message || ''
+            };
+        }).filter(function(badge) {
+            return !!badge.label;
+        });
     }
 
     const recommendationState = typeof WeakMap === 'function' ? new WeakMap() : null;
@@ -3863,6 +4236,29 @@ jQuery(function($) {
         info: 'bjlg-badge-bg-sky',
         neutral: 'bjlg-badge-bg-slate'
     };
+
+    function findScenarioById(scenarioId) {
+        if (!scenarioId) {
+            return null;
+        }
+        if (cronScenarioMap && cronScenarioMap.has && cronScenarioMap.has(scenarioId)) {
+            return cronScenarioMap.get(scenarioId);
+        }
+        if (!Array.isArray(cronScenarios)) {
+            return null;
+        }
+        for (let index = 0; index < cronScenarios.length; index++) {
+            const candidate = cronScenarios[index];
+            if (!candidate || typeof candidate !== 'object') {
+                continue;
+            }
+            const key = (candidate.id || candidate.expression || candidate.label || '').toString();
+            if (key === scenarioId) {
+                return candidate;
+            }
+        }
+        return null;
+    }
 
     function summarizeForecastForDisplay(forecast) {
         const summary = { badges: [], tips: [], loadLevel: 'low', scenario: null };
@@ -3943,13 +4339,27 @@ jQuery(function($) {
         }
 
         if (forecast.suggested_adjustments && typeof forecast.suggested_adjustments === 'object') {
-            summary.scenario = forecast.suggested_adjustments;
-            if (forecast.suggested_adjustments.label) {
-                summary.tips.unshift({
-                    text: __('Scénario suggéré : ', 'backup-jlg') + forecast.suggested_adjustments.label,
-                    variant: 'success'
-                });
-            }
+            const suggested = forecast.suggested_adjustments;
+            summary.scenario = {
+                label: suggested.label || __('Scénario recommandé', 'backup-jlg'),
+                adjustments: suggested,
+                variant: loadVariants[loadLevel] || 'info',
+                meta: loadLabels[loadLevel] || '',
+                description: suggested.description || __('Ajustez la cadence et la couverture selon l\'analyse.', 'backup-jlg'),
+                share_payload: {
+                    label: suggested.label || '',
+                    recurrence: suggested.recurrence || '',
+                    time: suggested.time || '',
+                    day: suggested.day || '',
+                    custom_cron: suggested.custom_cron || '',
+                    components: Array.isArray(suggested.components) ? suggested.components : [],
+                    incremental: typeof suggested.incremental === 'boolean' ? suggested.incremental : undefined
+                }
+            };
+            summary.tips.unshift({
+                text: __('Scénario suggéré : ', 'backup-jlg') + (suggested.label || ''),
+                variant: 'success'
+            });
         }
 
         return summary;
@@ -3988,6 +4398,7 @@ jQuery(function($) {
         const $badges = $panel.find('[data-role="recommendation-badges"]');
         const $tips = $panel.find('[data-role="recommendation-tips"]');
         const $empty = $panel.find('[data-role="recommendation-empty"]');
+        const $scenario = $panel.find('[data-role="recommendation-scenario"]');
 
         if ($badges.length) {
             $badges.empty();
@@ -3995,11 +4406,19 @@ jQuery(function($) {
         if ($tips.length) {
             $tips.empty();
         }
+        if ($scenario.length) {
+            $scenario.data('scenario', null);
+            $scenario.attr('hidden', 'hidden').hide();
+            $scenario.find('[data-role="recommendation-scenario-title"]').text('');
+            $scenario.find('[data-role="recommendation-scenario-meta"]').text('');
+            $scenario.find('[data-role="recommendation-scenario-description"]').text('');
+        }
 
         const hasBadges = summary && Array.isArray(summary.badges) && summary.badges.length;
         const hasTips = summary && Array.isArray(summary.tips) && summary.tips.length;
+        const hasScenario = summary && summary.scenario && typeof summary.scenario === 'object';
 
-        if (!hasBadges && !hasTips) {
+        if (!hasBadges && !hasTips && !hasScenario) {
             if ($empty.length) {
                 $empty.text(__('Modifiez la planification pour obtenir des recommandations.', 'backup-jlg')).show();
             }
@@ -4039,6 +4458,23 @@ jQuery(function($) {
                     text: tip.text
                 }).appendTo($tips);
             });
+        }
+
+        if (hasScenario && $scenario.length) {
+            const scenario = summary.scenario;
+            const title = scenario.label || __('Scénario recommandé', 'backup-jlg');
+            const meta = scenario.meta || '';
+            const description = scenario.description || '';
+
+            $scenario.find('[data-role="recommendation-scenario-title"]').text(title);
+            if (meta) {
+                $scenario.find('[data-role="recommendation-scenario-meta"]').text(meta);
+            }
+            if (description) {
+                $scenario.find('[data-role="recommendation-scenario-description"]').text(description);
+            }
+            $scenario.data('scenario', scenario);
+            $scenario.removeAttr('hidden').show();
         }
     }
 
@@ -4920,6 +5356,44 @@ jQuery(function($) {
         const $item = $button.closest('.bjlg-schedule-item');
         const scheduleId = ($item.find('[data-field="id"]').val() || '').toString();
         submitRunSchedule(scheduleId, $button, $item);
+    });
+
+    // Application de la recommandation
+    $scheduleForm.on('click', '[data-action="apply-recommended-scenario"]', function(event) {
+        event.preventDefault();
+        const $button = $(this);
+        const $item = $button.closest('.bjlg-schedule-item');
+        const $panel = $button.closest('[data-field="recommendations"]');
+        const scenario = $panel.find('[data-role="recommendation-scenario"]').data('scenario');
+        if (!scenario || !scenario.adjustments) {
+            return;
+        }
+        const mapped = findScenarioById(scenario.adjustments.scenario_id || '');
+        if (mapped) {
+            applyCronScenario($item, mapped);
+        } else {
+            applySuggestedAdjustments($item, scenario.adjustments);
+        }
+        renderScheduleFeedback('info', __('Recommandation appliquée.', 'backup-jlg'), []);
+    });
+
+    // Partage de la recommandation
+    $scheduleForm.on('click', '[data-action="share-recommended-scenario"]', function(event) {
+        event.preventDefault();
+        const $button = $(this);
+        const $panel = $button.closest('[data-field="recommendations"]');
+        const scenario = $panel.find('[data-role="recommendation-scenario"]').data('scenario');
+        if (!scenario) {
+            return;
+        }
+        const helper = getCronAssistantHelper($button.closest('.bjlg-schedule-item'));
+        if (scenario.share_payload) {
+            shareScenario({ share_payload: scenario.share_payload, label: scenario.label || '' }, helper);
+            return;
+        }
+        if (scenario.adjustments) {
+            shareScenario({ share_payload: scenario.adjustments, label: scenario.label || '' }, helper);
+        }
     });
 
     // Soumission du formulaire
