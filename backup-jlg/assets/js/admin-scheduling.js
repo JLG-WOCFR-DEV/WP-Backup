@@ -301,7 +301,7 @@ jQuery(function($) {
     }
 
     function analyzeCronExpression(expression) {
-        const result = { errors: [], warnings: [] };
+        const result = { errors: [], warnings: [], messages: [], severity: 'success' };
         const sanitized = (expression || '').toString().trim();
 
         if (!sanitized) {
@@ -314,6 +314,8 @@ jQuery(function($) {
 
         if (!cronAllowedPattern.test(sanitized)) {
             result.errors.push('L’expression contient des caractères non pris en charge. Utilisez uniquement les chiffres, espaces et symboles Cron classiques (* , - /).');
+            result.messages = result.errors.slice();
+            result.severity = 'error';
             return result;
         }
 
@@ -325,6 +327,8 @@ jQuery(function($) {
             } else {
                 result.errors.push('Expression trop longue : limitez-vous à 5 segments (minute, heure, jour du mois, mois, jour de semaine).');
             }
+            result.messages = result.errors.slice();
+            result.severity = 'error';
             return result;
         }
 
@@ -348,43 +352,41 @@ jQuery(function($) {
             result.errors.push('Jours de semaine non reconnus : ' + invalidDays.join(', ') + '. Utilisez sun–sat ou leurs équivalents numériques.');
         }
 
-        if (result.errors.length) {
-            return result;
-        }
+        if (!result.errors.length) {
+            const invalidMinuteValues = collectOutOfRangeNumbers(minuteField, 0, 59);
+            if (invalidMinuteValues.length) {
+                result.errors.push('Segment minutes : valeurs hors plage 0–59 détectées (' + invalidMinuteValues.join(', ') + ').');
+            }
 
-        const invalidMinuteValues = collectOutOfRangeNumbers(minuteField, 0, 59);
-        if (invalidMinuteValues.length) {
-            result.errors.push('Segment minutes : valeurs hors plage 0–59 détectées (' + invalidMinuteValues.join(', ') + ').');
-        }
+            const invalidHourValues = collectOutOfRangeNumbers(hourField, 0, 23);
+            if (invalidHourValues.length) {
+                result.errors.push('Segment heures : valeurs hors plage 0–23 détectées (' + invalidHourValues.join(', ') + ').');
+            }
 
-        const invalidHourValues = collectOutOfRangeNumbers(hourField, 0, 23);
-        if (invalidHourValues.length) {
-            result.errors.push('Segment heures : valeurs hors plage 0–23 détectées (' + invalidHourValues.join(', ') + ').');
-        }
+            const invalidDayOfMonthValues = collectOutOfRangeNumbers(dayOfMonthField.replace(/L-?/gi, ''), 1, 31);
+            if (invalidDayOfMonthValues.length) {
+                result.errors.push('Segment jours du mois : valeurs hors plage 1–31 détectées (' + invalidDayOfMonthValues.join(', ') + ').');
+            }
 
-        const invalidDayOfMonthValues = collectOutOfRangeNumbers(dayOfMonthField.replace(/L-?/gi, ''), 1, 31);
-        if (invalidDayOfMonthValues.length) {
-            result.errors.push('Segment jours du mois : valeurs hors plage 1–31 détectées (' + invalidDayOfMonthValues.join(', ') + ').');
-        }
+            const invalidMonthValues = collectOutOfRangeNumbers(monthField, 1, 12);
+            if (invalidMonthValues.length) {
+                result.errors.push('Segment mois : valeurs hors plage 1–12 détectées (' + invalidMonthValues.join(', ') + ').');
+            }
 
-        const invalidMonthValues = collectOutOfRangeNumbers(monthField, 1, 12);
-        if (invalidMonthValues.length) {
-            result.errors.push('Segment mois : valeurs hors plage 1–12 détectées (' + invalidMonthValues.join(', ') + ').');
-        }
+            const invalidDayOfWeekValues = collectOutOfRangeNumbers(dayOfWeekField, 0, 7);
+            if (invalidDayOfWeekValues.length) {
+                result.errors.push('Segment jours de semaine : valeurs hors plage 0–7 détectées (' + invalidDayOfWeekValues.join(', ') + ').');
+            }
 
-        const invalidDayOfWeekValues = collectOutOfRangeNumbers(dayOfWeekField, 0, 7);
-        if (invalidDayOfWeekValues.length) {
-            result.errors.push('Segment jours de semaine : valeurs hors plage 0–7 détectées (' + invalidDayOfWeekValues.join(', ') + ').');
-        }
-
-        const invalidSteps = []
-            .concat(collectInvalidSteps(minuteField))
-            .concat(collectInvalidSteps(hourField))
-            .concat(collectInvalidSteps(dayOfMonthField))
-            .concat(collectInvalidSteps(monthField))
-            .concat(collectInvalidSteps(dayOfWeekField));
-        if (invalidSteps.length) {
-            result.errors.push('Les pas doivent être supérieurs ou égaux à 1 : vérifiez les segments contenant "/0" ou similaires.');
+            const invalidSteps = []
+                .concat(collectInvalidSteps(minuteField))
+                .concat(collectInvalidSteps(hourField))
+                .concat(collectInvalidSteps(dayOfMonthField))
+                .concat(collectInvalidSteps(monthField))
+                .concat(collectInvalidSteps(dayOfWeekField));
+            if (invalidSteps.length) {
+                result.errors.push('Les pas doivent être supérieurs ou égaux à 1 : vérifiez les segments contenant "/0" ou similaires.');
+            }
         }
 
         const minuteHasWildcard = minuteField.indexOf('*') !== -1;
@@ -402,6 +404,9 @@ jQuery(function($) {
         if (dayOfMonthField !== '*' && dayOfMonthField !== '?' && dayOfWeekField !== '*' && dayOfWeekField !== '?') {
             result.warnings.push('Jour du mois et jour de semaine sont définis : Cron interprète ces segments avec un OU logique.');
         }
+
+        result.messages = result.errors.concat(result.warnings);
+        result.severity = result.errors.length ? 'error' : (result.warnings.length ? 'warning' : 'success');
 
         return result;
     }
@@ -2408,55 +2413,6 @@ jQuery(function($) {
         return null;
     }
 
-    function analyzeCronExpression(expression) {
-        const result = { severity: 'success', messages: [] };
-        const trimmed = (expression || '').toString().trim();
-        if (!trimmed) {
-            return result;
-        }
-
-        if (!cronAllowedPattern.test(trimmed)) {
-            result.severity = 'error';
-            result.messages.push('Certains caractères ne sont pas pris en charge.');
-            return result;
-        }
-
-        const fields = trimmed.split(/\s+/);
-        if (fields.length !== cronFieldCount) {
-            result.severity = 'error';
-            result.messages.push('Utilisez exactement cinq champs (minute, heure, jour, mois, jour de semaine).');
-            return result;
-        }
-
-        const minuteField = fields[0];
-        const hourField = fields[1];
-        const dayOfMonthField = fields[2];
-        const dayOfWeekField = fields[4];
-
-        const minuteInterval = estimateMinuteInterval(minuteField);
-        const isHourWildcard = isWildcardCronField(hourField);
-
-        if (minuteInterval !== null && minuteInterval < 5 && isHourWildcard) {
-            const label = minuteInterval === 1 ? 'toutes les minutes' : 'toutes les ' + minuteInterval + ' minutes';
-            result.messages.push('L’expression exécute la sauvegarde ' + label + '. Vérifiez que l’environnement peut absorber cette cadence.');
-        }
-
-        const isDayOfMonthRestricted = !isWildcardCronField(dayOfMonthField) && dayOfMonthField !== '*';
-        const isDayOfWeekRestricted = !isWildcardCronField(dayOfWeekField) && dayOfWeekField !== '*';
-
-        if (isDayOfMonthRestricted && isDayOfWeekRestricted) {
-            result.messages.push('Les champs « jour du mois » et « jour de semaine » sont tous deux filtrés. La sauvegarde ne s’exécutera que lorsque les deux conditions sont réunies.');
-        }
-
-        if (result.messages.length) {
-            result.severity = result.messages.some(function(message) {
-                return /ne s’exécutera/.test(message);
-            }) ? 'warning' : 'warning';
-        }
-
-        return result;
-    }
-
     function renderCronLocalWarnings($item, expression) {
         const helper = getCronAssistantHelper($item);
         if (!helper || !helper.container.length) {
@@ -2484,6 +2440,100 @@ jQuery(function($) {
         });
 
         return analysis.severity;
+    }
+
+    function evaluateCronGuardrails(expression) {
+        const normalized = normalizeCronExpression(expression);
+        const analysis = analyzeCronExpression(normalized);
+        const statuses = [];
+
+        if (!normalized) {
+            return statuses;
+        }
+
+        const hasErrors = Array.isArray(analysis.errors) && analysis.errors.length > 0;
+        const warnings = Array.isArray(analysis.warnings) ? analysis.warnings : [];
+        const cadenceWarning = warnings.some(function(message) {
+            return /Cadence très fréquente|chaque minute/.test(message || '');
+        });
+        const dualDayWarning = warnings.some(function(message) {
+            return /Jour du mois et jour de semaine/.test(message || '');
+        });
+
+        statuses.push({
+            id: 'syntax',
+            label: 'Syntaxe valide',
+            state: hasErrors ? 'error' : 'success',
+            message: hasErrors ? analysis.errors[0] : 'Expression compatible avec WP-Cron.'
+        });
+
+        if (hasErrors) {
+            return statuses;
+        }
+
+        statuses.push({
+            id: 'cadence',
+            label: 'Cadence maîtrisée',
+            state: cadenceWarning ? 'warning' : 'success',
+            message: cadenceWarning
+                ? 'Réduisez la fréquence ou limitez la plage horaire pour éviter une saturation.'
+                : 'Intervalle supérieur ou égal à 5 minutes.'
+        });
+
+        statuses.push({
+            id: 'day-filter',
+            label: 'Jour unique',
+            state: dualDayWarning ? 'warning' : 'success',
+            message: dualDayWarning
+                ? 'Choisissez soit le jour du mois soit le jour de semaine pour clarifier l’exécution.'
+                : 'Un seul des champs jour est filtré, l’intention est claire.'
+        });
+
+        return statuses;
+    }
+
+    function renderCronGuardrails(helper, expression) {
+        if (!helper || !helper.guardrails || !helper.guardrailList) {
+            return;
+        }
+
+        const statuses = evaluateCronGuardrails(expression);
+        const list = helper.guardrailList;
+
+        list.empty();
+
+        if (!Array.isArray(statuses) || !statuses.length) {
+            helper.guardrails.attr('hidden', 'hidden');
+            return;
+        }
+
+        const getBadgeClass = function(state) {
+            if (state === 'error') {
+                return 'bjlg-cron-guardrail__badge--error';
+            }
+            if (state === 'warning') {
+                return 'bjlg-cron-guardrail__badge--warning';
+            }
+            if (state === 'info') {
+                return 'bjlg-cron-guardrail__badge--info';
+            }
+            return 'bjlg-cron-guardrail__badge--success';
+        };
+
+        statuses.forEach(function(entry) {
+            const itemClass = 'bjlg-cron-guardrail bjlg-cron-guardrail--' + (entry.state || 'info');
+            const $item = $('<li/>', { class: itemClass });
+            $('<span/>', { class: 'bjlg-cron-guardrail__badge ' + getBadgeClass(entry.state) }).appendTo($item);
+            const $content = $('<div/>', { class: 'bjlg-cron-guardrail__content' });
+            $('<strong/>', { class: 'bjlg-cron-guardrail__label', text: entry.label || '' }).appendTo($content);
+            if (entry.message) {
+                $('<p/>', { class: 'bjlg-cron-guardrail__message', text: entry.message }).appendTo($content);
+            }
+            $item.append($content);
+            list.append($item);
+        });
+
+        helper.guardrails.removeAttr('hidden').show();
     }
 
     function formatShareFailureMessage(shareText) {
@@ -2574,6 +2624,8 @@ jQuery(function($) {
             catalog: $assistant.find('[data-cron-catalog]'),
             catalogList: $assistant.find('[data-cron-catalog-list]'),
             catalogEmpty: $assistant.find('[data-cron-catalog-empty]'),
+            guardrails: $assistant.find('[data-cron-guardrails]'),
+            guardrailList: $assistant.find('[data-cron-guardrail-list]'),
         };
     }
 
@@ -3009,6 +3061,8 @@ jQuery(function($) {
 
         const expression = payload && payload.expression ? payload.expression : '';
         const impactData = payload && payload.impact ? payload.impact : null;
+
+        renderCronGuardrails(helper, expression);
 
         if ($item && typeof $item.data === 'function') {
             $item.data('cronImpact', impactData);

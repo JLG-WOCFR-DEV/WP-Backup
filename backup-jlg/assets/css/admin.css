@@ -4214,6 +4214,65 @@ border-color: #d1d5db;
     gap: 6px;
 }
 
+.bjlg-cron-assistant__guardrails {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+}
+
+.bjlg-cron-guardrails {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+}
+
+.bjlg-cron-guardrail {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.bjlg-cron-guardrail:last-child {
+    margin-bottom: 0;
+}
+
+.bjlg-cron-guardrail__badge {
+    width: 10px;
+    height: 10px;
+    border-radius: 9999px;
+    margin-top: 6px;
+    background-color: #cbd5e1;
+    flex-shrink: 0;
+}
+
+.bjlg-cron-guardrail__badge--success {
+    background-color: #16a34a;
+}
+
+.bjlg-cron-guardrail__badge--warning {
+    background-color: #f59e0b;
+}
+
+.bjlg-cron-guardrail__badge--error {
+    background-color: #dc2626;
+}
+
+.bjlg-cron-guardrail__badge--info {
+    background-color: #0ea5e9;
+}
+
+.bjlg-cron-guardrail__label {
+    display: block;
+    margin: 0 0 2px;
+    color: #0f172a;
+}
+
+.bjlg-cron-guardrail__message {
+    margin: 0;
+    color: #475569;
+}
+
 .bjlg-cron-assistant__examples {
     display: flex;
     flex-wrap: wrap;
