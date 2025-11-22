@@ -837,6 +837,28 @@ jQuery(function($) {
         const refreshInfo = typeof storage.remote_refresh === 'object' && storage.remote_refresh !== null
             ? storage.remote_refresh
             : {};
+        const purgeSla = state.metrics.queues
+            && state.metrics.queues.remote_purge
+            && state.metrics.queues.remote_purge.sla
+            ? state.metrics.queues.remote_purge.sla
+            : null;
+        const capacityProjections = purgeSla && Array.isArray(purgeSla.capacity_projections)
+            ? purgeSla.capacity_projections
+            : [];
+        const capacityMap = new Map();
+        capacityProjections.forEach(function(projection) {
+            if (!projection || typeof projection !== 'object') {
+                return;
+            }
+            const id = (projection.id || '').toString();
+            const label = (projection.label || '').toString();
+            if (id) {
+                capacityMap.set(id, projection);
+            }
+            if (label && !capacityMap.has(label)) {
+                capacityMap.set(label, projection);
+            }
+        });
         const thresholdRatioConfig = Number(storage.remote_threshold || storage.threshold_ratio || 0.85);
         const threshold = Number.isFinite(thresholdRatioConfig) ? thresholdRatioConfig : 0.85;
         const $list = $card.find('[data-field="remote_storage_list"]');
@@ -947,7 +969,8 @@ jQuery(function($) {
                 return;
             }
 
-            const name = (dest.name || dest.id || __('Destination inconnue', 'backup-jlg')).toString();
+            const destId = (dest.id || '').toString();
+            const name = (dest.name || destId || __('Destination inconnue', 'backup-jlg')).toString();
             const connectedFlag = !!dest.connected;
             const errors = Array.isArray(dest.errors) ? dest.errors.filter(function(message) {
                 return message && message.toString().trim() !== '';
@@ -968,6 +991,7 @@ jQuery(function($) {
             const daysToThreshold = Number(dest.days_to_threshold);
             const daysLabel = dest.days_to_threshold_label || '';
             const projectionIntent = (dest.projection_intent || '').toString().toLowerCase();
+            const projectionMatch = capacityMap.get(destId) || capacityMap.get(name) || null;
 
             let ratio = null;
             const ratioFromSnapshot = Number(dest.utilization_ratio);
@@ -1028,6 +1052,18 @@ jQuery(function($) {
                 details.push(daysLabel);
             }
 
+            if (projectionMatch) {
+                if (projectionMatch.projection_label) {
+                    details.push(projectionMatch.projection_label);
+                }
+                if (projectionMatch.projected_relative) {
+                    details.push(sprintf(__('Saturation estimée %s', 'backup-jlg'), projectionMatch.projected_relative));
+                }
+                if (projectionMatch.usage_percent_label) {
+                    details.push(sprintf(__('Utilisation mesurée : %s', 'backup-jlg'), projectionMatch.usage_percent_label));
+                }
+            }
+
             let intent = 'info';
             if (!connectedFlag || errors.length) {
                 intent = 'error';
@@ -1047,6 +1083,19 @@ jQuery(function($) {
 
             if (projectionIntent === 'success' && intent === 'info') {
                 intent = 'success';
+            }
+
+            if (projectionMatch && projectionMatch.risk_intent) {
+                const normalizedRisk = projectionMatch.risk_intent.toString().toLowerCase();
+                if (normalizedRisk === 'error') {
+                    intent = 'error';
+                    criticalForecasts.push({ name: name, label: projectionMatch.projection_label || projectionMatch.projected_relative });
+                } else if (normalizedRisk === 'warning' && intent === 'info') {
+                    intent = 'warning';
+                    watchList.push(name);
+                } else if (normalizedRisk === 'success' && intent === 'info') {
+                    intent = 'success';
+                }
             }
 
             rendered.push({
