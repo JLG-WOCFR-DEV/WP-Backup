@@ -4273,6 +4273,50 @@ border-color: #d1d5db;
     color: #475569;
 }
 
+.bjlg-cron-guardrail-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0;
+}
+
+.bjlg-cron-guardrail-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    line-height: 1.2;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    color: #0f172a;
+}
+
+.bjlg-cron-guardrail-chip--success {
+    border-color: #bbf7d0;
+    background: #ecfdf3;
+    color: #166534;
+}
+
+.bjlg-cron-guardrail-chip--warning {
+    border-color: #fed7aa;
+    background: #fffbeb;
+    color: #92400e;
+}
+
+.bjlg-cron-guardrail-chip--error {
+    border-color: #fecdd3;
+    background: #fff1f2;
+    color: #991b1b;
+}
+
+.bjlg-cron-guardrail-chip--info {
+    border-color: #bae6fd;
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
 .bjlg-cron-assistant__examples {
     display: flex;
     flex-wrap: wrap;

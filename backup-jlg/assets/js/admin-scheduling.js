@@ -2199,6 +2199,10 @@ jQuery(function($) {
                 if (entry.description) {
                     $('<p/>', { class: 'description', text: entry.description }).appendTo($macro);
                 }
+                const guardrailChips = buildCronGuardrailChips(entry.expression || scenario.expression || '');
+                if (guardrailChips) {
+                    $macro.append(guardrailChips);
+                }
                 const $actions = $('<div/>', { class: 'bjlg-cron-catalog__macro-actions' });
                 $('<button/>', {
                     type: 'button',
@@ -2294,6 +2298,10 @@ jQuery(function($) {
             }
             if (metaParts.length) {
                 $('<p/>', { class: 'bjlg-schedule-preset__meta', text: metaParts.join(' • ') }).appendTo($card);
+            }
+            const guardrailChips = buildCronGuardrailChips(scenario.expression);
+            if (guardrailChips) {
+                $card.append(guardrailChips);
             }
             const $actions = $('<div/>', { class: 'bjlg-schedule-preset__actions' });
             $('<button/>', {
@@ -2593,6 +2601,52 @@ jQuery(function($) {
         }
 
         return statuses;
+    }
+
+    function buildCronGuardrailChips(expression) {
+        const statuses = evaluateCronGuardrails(expression);
+        if (!Array.isArray(statuses) || !statuses.length) {
+            return null;
+        }
+
+        const $chips = $('<div/>', { class: 'bjlg-cron-guardrail-chips', role: 'list' });
+
+        const getStateClass = function(state) {
+            if (state === 'error') {
+                return 'bjlg-cron-guardrail-chip--error';
+            }
+            if (state === 'warning') {
+                return 'bjlg-cron-guardrail-chip--warning';
+            }
+            if (state === 'success') {
+                return 'bjlg-cron-guardrail-chip--success';
+            }
+            return 'bjlg-cron-guardrail-chip--info';
+        };
+
+        statuses.forEach(function(entry) {
+            if (!entry || !entry.label) {
+                return;
+            }
+            const attributes = {
+                class: 'bjlg-cron-guardrail-chip ' + getStateClass(entry.state),
+                text: entry.label,
+                role: 'listitem'
+            };
+            if (entry.message) {
+                attributes.title = entry.message;
+                attributes['aria-label'] = entry.message;
+            } else {
+                attributes['aria-label'] = entry.label;
+            }
+            $('<span/>', attributes).appendTo($chips);
+        });
+
+        if (!$chips.children().length) {
+            return null;
+        }
+
+        return $chips;
     }
 
     function renderCronGuardrails(helper, expression) {
