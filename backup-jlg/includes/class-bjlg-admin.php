@@ -7918,6 +7918,10 @@ class BJLG_Admin {
                                             <span class="bjlg-cron-risk__badge" data-cron-risk-label></span>
                                             <p class="bjlg-cron-risk__message" data-cron-risk-message></p>
                                         </section>
+                                        <section class="bjlg-cron-assistant__guardrails" data-cron-guardrails hidden>
+                                            <strong class="bjlg-cron-assistant__title"><?php esc_html_e('Garde-fous', 'backup-jlg'); ?></strong>
+                                            <ul class="bjlg-cron-guardrails" data-cron-guardrail-list></ul>
+                                        </section>
                                         <div class="bjlg-cron-assistant__history" data-cron-history>
                                             <div class="bjlg-cron-history__header">
                                                 <strong class="bjlg-cron-assistant__title"><?php esc_html_e('Expressions récentes', 'backup-jlg'); ?></strong>
@@ -8079,6 +8083,17 @@ class BJLG_Admin {
                                 <p class="bjlg-schedule-recommendations__status" data-role="recommendation-status" hidden></p>
                                 <div class="bjlg-schedule-recommendations__badges" data-role="recommendation-badges"></div>
                                 <div class="bjlg-schedule-recommendations__tips" data-role="recommendation-tips"></div>
+                                <div class="bjlg-schedule-recommendations__scenario" data-role="recommendation-scenario" hidden>
+                                    <div class="bjlg-schedule-recommendations__scenario-header">
+                                        <strong data-role="recommendation-scenario-title"></strong>
+                                        <small class="bjlg-schedule-recommendations__scenario-meta" data-role="recommendation-scenario-meta"></small>
+                                    </div>
+                                    <p class="bjlg-schedule-recommendations__scenario-description" data-role="recommendation-scenario-description"></p>
+                                    <div class="bjlg-schedule-recommendations__scenario-actions" data-role="recommendation-scenario-actions">
+                                        <button type="button" class="button button-secondary" data-action="apply-recommended-scenario"><?php esc_html_e('Appliquer la recommandation', 'backup-jlg'); ?></button>
+                                        <button type="button" class="button-link" data-action="share-recommended-scenario"><?php esc_html_e('Partager', 'backup-jlg'); ?></button>
+                                    </div>
+                                </div>
                                 <p class="bjlg-schedule-recommendations__empty" data-role="recommendation-empty"><?php echo esc_html__(
                                     'Modifiez la planification pour découvrir les recommandations.',
                                     'backup-jlg'
