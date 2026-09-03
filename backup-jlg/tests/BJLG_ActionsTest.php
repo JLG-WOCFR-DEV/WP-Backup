@@ -55,8 +55,6 @@ namespace BJLG {
 
 namespace {
 use BJLG\BJLG_Notification_Queue;
-
-use BJLG\BJLG_Notification_Queue;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/class-bjlg-notification-queue.php';
