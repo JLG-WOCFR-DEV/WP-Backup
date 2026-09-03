@@ -193,7 +193,7 @@ class BJLG_Admin_Fallbacks {
             }
         }
 
-        if ($is_encrypted && $password === null) {
+        if ($is_encrypted && $password === null && BJLG_Restore::backup_requires_restore_password($filepath)) {
             $this->redirect_with_notice('error', __('Un mot de passe est requis pour restaurer cette sauvegarde chiffrée.', 'backup-jlg'));
             return;
         }

@@ -3724,7 +3724,7 @@ class BJLG_REST_API {
                 }
             }
 
-            if ($is_encrypted_backup && $password === null) {
+            if ($is_encrypted_backup && $password === null && BJLG_Restore::backup_requires_restore_password($filepath)) {
                 $message = 'Un mot de passe est requis pour restaurer une sauvegarde chiffrée.';
 
                 return new WP_Error(

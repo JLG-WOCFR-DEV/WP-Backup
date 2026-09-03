@@ -2420,7 +2420,7 @@ class BJLG_Restore {
             }
         }
 
-        if ($is_encrypted_backup && $password === null) {
+        if ($is_encrypted_backup && $password === null && self::backup_requires_restore_password($filepath)) {
             $message = 'Un mot de passe est requis pour restaurer une sauvegarde chiffrée.';
             wp_send_json_error([
                 'message' => $message,
@@ -2695,6 +2695,50 @@ class BJLG_Restore {
             $is_incremental_backup = false;
             if (isset($manifest['type']) && is_string($manifest['type'])) {
                 $is_incremental_backup = sanitize_key($manifest['type']) === 'incremental';
+            }
+
+            if ($is_incremental_backup) {
+                $predecessor_paths = $this->get_incremental_predecessor_paths($original_archive_path);
+                if (!empty($predecessor_paths)) {
+                    $zip->close();
+
+                    $total_links = count($predecessor_paths) + 1;
+                    foreach ($predecessor_paths as $index => $predecessor_path) {
+                        $current_status = array_merge($current_status, [
+                            'progress' => 20 + (int) floor(($index / $total_links) * 20),
+                            'status' => 'running',
+                            'status_text' => sprintf(
+                                'Restauration du maillon %d/%d : %s',
+                                $index + 1,
+                                $total_links,
+                                basename($predecessor_path)
+                            ),
+                        ]);
+                        set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
+
+                        $this->restore_archive_file(
+                            $predecessor_path,
+                            $password,
+                            $requested_components,
+                            $environment,
+                            $routing_table,
+                            $sandbox_context
+                        );
+                    }
+
+                    $zip = new ZipArchive();
+                    if ($zip->open($filepath) !== true) {
+                        throw new Exception("Impossible d'ouvrir l'archive. Fichier corrompu ?");
+                    }
+
+                    $manifest_json = $zip->getFromName('backup-manifest.json');
+                    if ($manifest_json === false) {
+                        throw new Exception("Manifeste de sauvegarde manquant.");
+                    }
+
+                    $manifest = json_decode($manifest_json, true);
+                    $is_incremental_backup = true;
+                }
             }
 
             $deleted_paths_by_component = [
@@ -3011,6 +3055,306 @@ class BJLG_Restore {
 
             BJLG_Backup::release_task_slot($task_id);
         }
+    }
+
+    /**
+     * Archives à restaurer avant le fichier incrémental demandé.
+     *
+     * @param string $requested_path
+     * @return array<int, string>
+     * @throws Exception
+     */
+    private function get_incremental_predecessor_paths($requested_path) {
+        if (!class_exists(BJLG_Incremental::class)) {
+            return [];
+        }
+
+        $handler = BJLG_Incremental::get_latest_instance();
+        if (!$handler instanceof BJLG_Incremental) {
+            $handler = new BJLG_Incremental();
+        }
+
+        if (!method_exists($handler, 'get_restore_chain_for_file')) {
+            return [];
+        }
+
+        $chain = $handler->get_restore_chain_for_file(basename((string) $requested_path));
+        if (!is_array($chain) || count($chain) < 2) {
+            return [];
+        }
+
+        array_pop($chain);
+
+        $paths = [];
+        foreach ($chain as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $resolved = $this->resolve_chain_backup_path($entry);
+            if ($resolved === null) {
+                $name = isset($entry['file']) ? (string) $entry['file'] : '?';
+                throw new Exception(
+                    sprintf(
+                        'Chaîne de restauration incomplète : le fichier « %s » est introuvable. Restaurez d’abord la sauvegarde complète ou récupérez le maillon manquant.',
+                        $name
+                    )
+                );
+            }
+
+            $paths[] = $resolved;
+        }
+
+        return $paths;
+    }
+
+    /**
+     * @param array<string, mixed> $entry
+     * @return string|null
+     */
+    private function resolve_chain_backup_path(array $entry) {
+        $candidates = [];
+
+        if (!empty($entry['path']) && is_string($entry['path'])) {
+            $candidates[] = $entry['path'];
+        }
+
+        if (!empty($entry['file']) && is_string($entry['file'])) {
+            $file = basename($entry['file']);
+            $directory = function_exists('bjlg_get_backup_directory') ? bjlg_get_backup_directory() : '';
+            $plain = preg_replace('/\.enc$/', '', $file);
+
+            if ($directory !== '') {
+                $candidates[] = $directory . $file;
+                $candidates[] = $directory . $plain;
+                $candidates[] = $directory . $plain . '.enc';
+            }
+
+            if (class_exists(BJLG_Backup_Path_Resolver::class)) {
+                $resolved = BJLG_Backup_Path_Resolver::resolve($file);
+                if (!is_wp_error($resolved) && is_string($resolved)) {
+                    $candidates[] = $resolved;
+                }
+
+                if ($plain !== $file) {
+                    $resolved_plain = BJLG_Backup_Path_Resolver::resolve($plain);
+                    if (!is_wp_error($resolved_plain) && is_string($resolved_plain)) {
+                        $candidates[] = $resolved_plain;
+                    }
+                }
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && $candidate !== '' && file_exists($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Restaure une archive (maillon de chaîne) sans point de restauration ni statut final.
+     *
+     * @param string               $archive_path
+     * @param string|null          $password
+     * @param array<int, string>   $requested_components
+     * @param string               $environment
+     * @param array<string, mixed> $routing_table
+     * @param array<string, mixed>|null $sandbox_context
+     * @return void
+     * @throws Exception
+     */
+    private function restore_archive_file(
+        $archive_path,
+        $password,
+        array $requested_components,
+        $environment,
+        array $routing_table,
+        $sandbox_context
+    ) {
+        $working_path = $archive_path;
+        $decrypted_path = null;
+        $temp_extract_dir = bjlg_get_backup_directory() . 'temp_restore_link_' . uniqid('', true);
+
+        try {
+            if (substr((string) $working_path, -4) === '.enc') {
+                $encryption = $this->get_encryption_handler();
+                if (!($encryption instanceof BJLG_Encryption)) {
+                    throw new Exception('Module de chiffrement indisponible.');
+                }
+
+                $decrypted_path = $encryption->decrypt_backup_file($working_path, $password);
+                $working_path = $decrypted_path;
+            }
+
+            if (!mkdir($temp_extract_dir, 0755, true) && !is_dir($temp_extract_dir)) {
+                throw new Exception("Impossible de créer le répertoire temporaire.");
+            }
+
+            $zip = new ZipArchive();
+            if ($zip->open($working_path) !== true) {
+                throw new Exception("Impossible d'ouvrir l'archive. Fichier corrompu ?");
+            }
+
+            try {
+                $this->apply_opened_backup_zip(
+                    $zip,
+                    $temp_extract_dir,
+                    $requested_components,
+                    $environment,
+                    $routing_table,
+                    $sandbox_context,
+                    false
+                );
+            } finally {
+                $zip->close();
+            }
+        } finally {
+            if (is_dir($temp_extract_dir)) {
+                $this->recursive_delete($temp_extract_dir);
+            }
+
+            if ($decrypted_path && $decrypted_path !== $archive_path && file_exists($decrypted_path)) {
+                @unlink($decrypted_path);
+            }
+        }
+    }
+
+    /**
+     * Applique le contenu d'une archive déjà ouverte.
+     *
+     * @param ZipArchive           $zip
+     * @param string               $temp_extract_dir
+     * @param array<int, string>   $requested_components
+     * @param string               $environment
+     * @param array<string, mixed> $routing_table
+     * @param array<string, mixed>|null $sandbox_context
+     * @param bool                 $fail_if_empty
+     * @return bool False si aucun composant n'a été restauré.
+     * @throws Exception
+     */
+    private function apply_opened_backup_zip(
+        ZipArchive $zip,
+        $temp_extract_dir,
+        array $requested_components,
+        $environment,
+        array $routing_table,
+        $sandbox_context,
+        $fail_if_empty = true
+    ) {
+        $manifest_json = $zip->getFromName('backup-manifest.json');
+        $manifest = is_string($manifest_json) ? json_decode($manifest_json, true) : [];
+        $allowed_components = ['db', 'plugins', 'themes', 'uploads'];
+        $manifest_components = [];
+
+        if (is_array($manifest) && !empty($manifest['contains']) && is_array($manifest['contains'])) {
+            foreach ($manifest['contains'] as $component) {
+                if (!is_string($component)) {
+                    continue;
+                }
+
+                $component_key = sanitize_key($component);
+                if (in_array($component_key, $allowed_components, true) && !in_array($component_key, $manifest_components, true)) {
+                    $manifest_components[] = $component_key;
+                }
+            }
+        }
+
+        $components_to_restore = array_values(array_intersect($manifest_components, $requested_components));
+        if (empty($components_to_restore)) {
+            if ($fail_if_empty) {
+                throw new Exception("Les composants demandés ne sont pas disponibles dans l'archive de sauvegarde.");
+            }
+
+            return false;
+        }
+
+        $is_incremental_backup = isset($manifest['type']) && sanitize_key((string) $manifest['type']) === 'incremental';
+        $deleted_paths_by_component = [
+            'plugins' => [],
+            'themes' => [],
+            'uploads' => [],
+        ];
+
+        if ($is_incremental_backup) {
+            try {
+                $deleted_paths_by_component = $this->extract_deleted_paths_from_archive($zip);
+            } catch (Throwable $deleted_exception) {
+                BJLG_Debug::log('Impossible de charger la liste des fichiers supprimés : ' . $deleted_exception->getMessage(), 'error');
+            }
+        }
+
+        if (in_array('db', $components_to_restore, true) && $zip->locateName('database.sql') !== false) {
+            $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
+            if (!array_key_exists('database.sql', $allowed_entries)) {
+                throw new Exception("Entrée d'archive invalide détectée : database.sql");
+            }
+
+            $zip->extractTo($temp_extract_dir, 'database.sql');
+            $sql_filepath = $temp_extract_dir . '/database.sql';
+
+            if ($environment === self::ENV_SANDBOX) {
+                $db_destination = $this->resolve_database_destination($routing_table, $sandbox_context);
+                if ($db_destination !== null) {
+                    $database_directory = dirname($db_destination);
+                    if ($database_directory !== '' && $database_directory !== '.') {
+                        self::ensure_directory_exists_static($database_directory);
+                    }
+
+                    if (!@copy($sql_filepath, $db_destination)) {
+                        throw new Exception("Impossible de copier le dump SQL vers la sandbox.");
+                    }
+                }
+            } else {
+                $this->import_database($sql_filepath);
+            }
+        }
+
+        foreach (['plugins', 'themes', 'uploads'] as $component_type) {
+            if (!in_array($component_type, $components_to_restore, true)) {
+                continue;
+            }
+
+            $destination = $this->resolve_component_destination($component_type, $routing_table, $environment);
+            if ($destination === null) {
+                continue;
+            }
+
+            $component_deleted = $deleted_paths_by_component[$component_type] ?? [];
+            if (!empty($component_deleted)) {
+                $this->apply_deleted_paths($component_type, $component_deleted, $destination, $environment);
+            }
+
+            $source_folder = "wp-content/{$component_type}";
+            $files_to_extract = [];
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $file = $zip->getNameIndex($i);
+                if ($file !== false && strpos($file, $source_folder) === 0) {
+                    $files_to_extract[] = $file;
+                }
+            }
+
+            if (empty($files_to_extract)) {
+                continue;
+            }
+
+            $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
+            foreach ($files_to_extract as $file_to_extract) {
+                if (!array_key_exists($file_to_extract, $allowed_entries)) {
+                    throw new Exception("Entrée d'archive invalide détectée : {$file_to_extract}");
+                }
+            }
+
+            $zip->extractTo($temp_extract_dir, $files_to_extract);
+            $this->recursive_copy(
+                $temp_extract_dir . '/' . $source_folder,
+                $destination
+            );
+        }
+
+        return true;
     }
 
     /**
@@ -3969,6 +4313,30 @@ class BJLG_Restore {
      *
      * @return BJLG_Encryption|null
      */
+    /**
+     * Indique si une archive chiffrée exige un mot de passe utilisateur.
+     *
+     * @param string $filepath
+     * @return bool
+     */
+    public static function backup_requires_restore_password($filepath) {
+        if (!is_string($filepath) || $filepath === '' || substr($filepath, -4) !== '.enc') {
+            return false;
+        }
+
+        if (!class_exists(BJLG_Encryption::class)) {
+            return true;
+        }
+
+        $encryption = new BJLG_Encryption();
+
+        if (!method_exists($encryption, 'encrypted_file_requires_password')) {
+            return true;
+        }
+
+        return (bool) $encryption->encrypted_file_requires_password($filepath);
+    }
+
     private function get_encryption_handler() {
         if (!$this->encryption_handler && class_exists(BJLG_Encryption::class)) {
             $this->encryption_handler = new BJLG_Encryption();

@@ -206,7 +206,7 @@ class BJLG_Cleanup {
      * Applique les règles de rétention pour supprimer les vieilles sauvegardes.
      * @return int Le nombre de fichiers supprimés.
      */
-    private function cleanup_backups() {
+    protected function cleanup_backups() {
         $settings = \bjlg_get_option('bjlg_cleanup_settings', ['by_number' => 3, 'by_age' => 0]);
         $retain_by_number = intval($settings['by_number']);
         $retain_by_age_days = intval($settings['by_age']);
@@ -301,6 +301,10 @@ class BJLG_Cleanup {
         // Supprimer les fichiers en s'assurant qu'il n'y a pas de doublons
         $deleted_count = 0;
         $unique_files_to_delete = array_unique($files_to_delete);
+        $unique_files_to_delete = $this->filter_protected_backup_deletions(
+            $unique_files_to_delete,
+            $normal_backups_with_mtime
+        );
 
         foreach ($unique_files_to_delete as $filepath) {
             if (file_exists($filepath)) {
@@ -314,6 +318,97 @@ class BJLG_Cleanup {
         }
 
         return $deleted_count;
+    }
+
+    /**
+     * Empêche la rétention d'effacer la dernière archive et les maillons de la chaîne incrémentale.
+     *
+     * @param array<int, string> $files_to_delete
+     * @param array<int, array{path: string, mtime: int}> $normal_backups_with_mtime
+     * @return array<int, string>
+     */
+    private function filter_protected_backup_deletions(array $files_to_delete, array $normal_backups_with_mtime) {
+        if (empty($files_to_delete)) {
+            return $files_to_delete;
+        }
+
+        $protected = [];
+
+        $newest_path = $this->get_newest_backup_path($normal_backups_with_mtime);
+        if ($newest_path !== null) {
+            $protected[$newest_path] = true;
+            $protected[basename($newest_path)] = true;
+        }
+
+        foreach ($this->get_incremental_protected_basenames() as $basename) {
+            if ($basename !== '') {
+                $protected[$basename] = true;
+            }
+        }
+
+        $filtered = [];
+        foreach ($files_to_delete as $filepath) {
+            $basename = basename((string) $filepath);
+            $plain = preg_replace('/\.enc$/', '', $basename);
+
+            if (
+                isset($protected[$filepath])
+                || isset($protected[$basename])
+                || isset($protected[$plain])
+                || isset($protected[$plain . '.enc'])
+            ) {
+                BJLG_Debug::log("Nettoyage : conservation de '" . $basename . "' (dernière archive ou chaîne incrémentale).");
+                continue;
+            }
+
+            $filtered[] = $filepath;
+        }
+
+        return $filtered;
+    }
+
+    /**
+     * @param array<int, array{path: string, mtime: int}> $backups
+     * @return string|null
+     */
+    private function get_newest_backup_path(array $backups) {
+        $newest = null;
+        $newest_mtime = -1;
+
+        foreach ($backups as $backup) {
+            if (!isset($backup['path'], $backup['mtime'])) {
+                continue;
+            }
+
+            if ((int) $backup['mtime'] >= $newest_mtime) {
+                $newest_mtime = (int) $backup['mtime'];
+                $newest = (string) $backup['path'];
+            }
+        }
+
+        return $newest;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function get_incremental_protected_basenames() {
+        if (!class_exists(BJLG_Incremental::class)) {
+            return [];
+        }
+
+        $handler = BJLG_Incremental::get_latest_instance();
+        if (!$handler instanceof BJLG_Incremental) {
+            $handler = new BJLG_Incremental();
+        }
+
+        if (!method_exists($handler, 'get_protected_backup_basenames')) {
+            return [];
+        }
+
+        $names = $handler->get_protected_backup_basenames();
+
+        return is_array($names) ? $names : [];
     }
 
     private function get_backup_mtime($filepath) {

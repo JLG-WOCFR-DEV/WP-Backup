@@ -339,7 +339,8 @@ class BJLG_Incremental {
             );
         }
 
-        $this->register_remote_purge($incremental);
+        // Ne pas purger le fichier distant : synthetic_full n'est qu'un index,
+        // le ZIP incrémental reste un maillon obligatoire de la chaîne de restauration.
     }
 
     private function register_remote_purge(array $incremental) {
@@ -1413,6 +1414,84 @@ class BJLG_Incremental {
         }
 
         return $chain;
+    }
+
+    /**
+     * Retourne la chaîne de restauration jusqu'au fichier demandé (inclus).
+     *
+     * @param string $filename Nom de fichier (.zip ou .zip.enc).
+     * @return array<int, array<string, mixed>>
+     */
+    public function get_restore_chain_for_file($filename) {
+        $target = $this->normalize_backup_basename($filename);
+        if ($target === '') {
+            return [];
+        }
+
+        $chain = $this->get_restore_chain();
+        $match_index = null;
+
+        foreach ($chain as $index => $backup) {
+            $candidate = $this->normalize_backup_basename($backup['file'] ?? '');
+            if ($candidate !== '' && $this->backup_basenames_match($target, $candidate)) {
+                $match_index = $index;
+                break;
+            }
+        }
+
+        if ($match_index === null) {
+            return [];
+        }
+
+        return array_slice($chain, 0, $match_index + 1);
+    }
+
+    /**
+     * Noms de fichiers encore nécessaires à une restauration point-in-time.
+     *
+     * @return array<int, string>
+     */
+    public function get_protected_backup_basenames() {
+        $names = [];
+
+        foreach ($this->get_restore_chain() as $backup) {
+            $basename = $this->normalize_backup_basename($backup['file'] ?? '');
+            if ($basename === '') {
+                continue;
+            }
+
+            $names[$basename] = true;
+            $names[preg_replace('/\.enc$/', '', $basename)] = true;
+            if (substr($basename, -4) !== '.enc') {
+                $names[$basename . '.enc'] = true;
+            }
+        }
+
+        return array_keys($names);
+    }
+
+    /**
+     * @param string $filename
+     * @return string
+     */
+    private function normalize_backup_basename($filename) {
+        return basename(str_replace('\\', '/', (string) $filename));
+    }
+
+    /**
+     * @param string $left
+     * @param string $right
+     * @return bool
+     */
+    private function backup_basenames_match($left, $right) {
+        if ($left === $right) {
+            return true;
+        }
+
+        $left_plain = preg_replace('/\.enc$/', '', $left);
+        $right_plain = preg_replace('/\.enc$/', '', $right);
+
+        return $left_plain === $right_plain;
     }
     
     /**

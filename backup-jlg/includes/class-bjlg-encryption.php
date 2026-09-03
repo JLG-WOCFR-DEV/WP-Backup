@@ -80,7 +80,7 @@ class BJLG_Encryption {
             }
         }
 
-        // Option 2: Depuis la base de données (moins sécurisé)
+        // Option 2: Depuis la base de données (moins sécurisé, à éviter en production)
         $stored_key = \bjlg_get_option('bjlg_encryption_key');
         if ($stored_key) {
             $key = $this->decode_encryption_key($stored_key, 'bjlg_encryption_key');
@@ -89,14 +89,50 @@ class BJLG_Encryption {
             }
         }
 
-        // Option 3: Générer une nouvelle clé
-        try {
-            return $this->generate_encryption_key();
-        } catch (Exception $exception) {
-            BJLG_Debug::error('Impossible de générer une clé de chiffrement : ' . $exception->getMessage());
-            BJLG_History::log('encryption_key_generation_failed', 'error', $exception->getMessage());
+        // Ne jamais auto-générer : une clé silencieuse rendrait les archives existantes illisibles
+        // et serait copiée dans le dump SQL. La génération reste explicite (AJAX / generate_encryption_key).
+        return null;
+    }
 
-            return null;
+    /**
+     * Indique si une archive .enc exige un mot de passe (flag FILE_FLAG_PASSWORD).
+     * Les fichiers chiffrés avec la clé du site uniquement ne nécessitent pas de mot de passe.
+     *
+     * @param string $filepath
+     * @return bool
+     */
+    public function encrypted_file_requires_password($filepath) {
+        if (!is_string($filepath) || $filepath === '' || !file_exists($filepath)) {
+            return false;
+        }
+
+        if (substr($filepath, -4) !== '.enc') {
+            return false;
+        }
+
+        $handle = @fopen($filepath, 'rb');
+        if ($handle === false) {
+            return true;
+        }
+
+        try {
+            $header = $this->read_encrypted_file_header($handle);
+            $version = isset($header['version']) ? (int) $header['version'] : 1;
+            $flags = isset($header['flags']) ? (int) $header['flags'] : 0;
+
+            if ($version >= 2) {
+                return ($flags & self::FILE_FLAG_PASSWORD) === self::FILE_FLAG_PASSWORD;
+            }
+
+            // Format v1 : pas de flag, la clé site suffit.
+            return false;
+        } catch (Exception $exception) {
+            BJLG_Debug::warning('Impossible de lire l\'en-tête de chiffrement : ' . $exception->getMessage());
+
+            // En-tête illisible : conserver le comportement conservateur.
+            return true;
+        } finally {
+            fclose($handle);
         }
     }
 

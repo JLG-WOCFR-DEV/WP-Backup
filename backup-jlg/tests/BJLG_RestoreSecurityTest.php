@@ -240,6 +240,32 @@ final class BJLG_RestoreSecurityTest extends TestCase
         $this->assertSame([], $GLOBALS['bjlg_test_transients']);
     }
 
+    public function test_handle_run_restore_allows_site_key_encrypted_backup_without_password(): void
+    {
+        require_once __DIR__ . '/Helpers/BJLG_Test_BackupFixtures.php';
+
+        $archive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'filename' => 'site-key-backup-' . uniqid('', true) . '.zip',
+            'manifest' => ['type' => 'full', 'contains' => ['db']],
+            'database' => "-- empty\n",
+            'encrypt' => true,
+            'password' => null,
+        ]);
+        $this->additionalBackupPaths[] = $archive['path'];
+
+        $_POST['nonce'] = 'nonce';
+        $_POST['filename'] = basename($archive['path']);
+
+        $restore = new BJLG\BJLG_Restore();
+
+        try {
+            $restore->handle_run_restore();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertArrayHasKey('task_id', $response->data);
+        }
+    }
+
     public function test_handle_run_restore_requires_minimum_password_length(): void
     {
         $_POST['nonce'] = 'nonce';

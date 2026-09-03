@@ -93,6 +93,20 @@ final class BJLG_RestoreTaskTest extends TestCase
 
                 return $this->col_results['transients'];
             }
+
+            public function get_results($query, $output = null)
+            {
+                $this->queries[] = (string) $query;
+
+                return [];
+            }
+
+            public function get_row($query, $output = null)
+            {
+                $this->queries[] = (string) $query;
+
+                return null;
+            }
         };
 
         $GLOBALS['bjlg_test_transients'] = [];
@@ -694,6 +708,140 @@ final class BJLG_RestoreTaskTest extends TestCase
         @unlink($fullArchive['path']);
         @unlink($incrementalArchive['path']);
         unset($_POST['task_id'], $_POST['nonce']);
+    }
+
+    public function test_incremental_restore_replays_full_chain_from_manifest(): void
+    {
+        require_once __DIR__ . '/../includes/class-bjlg-incremental.php';
+
+        $fullArchive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'filename' => 'full-backup-' . uniqid('', true) . '.zip',
+            'manifest' => ['type' => 'full', 'contains' => ['plugins', 'uploads']],
+            'files' => [
+                'wp-content/plugins/sample-plugin/plugin.php' => "<?php // full backup\n",
+                'wp-content/uploads/keep.txt' => 'from-full',
+            ],
+        ]);
+
+        $incrementalArchive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'filename' => 'incremental-backup-' . uniqid('', true) . '.zip',
+            'manifest' => ['type' => 'incremental', 'contains' => ['plugins', 'uploads']],
+            'files' => [
+                'wp-content/plugins/sample-plugin/plugin.php' => "<?php // incremental\n",
+                'wp-content/uploads/new.txt' => 'from-incremental',
+            ],
+        ]);
+
+        $handler = new BJLG\BJLG_Incremental();
+        $handler->update_manifest($fullArchive['path'], [
+            'path' => $fullArchive['path'],
+            'file' => basename($fullArchive['path']),
+            'components' => ['plugins', 'uploads'],
+            'incremental' => false,
+            'timestamp' => time() - 100,
+        ]);
+        $handler->update_manifest($incrementalArchive['path'], [
+            'path' => $incrementalArchive['path'],
+            'file' => basename($incrementalArchive['path']),
+            'components' => ['plugins', 'uploads'],
+            'incremental' => true,
+            'timestamp' => time(),
+        ]);
+
+        $environmentConfig = BJLG\BJLG_Restore::prepare_environment(BJLG\BJLG_Restore::ENV_SANDBOX);
+        $restore = new BJLG\BJLG_Restore(new BJLG\BJLG_Backup());
+
+        $taskId = 'bjlg_restore_' . uniqid('chain', true);
+        set_transient($taskId, [
+            'progress' => 0,
+            'status' => 'pending',
+            'status_text' => '',
+            'filename' => basename($incrementalArchive['path']),
+            'filepath' => $incrementalArchive['path'],
+            'components' => ['plugins', 'uploads'],
+            'environment' => $environmentConfig['environment'],
+            'routing_table' => $environmentConfig['routing_table'],
+            'sandbox' => $environmentConfig['sandbox'],
+        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
+
+        $restore->run_restore_task($taskId);
+
+        $taskState = get_transient($taskId);
+        $this->assertIsArray($taskState);
+        $this->assertSame('complete', $taskState['status'], $taskState['status_text'] ?? '');
+
+        $sandboxPlugin = $environmentConfig['routing_table']['plugins'] . '/sample-plugin/plugin.php';
+        $sandboxUploads = $environmentConfig['routing_table']['uploads'];
+        $this->assertFileExists($sandboxPlugin);
+        $this->assertSame("<?php // incremental\n", file_get_contents($sandboxPlugin));
+        $this->assertFileExists($sandboxUploads . '/keep.txt');
+        $this->assertSame('from-full', file_get_contents($sandboxUploads . '/keep.txt'));
+        $this->assertFileExists($sandboxUploads . '/new.txt');
+
+        bjlg_tests_recursive_delete($environmentConfig['sandbox']['base_path'] ?? '');
+        delete_transient($taskId);
+        @unlink($fullArchive['path']);
+        @unlink($incrementalArchive['path']);
+    }
+
+    public function test_incremental_restore_fails_when_full_backup_is_missing(): void
+    {
+        require_once __DIR__ . '/../includes/class-bjlg-incremental.php';
+
+        $fullArchive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'filename' => 'full-backup-missing-' . uniqid('', true) . '.zip',
+            'manifest' => ['type' => 'full', 'contains' => ['plugins']],
+            'files' => [
+                'wp-content/plugins/sample-plugin/plugin.php' => "<?php // full\n",
+            ],
+        ]);
+        $incrementalArchive = BJLG_Test_BackupFixtures::createBackupArchive([
+            'filename' => 'incremental-backup-missing-' . uniqid('', true) . '.zip',
+            'manifest' => ['type' => 'incremental', 'contains' => ['plugins']],
+            'files' => [
+                'wp-content/plugins/sample-plugin/plugin.php' => "<?php // incremental\n",
+            ],
+        ]);
+
+        $handler = new BJLG\BJLG_Incremental();
+        $handler->update_manifest($fullArchive['path'], [
+            'path' => $fullArchive['path'],
+            'file' => basename($fullArchive['path']),
+            'components' => ['plugins'],
+            'incremental' => false,
+        ]);
+        $handler->update_manifest($incrementalArchive['path'], [
+            'path' => $incrementalArchive['path'],
+            'file' => basename($incrementalArchive['path']),
+            'components' => ['plugins'],
+            'incremental' => true,
+        ]);
+
+        @unlink($fullArchive['path']);
+
+        $environmentConfig = BJLG\BJLG_Restore::prepare_environment(BJLG\BJLG_Restore::ENV_SANDBOX);
+        $restore = new BJLG\BJLG_Restore(new BJLG\BJLG_Backup());
+        $taskId = 'bjlg_restore_' . uniqid('missing', true);
+        set_transient($taskId, [
+            'progress' => 0,
+            'status' => 'pending',
+            'filename' => basename($incrementalArchive['path']),
+            'filepath' => $incrementalArchive['path'],
+            'components' => ['plugins'],
+            'environment' => $environmentConfig['environment'],
+            'routing_table' => $environmentConfig['routing_table'],
+            'sandbox' => $environmentConfig['sandbox'],
+        ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
+
+        $restore->run_restore_task($taskId);
+        $taskState = get_transient($taskId);
+        $this->assertIsArray($taskState);
+        $this->assertSame('error', $taskState['status']);
+        $this->assertStringContainsString('Chaîne de restauration incomplète', (string) $taskState['status_text']);
+
+        bjlg_tests_recursive_delete($environmentConfig['sandbox']['base_path'] ?? '');
+        delete_transient($taskId);
+        @unlink($incrementalArchive['path']);
     }
 
     private function removePath(string $path): void

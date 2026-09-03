@@ -390,19 +390,8 @@ final class BJLG_IncrementalManifestTest extends TestCase
         $this->assertSame(basename($inc3Path), $manifest['incremental_backups'][1]['file']);
 
         $this->assertArrayHasKey('remote_purge_queue', $manifest);
-        $this->assertNotEmpty($manifest['remote_purge_queue']);
-        $this->assertSame(basename($inc1Path), $manifest['remote_purge_queue'][0]['file']);
-        $this->assertSame(['google_drive'], $manifest['remote_purge_queue'][0]['destinations']);
-        $this->assertSame('pending', $manifest['remote_purge_queue'][0]['status']);
-        $this->assertIsInt($manifest['remote_purge_queue'][0]['registered_at']);
-        $this->assertSame(0, $manifest['remote_purge_queue'][0]['attempts']);
-        $this->assertSame(0, $manifest['remote_purge_queue'][0]['last_attempt_at']);
-        $this->assertIsInt($manifest['remote_purge_queue'][0]['next_attempt_at']);
-        $this->assertGreaterThan(0, $manifest['remote_purge_queue'][0]['next_attempt_at']);
-        $this->assertSame('', $manifest['remote_purge_queue'][0]['last_error']);
-        $this->assertIsArray($manifest['remote_purge_queue'][0]['errors']);
-        $this->assertArrayHasKey('failed_at', $manifest['remote_purge_queue'][0]);
-        $this->assertSame(0, $manifest['remote_purge_queue'][0]['failed_at']);
+        $this->assertEmpty($manifest['remote_purge_queue']);
+        $this->assertContains(basename($inc1Path), $handler->get_protected_backup_basenames());
 
         $chain = $handler->get_restore_chain();
         $this->assertCount(4, $chain);
@@ -455,6 +444,27 @@ final class BJLG_IncrementalManifestTest extends TestCase
             'incremental' => true,
             'destinations' => ['sftp'],
         ]);
+
+        $reflection = new ReflectionClass(BJLG\BJLG_Incremental::class);
+        $property = $reflection->getProperty('last_backup_data');
+        $property->setAccessible(true);
+        $data = $property->getValue($handler);
+        $data['remote_purge_queue'] = [[
+            'file' => basename($inc1Path),
+            'destinations' => ['google_drive', 'sftp'],
+            'status' => 'pending',
+            'registered_at' => time(),
+            'attempts' => 0,
+            'last_attempt_at' => 0,
+            'next_attempt_at' => time(),
+            'last_error' => '',
+            'errors' => [],
+            'failed_at' => 0,
+        ]];
+        $property->setValue($handler, $data);
+        $save = $reflection->getMethod('save_manifest');
+        $save->setAccessible(true);
+        $this->assertTrue($save->invoke($handler));
 
         $manifest = json_decode((string) file_get_contents($this->manifestPath), true);
         $this->assertIsArray($manifest);

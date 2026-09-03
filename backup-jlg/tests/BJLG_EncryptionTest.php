@@ -53,6 +53,34 @@ final class BJLG_EncryptionTest extends TestCase
         $this->assertIsString($key);
         $this->assertSame(BJLG_Encryption::KEY_LENGTH, strlen($key));
     }
+
+    public function test_constructor_does_not_write_encryption_key_option(): void
+    {
+        unset($GLOBALS['bjlg_test_options']['bjlg_encryption_key']);
+
+        new BJLG_Encryption();
+
+        $this->assertArrayNotHasKey('bjlg_encryption_key', $GLOBALS['bjlg_test_options'] ?? []);
+    }
+
+    public function test_encrypted_file_requires_password_reads_header_flag(): void
+    {
+        $plain = sys_get_temp_dir() . '/bjlg-enc-plain-' . uniqid('', true) . '.zip';
+        file_put_contents($plain, 'plain-backup');
+
+        bjlg_update_option('bjlg_encryption_settings', ['enabled' => true]);
+        $encryption = new BJLG_Encryption();
+
+        $withPassword = $encryption->encrypt_backup_file($plain, 'super-secret');
+        $this->assertTrue($encryption->encrypted_file_requires_password($withPassword));
+        @unlink($withPassword);
+
+        file_put_contents($plain, 'plain-backup');
+        $siteKeyOnly = $encryption->encrypt_backup_file($plain, null);
+        $this->assertFalse($encryption->encrypted_file_requires_password($siteKeyOnly));
+        @unlink($siteKeyOnly);
+        @unlink($plain);
+    }
 }
 
 }
