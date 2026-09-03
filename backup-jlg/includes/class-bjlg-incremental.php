@@ -1176,11 +1176,16 @@ class BJLG_Incremental {
     private function update_all_checksums() {
         global $wpdb;
         
-        $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
+        $tables = class_exists(BJLG_Backup::class)
+            ? BJLG_Backup::list_backup_tables($wpdb)
+            : $wpdb->get_results("SHOW TABLES", ARRAY_N);
         $this->last_backup_data['database_checksums'] = [];
         
         foreach ($tables as $table_array) {
-            $table = $table_array[0];
+            $table = is_array($table_array) ? (string) ($table_array[0] ?? '') : (string) $table_array;
+            if ($table === '' || !preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+                continue;
+            }
             $checksum_result = $wpdb->get_row("CHECKSUM TABLE `{$table}`", ARRAY_A);
             
             if ($checksum_result && isset($checksum_result['Checksum'])) {
@@ -1347,10 +1352,15 @@ class BJLG_Incremental {
         
         // Analyser la base de données
         global $wpdb;
-        $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
+        $tables = class_exists(BJLG_Backup::class)
+            ? BJLG_Backup::list_backup_tables($wpdb)
+            : $wpdb->get_results("SHOW TABLES", ARRAY_N);
         
         foreach ($tables as $table_array) {
-            $table = $table_array[0];
+            $table = is_array($table_array) ? (string) ($table_array[0] ?? '') : (string) $table_array;
+            if ($table === '' || !preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+                continue;
+            }
             if ($this->table_has_changed($table)) {
                 $changes['database']['tables_modified']++;
                 

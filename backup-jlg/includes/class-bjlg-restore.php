@@ -2515,6 +2515,8 @@ class BJLG_Restore {
             return;
         }
 
+        BJLG_Backup::spawn_scheduled_cron();
+
         BJLG_Backup::release_task_slot($task_id);
 
         wp_send_json_success(['task_id' => $task_id]);

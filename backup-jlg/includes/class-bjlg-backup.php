@@ -141,6 +141,57 @@ class BJLG_Backup {
     }
 
     /**
+     * Déclenche wp-cron immédiatement après la planification d'une tâche.
+     */
+    public static function spawn_scheduled_cron() {
+        if (function_exists('spawn_cron')) {
+            spawn_cron();
+        }
+    }
+
+    /**
+     * Liste les tables à inclure dans un dump (préfixe du site par défaut).
+     *
+     * @param object|null $wpdb
+     * @return array<int, string>
+     */
+    public static function list_backup_tables($wpdb = null) {
+        if ($wpdb === null && isset($GLOBALS['wpdb'])) {
+            $wpdb = $GLOBALS['wpdb'];
+        }
+
+        if (!is_object($wpdb) || !method_exists($wpdb, 'get_results')) {
+            return [];
+        }
+
+        $rows = $wpdb->get_results('SHOW TABLES', ARRAY_N);
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        $include_all = function_exists('apply_filters')
+            ? (bool) apply_filters('bjlg_backup_include_all_db_tables', false)
+            : false;
+        $prefix = isset($wpdb->prefix) ? (string) $wpdb->prefix : '';
+        $tables = [];
+
+        foreach ($rows as $row) {
+            $table = is_array($row) ? (string) ($row[0] ?? '') : '';
+            if ($table === '') {
+                continue;
+            }
+
+            if (!$include_all && $prefix !== '' && strpos($table, $prefix) !== 0) {
+                continue;
+            }
+
+            $tables[] = $table;
+        }
+
+        return $tables;
+    }
+
+    /**
      * Enregistre ou rafraîchit l'état d'une tâche dans un transient.
      *
      * @param string $task_id
@@ -1115,6 +1166,8 @@ class BJLG_Backup {
             wp_send_json_error(['message' => "Impossible de planifier la tâche de sauvegarde en arrière-plan."], 500);
         }
 
+        self::spawn_scheduled_cron();
+
         BJLG_Debug::log("Nouvelle tâche de sauvegarde créée : $task_id");
         BJLG_History::log('backup_started', 'info', 'Composants : ' . implode(', ', $components));
 
@@ -1609,7 +1662,27 @@ class BJLG_Backup {
                 $history_metadata['warnings'][] = $destination_failure_notice;
             }
 
-            BJLG_History::log('backup_created', 'success', $history_message, null, null, $history_metadata);
+            $remote_requested = array_values(array_filter(
+                (array) $destination_queue,
+                static function ($destination_id) {
+                    return is_string($destination_id) && $destination_id !== '' && $destination_id !== 'local';
+                }
+            ));
+            $remote_success = isset($destination_results['success']) && is_array($destination_results['success'])
+                ? array_values(array_filter(array_keys($destination_results['success']), static function ($destination_id) {
+                    return is_string($destination_id) && $destination_id !== '' && $destination_id !== 'local';
+                }))
+                : [];
+            $all_remote_failed = !empty($remote_requested) && empty($remote_success);
+
+            BJLG_History::log(
+                'backup_created',
+                $all_remote_failed ? 'failure' : 'success',
+                $history_message,
+                null,
+                null,
+                $history_metadata
+            );
 
             $manifest_details = [
                 'file' => $backup_filename,
@@ -1658,7 +1731,15 @@ class BJLG_Backup {
                 $success_message .= ' ' . $destination_failure_notice;
             }
 
-            $this->update_task_progress($task_id, 100, 'complete', $success_message);
+            if (!empty($all_remote_failed)) {
+                $success_message = 'Sauvegarde locale créée, mais tous les envois distants ont échoué. La copie locale a été conservée.';
+                if ($destination_failure_notice !== '') {
+                    $success_message .= ' ' . $destination_failure_notice;
+                }
+                $this->update_task_progress($task_id, 100, 'error', $success_message);
+            } else {
+                $this->update_task_progress($task_id, 100, 'complete', $success_message);
+            }
 
             BJLG_Debug::log("Sauvegarde terminée : $backup_filename (" . size_format($file_size) . ")");
 
@@ -2147,8 +2228,8 @@ class BJLG_Backup {
             fwrite($handle, "SET NAMES utf8mb4;\n");
             fwrite($handle, "SET FOREIGN_KEY_CHECKS=0;\n\n");
 
-            // Obtenir toutes les tables
-            $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
+            // Obtenir les tables du site (préfixe $wpdb->prefix, filtrable)
+            $tables = self::list_backup_tables($wpdb);
 
             $incremental_handler = null;
             if ($incremental && class_exists(BJLG_Incremental::class)) {
@@ -2159,8 +2240,11 @@ class BJLG_Backup {
                 }
             }
 
-            foreach ($tables as $table_array) {
-                $table = $table_array[0];
+            foreach ($tables as $table) {
+                $table = (string) $table;
+                if ($table === '' || !preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+                    continue;
+                }
 
                 // Pour l'incrémental, vérifier si la table a changé
                 if ($incremental && $incremental_handler) {
@@ -2172,6 +2256,10 @@ class BJLG_Backup {
 
                 // Structure de la table
                 $create_table = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
+                if (!is_array($create_table) || empty($create_table[1])) {
+                    BJLG_Debug::log("SHOW CREATE TABLE a échoué pour {$table}, table ignorée.");
+                    continue;
+                }
                 fwrite($handle, "\n-- Table: {$table}\n");
                 fwrite($handle, "DROP TABLE IF EXISTS `{$table}`;\n");
                 fwrite($handle, $create_table[1] . ";\n\n");
@@ -4140,14 +4228,20 @@ class BJLG_Backup {
         fwrite($handle, "SET NAMES utf8mb4;\n");
         fwrite($handle, "SET FOREIGN_KEY_CHECKS=0;\n\n");
         
-        // Tables
-        $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
+        // Tables du site (préfixe $wpdb->prefix)
+        $tables = self::list_backup_tables($wpdb);
         
-        foreach ($tables as $table_array) {
-            $table = $table_array[0];
+        foreach ($tables as $table) {
+            $table = (string) $table;
+            if ($table === '' || !preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+                continue;
+            }
             
             // Structure
             $create = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
+            if (!is_array($create) || empty($create[1])) {
+                continue;
+            }
             fwrite($handle, "DROP TABLE IF EXISTS `{$table}`;\n");
             fwrite($handle, $create[1] . ";\n\n");
             

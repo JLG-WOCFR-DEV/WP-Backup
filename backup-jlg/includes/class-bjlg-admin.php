@@ -1872,7 +1872,13 @@ class BJLG_Admin {
         );
 
         $backup_cta_url = $backup_tab_url . '#bjlg-backup-creation-form';
-        $restore_cta_url = $backup_tab_url . '#bjlg-restore-form';
+        $restore_cta_url = add_query_arg(
+            [
+                'page' => 'backup-jlg',
+                'section' => 'restore',
+            ],
+            admin_url('admin.php')
+        );
         $checklist_json = !empty($onboarding_payload) ? wp_json_encode($onboarding_payload) : '';
         $checklist_attr = $checklist_json ? ' data-bjlg-checklist="' . esc_attr($checklist_json) . '"' : '';
 

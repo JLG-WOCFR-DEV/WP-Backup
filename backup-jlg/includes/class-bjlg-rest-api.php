@@ -2753,6 +2753,9 @@ class BJLG_REST_API {
 
             // Planifier l'exécution
             $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+            if ($scheduled !== false && !is_wp_error($scheduled)) {
+                BJLG_Backup::spawn_scheduled_cron();
+            }
 
             if ($scheduled === false) {
                 BJLG_Backup::delete_task_state($task_id);
@@ -3789,6 +3792,9 @@ class BJLG_REST_API {
 
             // Planifier l'exécution
             $scheduled = wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
+            if ($scheduled !== false && !is_wp_error($scheduled)) {
+                BJLG_Backup::spawn_scheduled_cron();
+            }
 
             if ($scheduled === false || is_wp_error($scheduled)) {
                 delete_transient($task_id);

@@ -62,6 +62,32 @@ final class BJLG_BackupDatabaseTest extends TestCase
         $this->assertStringNotContainsString("' OR '1'='1", $sql);
     }
 
+    public function test_list_backup_tables_filters_by_prefix(): void
+    {
+        $previous = $GLOBALS['wpdb'] ?? null;
+        $GLOBALS['wpdb'] = new class {
+            public $prefix = 'wp_';
+
+            public function get_results($query, $output = 'OBJECT')
+            {
+                return [
+                    ['wp_posts'],
+                    ['wp_options'],
+                    ['otherapp_users'],
+                ];
+            }
+        };
+
+        $tables = BJLG\BJLG_Backup::list_backup_tables();
+        $this->assertSame(['wp_posts', 'wp_options'], $tables);
+
+        if ($previous === null) {
+            unset($GLOBALS['wpdb']);
+        } else {
+            $GLOBALS['wpdb'] = $previous;
+        }
+    }
+
     public function test_backup_database_streams_content_into_zip_via_temp_file(): void
     {
         $backup = new BJLG\BJLG_Backup();
