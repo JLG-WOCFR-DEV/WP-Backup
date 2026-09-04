@@ -42,6 +42,8 @@ class BJLG_Admin {
         add_action('wp_ajax_bjlg_notification_resolve', [$this, 'ajax_resolve_notification']);
         add_action('admin_post_bjlg_save_sandbox_schedule', [$this, 'handle_save_sandbox_schedule']);
         add_action('admin_post_bjlg_download_sandbox_report', [$this, 'handle_download_sandbox_report']);
+        add_action('admin_post_bjlg_download_self_test_report', [$this, 'handle_download_self_test_report']);
+        add_action('admin_post_bjlg_run_restore_self_test', [$this, 'handle_run_restore_self_test']);
     }
 
     /**
@@ -4096,116 +4098,57 @@ class BJLG_Admin {
         );
         $restore_redirect .= '#bjlg-restore-form';
 
-        ?>
-        <div class="bjlg-section">
-            <h2>Restaurer depuis un fichier</h2>
-            <p>Si vous avez un fichier de sauvegarde sur votre ordinateur, vous pouvez le téléverser ici pour lancer une restauration.</p>
-            <form id="bjlg-restore-form" method="post" enctype="multipart/form-data" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                <?php wp_nonce_field('bjlg_restore_backup', 'bjlg_restore_backup_nonce'); ?>
-                <input type="hidden" name="action" value="bjlg_restore_backup">
-                <input type="hidden" name="redirect_to" value="<?php echo esc_url($restore_redirect); ?>">
-                <input type="hidden" name="restore_environment" value="production" data-role="restore-environment-field">
-                <div class="bjlg-restore-username-field bjlg-screen-reader-only">
-                    <label class="bjlg-screen-reader-only" for="bjlg-restore-username">Nom d'utilisateur</label>
-                    <input type="text"
-                           id="bjlg-restore-username"
-                           name="username"
-                           class="regular-text bjlg-screen-reader-only"
-                           autocomplete="username"
-                           aria-label="Nom d'utilisateur">
-                </div>
-                <table class="form-table">
-                    <tbody>
-                        <tr>
-                            <th scope="row"><label for="bjlg-restore-file-input">Fichier de sauvegarde</label></th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <input type="file" id="bjlg-restore-file-input" name="restore_file" accept=".zip,.zip.enc" required>
-                                    <p class="description">Formats acceptés : .zip, .zip.enc (chiffré)</p>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row"><label for="bjlg-restore-password">Mot de passe</label></th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <input type="password"
-                                           id="bjlg-restore-password"
-                                           name="password"
-                                           class="regular-text"
-                                           autocomplete="current-password"
-                                           aria-describedby="bjlg-restore-password-help"
-                                           placeholder="Requis pour les archives .zip.enc">
-                                    <p class="description"
-                                       id="bjlg-restore-password-help"
-                                       data-default-text="<?php echo esc_attr('Requis pour restaurer les sauvegardes chiffrées (.zip.enc). Laissez vide pour les archives non chiffrées.'); ?>"
-                                       data-encrypted-text="<?php echo esc_attr('Mot de passe obligatoire : renseignez-le pour déchiffrer l\'archive (.zip.enc).'); ?>">
-                                        Requis pour restaurer les sauvegardes chiffrées (<code>.zip.enc</code>). Laissez vide pour les archives non chiffrées.
-                                    </p>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">Options</th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <label><input type="checkbox" name="create_backup_before_restore" value="1" checked> Créer une sauvegarde de sécurité avant la restauration</label>
-                                </div>
-                            </td>
-                        </tr>
-                        <?php if (BJLG_Restore::user_can_use_sandbox()) : ?>
-                        <tr>
-                            <th scope="row">Environnement de test</th>
-                            <td>
-                                <div class="bjlg-field-control">
-                                    <label>
-                                        <input type="checkbox" name="restore_to_sandbox" value="1">
-                                        Restaurer dans un environnement de test
-                                    </label>
-                                    <p class="description">Les fichiers seront restaurés dans un dossier isolé sans impacter la production.</p>
-                                    <label for="bjlg-restore-sandbox-path" class="screen-reader-text">Chemin de la sandbox</label>
-                                    <input type="text"
-                                           id="bjlg-restore-sandbox-path"
-                                           name="sandbox_path"
-                                           class="regular-text"
-                                           placeholder="Laisser vide pour utiliser le dossier sandbox automatique"
-                                           disabled>
-                                </div>
-                            </td>
-                        </tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-                <div id="bjlg-restore-errors" class="notice notice-error" style="display: none;" role="alert"></div>
-                <p class="submit">
-                    <button type="submit" class="button button-primary"><span class="dashicons dashicons-upload" aria-hidden="true"></span> Téléverser et Restaurer</button>
-                </p>
-            </form>
-            <div id="bjlg-restore-status" style="display: none;">
-                <h3>Statut de la restauration</h3>
-                <div class="bjlg-progress-bar"><div
-                        class="bjlg-progress-bar-inner"
-                        id="bjlg-restore-progress-bar"
-                        role="progressbar"
-                        aria-valuemin="0"
-                        aria-valuemax="100"
-                        aria-valuenow="0"
-                        aria-valuetext="0%"
-                        aria-live="off"
-                        aria-atomic="true"
-                        aria-busy="false">0%</div></div>
-                <p id="bjlg-restore-status-text"
-                   role="status"
-                   aria-live="polite"
-                   aria-atomic="true"
-                   aria-busy="false">Préparation...</p>
-            </div>
-            <div id="bjlg-restore-debug-wrapper" style="display: none;">
-                <h3><span class="dashicons dashicons-info" aria-hidden="true"></span> Détails techniques</h3>
-                <pre id="bjlg-restore-ajax-debug" class="bjlg-log-textarea"></pre>
-            </div>
-        </div>
-        <?php
+        $self_test = class_exists(BJLG_Restore_Self_Test::class)
+            ? BJLG_Restore_Self_Test::get_status_summary()
+            : [
+                'status' => '',
+                'message' => '',
+                'last_run_at' => 0,
+                'next_run_at' => 0,
+                'report' => [],
+            ];
+        $self_test_links = $this->get_self_test_report_links();
+        $self_test_run_url = admin_url('admin-post.php');
+
+        include __DIR__ . '/admin/views/restore-section.php';
+    }
+
+    /**
+     * Runs the restore self-test immediately from the admin screen.
+     */
+    public function handle_run_restore_self_test() {
+        if (!bjlg_can_manage_backups()) {
+            wp_die(__('Permission refusée.', 'backup-jlg'), '', ['response' => 403]);
+        }
+
+        check_admin_referer('bjlg_run_restore_self_test');
+
+        if (class_exists(BJLG_Restore_Self_Test::class)) {
+            BJLG_Restore_Self_Test::dispatch();
+        }
+
+        $summary = class_exists(BJLG_Restore_Self_Test::class)
+            ? BJLG_Restore_Self_Test::get_status_summary()
+            : [];
+        $status = isset($summary['status']) ? (string) $summary['status'] : 'info';
+        $message = isset($summary['message']) && $summary['message'] !== ''
+            ? (string) $summary['message']
+            : __('Test de restauration lancé.', 'backup-jlg');
+
+        $notice = ($status === 'failure') ? 'error' : (($status === 'skipped') ? 'warning' : 'success');
+
+        $redirect = add_query_arg(
+            [
+                'page' => 'backup-jlg',
+                'section' => 'restore',
+                'bjlg_notice' => $notice,
+                'bjlg_notice_message' => rawurlencode($message),
+            ],
+            admin_url('admin.php')
+        );
+
+        wp_safe_redirect($redirect);
+        exit;
     }
 
     /**

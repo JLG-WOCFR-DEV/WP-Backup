@@ -22,6 +22,46 @@ class BJLG_Restore_Self_Test {
         add_action(self::HOOK, [$this, 'run']);
     }
 
+    public static function get_hook(): string {
+        return self::HOOK;
+    }
+
+    /**
+     * Triggers the scheduled handler immediately.
+     */
+    public static function dispatch(): void {
+        if (function_exists('do_action')) {
+            do_action(self::HOOK);
+        }
+    }
+
+    /**
+     * Returns a compact status payload for the restore admin screen.
+     *
+     * @return array<string,mixed>
+     */
+    public static function get_status_summary(): array {
+        $state = get_option(self::OPTION, []);
+        if (!is_array($state)) {
+            $state = [];
+        }
+
+        $report = get_option(self::REPORT_OPTION, []);
+        if (!is_array($report)) {
+            $report = [];
+        }
+
+        $next_run = function_exists('wp_next_scheduled') ? wp_next_scheduled(self::HOOK) : false;
+
+        return [
+            'status'      => isset($state['status']) ? (string) $state['status'] : '',
+            'message'     => isset($state['message']) ? (string) $state['message'] : '',
+            'last_run_at' => isset($state['last_run_at']) ? (int) $state['last_run_at'] : 0,
+            'next_run_at' => $next_run ? (int) $next_run : 0,
+            'report'      => $report,
+        ];
+    }
+
     public function maybe_schedule(): void {
         if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_event')) {
             return;

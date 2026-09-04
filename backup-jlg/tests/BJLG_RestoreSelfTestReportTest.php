@@ -12,6 +12,11 @@ final class BJLG_RestoreSelfTestReportTest extends TestCase
     {
         parent::tearDown();
 
+        $state = get_option('bjlg_restore_self_test_state');
+        if (is_array($state)) {
+            update_option('bjlg_restore_self_test_state', []);
+        }
+
         $report = get_option('bjlg_restore_self_test_report');
         if (is_array($report) && !empty($report['files'])) {
             $files = $report['files'];
@@ -149,5 +154,25 @@ final class BJLG_RestoreSelfTestReportTest extends TestCase
         $this->assertSame(15.5, $captured['failed']['rto_seconds']);
         $this->assertSame(3600, $captured['failed']['rpo_seconds']);
         $this->assertSame('Erreur', $captured['failed']['error']);
+    }
+
+    public function test_get_status_summary_reads_state_option(): void
+    {
+        update_option('bjlg_restore_self_test_state', [
+            'status' => 'success',
+            'message' => 'Sandbox OK',
+            'last_run_at' => 1700000000,
+        ]);
+        update_option('bjlg_restore_self_test_report', [
+            'status' => 'success',
+            'archive' => 'backup.zip',
+        ]);
+
+        $summary = BJLG_Restore_Self_Test::get_status_summary();
+
+        $this->assertSame('success', $summary['status']);
+        $this->assertSame('Sandbox OK', $summary['message']);
+        $this->assertSame(1700000000, $summary['last_run_at']);
+        $this->assertSame('backup.zip', $summary['report']['archive']);
     }
 }
