@@ -85,6 +85,126 @@ final class BJLG_AdminAdvancedStorageMetricsTest extends TestCase
         $digest = bjlg_get_option(BJLG_Remote_Storage_Metrics::WARNING_DIGEST_OPTION, []);
         $this->assertArrayHasKey('awss3', $digest);
         $this->assertSame($generated_at, $digest['awss3']);
+        $this->assertSame('critical', $result['destinations'][0]['badge'] ?? null);
+    }
+
+    public function test_collect_remote_storage_metrics_guards_missing_projection_fields(): void
+    {
+        $result = $this->collectRemoteStorageMetrics([
+            [
+                'id' => 'gdrive',
+                'name' => 'Google Drive',
+                'connected' => true,
+                'used_bytes' => 100,
+                'quota_bytes' => 1000,
+                'free_bytes' => 900,
+                'errors' => [],
+                'refreshed_at' => time(),
+            ],
+        ]);
+
+        $this->assertArrayHasKey('destinations', $result);
+        $this->assertCount(1, $result['destinations']);
+        $this->assertArrayNotHasKey('badge', $result['destinations'][0]);
+        $this->assertSame(0.1, round((float) $result['destinations'][0]['utilization_ratio'], 2));
+    }
+
+    /**
+     * @dataProvider provideProjectionBadgeCases
+     * @param array<string, mixed> $destinationOverrides
+     */
+    public function test_collect_remote_storage_metrics_sets_badge_from_projection_fields(
+        array $destinationOverrides,
+        ?string $expectedBadge
+    ): void {
+        $destination = array_merge(
+            [
+                'id' => 'aws-s3',
+                'name' => 'Primary S3',
+                'connected' => true,
+                'used_bytes' => 400,
+                'quota_bytes' => 1000,
+                'free_bytes' => 600,
+                'errors' => [],
+                'refreshed_at' => time(),
+            ],
+            $destinationOverrides
+        );
+
+        $result = $this->collectRemoteStorageMetrics([$destination]);
+        $this->assertSame($expectedBadge, $result['destinations'][0]['badge'] ?? null);
+    }
+
+    /**
+     * @return array<string, array{0: array<string, mixed>, 1: string|null}>
+     */
+    public function provideProjectionBadgeCases(): array
+    {
+        return [
+            'ratio above threshold wins over projection' => [
+                [
+                    'used_bytes' => 900,
+                    'quota_bytes' => 1000,
+                    'free_bytes' => 100,
+                    'days_to_threshold' => 10,
+                    'projection_intent' => 'success',
+                ],
+                'critical',
+            ],
+            'days to threshold within one day' => [
+                [
+                    'days_to_threshold' => 0.5,
+                    'projection_intent' => 'critical',
+                ],
+                'critical',
+            ],
+            'days to threshold within three days' => [
+                [
+                    'days_to_threshold' => 2.5,
+                    'projection_intent' => 'warning',
+                ],
+                'warning',
+            ],
+            'projection success without imminent threshold' => [
+                [
+                    'days_to_threshold' => 10,
+                    'projection_intent' => 'SUCCESS',
+                ],
+                'success',
+            ],
+            'projection success with missing days to threshold' => [
+                [
+                    'projection_intent' => 'success',
+                ],
+                'success',
+            ],
+            'non numeric days to threshold is ignored' => [
+                [
+                    'days_to_threshold' => 'soon',
+                    'projection_intent' => 'watch',
+                ],
+                null,
+            ],
+        ];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $destinations
+     * @return array<string, mixed>
+     */
+    private function collectRemoteStorageMetrics(array $destinations, ?int $generated_at = null): array
+    {
+        $generated_at = $generated_at ?? time();
+        bjlg_update_option(BJLG_Remote_Storage_Metrics::OPTION_KEY, [
+            'generated_at' => $generated_at,
+            'destinations' => $destinations,
+        ]);
+
+        $admin = new BJLG_Admin_Advanced();
+        $method = new ReflectionMethod(BJLG_Admin_Advanced::class, 'collect_remote_storage_metrics');
+        $method->setAccessible(true);
+
+        return $method->invoke($admin);
     }
 }
 
