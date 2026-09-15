@@ -1016,6 +1016,54 @@ $('body').on('click', '.bjlg-copy-field', function(e) {
     }
 });
 
+// --- CHIFFREMENT : génération de clé et test (erreurs visibles) ---
+function runEncryptionTool($button, action) {
+    const $form = $button.closest('form');
+    const $feedback = ensureFeedbackElement($form);
+    const originalText = $button.text();
+
+    $button.prop('disabled', true);
+
+    $.post(bjlg_ajax.ajax_url, { action: action, nonce: bjlg_ajax.nonce })
+        .done(function(response) {
+            const normalized = normalizeSettingsResponse(response);
+            if (normalized.success) {
+                showFeedback($feedback, 'success', normalized.message || 'Opération réussie.');
+                if (action === 'bjlg_generate_encryption_key' && response && response.data && response.data.config_line) {
+                    $('#bjlg-encryption-config-line')
+                        .val(response.data.config_line)
+                        .prop('hidden', false);
+                }
+            } else {
+                showFeedback($feedback, 'error', normalized.message || 'Opération impossible.');
+            }
+        })
+        .fail(function(xhr) {
+            let message = 'Opération impossible.';
+            if (xhr && xhr.responseJSON) {
+                if (xhr.responseJSON.data && xhr.responseJSON.data.message) {
+                    message = xhr.responseJSON.data.message;
+                } else if (xhr.responseJSON.message) {
+                    message = xhr.responseJSON.message;
+                }
+            }
+            showFeedback($feedback, 'error', message);
+        })
+        .always(function() {
+            $button.prop('disabled', false).text(originalText);
+        });
+}
+
+$(document).on('click', '#bjlg-generate-encryption-key', function(event) {
+    event.preventDefault();
+    runEncryptionTool($(this), 'bjlg_generate_encryption_key');
+});
+
+$(document).on('click', '#bjlg-test-encryption', function(event) {
+    event.preventDefault();
+    runEncryptionTool($(this), 'bjlg_test_encryption');
+});
+
 // --- GESTIONNAIRE RÉGÉNÉRATION WEBHOOK ---
 $('#bjlg-regenerate-webhook').on('click', function(e) {
     e.preventDefault();

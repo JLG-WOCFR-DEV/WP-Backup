@@ -52,7 +52,7 @@ composer install
 ### Configuration requise
 
 - **PHP** : 7.4 ou supérieur
-- **WordPress** : 5.0 ou supérieur
+- **WordPress** : 5.0 ou supérieur (Tested up to 7.1)
 - **MySQL** : 5.6 ou supérieur
 - **Mémoire PHP** : 256MB recommandé
 - **Temps d'exécution** : 300s ou illimité recommandé

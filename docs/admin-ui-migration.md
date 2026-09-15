@@ -12,4 +12,6 @@ Les retours accessibles (`role="status"`, `wp.a11y.speak`) restent en place.
 
 ## Réglages
 
-Les options métier sont déclarées via `register_setting()` (groupe `bjlg_plugin_settings`). La sauvegarde opérationnelle continue de passer par AJAX (`bjlg_save_settings`) pour ne pas casser le contexte multisite ni la planification.
+Les options métier (rétention, notifications, chiffrement, performance, sandbox, etc.) sont déclarées via `register_setting()` (groupe `bjlg_plugin_settings`). Les identifiants cloud et la planification restent hors Settings API.
+
+La sauvegarde opérationnelle continue de passer par AJAX (`bjlg_save_settings`) pour ne pas casser le contexte multisite ni les effets de bord (cron, chiffrement). Les formulaires de réglages n’envoient **pas** vers `options.php`. Un POST HTML sans JavaScript affiche une notice d’erreur au lieu d’échouer silencieusement.

@@ -4,13 +4,15 @@
  * Plugin URI:  https://jlg.dev
  * Description: Sauvegarde & restauration pour WordPress avec chiffrement, API REST et intégrations.
  * Version:     2.0.3
+ * Requires at least: 5.0
+ * Tested up to: 7.1
+ * Requires PHP: 7.4
  * Author:      JLG
  * Author URI:  https://jlg.dev
  * License:     GPL-2.0-or-later
+ * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: backup-jlg
- * Requires PHP: 7.4
- * Requires at least: 5.0
- * Tested up to: 7.1
+ * Domain Path: /languages
  */
 if (!defined('ABSPATH')) exit;
 

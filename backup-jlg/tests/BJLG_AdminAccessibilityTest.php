@@ -193,11 +193,48 @@ final class BJLG_AdminAccessibilityTest extends TestCase
         $this->assertStringContainsString('bjlg_plugin_settings', $html);
     }
 
+    public function test_settings_markup_declares_encryption_form_and_noscript_warning(): void
+    {
+        $admin_php = (string) file_get_contents(dirname(__DIR__) . '/includes/class-bjlg-admin.php');
+        $this->assertStringContainsString('id="bjlg-encryption-settings"', $admin_php);
+        $this->assertStringContainsString('name="encryption_settings_submitted"', $admin_php);
+        $this->assertStringContainsString('name="encryption_compression_level"', $admin_php);
+        $this->assertStringContainsString('JavaScript est requis pour enregistrer les réglages', $admin_php);
+
+        $js = (string) file_get_contents(dirname(__DIR__) . '/assets/js/admin-settings.js');
+        $this->assertStringContainsString("'bjlg_generate_encryption_key'", $js);
+        $this->assertStringContainsString("'bjlg_test_encryption'", $js);
+    }
+
     public function test_plugin_header_declares_tested_up_to_71(): void
     {
         $plugin_file = dirname(__DIR__) . '/backup-jlg.php';
         $contents = (string) file_get_contents($plugin_file);
 
+        $this->assertMatchesRegularExpression('/^\s*\*\s*Requires at least:\s*5\.0\s*$/m', $contents);
+        $this->assertMatchesRegularExpression('/^\s*\*\s*Requires PHP:\s*7\.4\s*$/m', $contents);
         $this->assertMatchesRegularExpression('/^\s*\*\s*Tested up to:\s*7\.1\s*$/m', $contents);
+        $this->assertMatchesRegularExpression('/^\s*\*\s*License URI:\s*https:\/\/www\.gnu\.org\/licenses\/gpl-2\.0\.html\s*$/m', $contents);
+        $this->assertMatchesRegularExpression('/^\s*\*\s*Domain Path:\s*\/languages\s*$/m', $contents);
+    }
+
+    public function test_readme_txt_declares_wordpress_71_headers(): void
+    {
+        $readme = dirname(__DIR__) . '/readme.txt';
+        $this->assertFileExists($readme);
+        $contents = (string) file_get_contents($readme);
+
+        $this->assertMatchesRegularExpression('/^Requires at least:\s*5\.0\s*$/m', $contents);
+        $this->assertMatchesRegularExpression('/^Tested up to:\s*7\.1\s*$/m', $contents);
+        $this->assertMatchesRegularExpression('/^Requires PHP:\s*7\.4\s*$/m', $contents);
+    }
+
+    public function test_backup_and_restore_forms_do_not_post_settings_api_fields(): void
+    {
+        $backup = $this->renderSection('render_backup_creation_section');
+        $restore = $this->renderSection('render_restore_section');
+
+        $this->assertNull($backup->query('//*[@name="option_page"]')->item(0));
+        $this->assertNull($restore->query('//*[@name="option_page"]')->item(0));
     }
 }
