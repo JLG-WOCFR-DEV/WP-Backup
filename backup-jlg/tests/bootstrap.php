@@ -1457,6 +1457,18 @@ if (!function_exists('date_i18n')) {
     }
 }
 
+if (!function_exists('get_date_from_gmt')) {
+    function get_date_from_gmt($string, $format = 'Y-m-d H:i:s') {
+        $timestamp = strtotime((string) $string . ' UTC');
+
+        if ($timestamp === false) {
+            return '';
+        }
+
+        return gmdate((string) $format, $timestamp);
+    }
+}
+
 if (!function_exists('network_admin_url')) {
     function network_admin_url($path = '', $scheme = 'admin') {
         return 'https://example.test/wp-admin/network/' . ltrim($path, '/');

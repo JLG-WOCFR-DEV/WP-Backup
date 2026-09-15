@@ -24,6 +24,7 @@ class BJLG_Scheduler {
     const SCHEDULE_HOOK = 'bjlg_scheduled_backup_hook';
     const SANDBOX_VALIDATION_HOOK = 'bjlg_sandbox_validation_hook';
     const SANDBOX_AUTOMATION_HOOK = 'bjlg_schedule_sandbox_restore';
+    const RESTORE_CHECK_HOOK = 'bjlg_run_restore_check';
     const MIN_CUSTOM_CRON_INTERVAL = 5 * MINUTE_IN_SECONDS;
     const EVENT_CRON_HOOK = 'bjlg_process_event_triggers';
 
@@ -549,6 +550,7 @@ class BJLG_Scheduler {
         // Hook Cron pour l'exécution automatique
         add_action(self::SCHEDULE_HOOK, [$this, 'run_scheduled_backup']);
         add_action(self::EVENT_CRON_HOOK, [$this, 'process_event_trigger_queue'], 10, 1);
+        add_action(self::RESTORE_CHECK_HOOK, [$this, 'run_scheduled_restore_check']);
         add_action('admin_post_bjlg_save_sandbox_schedule', [$this, 'handle_save_sandbox_schedule']);
 
         // Filtres pour les intervalles personnalisés
@@ -686,6 +688,7 @@ class BJLG_Scheduler {
         $collection = $this->get_schedule_settings();
         $this->sync_schedules($collection['schedules']);
         $this->maybe_schedule_sandbox_validation();
+        $this->sync_restore_check_schedule();
     }
 
     /**
@@ -2757,12 +2760,14 @@ class BJLG_Scheduler {
 
     /**
      * Enregistre les réglages de validation sandbox.
+     * API publique : l'écran admin POST appelle cette méthode.
      *
      * @param array<string,mixed> $settings
      */
-    private function save_sandbox_schedule_settings(array $settings): void
+    public function save_sandbox_schedule_settings(array $settings): void
     {
-        \bjlg_update_option(self::SANDBOX_SCHEDULE_OPTION, $settings, null, null, false);
+        $sanitized = $this->sanitize_sandbox_schedule_settings($settings);
+        \bjlg_update_option(self::SANDBOX_SCHEDULE_OPTION, $sanitized, null, null, false);
     }
 
     /**
@@ -3322,7 +3327,7 @@ class BJLG_Scheduler {
             $day_of_month = $defaults['day_of_month'];
         }
 
-        $components = BJLG_Settings::sanitize_schedule_components($raw['components'] ?? $defaults['components']);
+        $components = BJLG_Settings::sanitize_backup_components($raw['components'] ?? $defaults['components']);
         if (empty($components)) {
             $components = $defaults['components'];
         }
@@ -3346,6 +3351,97 @@ class BJLG_Scheduler {
     private function save_restore_check_settings(array $settings): void
     {
         \bjlg_update_option(self::RESTORE_CHECK_OPTION, $settings, null, null, false);
+    }
+
+    /**
+     * AJAX : enregistre la validation automatique de restauration.
+     */
+    public function handle_save_restore_check(): void
+    {
+        if (!\bjlg_can_manage_backups()) {
+            wp_send_json_error(['message' => __('Permission refusée.', 'backup-jlg')], 403);
+        }
+
+        check_ajax_referer('bjlg_nonce', 'nonce');
+
+        $posted = wp_unslash($_POST);
+        $raw = $posted['settings'] ?? [];
+        if (is_string($raw)) {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                $raw = $decoded;
+            }
+        }
+
+        $settings = self::sanitize_restore_check_settings($raw);
+        $this->save_restore_check_settings($settings);
+        $this->sync_restore_check_schedule($settings);
+
+        $next_run = function_exists('wp_next_scheduled') ? wp_next_scheduled(self::RESTORE_CHECK_HOOK) : false;
+        $next_run = $next_run ? (int) $next_run : null;
+
+        wp_send_json_success([
+            'message' => __('Validation programmée mise à jour.', 'backup-jlg'),
+            'settings' => $settings,
+            'state' => $this->get_restore_check_state(),
+            'next_run' => $next_run,
+            'next_run_formatted' => ($next_run && function_exists('get_date_from_gmt'))
+                ? get_date_from_gmt(gmdate('Y-m-d H:i:s', $next_run), 'd/m/Y H:i:s')
+                : ($next_run ? $this->format_gmt_datetime($next_run) : null),
+            'next_run_relative' => ($next_run && function_exists('human_time_diff'))
+                ? human_time_diff(time(), $next_run)
+                : null,
+        ]);
+    }
+
+    /**
+     * Synchronise l'événement WP-Cron de validation de restauration.
+     *
+     * @param array<string,mixed>|null $settings
+     */
+    private function sync_restore_check_schedule(?array $settings = null): void
+    {
+        $settings = is_array($settings) ? $settings : $this->get_restore_check_settings();
+        $hook = self::RESTORE_CHECK_HOOK;
+        $enabled = !empty($settings['enabled']);
+
+        if (!$enabled) {
+            if (function_exists('wp_clear_scheduled_hook')) {
+                wp_clear_scheduled_hook($hook);
+            }
+
+            return;
+        }
+
+        $recurrence = isset($settings['recurrence']) ? (string) $settings['recurrence'] : 'weekly';
+        $allowed = function_exists('wp_get_schedules') ? wp_get_schedules() : [];
+        if (!is_array($allowed) || !isset($allowed[$recurrence])) {
+            $recurrence = 'weekly';
+        }
+
+        $next = function_exists('wp_next_scheduled') ? wp_next_scheduled($hook) : false;
+        $current = '';
+        if (function_exists('wp_get_schedule')) {
+            $schedule = wp_get_schedule($hook);
+            if (is_string($schedule)) {
+                $current = $schedule;
+            }
+        }
+
+        if ($next && $current === $recurrence) {
+            return;
+        }
+
+        if (function_exists('wp_clear_scheduled_hook')) {
+            wp_clear_scheduled_hook($hook);
+        }
+
+        $first = $this->calculate_first_run($settings);
+        if (!$first) {
+            $first = time() + HOUR_IN_SECONDS;
+        }
+
+        wp_schedule_event($first, $recurrence, $hook);
     }
 
     public function get_restore_check_state(): array
