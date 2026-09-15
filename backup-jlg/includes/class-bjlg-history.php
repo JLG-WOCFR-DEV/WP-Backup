@@ -724,7 +724,7 @@ class BJLG_History {
     /**
      * Retourne le nom complet de la table d'historique selon le préfixe actif.
      */
-    private static function get_table_name($blog_id = null) {
+    public static function get_table_name($blog_id = null) {
         global $wpdb;
 
         $table_suffix = 'bjlg_history';

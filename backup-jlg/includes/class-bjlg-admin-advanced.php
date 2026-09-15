@@ -12,6 +12,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+if (!class_exists(__NAMESPACE__ . '\\BJLG_Backup_Integrity', false)) {
+    require_once __DIR__ . '/class-bjlg-backup-integrity.php';
+}
+
 /**
  * Advanced admin functionality (placeholder for future features)
  */
@@ -163,6 +167,10 @@ class BJLG_Admin_Advanced {
             $files = glob($pattern);
 
             if (is_array($files) && !empty($files)) {
+                $files = BJLG_Backup_Integrity::filter_archive_paths($files);
+            }
+
+            if (is_array($files) && !empty($files)) {
                 $metrics['storage']['backup_count'] = count($files);
 
                 usort($files, function ($a, $b) {
@@ -181,6 +189,19 @@ class BJLG_Admin_Advanced {
                     ];
                 }
             }
+        }
+
+        if (empty($metrics['history']['last_backup']) && !empty($metrics['storage']['latest_backup']) && is_array($metrics['storage']['latest_backup'])) {
+            $latest = $metrics['storage']['latest_backup'];
+            $mtime = isset($latest['timestamp']) ? (int) $latest['timestamp'] : 0;
+            $metrics['history']['last_backup'] = [
+                'timestamp' => $mtime > 0 ? gmdate('Y-m-d H:i:s', $mtime) : '',
+                'formatted' => $latest['formatted'] ?? '',
+                'relative' => $latest['relative'] ?? '',
+                'status' => 'success',
+                'details' => $latest['filename'] ?? '',
+                'source' => 'disk',
+            ];
         }
 
         $remote_snapshot = $this->collect_remote_storage_metrics();

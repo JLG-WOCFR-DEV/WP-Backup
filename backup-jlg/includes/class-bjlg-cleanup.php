@@ -4,6 +4,9 @@ namespace BJLG;
 use Exception;
 
 require_once __DIR__ . '/class-bjlg-api-keys.php';
+if (!class_exists(__NAMESPACE__ . '\\BJLG_Backup_Integrity', false)) {
+    require_once __DIR__ . '/class-bjlg-backup-integrity.php';
+}
 
 if (!defined('ABSPATH')) {
     exit;
@@ -217,6 +220,9 @@ class BJLG_Cleanup {
         }
 
         $backups = glob(bjlg_get_backup_directory() . '*.zip*');
+        if (!empty($backups)) {
+            $backups = BJLG_Backup_Integrity::filter_archive_paths($backups);
+        }
         if (empty($backups)) {
             BJLG_Debug::log("Nettoyage : Aucun fichier de sauvegarde à vérifier.");
             return 0;
@@ -309,6 +315,7 @@ class BJLG_Cleanup {
         foreach ($unique_files_to_delete as $filepath) {
             if (file_exists($filepath)) {
                 if (unlink($filepath)) {
+                    BJLG_Backup_Integrity::delete_sidecar($filepath);
                     $deleted_count++;
                     BJLG_Debug::log("Fichier supprimé : " . basename($filepath));
                 } else {
@@ -734,6 +741,9 @@ class BJLG_Cleanup {
         ];
 
         $backups = glob(bjlg_get_backup_directory() . '*.zip*');
+        if (!empty($backups)) {
+            $backups = BJLG_Backup_Integrity::filter_archive_paths($backups);
+        }
 
         if (!empty($backups)) {
             $sizes = [];

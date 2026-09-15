@@ -104,6 +104,8 @@ class BJLG_Admin_Fallbacks {
             return;
         }
 
+        BJLG_Backup::dispatch_backup_task($task_id);
+
         $this->redirect_with_notice('success', __('Sauvegarde lancée. Vous recevrez une notification lorsqu\'elle sera terminée.', 'backup-jlg'));
     }
 
@@ -251,6 +253,8 @@ class BJLG_Admin_Fallbacks {
             $this->redirect_with_notice('error', $message);
             return;
         }
+
+        BJLG_Backup::dispatch_restore_task($task_id);
 
         $this->redirect_with_notice('success', __('Restauration planifiée. Le suivi s\'affichera dans l\'interface.', 'backup-jlg'));
     }

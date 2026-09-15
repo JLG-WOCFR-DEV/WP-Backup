@@ -65,16 +65,18 @@ class BJLG_Admin {
 
     /**
      * Retourne le message à afficher quand le SDK Google Drive est manquant.
+     *
+     * @param bool $verbose Message Composer complet (onglet Intégrations).
      */
-    private function get_google_drive_unavailable_notice() {
-        if ($this->google_drive_notice === null) {
-            $this->google_drive_notice = esc_html__(
+    private function get_google_drive_unavailable_notice($verbose = false) {
+        if ($verbose) {
+            return esc_html__(
                 "Le SDK Google n'est pas disponible. Installez les dépendances via Composer pour activer cette destination.",
                 'backup-jlg'
             );
         }
 
-        return $this->google_drive_notice;
+        return esc_html__('Google Drive indisponible (SDK non packagé).', 'backup-jlg');
     }
 
     /**
@@ -3938,7 +3940,7 @@ class BJLG_Admin {
         ];
 
         if (class_exists(BJLG_Scheduler::class)) {
-            $scheduler = new BJLG_Scheduler();
+            $scheduler = BJLG_Scheduler::instance();
             if (method_exists($scheduler, 'get_sandbox_schedule_settings')) {
                 $sandbox_settings = $scheduler->get_sandbox_schedule_settings();
             }
@@ -5084,6 +5086,8 @@ class BJLG_Admin {
                 'backup_complete' => '',
                 'backup_failed' => '',
                 'cleanup_complete' => '',
+                'storage_capacity' => '',
+                'sla_validation' => '',
                 'sla_alert' => '',
             ],
             'secret' => '',
@@ -6285,7 +6289,7 @@ class BJLG_Admin {
                         <th scope="row">Sauvegarde terminée</th>
                         <td>
                             <div class="bjlg-field-control">
-                                <input type="url" name="webhook_backup_complete" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['backup_complete']); ?>" placeholder="https://exemple.com/webhooks/backup-success">
+                                <input type="url" name="webhook_backup_complete" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['backup_complete'] ?? ''); ?>" placeholder="https://exemple.com/webhooks/backup-success">
                             </div>
                         </td>
                     </tr>
@@ -6293,7 +6297,7 @@ class BJLG_Admin {
                         <th scope="row">Sauvegarde échouée</th>
                         <td>
                             <div class="bjlg-field-control">
-                                <input type="url" name="webhook_backup_failed" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['backup_failed']); ?>" placeholder="https://exemple.com/webhooks/backup-failed">
+                                <input type="url" name="webhook_backup_failed" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['backup_failed'] ?? ''); ?>" placeholder="https://exemple.com/webhooks/backup-failed">
                             </div>
                         </td>
                     </tr>
@@ -6301,7 +6305,7 @@ class BJLG_Admin {
                         <th scope="row">Nettoyage terminé</th>
                         <td>
                             <div class="bjlg-field-control">
-                                <input type="url" name="webhook_cleanup_complete" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['cleanup_complete']); ?>" placeholder="https://exemple.com/webhooks/cleanup">
+                                <input type="url" name="webhook_cleanup_complete" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['cleanup_complete'] ?? ''); ?>" placeholder="https://exemple.com/webhooks/cleanup">
                             </div>
                         </td>
                     </tr>
@@ -6309,7 +6313,7 @@ class BJLG_Admin {
                         <th scope="row">Capacité de stockage</th>
                         <td>
                             <div class="bjlg-field-control">
-                                <input type="url" name="webhook_storage_capacity" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['storage_capacity']); ?>" placeholder="https://exemple.com/webhooks/storage-capacity">
+                                <input type="url" name="webhook_storage_capacity" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['storage_capacity'] ?? ''); ?>" placeholder="https://exemple.com/webhooks/storage-capacity">
                             </div>
                         </td>
                     </tr>
@@ -6317,7 +6321,7 @@ class BJLG_Admin {
                         <th scope="row">Validation SLA</th>
                         <td>
                             <div class="bjlg-field-control">
-                                <input type="url" name="webhook_sla_validation" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['sla_validation']); ?>" placeholder="https://exemple.com/webhooks/sla-validation">
+                                <input type="url" name="webhook_sla_validation" class="regular-text" value="<?php echo esc_attr($webhook_settings['urls']['sla_validation'] ?? ''); ?>" placeholder="https://exemple.com/webhooks/sla-validation">
                             </div>
                         </td>
                     </tr>

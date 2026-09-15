@@ -12,6 +12,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+if (!class_exists(__NAMESPACE__ . '\\BJLG_Backup_Integrity', false)) {
+    require_once __DIR__ . '/class-bjlg-backup-integrity.php';
+}
+
 class BJLG_Encryption {
     
     const CIPHER_METHOD = 'aes-256-cbc';
@@ -1348,6 +1352,7 @@ class BJLG_Encryption {
      */
     public function get_encryption_stats() {
         $backups = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
+        $backups = BJLG_Backup_Integrity::filter_archive_paths($backups);
         $encrypted = 0;
         $unencrypted = 0;
         $total_encrypted_size = 0;

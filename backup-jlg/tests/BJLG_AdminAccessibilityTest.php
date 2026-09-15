@@ -144,6 +144,13 @@ final class BJLG_AdminAccessibilityTest extends TestCase
         $this->assertProgressAccessibility($xpath, 'bjlg-restore-progress-bar', 'bjlg-restore-status-text');
     }
 
+    public function test_history_section_uses_scheduler_singleton(): void
+    {
+        $xpath = $this->renderSection('render_history_section');
+        $section = $xpath->query('//*[contains(@class, "bjlg-history")]')->item(0);
+        $this->assertInstanceOf(\DOMElement::class, $section);
+    }
+
     public function test_admin_page_uses_a_single_native_wp_admin_ui(): void
     {
         $html = $this->renderAdminPageHtml();

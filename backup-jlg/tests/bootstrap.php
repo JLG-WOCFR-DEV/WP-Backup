@@ -511,6 +511,20 @@ if (!defined('DAY_IN_SECONDS')) {
     define('DAY_IN_SECONDS', 86400);
 }
 
+if (!defined('WEEK_IN_SECONDS')) {
+    define('WEEK_IN_SECONDS', 604800);
+}
+
+if (!defined('MONTH_IN_SECONDS')) {
+    define('MONTH_IN_SECONDS', 2592000);
+}
+
+if (!function_exists('absint')) {
+    function absint($maybeint) {
+        return abs((int) $maybeint);
+    }
+}
+
 if (!defined('ARRAY_A')) {
     define('ARRAY_A', 'ARRAY_A');
 }
@@ -972,13 +986,18 @@ if (!class_exists('BJLG_Test_JSON_Response')) {
         /** @var int|null */
         public $status_code;
 
+        /** @var bool|null */
+        public $success;
+
         /**
          * @param mixed     $data
          * @param int|null  $status_code
+         * @param bool|null $success
          */
-        public function __construct($data = null, $status_code = null) {
+        public function __construct($data = null, $status_code = null, $success = null) {
             $this->data = $data;
             $this->status_code = $status_code;
+            $this->success = $success;
             parent::__construct('JSON response');
         }
     }
@@ -1048,6 +1067,11 @@ if (!function_exists('add_filter')) {
 
 if (!function_exists('do_action')) {
     function do_action($hook, ...$args) {
+        if (!isset($GLOBALS['wp_actions']) || !is_array($GLOBALS['wp_actions'])) {
+            $GLOBALS['wp_actions'] = [];
+        }
+        $GLOBALS['wp_actions'][$hook] = (int) ($GLOBALS['wp_actions'][$hook] ?? 0) + 1;
+
         if (empty($GLOBALS['bjlg_test_hooks']['actions'][$hook])) {
             return;
         }
@@ -1061,6 +1085,16 @@ if (!function_exists('do_action')) {
                 call_user_func_array($definition['callback'], $callback_args);
             }
         }
+    }
+}
+
+if (!function_exists('did_action')) {
+    function did_action($hook_name) {
+        if (!isset($GLOBALS['wp_actions']) || !is_array($GLOBALS['wp_actions'])) {
+            return 0;
+        }
+
+        return (int) ($GLOBALS['wp_actions'][$hook_name] ?? 0);
     }
 }
 
@@ -1083,6 +1117,44 @@ if (!function_exists('apply_filters')) {
         }
 
         return $all_args[0];
+    }
+}
+
+if (!function_exists('remove_filter')) {
+    function remove_filter($hook, $callback, $priority = 10) {
+        if (empty($GLOBALS['bjlg_test_hooks']['filters'][$hook][$priority])) {
+            return false;
+        }
+
+        $removed = false;
+
+        foreach ($GLOBALS['bjlg_test_hooks']['filters'][$hook][$priority] as $index => $definition) {
+            if ($definition['callback'] === $callback) {
+                unset($GLOBALS['bjlg_test_hooks']['filters'][$hook][$priority][$index]);
+                $removed = true;
+            }
+        }
+
+        return $removed;
+    }
+}
+
+if (!function_exists('remove_action')) {
+    function remove_action($hook, $callback, $priority = 10) {
+        if (empty($GLOBALS['bjlg_test_hooks']['actions'][$hook][$priority])) {
+            return false;
+        }
+
+        $removed = false;
+
+        foreach ($GLOBALS['bjlg_test_hooks']['actions'][$hook][$priority] as $index => $definition) {
+            if ($definition['callback'] === $callback) {
+                unset($GLOBALS['bjlg_test_hooks']['actions'][$hook][$priority][$index]);
+                $removed = true;
+            }
+        }
+
+        return $removed;
     }
 }
 
@@ -1385,6 +1457,18 @@ if (!function_exists('date_i18n')) {
     }
 }
 
+if (!function_exists('get_date_from_gmt')) {
+    function get_date_from_gmt($string, $format = 'Y-m-d H:i:s') {
+        $timestamp = strtotime((string) $string . ' UTC');
+
+        if ($timestamp === false) {
+            return '';
+        }
+
+        return gmdate((string) $format, $timestamp);
+    }
+}
+
 if (!function_exists('network_admin_url')) {
     function network_admin_url($path = '', $scheme = 'admin') {
         return 'https://example.test/wp-admin/network/' . ltrim($path, '/');
@@ -1530,6 +1614,29 @@ if (!function_exists('delete_site_option')) {
 if (!function_exists('get_locale')) {
     function get_locale() {
         return 'fr_FR';
+    }
+}
+
+if (!function_exists('wp_timezone')) {
+    function wp_timezone() {
+        if (function_exists('wp_timezone_string')) {
+            $timezone_string = wp_timezone_string();
+            if (is_string($timezone_string) && $timezone_string !== '') {
+                try {
+                    return new DateTimeZone($timezone_string);
+                } catch (Exception $exception) {
+                    // Fall through to UTC.
+                }
+            }
+        }
+
+        return new DateTimeZone('UTC');
+    }
+}
+
+if (!function_exists('wp_timezone_string')) {
+    function wp_timezone_string() {
+        return 'UTC';
     }
 }
 
@@ -2175,7 +2282,7 @@ if (!function_exists('wp_send_json_error')) {
             'status_code' => $status_code,
         ];
 
-        throw new BJLG_Test_JSON_Response($data, $status_code);
+        throw new BJLG_Test_JSON_Response($data, $status_code, false);
     }
 }
 
@@ -2186,7 +2293,7 @@ if (!function_exists('wp_send_json_success')) {
             'status_code' => $status_code,
         ];
 
-        throw new BJLG_Test_JSON_Response($data, $status_code);
+        throw new BJLG_Test_JSON_Response($data, $status_code, true);
     }
 }
 
@@ -2358,29 +2465,94 @@ if (!function_exists('wp_schedule_event')) {
     }
 }
 
+if (!function_exists('wp_get_schedules')) {
+    function wp_get_schedules() {
+        $schedules = [
+            'hourly' => ['interval' => HOUR_IN_SECONDS, 'display' => 'Once Hourly'],
+            'twicedaily' => ['interval' => 12 * HOUR_IN_SECONDS, 'display' => 'Twice Daily'],
+            'daily' => ['interval' => DAY_IN_SECONDS, 'display' => 'Once Daily'],
+            'weekly' => ['interval' => 7 * DAY_IN_SECONDS, 'display' => 'Once Weekly'],
+        ];
+
+        $extra = apply_filters('cron_schedules', []);
+        if (!is_array($extra)) {
+            $extra = [];
+        }
+
+        return array_merge($extra, $schedules);
+    }
+}
+
+if (!function_exists('wp_get_schedule')) {
+    function wp_get_schedule($hook, $args = []) {
+        $has_args = func_num_args() > 1;
+
+        if (!empty($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook])) {
+            foreach ($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook] as $event) {
+                if ($has_args && ($event['args'] ?? []) !== (array) $args) {
+                    continue;
+                }
+
+                return $event['recurrence'] ?? false;
+            }
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('spawn_cron')) {
+    function spawn_cron($gmt_time = 0) {
+        if (!isset($GLOBALS['bjlg_test_spawn_cron_calls'])) {
+            $GLOBALS['bjlg_test_spawn_cron_calls'] = [];
+        }
+
+        $GLOBALS['bjlg_test_spawn_cron_calls'][] = [
+            'gmt_time' => $gmt_time,
+            'at' => time(),
+        ];
+
+        return true;
+    }
+}
+
 if (!function_exists('wp_next_scheduled')) {
     function wp_next_scheduled($hook, $args = []) {
         $has_args = func_num_args() > 1;
+        $timestamps = [];
 
-        if (empty($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook])) {
-            return false;
-        }
-
-        if ($has_args) {
-            $key = bjlg_build_cron_event_key($hook, $args);
-            if (isset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key])) {
-                return $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key]['timestamp'];
+        if (!empty($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook])) {
+            if ($has_args) {
+                $key = bjlg_build_cron_event_key($hook, $args);
+                if (isset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key])) {
+                    $timestamps[] = (int) $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key]['timestamp'];
+                }
+            } else {
+                foreach ($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook] as $event) {
+                    $timestamps[] = (int) $event['timestamp'];
+                }
             }
-
-            return false;
         }
 
-        $timestamps = array_map(
-            static function ($event) {
-                return $event['timestamp'];
-            },
-            $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook]
-        );
+        if (!empty($GLOBALS['bjlg_test_scheduled_events']['single'])) {
+            foreach ($GLOBALS['bjlg_test_scheduled_events']['single'] as $event) {
+                if (($event['hook'] ?? '') !== $hook) {
+                    continue;
+                }
+
+                $event_args = isset($event['args']) ? (array) $event['args'] : [];
+
+                if ($has_args) {
+                    if ($event_args != (array) $args) {
+                        continue;
+                    }
+                } elseif (!empty($event_args)) {
+                    continue;
+                }
+
+                $timestamps[] = (int) $event['timestamp'];
+            }
+        }
 
         if (empty($timestamps)) {
             return false;
@@ -2494,6 +2666,16 @@ if (!function_exists('add_query_arg')) {
         $queryStr = $parsed_url['query'] ? '?' . $parsed_url['query'] : '';
 
         return $scheme . '://' . $host . $port . $path . $queryStr;
+    }
+}
+
+if (!function_exists('remove_query_arg')) {
+    function remove_query_arg($key, $query = false) {
+        if ($query === false || $query === '') {
+            $query = 'https://example.com/';
+        }
+
+        return add_query_arg($key, false, $query);
     }
 }
 

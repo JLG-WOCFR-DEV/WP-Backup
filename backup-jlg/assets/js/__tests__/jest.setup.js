@@ -26,6 +26,8 @@ if (typeof window !== 'undefined') {
   window.jQuery = patchedJQuery;
 }
 
+global.__BJLG_JQUERY = jq;
+
 global.wp = {
   i18n: {
     __: (text) => text,

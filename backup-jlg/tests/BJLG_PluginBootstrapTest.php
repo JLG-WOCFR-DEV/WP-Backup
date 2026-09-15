@@ -57,6 +57,15 @@ final class BJLG_PluginBootstrapTest extends TestCase
         }
     }
 
+    public function test_event_triggers_class_is_loaded_when_bootstrapped(): void
+    {
+        do_action('plugins_loaded');
+
+        $this->assertTrue(class_exists(\BJLG\BJLG_Event_Triggers::class));
+        $this->assertTrue(method_exists(\BJLG\BJLG_Scheduler::class, 'get_default_sandbox_schedule_settings'));
+        $this->assertTrue(method_exists(\BJLG\BJLG_Scheduler::class, 'maybe_schedule_sandbox_validation'));
+    }
+
     public function test_autoloader_is_required_when_present(): void
     {
         $vendorDir = dirname(__DIR__) . '/vendor-bjlg';

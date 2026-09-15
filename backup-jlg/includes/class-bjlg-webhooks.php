@@ -341,6 +341,8 @@ class BJLG_Webhooks {
             exit;
         }
 
+        BJLG_Backup::dispatch_backup_task($task_id);
+
         // Renvoyer une réponse de succès
         $response_data = [
             'message' => 'Backup job scheduled successfully.',

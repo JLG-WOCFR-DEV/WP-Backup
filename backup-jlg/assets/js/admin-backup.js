@@ -1,3 +1,92 @@
+(function (root) {
+    'use strict';
+
+    function toNumber(value) {
+        const parsed = Number.parseFloat(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function interpretTaskProgress(data, options) {
+        const settings = options || {};
+        const progress = data && data.progress != null ? toNumber(data.progress) : 0;
+        const status = data && typeof data.status === 'string' ? data.status : '';
+        const statusText = (data && data.status_text) ? String(data.status_text) : '';
+
+        if (status === 'error') {
+            return {
+                done: true,
+                outcome: 'error',
+                message: statusText || settings.errorFallback || 'La tâche a échoué.',
+                progress: Math.max(progress, 100)
+            };
+        }
+
+        if (status === 'complete') {
+            return {
+                done: true,
+                outcome: 'success',
+                message: statusText || settings.successFallback || 'Terminé.',
+                progress: 100
+            };
+        }
+
+        if (status === 'warning' && progress >= 100) {
+            return {
+                done: true,
+                outcome: 'warning',
+                message: statusText || settings.warningFallback || 'Terminé avec des avertissements.',
+                progress: 100
+            };
+        }
+
+        if (progress >= 100 && status !== '' && status !== 'running' && status !== 'pending') {
+            return {
+                done: true,
+                outcome: 'error',
+                message: statusText || 'La tâche s’est arrêtée sans confirmation de succès.',
+                progress: 100
+            };
+        }
+
+        return {
+            done: false,
+            outcome: 'running',
+            message: statusText,
+            progress: progress
+        };
+    }
+
+    function getPollingStopReason(result, consecutiveFailures, elapsedMs, options) {
+        const settings = options || {};
+        const maxFailures = settings.maxFailures != null ? settings.maxFailures : 5;
+        const timeoutMs = settings.timeoutMs != null ? settings.timeoutMs : 45 * 60 * 1000;
+
+        if (result && result.done) {
+            return result.outcome || 'done';
+        }
+
+        if (consecutiveFailures >= maxFailures) {
+            return 'transport';
+        }
+
+        if (elapsedMs >= timeoutMs) {
+            return 'timeout';
+        }
+
+        return null;
+    }
+
+    function shouldStopPolling(result, consecutiveFailures, elapsedMs, options) {
+        return getPollingStopReason(result, consecutiveFailures, elapsedMs, options) !== null;
+    }
+
+    root.bjlgTaskProgress = {
+        interpret: interpretTaskProgress,
+        getPollingStopReason: getPollingStopReason,
+        shouldStopPolling: shouldStopPolling
+    };
+})(typeof window !== 'undefined' ? window : globalThis);
+
 jQuery(function($) {
     'use strict';
 
@@ -103,13 +192,27 @@ jQuery(function($) {
         }
     }
 
-    function showError(message) {
-        if ($feedback.length) {
-            $feedback
-                .attr('class', 'notice notice-error')
-                .text(message)
-                .show();
+    function showNotice(type, message) {
+        if (!$feedback.length) {
+            return;
         }
+
+        const classMap = {
+            success: 'notice notice-success',
+            warning: 'notice notice-warning',
+            info: 'notice notice-info',
+            error: 'notice notice-error'
+        };
+        const className = classMap[type] || classMap.error;
+
+        $feedback
+            .attr('class', className)
+            .text(message)
+            .show();
+    }
+
+    function showError(message) {
+        showNotice('error', message);
     }
 
     function setControlsDisabled(disabled) {
@@ -307,6 +410,7 @@ jQuery(function($) {
 
             $('<button/>', {
                 class: 'button button-primary bjlg-restore-button',
+                type: 'button',
                 text: 'Restaurer',
                 'data-filename': filename
             }).appendTo($actionsWrapper);
@@ -320,6 +424,7 @@ jQuery(function($) {
 
             $('<button/>', {
                 class: 'button button-link-delete bjlg-delete-button',
+                type: 'button',
                 text: 'Supprimer',
                 'data-filename': filename
             }).appendTo($actionsWrapper);
@@ -493,6 +598,303 @@ jQuery(function($) {
         }
         state.page = Math.max(1, target);
         requestBackups();
+    });
+
+    function getListActionFilename($button) {
+        const raw = $button.attr('data-filename');
+        return typeof raw === 'string' ? raw.trim() : '';
+    }
+
+    function getAjaxErrorMessage(jqXHR, fallback) {
+        if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.data && jqXHR.responseJSON.data.message) {
+            return jqXHR.responseJSON.data.message;
+        }
+        if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.message) {
+            return jqXHR.responseJSON.message;
+        }
+        return fallback;
+    }
+
+    function startBrowserDownload(url, filename) {
+        const link = document.createElement('a');
+        link.className = 'bjlg-generated-download-link';
+        link.href = url;
+        if (filename) {
+            link.setAttribute('download', filename);
+        }
+        link.rel = 'noopener';
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    function prepareBackupDownload(filename, $button) {
+        if (!filename) {
+            showError('Nom de fichier manquant.');
+            return;
+        }
+
+        if (!restSettings.ajax_url || !restSettings.nonce) {
+            showError('Configuration AJAX indisponible.');
+            return;
+        }
+
+        $button.prop('disabled', true);
+
+        $.ajax({
+            url: restSettings.ajax_url,
+            type: 'POST',
+            dataType: 'json',
+            data: {
+                action: 'bjlg_prepare_download',
+                nonce: restSettings.nonce,
+                filename: filename
+            }
+        })
+        .done(function(response) {
+            const data = response && response.data ? response.data : {};
+            if (response && response.success && data.download_url) {
+                startBrowserDownload(data.download_url, filename);
+                showNotice('success', 'Téléchargement lancé.');
+                return;
+            }
+
+            showError((data && data.message) ? data.message : 'Impossible de préparer le téléchargement.');
+        })
+        .fail(function(jqXHR) {
+            showError(getAjaxErrorMessage(jqXHR, 'Erreur de communication lors du téléchargement.'));
+        })
+        .always(function() {
+            $button.prop('disabled', false);
+        });
+    }
+
+    function deleteBackupFromList(filename, $button) {
+        if (!filename) {
+            showError('Nom de fichier manquant.');
+            return;
+        }
+
+        if (!restSettings.ajax_url || !restSettings.nonce) {
+            showError('Configuration AJAX indisponible.');
+            return;
+        }
+
+        $button.prop('disabled', true);
+
+        $.ajax({
+            url: restSettings.ajax_url,
+            type: 'POST',
+            dataType: 'json',
+            data: {
+                action: 'bjlg_delete_backup',
+                nonce: restSettings.nonce,
+                filename: filename
+            }
+        })
+        .done(function(response) {
+            const data = response && response.data ? response.data : {};
+            if (response && response.success) {
+                showNotice('success', (data && data.message) ? data.message : 'Fichier supprimé avec succès.');
+                requestBackups();
+                return;
+            }
+
+            showError((data && data.message) ? data.message : 'Impossible de supprimer la sauvegarde.');
+        })
+        .fail(function(jqXHR) {
+            showError(getAjaxErrorMessage(jqXHR, 'Erreur de communication lors de la suppression.'));
+        })
+        .always(function() {
+            $button.prop('disabled', false);
+        });
+    }
+
+    function updateRestoreProgressFromList(progressValue, message) {
+        const $statusWrapper = $('#bjlg-restore-status');
+        const $statusText = $('#bjlg-restore-status-text');
+        const $progressBar = $('#bjlg-restore-progress-bar');
+
+        if ($statusWrapper.length) {
+            $statusWrapper.show();
+        }
+        if ($statusText.length && message) {
+            $statusText.text(message);
+        }
+        if ($progressBar.length && Number.isFinite(progressValue)) {
+            const clamped = Math.max(0, Math.min(100, progressValue));
+            const percentText = String(clamped) + '%';
+            $progressBar
+                .css('width', percentText)
+                .text(percentText)
+                .attr('aria-valuenow', String(clamped))
+                .attr('aria-valuetext', percentText);
+        }
+    }
+
+    function pollRestoreFromList(taskId, $button) {
+        const startedAt = Date.now();
+        let consecutiveFailures = 0;
+        const interval = setInterval(function() {
+            $.ajax({
+                url: restSettings.ajax_url,
+                type: 'POST',
+                dataType: 'json',
+                data: {
+                    action: 'bjlg_check_restore_progress',
+                    nonce: restSettings.nonce,
+                    task_id: taskId
+                }
+            })
+            .done(function(response) {
+                if (response && response.success && response.data) {
+                    consecutiveFailures = 0;
+                    const result = window.bjlgTaskProgress
+                        ? window.bjlgTaskProgress.interpret(response.data, {
+                            errorFallback: 'La restauration a échoué.',
+                            successFallback: 'Restauration terminée.',
+                            warningFallback: 'Restauration terminée avec des avertissements.'
+                        })
+                        : { done: false, outcome: 'running', message: '', progress: 0 };
+
+                    updateRestoreProgressFromList(result.progress, result.message);
+
+                    const stopReason = window.bjlgTaskProgress
+                        ? window.bjlgTaskProgress.getPollingStopReason(result, consecutiveFailures, Date.now() - startedAt)
+                        : null;
+
+                    if (!stopReason) {
+                        return;
+                    }
+
+                    clearInterval(interval);
+                    $button.prop('disabled', false);
+
+                    if (stopReason === 'success' || stopReason === 'warning') {
+                        updateRestoreProgressFromList(100, result.message);
+                        showNotice(stopReason === 'warning' ? 'warning' : 'success', result.message || 'Restauration terminée.');
+                        return;
+                    }
+
+                    showError(result.message || 'La restauration a échoué.');
+                    return;
+                }
+
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress && window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
+                    clearInterval(interval);
+                    $button.prop('disabled', false);
+                    showError('Tâche de restauration introuvable.');
+                }
+            })
+            .fail(function() {
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress && window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
+                    clearInterval(interval);
+                    $button.prop('disabled', false);
+                    showError('Erreur de communication lors du suivi de la restauration.');
+                }
+            });
+        }, 3000);
+    }
+
+    function restoreBackupFromList(filename, $button) {
+        if (!filename) {
+            showError('Nom de fichier manquant.');
+            return;
+        }
+
+        if (!restSettings.ajax_url || !restSettings.nonce) {
+            showError('Configuration AJAX indisponible.');
+            return;
+        }
+
+        if (window.bjlgAdmin && typeof window.bjlgAdmin.setActiveSection === 'function') {
+            window.bjlgAdmin.setActiveSection('restore', true);
+        }
+
+        const $restoreForm = $('#bjlg-restore-form');
+        let $hidden = $restoreForm.find('input[name="restore_filename"]');
+        if ($restoreForm.length && !$hidden.length) {
+            $hidden = $('<input>', { type: 'hidden', name: 'restore_filename' }).appendTo($restoreForm);
+        }
+        if ($hidden.length) {
+            $hidden.val(filename);
+        }
+
+        const createRestorePoint = $restoreForm.find('input[name="create_backup_before_restore"]').is(':checked');
+        const password = ($('#bjlg-restore-password').val() || '').toString();
+        const sandboxEnabled = $restoreForm.find('input[name="restore_to_sandbox"]').is(':checked');
+        const sandboxPath = ($restoreForm.find('input[name="sandbox_path"]').val() || '').toString().trim();
+
+        $button.prop('disabled', true);
+        updateRestoreProgressFromList(0, 'Initialisation de la restauration...');
+
+        const requestData = {
+            action: 'bjlg_run_restore',
+            nonce: restSettings.nonce,
+            filename: filename,
+            create_backup_before_restore: createRestorePoint ? 1 : 0,
+            password: password,
+            restore_environment: sandboxEnabled ? 'sandbox' : 'production'
+        };
+
+        if (sandboxEnabled) {
+            requestData.sandbox_path = sandboxPath;
+        }
+
+        $.ajax({
+            url: restSettings.ajax_url,
+            type: 'POST',
+            dataType: 'json',
+            data: requestData
+        })
+        .done(function(response) {
+            const data = response && response.data ? response.data : {};
+            if (response && response.success && data.task_id) {
+                pollRestoreFromList(data.task_id, $button);
+                return;
+            }
+
+            $button.prop('disabled', false);
+            showError((data && data.message) ? data.message : 'Impossible de démarrer la restauration.');
+        })
+        .fail(function(jqXHR) {
+            $button.prop('disabled', false);
+            showError(getAjaxErrorMessage(jqXHR, 'Erreur de communication lors de la restauration.'));
+        });
+    }
+
+    $section.on('click', '.bjlg-download-button', function(e) {
+        e.preventDefault();
+        prepareBackupDownload(getListActionFilename($(this)), $(this));
+    });
+
+    $section.on('click', '.bjlg-delete-button', function(e) {
+        e.preventDefault();
+        const filename = getListActionFilename($(this));
+        if (!filename) {
+            showError('Nom de fichier manquant.');
+            return;
+        }
+        if (!window.confirm('Supprimer définitivement cette sauvegarde ?')) {
+            return;
+        }
+        deleteBackupFromList(filename, $(this));
+    });
+
+    $section.on('click', '.bjlg-restore-button', function(e) {
+        e.preventDefault();
+        const filename = getListActionFilename($(this));
+        if (!filename) {
+            showError('Nom de fichier manquant.');
+            return;
+        }
+        if (!window.confirm('Restaurer cette sauvegarde maintenant ? Le site va être modifié.')) {
+            return;
+        }
+        restoreBackupFromList(filename, $(this));
     });
 
     requestBackups();
@@ -1214,6 +1616,9 @@ $('#bjlg-backup-creation-form').on('submit.bjlgBackupAjax', function(e) {
                 debugReport += "\n\n--- 2. SUIVI DE LA PROGRESSION ---";
                 $debugOutput.text(debugReport);
             }
+            if (response.data.disk_space && response.data.disk_space.warning) {
+                setBackupStatusText(response.data.disk_space.warning);
+            }
             pollBackupProgress(response.data.task_id);
         } else {
             const errorMessage = response && response.data && response.data.message
@@ -1235,6 +1640,8 @@ $('#bjlg-backup-creation-form').on('submit.bjlgBackupAjax', function(e) {
     });
 
     function pollBackupProgress(taskId) {
+        const startedAt = Date.now();
+        let consecutiveFailures = 0;
         const interval = setInterval(function() {
             $.ajax({
                 url: bjlg_ajax.ajax_url, type: 'POST',
@@ -1242,28 +1649,53 @@ $('#bjlg-backup-creation-form').on('submit.bjlgBackupAjax', function(e) {
             })
             .done(function(response) {
                 if (response.success && response.data) {
+                    consecutiveFailures = 0;
                     const data = response.data;
-                    setBackupStatusText(data.status_text || 'Progression...');
+                    const result = window.bjlgTaskProgress.interpret(data, {
+                        errorFallback: 'La sauvegarde a échoué.',
+                        successFallback: 'Sauvegarde terminée.',
+                        warningFallback: 'Sauvegarde terminée avec des avertissements.'
+                    });
+
+                    setBackupStatusText(result.message || 'Progression...');
                     setBackupBusyState(true);
+                    updateBackupProgress(result.progress);
 
-                    const progressValue = Number.parseFloat(data.progress);
-                    updateBackupProgress(progressValue);
-
-                    if (Number.isFinite(progressValue) && progressValue >= 100) {
+                    const stopReason = window.bjlgTaskProgress.getPollingStopReason(
+                        result,
+                        consecutiveFailures,
+                        Date.now() - startedAt
+                    );
+                    if (stopReason) {
                         clearInterval(interval);
-                        if (data.status === 'error') {
-                            setBackupBusyState(false);
-                            setBackupStatusText('❌ Erreur : ' + (data.status_text || 'La sauvegarde a échoué.'));
-                            $button.prop('disabled', false);
-                        } else {
-                            setBackupBusyState(false);
-                            updateBackupProgress(100);
-                            setBackupStatusText('✔️ Terminé ! La page va se recharger.');
-                            setTimeout(() => window.location.reload(), 2000);
+                        setBackupBusyState(false);
+                        $button.prop('disabled', false);
+
+                        if (stopReason === 'timeout') {
+                            setBackupStatusText('❌ Le suivi a expiré alors que la sauvegarde est encore en cours. Vérifiez l’historique avant de recharger.');
+                            return;
                         }
-                        return;
+
+                        if (stopReason === 'error' || stopReason === 'transport') {
+                            setBackupStatusText('❌ Erreur : ' + (result.message || 'La sauvegarde a échoué.'));
+                            return;
+                        }
+
+                        if (stopReason === 'warning') {
+                            updateBackupProgress(100);
+                            setBackupStatusText('⚠️ ' + result.message);
+                            return;
+                        }
+
+                        updateBackupProgress(100);
+                        setBackupStatusText('✔️ ' + result.message + ' La page va se recharger.');
+                        setTimeout(() => window.location.reload(), 2000);
                     }
-                } else {
+                    return;
+                }
+
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
                     clearInterval(interval);
                     setBackupBusyState(false);
                     setBackupStatusText('❌ Erreur : La tâche de sauvegarde a été perdue.');
@@ -1271,10 +1703,13 @@ $('#bjlg-backup-creation-form').on('submit.bjlgBackupAjax', function(e) {
                 }
             })
             .fail(function() {
-                 clearInterval(interval);
-                 setBackupBusyState(false);
-                 setBackupStatusText('❌ Erreur de communication lors du suivi.');
-                 $button.prop('disabled', false);
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
+                    clearInterval(interval);
+                    setBackupBusyState(false);
+                    setBackupStatusText('❌ Erreur de communication lors du suivi.');
+                    $button.prop('disabled', false);
+                }
             });
         }, 3000);
     }
@@ -1814,6 +2249,8 @@ $('#bjlg-restore-form').on('submit.bjlgRestoreAjax', function(e) {
             nonce: '***',
             task_id: taskId
         });
+        const startedAt = Date.now();
+        let consecutiveFailures = 0;
         const interval = setInterval(function() {
             $.ajax({
                 url: bjlg_ajax.ajax_url,
@@ -1827,32 +2264,59 @@ $('#bjlg-restore-form').on('submit.bjlgRestoreAjax', function(e) {
             .done(function(response) {
                 appendRestoreDebug('Mise à jour progression', response);
                 if (response.success && response.data) {
+                    consecutiveFailures = 0;
                     const data = response.data;
+                    const result = window.bjlgTaskProgress.interpret(data, {
+                        errorFallback: 'La restauration a échoué.',
+                        successFallback: 'Restauration terminée.',
+                        warningFallback: 'Restauration terminée avec des avertissements.'
+                    });
 
-                    if (data.status_text) {
-                        setRestoreStatusText(data.status_text);
+                    if (result.message) {
+                        setRestoreStatusText(result.message);
                     }
 
                     setRestoreBusyState(true);
+                    updateRestoreProgress(result.progress);
 
-                    const progressValue = Number.parseFloat(data.progress);
-                    updateRestoreProgress(progressValue);
-
-                    if (data.status === 'error') {
+                    const stopReason = window.bjlgTaskProgress.getPollingStopReason(
+                        result,
+                        consecutiveFailures,
+                        Date.now() - startedAt
+                    );
+                    if (stopReason) {
                         clearInterval(interval);
-                        const message = data.status_text || 'La restauration a échoué.';
-                        displayRestoreErrors(message, getValidationErrors(data));
                         setRestoreBusyState(false);
-                        setRestoreStatusText('❌ ' + message);
                         $button.prop('disabled', false);
-                    } else if (data.status === 'complete' || (Number.isFinite(progressValue) && progressValue >= 100)) {
-                        clearInterval(interval);
-                        setRestoreBusyState(false);
+
+                        if (stopReason === 'timeout') {
+                            const timeoutMessage = 'Le suivi a expiré alors que la restauration est encore en cours. Ne rechargez pas la page tant que le statut n’est pas confirmé dans l’historique.';
+                            displayRestoreErrors(timeoutMessage, getValidationErrors(data));
+                            setRestoreStatusText('❌ ' + timeoutMessage);
+                            return;
+                        }
+
+                        if (stopReason === 'error' || stopReason === 'transport') {
+                            displayRestoreErrors(result.message, getValidationErrors(data));
+                            setRestoreStatusText('❌ ' + result.message);
+                            return;
+                        }
+
+                        if (stopReason === 'warning') {
+                            updateRestoreProgress(100);
+                            setRestoreStatusText('⚠️ ' + result.message);
+                            return;
+                        }
+
                         updateRestoreProgress(100);
-                        setRestoreStatusText('✔️ Restauration terminée ! La page va se recharger.');
+                        setRestoreStatusText('✔️ ' + result.message + ' La page va se recharger.');
                         setTimeout(() => window.location.reload(), 3000);
                     }
-                } else {
+                    return;
+                }
+
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
                     clearInterval(interval);
                     const message = response && response.data && response.data.message
                         ? response.data.message
@@ -1870,10 +2334,13 @@ $('#bjlg-restore-form').on('submit.bjlgRestoreAjax', function(e) {
                         responseText: xhr ? xhr.responseText : 'Aucune réponse'
                     }
                 );
-                clearInterval(interval);
-                setRestoreBusyState(false);
-                setRestoreStatusText('❌ Erreur de communication lors du suivi de la restauration.');
-                $button.prop('disabled', false);
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
+                    clearInterval(interval);
+                    setRestoreBusyState(false);
+                    setRestoreStatusText('❌ Erreur de communication lors du suivi de la restauration.');
+                    $button.prop('disabled', false);
+                }
             });
         }, 3000);
     }

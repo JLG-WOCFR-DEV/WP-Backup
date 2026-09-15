@@ -22,6 +22,9 @@ if (!defined('ABSPATH')) {
 }
 
 require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
+if (!class_exists(__NAMESPACE__ . '\\BJLG_Backup_Integrity', false)) {
+    require_once __DIR__ . '/class-bjlg-backup-integrity.php';
+}
 require_once __DIR__ . '/class-bjlg-restore.php';
 require_once __DIR__ . '/class-bjlg-settings.php';
 require_once __DIR__ . '/class-bjlg-history.php';
@@ -2555,7 +2558,7 @@ class BJLG_REST_API {
                 ]);
             }
 
-            $regex = new \RegexIterator($iterator, '/(?:\\.zip(?:\\..*)?)$/i');
+            $regex = new \RegexIterator($iterator, '/\\.zip(\\.enc)?$/i');
 
             $component_filters = [];
             if ($type === 'database') {
@@ -2575,6 +2578,12 @@ class BJLG_REST_API {
                 }
 
                 if (!$fileinfo->isFile()) {
+                    continue;
+                }
+
+                if (class_exists(BJLG_Backup_Integrity::class)
+                    && !BJLG_Backup_Integrity::is_backup_archive($fileinfo->getPathname())
+                ) {
                     continue;
                 }
 
@@ -2630,7 +2639,7 @@ class BJLG_REST_API {
 
             $backups = [];
 
-            foreach ($entries as $entry) {
+            foreach ($page_entries as $entry) {
                 $manifest = $entry['manifest'];
 
                 if ($manifest === null && empty($entry['manifest_loaded'])) {
@@ -2754,7 +2763,7 @@ class BJLG_REST_API {
             // Planifier l'exécution
             $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
             if ($scheduled !== false && !is_wp_error($scheduled)) {
-                BJLG_Backup::spawn_scheduled_cron();
+                BJLG_Backup::dispatch_backup_task($task_id);
             }
 
             if ($scheduled === false) {
@@ -3793,7 +3802,7 @@ class BJLG_REST_API {
             // Planifier l'exécution
             $scheduled = wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
             if ($scheduled !== false && !is_wp_error($scheduled)) {
-                BJLG_Backup::spawn_scheduled_cron();
+                BJLG_Backup::dispatch_restore_task($task_id);
             }
 
             if ($scheduled === false || is_wp_error($scheduled)) {
@@ -3921,6 +3930,7 @@ class BJLG_REST_API {
             $compute_status = function () {
                 $backup_directory = bjlg_get_backup_directory();
                 $backup_files = glob($backup_directory . '*.zip*') ?: [];
+                $backup_files = BJLG_Backup_Integrity::filter_archive_paths($backup_files);
                 $disk_space_error = false;
                 $disk_free_space = null;
 
@@ -5471,6 +5481,7 @@ class BJLG_REST_API {
     private function get_total_backup_size() {
         $total = 0;
         $files = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
+        $files = BJLG_Backup_Integrity::filter_archive_paths($files);
 
         foreach ($files as $file) {
             $total += filesize($file);

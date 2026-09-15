@@ -564,6 +564,54 @@ if (!class_exists('BJLG\\BJLG_Debug') && !class_exists('BJLG_Debug')) {
             }
         }
 
+        public function test_get_backups_excludes_checksum_sidecars_and_returns_archives(): void
+        {
+            $api = new BJLG\BJLG_REST_API();
+            $directory = bjlg_get_backup_directory();
+            $zip = $directory . 'bjlg-listed-archive.zip';
+            $sidecar = $zip . '.sha256';
+            $created = [$zip, $sidecar];
+
+            file_put_contents($zip, 'zip-bytes');
+            file_put_contents($sidecar, hash('sha256', 'zip-bytes'));
+            touch($zip, time());
+            touch($sidecar, time());
+
+            $request = new class {
+                public function get_param($key)
+                {
+                    $params = [
+                        'page' => 1,
+                        'per_page' => 10,
+                        'type' => 'all',
+                        'sort' => 'date_desc',
+                    ];
+
+                    return $params[$key] ?? null;
+                }
+            };
+
+            try {
+                $response = $api->get_backups($request);
+
+                $filenames = array_map(static function (array $backup) {
+                    return $backup['filename'] ?? '';
+                }, $response['backups']);
+
+                $this->assertContains('bjlg-listed-archive.zip', $filenames);
+                $this->assertNotContains('bjlg-listed-archive.zip.sha256', $filenames);
+                foreach ($filenames as $filename) {
+                    $this->assertStringEndsNotWith('.sha256', (string) $filename);
+                }
+            } finally {
+                foreach ($created as $file) {
+                    if (file_exists($file)) {
+                        unlink($file);
+                    }
+                }
+            }
+        }
+
         public function test_get_backups_filters_database_and_files_types(): void
         {
             $api = new BJLG\BJLG_REST_API();

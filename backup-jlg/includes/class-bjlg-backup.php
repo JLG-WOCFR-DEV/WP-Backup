@@ -13,6 +13,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+if (!class_exists(__NAMESPACE__ . '\\BJLG_Backup_Integrity', false)) {
+    require_once __DIR__ . '/class-bjlg-backup-integrity.php';
+}
+
 if (function_exists('add_action')) {
     add_action('init', [\BJLG\BJLG_Backup::class, 'bootstrap_realtime_capture'], 3);
 }
@@ -150,6 +154,120 @@ class BJLG_Backup {
     }
 
     /**
+     * WP-Cron désactivé (wp-config) : spawn_cron() est un no-op.
+     */
+    public static function is_wp_cron_disabled(): bool {
+        return defined('DISABLE_WP_CRON') && DISABLE_WP_CRON;
+    }
+
+    /**
+     * Exécuter la tâche dans la requête courante plutôt que d'attendre wp-cron.
+     */
+    public static function should_run_task_inline(): bool {
+        $inline = self::is_wp_cron_disabled();
+
+        if (function_exists('apply_filters')) {
+            return (bool) apply_filters('bjlg_run_backup_inline', $inline);
+        }
+
+        return $inline;
+    }
+
+    /**
+     * Normalise l'identifiant d'une tâche (args nommés WP-Cron ou scalaire).
+     *
+     * @param mixed $task_id
+     */
+    public static function normalize_task_id($task_id): string {
+        if (is_array($task_id)) {
+            if (isset($task_id['task_id'])) {
+                $task_id = $task_id['task_id'];
+            } elseif (isset($task_id[0])) {
+                $task_id = $task_id[0];
+            } else {
+                $task_id = '';
+            }
+        }
+
+        if (!is_scalar($task_id)) {
+            return '';
+        }
+
+        return trim((string) $task_id);
+    }
+
+    /**
+     * Après planification : spawn_cron, ou exécution inline si WP-Cron est inactif.
+     */
+    public static function dispatch_backup_task($task_id): void {
+        $task_id = self::normalize_task_id($task_id);
+        if ($task_id === '') {
+            return;
+        }
+
+        if (self::should_run_task_inline()) {
+            do_action('bjlg_run_backup_task', $task_id);
+            return;
+        }
+
+        self::spawn_scheduled_cron();
+    }
+
+    /**
+     * Après planification d'une restauration : spawn_cron ou exécution inline.
+     */
+    public static function dispatch_restore_task($task_id): void {
+        $task_id = self::normalize_task_id($task_id);
+        if ($task_id === '') {
+            return;
+        }
+
+        if (self::should_run_task_inline()) {
+            do_action('bjlg_run_restore_task', $task_id);
+            return;
+        }
+
+        self::spawn_scheduled_cron();
+    }
+
+    /**
+     * Si WP-Cron est coupé, termine la tâche pending qui tient encore le verrou global.
+     */
+    public static function maybe_complete_pending_inline_lock_owner(): void {
+        if (!self::should_run_task_inline()) {
+            return;
+        }
+
+        $owner = self::get_task_lock_owner();
+        if (!is_string($owner) || $owner === '') {
+            return;
+        }
+
+        $state = get_transient($owner);
+        if (!is_array($state)) {
+            self::release_task_slot($owner);
+            return;
+        }
+
+        $status = (string) ($state['status'] ?? '');
+        if (in_array($status, ['complete', 'error'], true)) {
+            self::release_task_slot($owner);
+            return;
+        }
+
+        if ($status !== 'pending') {
+            return;
+        }
+
+        if (strpos($owner, 'bjlg_restore_') === 0) {
+            self::dispatch_restore_task($owner);
+            return;
+        }
+
+        self::dispatch_backup_task($owner);
+    }
+
+    /**
      * Liste les tables à inclure dans un dump (préfixe du site par défaut).
      *
      * @param object|null $wpdb
@@ -199,6 +317,7 @@ class BJLG_Backup {
      * @return bool
      */
     public static function save_task_state($task_id, array $task_data) {
+        $task_data = self::stamp_task_heartbeat($task_data);
         $saved = set_transient($task_id, $task_data, self::get_task_ttl());
 
         if ($saved) {
@@ -207,6 +326,98 @@ class BJLG_Backup {
         }
 
         return $saved;
+    }
+
+    /**
+     * Enregistre un horodatage d'activité pour détecter l'inactivité, pas la durée totale.
+     *
+     * @param array<string, mixed> $task_data
+     * @return array<string, mixed>
+     */
+    public static function stamp_task_heartbeat(array $task_data) {
+        $task_data['updated_at'] = time();
+
+        return $task_data;
+    }
+
+    /**
+     * Dernière activité connue d'une tâche (heartbeat / progression), pas l'heure de démarrage.
+     *
+     * @param array<string, mixed> $task_data
+     * @return int
+     */
+    public static function get_task_heartbeat_timestamp(array $task_data) {
+        $candidates = [];
+
+        foreach (['updated_at', 'heartbeat_at', 'last_progress_at'] as $key) {
+            if (!isset($task_data[$key]) || !is_numeric($task_data[$key])) {
+                continue;
+            }
+
+            $timestamp = (int) $task_data[$key];
+            if ($timestamp > 0) {
+                $candidates[] = $timestamp;
+            }
+        }
+
+        if ($candidates !== []) {
+            return max($candidates);
+        }
+
+        return isset($task_data['start_time']) ? (int) $task_data['start_time'] : 0;
+    }
+
+    /**
+     * Marque une tâche bloquée comme échouée pour que l'admin ne poll pas indéfiniment.
+     *
+     * @param string               $task_id
+     * @param array<string, mixed> $task_data
+     * @param string               $label
+     * @return array<string, mixed>
+     */
+    public static function mark_stale_task_if_needed($task_id, array $task_data, $label = 'tâche') {
+        $status = isset($task_data['status']) ? (string) $task_data['status'] : '';
+
+        if (!in_array($status, ['pending', 'running', 'warning'], true)) {
+            return $task_data;
+        }
+
+        $progress = isset($task_data['progress']) ? (float) $task_data['progress'] : 0.0;
+        if ($progress >= 100) {
+            return $task_data;
+        }
+
+        $heartbeat = self::get_task_heartbeat_timestamp($task_data);
+        if ($heartbeat <= 0) {
+            return $task_data;
+        }
+
+        $stale_after = 45 * MINUTE_IN_SECONDS;
+        if (function_exists('apply_filters')) {
+            $filtered = apply_filters('bjlg_task_stale_after', $stale_after, $task_id, $task_data, $label);
+            if (is_numeric($filtered) && (int) $filtered > 0) {
+                $stale_after = (int) $filtered;
+            }
+        }
+
+        if ((time() - $heartbeat) < $stale_after) {
+            return $task_data;
+        }
+
+        $message = sprintf(
+            'La %s semble bloquée (délai dépassé). Vérifiez WP-Cron, l\'espace disque et les permissions, puis relancez.',
+            $label
+        );
+
+        $task_data['progress'] = 100;
+        $task_data['status'] = 'error';
+        $task_data['status_text'] = $message;
+
+        self::save_task_state($task_id, $task_data);
+        BJLG_Debug::log("Tâche {$task_id} marquée comme expirée : {$message}", 'error');
+        BJLG_History::log('task_stale', 'failure', $message);
+
+        return $task_data;
     }
 
     /**
@@ -1100,6 +1311,9 @@ class BJLG_Backup {
             $this->ensure_backup_directory_is_ready();
             $disk_assessment = $this->assert_sufficient_disk_space($task_data);
             $task_data['disk_space_check'] = $disk_assessment;
+            if (($disk_assessment['status'] ?? '') === 'unknown') {
+                $task_data['status_text'] = $disk_assessment['warning'] ?? $task_data['status_text'];
+            }
         } catch (BJLG_DiskSpaceException $disk_exception) {
             $context = $disk_exception->get_context();
             if (!is_array($context)) {
@@ -1125,6 +1339,8 @@ class BJLG_Backup {
                 'code' => 'bjlg_backup_initialization_failed',
             ], 500);
         }
+
+        self::maybe_complete_pending_inline_lock_owner();
 
         if (!self::reserve_task_slot($task_id)) {
             BJLG_Debug::log("Impossible de démarrer la tâche $task_id : une sauvegarde est déjà en cours.");
@@ -1166,14 +1382,19 @@ class BJLG_Backup {
             wp_send_json_error(['message' => "Impossible de planifier la tâche de sauvegarde en arrière-plan."], 500);
         }
 
-        self::spawn_scheduled_cron();
+        if (self::should_run_task_inline()) {
+            $this->run_backup_task($task_id);
+        } else {
+            self::spawn_scheduled_cron();
+        }
 
         BJLG_Debug::log("Nouvelle tâche de sauvegarde créée : $task_id");
         BJLG_History::log('backup_started', 'info', 'Composants : ' . implode(', ', $components));
 
         wp_send_json_success([
             'task_id' => $task_id,
-            'message' => 'Sauvegarde lancée en arrière-plan.'
+            'message' => 'Sauvegarde lancée en arrière-plan.',
+            'disk_space' => $task_data['disk_space_check'] ?? null,
         ]);
     }
 
@@ -1226,9 +1447,19 @@ class BJLG_Backup {
         $task_id = sanitize_key($_POST['task_id']);
         $progress_data = get_transient($task_id);
 
-        if ($progress_data === false) {
+        if ($progress_data === false || !is_array($progress_data)) {
             wp_send_json_error(['message' => 'Tâche non trouvée ou expirée.']);
         }
+
+        if (self::should_run_task_inline() && (($progress_data['status'] ?? '') === 'pending')) {
+            $this->run_backup_task($task_id);
+            $progress_data = get_transient($task_id);
+            if ($progress_data === false || !is_array($progress_data)) {
+                wp_send_json_error(['message' => 'Tâche non trouvée ou expirée.']);
+            }
+        }
+
+        $progress_data = self::mark_stale_task_if_needed($task_id, $progress_data, 'sauvegarde');
 
         wp_send_json_success($progress_data);
     }
@@ -1246,6 +1477,21 @@ class BJLG_Backup {
      * Exécute la tâche de sauvegarde en arrière-plan
      */
     public function run_backup_task($task_id) {
+        $task_id = self::normalize_task_id($task_id);
+        if ($task_id === '') {
+            return;
+        }
+
+        $existing = get_transient($task_id);
+        if (is_array($existing) && in_array((string) ($existing['status'] ?? ''), ['complete', 'error'], true)) {
+            self::release_task_slot($task_id);
+            return;
+        }
+
+        if (!self::reserve_task_slot($task_id)) {
+            self::maybe_complete_pending_inline_lock_owner();
+        }
+
         if (!self::reserve_task_slot($task_id)) {
             $lock_owner = self::get_task_lock_owner();
 
@@ -1257,8 +1503,18 @@ class BJLG_Backup {
 
             $rescheduled = wp_schedule_single_event(time() + 30, 'bjlg_run_backup_task', ['task_id' => $task_id]);
 
-            if ($rescheduled === false) {
-                BJLG_Debug::log("Échec de la replanification de la tâche $task_id.");
+            if ($rescheduled === false || self::should_run_task_inline()) {
+                if ($rescheduled === false) {
+                    BJLG_Debug::log("Échec de la replanification de la tâche $task_id.");
+                }
+                $this->update_task_progress(
+                    $task_id,
+                    100,
+                    'error',
+                    'Impossible d\'acquérir le verrou de sauvegarde. Réessayez dans quelques minutes.'
+                );
+            } else {
+                self::spawn_scheduled_cron();
             }
 
             return;
@@ -1425,7 +1681,16 @@ class BJLG_Backup {
                 }
 
                 $manifest = $this->create_manifest($components, $backup_type);
-                $zip->addFromString('backup-manifest.json', json_encode($manifest, JSON_PRETTY_PRINT));
+                $encoded_manifest = json_encode($manifest, JSON_PRETTY_PRINT);
+
+                if ($encoded_manifest === false) {
+                    throw new Exception("Impossible d'encoder le manifeste de sauvegarde.");
+                }
+
+                $this->assert_zip_operation_success(
+                    $zip->addFromString('backup-manifest.json', $encoded_manifest),
+                    "Impossible d'ajouter le manifeste à l'archive ZIP."
+                );
 
                 $progress = 20;
                 $components_count = count($components);
@@ -1471,10 +1736,13 @@ class BJLG_Backup {
                     $encoded_deleted = json_encode($deleted_metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 
                     if ($encoded_deleted === false) {
-                        BJLG_Debug::log("Impossible d'encoder la liste des fichiers supprimés pour l'archive incrémentale.", 'error');
-                    } else {
-                        $zip->addFromString('deleted-files.json', $encoded_deleted);
+                        throw new Exception("Impossible d'encoder la liste des fichiers supprimés pour l'archive incrémentale.");
                     }
+
+                    $this->assert_zip_operation_success(
+                        $zip->addFromString('deleted-files.json', $encoded_deleted),
+                        "Impossible d'ajouter la liste des fichiers supprimés à l'archive incrémentale."
+                    );
                 }
 
                 $close_result = @$zip->close();
@@ -1487,49 +1755,19 @@ class BJLG_Backup {
             // Chiffrement si demandé
             $requested_encryption = (bool) $task_data['encrypt'];
             if ($requested_encryption) {
-                if ($this->encryption_handler) {
-                    $this->update_task_progress($task_id, 95, 'running', 'Chiffrement de la sauvegarde...');
-                    $encrypted_file = $this->encryption_handler->encrypt_backup_file($backup_filepath);
-
-                    if (is_string($encrypted_file) && $encrypted_file !== $backup_filepath) {
-                        $backup_filepath = $encrypted_file;
-                        $backup_filename = basename($encrypted_file);
-                    } else {
-                        $task_data['encrypt'] = false;
-                        self::save_task_state($task_id, $task_data);
-
-                        BJLG_Debug::log("Chiffrement non appliqué pour la sauvegarde {$backup_filename}.");
-                        BJLG_History::log(
-                            'backup_encryption_failed',
-                            'warning',
-                            'Le fichier de sauvegarde n\'a pas été chiffré comme prévu.'
-                        );
-
-                        $this->update_task_progress(
-                            $task_id,
-                            95,
-                            'running',
-                            'Chiffrement indisponible, sauvegarde conservée sans chiffrement.'
-                        );
-                    }
-                } else {
-                    $task_data['encrypt'] = false;
-                    self::save_task_state($task_id, $task_data);
-
-                    BJLG_Debug::log('Chiffrement demandé mais module indisponible.');
-                    BJLG_History::log(
-                        'backup_encryption_failed',
-                        'warning',
-                        'Chiffrement demandé mais module indisponible : sauvegarde non chiffrée.'
-                    );
-
-                    $this->update_task_progress(
-                        $task_id,
-                        95,
-                        'running',
-                        'Chiffrement indisponible, sauvegarde conservée sans chiffrement.'
-                    );
+                if (!$this->encryption_handler) {
+                    throw new Exception('Chiffrement demandé mais module indisponible. La sauvegarde n\'a pas été conservée.');
                 }
+
+                $this->update_task_progress($task_id, 95, 'running', 'Chiffrement de la sauvegarde...');
+                $encrypted_file = $this->encryption_handler->encrypt_backup_file($backup_filepath);
+
+                if (!is_string($encrypted_file) || $encrypted_file === '' || $encrypted_file === $backup_filepath) {
+                    throw new Exception('Le chiffrement de la sauvegarde a échoué. La copie non chiffrée n\'a pas été conservée.');
+                }
+
+                $backup_filepath = $encrypted_file;
+                $backup_filename = basename($encrypted_file);
             }
 
             $effective_encryption = (bool) $task_data['encrypt'];
@@ -1540,6 +1778,19 @@ class BJLG_Backup {
                 $failure_message = $check_results['overall_message'] ?? 'Les vérifications post-sauvegarde ont échoué.';
                 throw new Exception($failure_message);
             }
+
+            if (empty($check_results['checksum'])) {
+                $check_results['checksum'] = BJLG_Backup_Integrity::hash_file($backup_filepath);
+                $check_results['checksum_algorithm'] = BJLG_Backup_Integrity::ALGORITHM;
+            }
+
+            BJLG_Backup_Integrity::write_sidecar($backup_filepath, (string) $check_results['checksum']);
+            $task_data['checksum'] = $check_results['checksum'];
+            $task_data['checksum_algorithm'] = $check_results['checksum_algorithm'] ?? BJLG_Backup_Integrity::ALGORITHM;
+            $task_data['filename'] = $backup_filename;
+            $task_data['filepath'] = $backup_filepath;
+            self::save_task_state($task_id, $task_data);
+
             $destination_results = $this->dispatch_to_destinations(
                 $backup_filepath,
                 $destination_queue,
@@ -1743,7 +1994,7 @@ class BJLG_Backup {
 
             BJLG_Debug::log("Sauvegarde terminée : $backup_filename (" . size_format($file_size) . ")");
 
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             BJLG_Debug::log("ERREUR dans la sauvegarde : " . $e->getMessage());
             BJLG_History::log('backup_created', 'failure', 'Erreur : ' . $e->getMessage());
 
@@ -1758,6 +2009,7 @@ class BJLG_Backup {
             // Nettoyer les fichiers partiels
             if (isset($backup_filepath) && file_exists($backup_filepath)) {
                 @unlink($backup_filepath);
+                BJLG_Backup_Integrity::delete_sidecar($backup_filepath);
             }
         } finally {
             $this->cleanup_temporary_files();
@@ -1875,7 +2127,21 @@ class BJLG_Backup {
         }
 
         if ($free_bytes === null) {
-            BJLG_Debug::log("Impossible de déterminer l'espace disque libre pour {$disk_probe_path}. Contrôle préventif ignoré.");
+            $unknown_message = sprintf(
+                "Impossible de déterminer l'espace disque libre pour %s. La sauvegarde continue, mais un disque saturé pourra produire une archive incomplète.",
+                $disk_probe_path
+            );
+            BJLG_Debug::log($unknown_message, 'warning');
+            BJLG_History::log('backup_disk_space', 'warning', $unknown_message);
+            $snapshot['warning'] = $unknown_message;
+
+            $require_probe = function_exists('apply_filters')
+                ? (bool) apply_filters('bjlg_require_known_disk_space', false, $snapshot, $task_data)
+                : false;
+
+            if ($require_probe) {
+                throw new BJLG_DiskSpaceException($unknown_message, $snapshot);
+            }
         } else {
             BJLG_Debug::log(sprintf(
                 'Contrôle espace disque OK : %s requis, %s disponibles (%s de marge).',
@@ -2193,6 +2459,29 @@ class BJLG_Backup {
     }
 
     /**
+     * Écrit dans un flux et échoue clairement en cas d'erreur disque.
+     *
+     * @param resource $handle
+     * @param string   $data
+     *
+     * @throws Exception
+     */
+    private function fwrite_or_fail($handle, $data) {
+        $data = (string) $data;
+        $length = strlen($data);
+
+        if ($length === 0) {
+            return;
+        }
+
+        $written = fwrite($handle, $data);
+
+        if ($written === false || $written < $length) {
+            throw new Exception("Écriture du dump SQL interrompue (disque plein ou permissions insuffisantes).");
+        }
+    }
+
+    /**
      * Sauvegarde la base de données en écrivant le dump SQL dans un fichier temporaire
      * pour limiter la consommation mémoire avant de l'ajouter à l'archive.
      *
@@ -2221,12 +2510,12 @@ class BJLG_Backup {
 
         try {
             // Header SQL
-            fwrite($handle, "-- Backup JLG Database Export\n");
-            fwrite($handle, "-- Version: " . BJLG_VERSION . "\n");
-            fwrite($handle, "-- Date: " . date('Y-m-d H:i:s') . "\n");
-            fwrite($handle, "-- Site: " . get_site_url() . "\n\n");
-            fwrite($handle, "SET NAMES utf8mb4;\n");
-            fwrite($handle, "SET FOREIGN_KEY_CHECKS=0;\n\n");
+            $this->fwrite_or_fail($handle, "-- Backup JLG Database Export\n");
+            $this->fwrite_or_fail($handle, "-- Version: " . BJLG_VERSION . "\n");
+            $this->fwrite_or_fail($handle, "-- Date: " . date('Y-m-d H:i:s') . "\n");
+            $this->fwrite_or_fail($handle, "-- Site: " . get_site_url() . "\n\n");
+            $this->fwrite_or_fail($handle, "SET NAMES utf8mb4;\n");
+            $this->fwrite_or_fail($handle, "SET FOREIGN_KEY_CHECKS=0;\n\n");
 
             // Obtenir les tables du site (préfixe $wpdb->prefix, filtrable)
             $tables = self::list_backup_tables($wpdb);
@@ -2239,6 +2528,8 @@ class BJLG_Backup {
                     $incremental_handler = new BJLG_Incremental();
                 }
             }
+
+            $exported_tables = 0;
 
             foreach ($tables as $table) {
                 $table = (string) $table;
@@ -2257,18 +2548,17 @@ class BJLG_Backup {
                 // Structure de la table
                 $create_table = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
                 if (!is_array($create_table) || empty($create_table[1])) {
-                    BJLG_Debug::log("SHOW CREATE TABLE a échoué pour {$table}, table ignorée.");
-                    continue;
+                    throw new Exception("SHOW CREATE TABLE a échoué pour la table {$table}. La sauvegarde est interrompue pour éviter un dump incomplet.");
                 }
-                fwrite($handle, "\n-- Table: {$table}\n");
-                fwrite($handle, "DROP TABLE IF EXISTS `{$table}`;\n");
-                fwrite($handle, $create_table[1] . ";\n\n");
+                $this->fwrite_or_fail($handle, "\n-- Table: {$table}\n");
+                $this->fwrite_or_fail($handle, "DROP TABLE IF EXISTS `{$table}`;\n");
+                $this->fwrite_or_fail($handle, $create_table[1] . ";\n\n");
 
                 // Données de la table
                 $row_count = $wpdb->get_var("SELECT COUNT(*) FROM `{$table}`");
 
                 if ($row_count > 0) {
-                    fwrite($handle, "-- Data for table: {$table}\n");
+                    $this->fwrite_or_fail($handle, "-- Data for table: {$table}\n");
 
                     $batch_size = 1000;
                     $primary_key = $this->get_table_primary_key($table);
@@ -2279,9 +2569,15 @@ class BJLG_Backup {
                         $this->export_table_with_streaming($handle, $table, $batch_size);
                     }
                 }
+
+                $exported_tables++;
             }
 
-            fwrite($handle, "\nSET FOREIGN_KEY_CHECKS=1;\n");
+            if ($exported_tables === 0 && !$incremental) {
+                throw new Exception("Aucune table n'a pu être exportée. La sauvegarde de la base est incomplète.");
+            }
+
+            $this->fwrite_or_fail($handle, "\nSET FOREIGN_KEY_CHECKS=1;\n");
         } finally {
             fclose($handle);
         }
@@ -2336,8 +2632,8 @@ class BJLG_Backup {
         $this->stream_insert_statement(
             $table,
             $rows,
-            static function (string $chunk) use ($handle) {
-                fwrite($handle, $chunk);
+            function (string $chunk) use ($handle) {
+                $this->fwrite_or_fail($handle, $chunk);
             }
         );
     }
@@ -2652,11 +2948,15 @@ class BJLG_Backup {
         array $exclude_overrides = []
     ) {
         if (!is_dir($source_dir)) {
-            BJLG_Debug::log("Répertoire introuvable : $source_dir");
-            return [
-                'modified' => [],
-                'deleted' => [],
-            ];
+            if ($incremental) {
+                BJLG_Debug::log("Répertoire introuvable : $source_dir");
+                return [
+                    'modified' => [],
+                    'deleted' => [],
+                ];
+            }
+
+            throw new Exception("Répertoire introuvable pour la sauvegarde : $source_dir");
         }
 
         BJLG_Debug::log("Sauvegarde du répertoire : " . basename($source_dir));
@@ -3216,16 +3516,10 @@ class BJLG_Backup {
             throw new Exception('Le fichier de sauvegarde est introuvable pour les vérifications.');
         }
 
-        if (!empty($post_checks['checksum'])) {
-            $hash = @hash_file('sha256', $filepath);
-            if ($hash === false) {
-                throw new Exception('Impossible de calculer le hash SHA-256 de la sauvegarde.');
-            }
-
-            BJLG_Debug::log('Checksum de la sauvegarde : ' . $hash);
-            $results['checksum'] = $hash;
-            $results['checksum_algorithm'] = 'sha256';
-        }
+        $hash = BJLG_Backup_Integrity::hash_file($filepath);
+        BJLG_Debug::log('Checksum de la sauvegarde : ' . $hash);
+        $results['checksum'] = $hash;
+        $results['checksum_algorithm'] = BJLG_Backup_Integrity::ALGORITHM;
 
         $log_file_check = function($filename, $status, $message = '', array $context = []) use (&$results) {
             $entry = array_merge([

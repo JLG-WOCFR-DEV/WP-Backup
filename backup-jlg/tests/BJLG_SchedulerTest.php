@@ -52,6 +52,7 @@ final class BJLG_SchedulerTest extends TestCase
         $GLOBALS['bjlg_test_options'] = [];
         $GLOBALS['bjlg_test_set_transient_mock'] = null;
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
+        $GLOBALS['bjlg_test_spawn_cron_calls'] = [];
         BJLG_Debug::$logs = [];
         $_POST = [];
         $_REQUEST = [];
@@ -92,6 +93,7 @@ final class BJLG_SchedulerTest extends TestCase
         $this->assertArrayHasKey('start_time', $task_data);
         $this->assertIsInt($task_data['start_time']);
         $this->assertGreaterThan(0, $task_data['start_time']);
+        $this->assertNotEmpty($GLOBALS['bjlg_test_spawn_cron_calls']);
     }
 
     public function test_handle_run_scheduled_now_returns_error_when_transient_fails(): void
@@ -541,7 +543,13 @@ final class BJLG_SchedulerTest extends TestCase
         $scheduler->handle_event_trigger('filesystem', ['path' => 'file-a']);
         $scheduler->handle_event_trigger('filesystem', ['path' => 'file-b']);
 
-        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+        $backup_tasks = array_values(array_filter(
+            $GLOBALS['bjlg_test_scheduled_events']['single'],
+            static function (array $event): bool {
+                return ($event['hook'] ?? '') === 'bjlg_run_backup_task';
+            }
+        ));
+        $this->assertEmpty($backup_tasks, 'Le batch ne doit pas lancer de sauvegarde avant le seuil.');
 
         $state = bjlg_get_option('bjlg_event_trigger_state', []);
         $this->assertArrayHasKey('pending', $state);
@@ -608,6 +616,107 @@ final class BJLG_SchedulerTest extends TestCase
         $this->assertArrayHasKey('filesystem', $state['pending']);
         $this->assertArrayHasKey('filesystem', $state['next_run']);
         $this->assertGreaterThan(time(), (int) $state['next_run']['filesystem']);
+    }
+
+    public function test_run_scheduled_backup_spawns_cron(): void
+    {
+        bjlg_update_option('bjlg_schedule_settings', [
+            'id' => 'sched-daily',
+            'label' => 'Quotidienne',
+            'recurrence' => 'daily',
+            'components' => ['db'],
+            'encrypt' => false,
+            'incremental' => false,
+        ]);
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+        $collection = $scheduler->get_schedule_settings();
+        $schedule_id = $collection['schedules'][0]['id'];
+
+        $GLOBALS['bjlg_test_spawn_cron_calls'] = [];
+        $GLOBALS['bjlg_test_scheduled_events']['single'] = [];
+
+        $scheduler->run_scheduled_backup($schedule_id);
+
+        $this->assertNotEmpty($GLOBALS['bjlg_test_spawn_cron_calls']);
+        $hooks = array_column($GLOBALS['bjlg_test_scheduled_events']['single'], 'hook');
+        $this->assertContains('bjlg_run_backup_task', $hooks);
+    }
+
+    public function test_run_scheduled_backup_rearms_custom_follow_up_on_transient_failure(): void
+    {
+        bjlg_update_option('bjlg_schedule_settings', [
+            'id' => 'sched-custom',
+            'label' => 'Cron custom',
+            'recurrence' => 'custom',
+            'custom_cron' => '0 * * * *',
+            'components' => ['db'],
+            'encrypt' => false,
+            'incremental' => false,
+        ]);
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+        $collection = $scheduler->get_schedule_settings();
+        $schedule = $collection['schedules'][0];
+        $this->assertSame('custom', $schedule['recurrence']);
+
+        $GLOBALS['bjlg_test_set_transient_mock'] = static function () {
+            return false;
+        };
+        $GLOBALS['bjlg_test_scheduled_events']['single'] = [];
+
+        $scheduler->run_scheduled_backup($schedule['id']);
+
+        $hooks = array_column($GLOBALS['bjlg_test_scheduled_events']['single'], 'hook');
+        $this->assertContains(BJLG\BJLG_Scheduler::SCHEDULE_HOOK, $hooks);
+        $this->assertNotContains('bjlg_run_backup_task', $hooks);
+    }
+
+    public function test_get_default_sandbox_schedule_settings_are_disabled(): void
+    {
+        $defaults = BJLG\BJLG_Scheduler::get_default_sandbox_schedule_settings();
+
+        $this->assertFalse($defaults['enabled']);
+        $this->assertSame('weekly', $defaults['recurrence']);
+        $this->assertContains('db', $defaults['components']);
+    }
+
+    public function test_maybe_schedule_sandbox_validation_clears_disabled_hook(): void
+    {
+        $hook = BJLG\BJLG_Scheduler::SANDBOX_VALIDATION_HOOK;
+        $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook] = [
+            'default' => [
+                'timestamp' => time() + DAY_IN_SECONDS,
+                'recurrence' => 'daily',
+                'args' => [],
+            ],
+        ];
+
+        BJLG\BJLG_Scheduler::instance()->maybe_schedule_sandbox_validation();
+
+        $this->assertArrayNotHasKey($hook, $GLOBALS['bjlg_test_scheduled_events']['recurring']);
+    }
+
+    public function test_add_custom_schedules_does_not_recurse_through_wp_get_schedules(): void
+    {
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+
+        $schedules = wp_get_schedules();
+
+        $this->assertIsArray($schedules);
+        $this->assertArrayHasKey('every_five_minutes', $schedules);
+        $this->assertArrayHasKey('hourly', $schedules);
+        $this->assertSame(5 * MINUTE_IN_SECONDS, $schedules['every_five_minutes']['interval']);
+
+        $again = $scheduler->add_custom_schedules([]);
+        $this->assertArrayHasKey('monthly', $again);
+    }
+
+    public function test_scheduler_constructor_is_private(): void
+    {
+        $reflection = new ReflectionClass(BJLG\BJLG_Scheduler::class);
+        $this->assertTrue($reflection->getConstructor()->isPrivate());
+        $this->assertInstanceOf(BJLG\BJLG_Scheduler::class, BJLG\BJLG_Scheduler::instance());
     }
 
     private function computeExpectedMonthlyTimestamp(\DateTimeImmutable $now, int $dayOfMonth, int $hour, int $minute): int

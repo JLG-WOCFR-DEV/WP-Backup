@@ -787,4 +787,32 @@ final class BJLG_RemoteStorageMetricsTest extends TestCase
             }
         };
     }
+
+    public function test_get_quota_sample_for_destination_reads_snapshot(): void
+    {
+        bjlg_update_option(BJLG_Remote_Storage_Metrics::OPTION_KEY, [
+            'generated_at' => time(),
+            'destinations' => [
+                [
+                    'id' => 'aws_s3',
+                    'used_bytes' => 100,
+                    'quota_bytes' => 1000,
+                    'free_bytes' => 900,
+                    'quota_samples' => [
+                        'used_bytes' => 150,
+                        'quota_bytes' => 1000,
+                        'free_bytes' => 850,
+                        'ratio' => 0.15,
+                    ],
+                ],
+            ],
+        ]);
+
+        $sample = BJLG_Remote_Storage_Metrics::get_quota_sample_for_destination('aws_s3');
+
+        $this->assertSame(150, $sample['used_bytes']);
+        $this->assertSame(1000, $sample['quota_bytes']);
+        $this->assertSame(850, $sample['free_bytes']);
+        $this->assertEqualsWithDelta(0.15, $sample['ratio'], 0.0001);
+    }
 }

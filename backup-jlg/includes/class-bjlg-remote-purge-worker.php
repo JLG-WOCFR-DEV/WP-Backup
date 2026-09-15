@@ -1816,16 +1816,21 @@ class BJLG_Remote_Purge_Worker {
         return date('H:i', $timestamp);
     }
 
-    private function sanitize_bytes($value): ?int
+    /**
+     * Snapshot SLA des purges distantes.
+     *
+     * @return array<string,mixed>
+     */
+    private function get_metrics_snapshot(): array
     {
-        if (is_numeric($value)) {
-            $numeric = (float) $value;
-            if (is_finite($numeric) && $numeric >= 0) {
-                return (int) round($numeric);
-            }
+        $stored = [];
+        if (function_exists('bjlg_get_option')) {
+            $stored = bjlg_get_option(self::METRICS_OPTION, []);
+        } elseif (function_exists('get_option')) {
+            $stored = get_option(self::METRICS_OPTION, []);
         }
 
-        return null;
+        return is_array($stored) ? $stored : [];
     }
 
     private function persist_metrics_audit(array $metrics): void
@@ -2189,88 +2194,6 @@ class BJLG_Remote_Purge_Worker {
         }
 
         return $relative;
-    }
-
-    private function extract_quota_sample($destination_id, $result, int $now): ?array {
-        if (!is_array($result)) {
-            return null;
-        }
-
-        $candidates = [];
-
-        if (isset($result['quota']) && is_array($result['quota'])) {
-            $candidates[] = $result['quota'];
-        }
-        if (isset($result['usage']) && is_array($result['usage'])) {
-            $candidates[] = $result['usage'];
-        }
-        if (isset($result['storage']) && is_array($result['storage'])) {
-            $candidates[] = $result['storage'];
-        }
-        if (isset($result['metrics']) && is_array($result['metrics'])) {
-            $candidates[] = $result['metrics'];
-        }
-
-        $usage = null;
-        foreach ($candidates as $candidate) {
-            if (!empty($candidate)) {
-                $usage = $candidate;
-                break;
-            }
-        }
-
-        if (!is_array($usage)) {
-            return null;
-        }
-
-        $used = $this->normalize_bytes_field($usage, ['used_bytes', 'used', 'usage_bytes']);
-        $quota = $this->normalize_bytes_field($usage, ['quota_bytes', 'limit', 'capacity_bytes']);
-        $free = $this->normalize_bytes_field($usage, ['free_bytes', 'available']);
-
-        if ($quota !== null && $used !== null && $free === null) {
-            $free = max(0, $quota - $used);
-        }
-
-        if ($quota === null && $used !== null && $free !== null) {
-            $quota = max(0, $used + $free);
-        }
-
-        $ratio = null;
-        if ($quota !== null && $quota > 0 && $used !== null) {
-            $ratio = max(0.0, min(1.0, $used / $quota));
-        }
-
-        return [
-            'destination' => (string) $destination_id,
-            'captured_at' => $now,
-            'used_bytes' => $used,
-            'quota_bytes' => $quota,
-            'free_bytes' => $free,
-            'ratio' => $ratio,
-        ];
-    }
-
-    private function normalize_bytes_field(array $data, array $keys): ?int {
-        foreach ($keys as $key) {
-            if (!isset($data[$key])) {
-                continue;
-            }
-
-            $value = $data[$key];
-
-            if (is_numeric($value)) {
-                return (int) $value;
-            }
-
-            if (is_string($value) && $value !== '') {
-                $normalized = preg_replace('/[^0-9\\.\-]/', '', $value);
-                if ($normalized !== '' && is_numeric($normalized)) {
-                    return (int) round((float) $normalized);
-                }
-            }
-        }
-
-        return null;
     }
 
     /**
