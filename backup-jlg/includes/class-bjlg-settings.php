@@ -541,6 +541,7 @@ class BJLG_Settings {
         // Initialiser les paramètres par défaut si nécessaire
         add_action('init', [$this, 'init_default_settings']);
         add_action('admin_init', [$this, 'register_settings']);
+        add_action('admin_init', [$this, 'flag_settings_posted_without_ajax']);
     }
 
     /**
@@ -574,6 +575,7 @@ class BJLG_Settings {
             'bjlg_performance_settings',
             'bjlg_monitoring_settings',
             'bjlg_webhook_settings',
+            'bjlg_sandbox_automation_settings',
             'bjlg_advanced_settings',
         ];
     }
@@ -584,6 +586,16 @@ class BJLG_Settings {
     public function register_settings(): void {
         if (!function_exists('register_setting')) {
             return;
+        }
+
+        if (function_exists('add_settings_section')) {
+            add_settings_section(
+                'bjlg_plugin_settings_main',
+                __('Réglages Backup JLG', 'backup-jlg'),
+                static function (): void {
+                },
+                self::SETTINGS_GROUP
+            );
         }
 
         foreach (self::get_settings_api_options() as $option_name) {
@@ -597,6 +609,53 @@ class BJLG_Settings {
                 'default' => [],
             ]);
         }
+    }
+
+    /**
+     * Affiche les notices Settings API (échec de POST natif, etc.).
+     */
+    public static function render_settings_notices(): void {
+        if (function_exists('settings_errors')) {
+            settings_errors(self::SETTINGS_GROUP);
+        }
+    }
+
+    /**
+     * POST HTML sans AJAX : ne rien enregistrer via options.php, mais
+     * afficher une erreur visible au lieu d’un échec silencieux.
+     */
+    public function flag_settings_posted_without_ajax(): void {
+        if (function_exists('wp_doing_ajax') && wp_doing_ajax()) {
+            return;
+        }
+
+        if (defined('DOING_AJAX') && DOING_AJAX) {
+            return;
+        }
+
+        $pagenow = isset($GLOBALS['pagenow']) ? (string) $GLOBALS['pagenow'] : '';
+        if ($pagenow === 'options.php') {
+            return;
+        }
+
+        if (empty($_POST['option_page']) || $_POST['option_page'] !== self::SETTINGS_GROUP) {
+            return;
+        }
+
+        if (function_exists('bjlg_can_manage_settings') && !\bjlg_can_manage_settings()) {
+            return;
+        }
+
+        if (!function_exists('add_settings_error')) {
+            return;
+        }
+
+        add_settings_error(
+            self::SETTINGS_GROUP,
+            'bjlg_settings_js_required',
+            __('Les réglages n’ont pas été enregistrés : JavaScript est requis pour la sauvegarde. Activez JavaScript puis réessayez.', 'backup-jlg'),
+            'error'
+        );
     }
 
     /**
@@ -699,6 +758,8 @@ class BJLG_Settings {
 
         $context = $this->resolve_request_context_from_input($_POST);
         $this->ensure_request_context_capabilities($context);
+
+        $site_switched = false;
 
         try {
             $saved_settings = [];
@@ -903,20 +964,25 @@ class BJLG_Settings {
             }
 
             // --- Réglages de Chiffrement ---
-            $encryption_fields = ['encryption_enabled', 'auto_encrypt', 'password_protect', 'compression_level', 'encryption_settings_submitted'];
-            $encryption_submitted = false;
-            foreach ($encryption_fields as $field) {
-                if (array_key_exists($field, $_POST)) {
-                    $encryption_submitted = true;
-                    break;
-                }
-            }
+            // Ne pas déclencher sur `compression_level` : ce champ est aussi
+            // celui du formulaire Performance, ce qui désactivait le chiffrement.
+            $encryption_submitted = array_key_exists('encryption_settings_submitted', $_POST)
+                || array_key_exists('encryption_enabled', $_POST)
+                || array_key_exists('auto_encrypt', $_POST)
+                || array_key_exists('password_protect', $_POST);
 
             if ($encryption_submitted) {
                 $current_encryption = $this->get_section_settings_with_defaults('encryption');
 
-                $compression_level = isset($_POST['compression_level'])
-                    ? max(0, intval(wp_unslash($_POST['compression_level'])))
+                $raw_encryption_compression = null;
+                if (isset($_POST['encryption_compression_level'])) {
+                    $raw_encryption_compression = $_POST['encryption_compression_level'];
+                } elseif (isset($_POST['compression_level'])) {
+                    $raw_encryption_compression = $_POST['compression_level'];
+                }
+
+                $compression_level = $raw_encryption_compression !== null
+                    ? max(0, intval(wp_unslash($raw_encryption_compression)))
                     : (isset($current_encryption['compression_level']) ? max(0, intval($current_encryption['compression_level'])) : 6);
 
                 $encryption_settings = [
@@ -2293,6 +2359,9 @@ class BJLG_Settings {
                 }
 
                 return $sanitized;
+
+            case 'bjlg_sandbox_automation_settings':
+                return self::sanitize_sandbox_automation_settings(is_array($value) ? $value : []);
 
             case 'bjlg_webhook_settings':
                 $defaults = [

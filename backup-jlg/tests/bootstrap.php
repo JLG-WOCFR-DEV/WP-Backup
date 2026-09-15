@@ -1240,6 +1240,52 @@ if (!function_exists('settings_fields')) {
     }
 }
 
+if (!function_exists('add_settings_section')) {
+    function add_settings_section($id, $title, $callback, $page) {
+        if (!isset($GLOBALS['bjlg_test_settings_sections'])) {
+            $GLOBALS['bjlg_test_settings_sections'] = [];
+        }
+
+        $GLOBALS['bjlg_test_settings_sections'][$page][$id] = [
+            'title' => $title,
+            'callback' => $callback,
+        ];
+    }
+}
+
+if (!function_exists('add_settings_error')) {
+    function add_settings_error($setting, $code, $message, $type = 'error') {
+        if (!isset($GLOBALS['bjlg_test_settings_errors'])) {
+            $GLOBALS['bjlg_test_settings_errors'] = [];
+        }
+
+        $GLOBALS['bjlg_test_settings_errors'][] = [
+            'setting' => $setting,
+            'code' => $code,
+            'message' => $message,
+            'type' => $type,
+        ];
+    }
+}
+
+if (!function_exists('settings_errors')) {
+    function settings_errors($setting = '') {
+        $errors = $GLOBALS['bjlg_test_settings_errors'] ?? [];
+        foreach ($errors as $error) {
+            if ($setting !== '' && $error['setting'] !== $setting) {
+                continue;
+            }
+            echo '<div class="notice notice-' . esc_attr($error['type']) . '"><p>' . esc_html($error['message']) . '</p></div>';
+        }
+    }
+}
+
+if (!function_exists('wp_doing_ajax')) {
+    function wp_doing_ajax() {
+        return !empty($GLOBALS['bjlg_test_doing_ajax']);
+    }
+}
+
 if (!function_exists('check_ajax_referer')) {
     function check_ajax_referer($action = -1, $query_arg = false, $die = true) {
         return true;

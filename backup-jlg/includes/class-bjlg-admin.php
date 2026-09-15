@@ -1353,6 +1353,7 @@ class BJLG_Admin {
                     <p><?php echo esc_html($notice['message']); ?></p>
                 </div>
             <?php endforeach; ?>
+            <?php BJLG_Settings::render_settings_notices(); ?>
 
             <nav class="nav-tab-wrapper wp-clearfix" aria-label="<?php esc_attr_e('Sections Backup JLG', 'backup-jlg'); ?>">
                 <?php foreach ($sections as $section_key => $section): ?>
@@ -5100,10 +5101,98 @@ class BJLG_Admin {
         $webhook_settings['urls'] = isset($webhook_settings['urls']) && is_array($webhook_settings['urls'])
             ? wp_parse_args($webhook_settings['urls'], $webhook_defaults['urls'])
             : $webhook_defaults['urls'];
+        $encryption_defaults = [
+            'enabled' => false,
+            'auto_encrypt' => false,
+            'password_protect' => false,
+            'compression_level' => 6,
+        ];
+        $encryption_settings = \bjlg_get_option('bjlg_encryption_settings', []);
+        if (!is_array($encryption_settings)) {
+            $encryption_settings = [];
+        }
+        $encryption_settings = wp_parse_args($encryption_settings, $encryption_defaults);
         ?>
         <div class="bjlg-section">
-            <h2>Configuration du Plugin</h2>
-            
+            <h2><?php esc_html_e('Configuration du Plugin', 'backup-jlg'); ?></h2>
+            <noscript>
+                <div class="notice notice-error">
+                    <p><?php esc_html_e('JavaScript est requis pour enregistrer les réglages. Sans JavaScript, aucune modification n’est sauvegardée.', 'backup-jlg'); ?></p>
+                </div>
+            </noscript>
+
+            <h3 id="bjlg-encryption-settings"><span class="dashicons dashicons-lock" aria-hidden="true"></span> <?php esc_html_e('Chiffrement', 'backup-jlg'); ?></h3>
+            <form class="bjlg-settings-form bjlg-encryption-form" method="post"
+                  data-success-message="<?php esc_attr_e('Réglages de chiffrement sauvegardés.', 'backup-jlg'); ?>"
+                  data-error-message="<?php esc_attr_e('Impossible de sauvegarder le chiffrement.', 'backup-jlg'); ?>">
+                <?php BJLG_Settings::render_settings_fields(); ?>
+                <input type="hidden" name="encryption_settings_submitted" value="1">
+                <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Sauvegarde chiffrée', 'backup-jlg'); ?></th>
+                        <td>
+                            <label for="bjlg-encryption-enabled">
+                                <input type="checkbox"
+                                       id="bjlg-encryption-enabled"
+                                       name="encryption_enabled"
+                                       value="1"
+                                       <?php checked(!empty($encryption_settings['enabled'])); ?>>
+                                <?php esc_html_e('Activer le chiffrement AES-256 des archives', 'backup-jlg'); ?>
+                            </label>
+                            <p class="description"><?php esc_html_e('Une clé valide (wp-config ou générée ci-dessous) est obligatoire. Un échec de chiffrement n’est pas ignoré.', 'backup-jlg'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Options', 'backup-jlg'); ?></th>
+                        <td>
+                            <fieldset>
+                                <legend class="screen-reader-text"><?php esc_html_e('Options de chiffrement', 'backup-jlg'); ?></legend>
+                                <label for="bjlg-auto-encrypt">
+                                    <input type="checkbox" id="bjlg-auto-encrypt" name="auto_encrypt" value="1" <?php checked(!empty($encryption_settings['auto_encrypt'])); ?>>
+                                    <?php esc_html_e('Chiffrer automatiquement les nouvelles sauvegardes', 'backup-jlg'); ?>
+                                </label>
+                                <br>
+                                <label for="bjlg-password-protect">
+                                    <input type="checkbox" id="bjlg-password-protect" name="password_protect" value="1" <?php checked(!empty($encryption_settings['password_protect'])); ?>>
+                                    <?php esc_html_e('Protéger les archives par mot de passe', 'backup-jlg'); ?>
+                                </label>
+                            </fieldset>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="bjlg-encryption-compression"><?php esc_html_e('Niveau de compression (archives chiffrées)', 'backup-jlg'); ?></label></th>
+                        <td>
+                            <input type="number"
+                                   id="bjlg-encryption-compression"
+                                   name="encryption_compression_level"
+                                   class="small-text"
+                                   min="0"
+                                   max="9"
+                                   value="<?php echo esc_attr((string) $encryption_settings['compression_level']); ?>">
+                            <p class="description"><?php esc_html_e('0 = aucune compression, 9 = maximale. Distinct du niveau de compression des performances.', 'backup-jlg'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php esc_html_e('Clé AES-256', 'backup-jlg'); ?></th>
+                        <td>
+                            <p>
+                                <button type="button" class="button" id="bjlg-generate-encryption-key">
+                                    <?php esc_html_e('Générer une clé', 'backup-jlg'); ?>
+                                </button>
+                                <button type="button" class="button" id="bjlg-test-encryption">
+                                    <?php esc_html_e('Tester le chiffrement', 'backup-jlg'); ?>
+                                </button>
+                            </p>
+                            <p class="description"><?php esc_html_e('La génération affiche une ligne à coller dans wp-config.php. Les erreurs de test restent visibles ci-dessus.', 'backup-jlg'); ?></p>
+                            <label for="bjlg-encryption-config-line" class="screen-reader-text"><?php esc_html_e('Ligne wp-config.php', 'backup-jlg'); ?></label>
+                            <textarea id="bjlg-encryption-config-line" class="large-text code" rows="2" readonly hidden></textarea>
+                        </td>
+                    </tr>
+                </table>
+                <p class="submit"><button type="submit" class="button button-primary"><?php esc_html_e('Enregistrer le chiffrement', 'backup-jlg'); ?></button></p>
+            </form>
+
             <h3><span class="dashicons dashicons-cloud" aria-hidden="true"></span> Destinations Cloud</h3>
             <div class="bjlg-settings-destinations">
                 <?php
@@ -5311,7 +5400,7 @@ class BJLG_Admin {
             </form>
 
             <h3><span class="dashicons dashicons-shield" aria-hidden="true"></span> Snapshot pré-update</h3>
-            <form class="bjlg-settings-form bjlg-update-guard-form"
+            <form class="bjlg-settings-form bjlg-update-guard-form" method="post"
                   data-success-message="Paramètres du snapshot pré-update sauvegardés."
                   data-error-message="Impossible de mettre à jour le snapshot pré-update.">
                 <?php BJLG_Settings::render_settings_fields(); ?>
@@ -5545,7 +5634,7 @@ class BJLG_Admin {
                 <p class="description"><strong>Compatibilité :</strong> L'ancien format <code><?php echo esc_html(add_query_arg(BJLG_Webhooks::WEBHOOK_QUERY_VAR, 'VOTRE_CLE', home_url('/'))); ?></code> reste supporté provisoirement mais sera retiré après la période de transition.</p>
             </form>
 
-            <form class="bjlg-settings-form">
+            <form class="bjlg-settings-form" method="post">
                 <?php BJLG_Settings::render_settings_fields(); ?>
                 <div class="bjlg-settings-feedback notice bjlg-hidden" role="status" aria-live="polite"></div>
                 <h3><span class="dashicons dashicons-chart-area" aria-hidden="true"></span> Monitoring du stockage distant</h3>
@@ -5867,7 +5956,7 @@ class BJLG_Admin {
             </form>
 
             <h3><span class="dashicons dashicons-megaphone" aria-hidden="true"></span> Notifications</h3>
-            <form class="bjlg-settings-form bjlg-notification-preferences-form" data-success-message="Notifications mises à jour." data-error-message="Impossible de sauvegarder les notifications.">
+            <form class="bjlg-settings-form bjlg-notification-preferences-form" method="post" data-success-message="Notifications mises à jour." data-error-message="Impossible de sauvegarder les notifications.">
                 <?php BJLG_Settings::render_settings_fields(); ?>
                 <table class="form-table">
                     <tr>
@@ -5990,7 +6079,7 @@ class BJLG_Admin {
             </div>
 
             <h3><span class="dashicons dashicons-admin-site-alt3" aria-hidden="true"></span> Canaux</h3>
-            <form class="bjlg-settings-form bjlg-notification-channels-form" data-success-message="Canaux mis à jour." data-error-message="Impossible de mettre à jour les canaux.">
+            <form class="bjlg-settings-form bjlg-notification-channels-form" method="post" data-success-message="Canaux mis à jour." data-error-message="Impossible de mettre à jour les canaux.">
                 <?php BJLG_Settings::render_settings_fields(); ?>
                 <table class="form-table">
                     <tr>
@@ -6405,7 +6494,7 @@ class BJLG_Admin {
             </div>
 
             <h3><span class="dashicons dashicons-performance" aria-hidden="true"></span> Performance</h3>
-            <form class="bjlg-settings-form" data-success-message="Paramètres de performance sauvegardés." data-error-message="Impossible de sauvegarder la configuration de performance.">
+            <form class="bjlg-settings-form" method="post" data-success-message="Paramètres de performance sauvegardés." data-error-message="Impossible de sauvegarder la configuration de performance.">
                 <?php BJLG_Settings::render_settings_fields(); ?>
                 <table class="form-table">
                     <tr>
