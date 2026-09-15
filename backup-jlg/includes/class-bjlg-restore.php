@@ -13,6 +13,9 @@ if (!defined('ABSPATH')) {
 require_once __DIR__ . '/class-bjlg-backup.php';
 require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
 require_once __DIR__ . '/class-bjlg-health-check.php';
+if (!class_exists(__NAMESPACE__ . '\\BJLG_Backup_Integrity', false)) {
+    require_once __DIR__ . '/class-bjlg-backup-integrity.php';
+}
 
 /**
  * Gère tout le processus de restauration, y compris la pré-sauvegarde de sécurité.
@@ -2534,9 +2537,11 @@ class BJLG_Restore {
         $task_id = sanitize_key($_POST['task_id']);
         $progress_data = get_transient($task_id);
 
-        if ($progress_data === false) {
+        if ($progress_data === false || !is_array($progress_data)) {
             wp_send_json_error(['message' => 'Tâche non trouvée.']);
         }
+
+        $progress_data = BJLG_Backup::mark_stale_task_if_needed($task_id, $progress_data, 'restauration');
 
         wp_send_json_success($progress_data);
     }
@@ -2552,8 +2557,20 @@ class BJLG_Restore {
 
             $rescheduled = wp_schedule_single_event(time() + 30, 'bjlg_run_restore_task', ['task_id' => $task_id]);
 
-            if ($rescheduled === false && class_exists('BJLG_Debug')) {
-                BJLG_Debug::log("Échec de la replanification de la tâche de restauration {$task_id}.");
+            if ($rescheduled === false) {
+                if (class_exists('BJLG_Debug')) {
+                    BJLG_Debug::log("Échec de la replanification de la tâche de restauration {$task_id}.");
+                }
+
+                $stuck = get_transient($task_id);
+                if (is_array($stuck)) {
+                    $stuck['progress'] = 100;
+                    $stuck['status'] = 'error';
+                    $stuck['status_text'] = 'Impossible d\'acquérir le verrou de restauration et de replanifier la tâche. Réessayez dans quelques minutes.';
+                    set_transient($task_id, $stuck, BJLG_Backup::get_task_ttl());
+                }
+            } else {
+                BJLG_Backup::spawn_scheduled_cron();
             }
 
             return;
@@ -2594,24 +2611,15 @@ class BJLG_Restore {
         $current_status = is_array($task_data) ? $task_data : [];
         $current_status['environment'] = $environment;
 
-        if (!empty($encrypted_password)) {
-            try {
-                $password = $this->decrypt_password_from_transient($encrypted_password);
-            } catch (Exception $exception) {
-                if (class_exists(BJLG_Debug::class)) {
-                    BJLG_Debug::log(
-                        "ERREUR: Échec du déchiffrement du mot de passe pour la tâche {$task_id} : " . $exception->getMessage(),
-                        'error'
-                    );
-                }
-            }
-        }
-
         $temp_extract_dir = bjlg_get_backup_directory() . 'temp_restore_' . uniqid();
         $final_error_status = null;
         $error_status_recorded = false;
 
         try {
+            if (!empty($encrypted_password)) {
+                $password = $this->decrypt_password_from_transient($encrypted_password);
+            }
+
             set_time_limit(0);
             @ini_set('memory_limit', '256M');
 
@@ -2637,6 +2645,15 @@ class BJLG_Restore {
 
             if (!file_exists($filepath)) {
                 throw new Exception("Le fichier de sauvegarde n'a pas été trouvé.");
+            }
+
+            $integrity = BJLG_Backup_Integrity::verify_file($filepath, false);
+            if (($integrity['status'] ?? '') === 'skipped') {
+                $current_status['integrity_warning'] = $integrity['message'];
+                BJLG_Debug::log($integrity['message'], 'warning');
+            } else {
+                $current_status['checksum'] = $integrity['checksum'] ?? '';
+                $current_status['checksum_algorithm'] = $integrity['algorithm'] ?? BJLG_Backup_Integrity::ALGORITHM;
             }
 
             if (substr($filepath, -4) === '.enc') {
@@ -2750,11 +2767,7 @@ class BJLG_Restore {
             ];
 
             if ($is_incremental_backup) {
-                try {
-                    $deleted_paths_by_component = $this->extract_deleted_paths_from_archive($zip);
-                } catch (Throwable $deleted_exception) {
-                    BJLG_Debug::log('Impossible de charger la liste des fichiers supprimés : ' . $deleted_exception->getMessage(), 'error');
-                }
+                $deleted_paths_by_component = $this->extract_deleted_paths_from_archive($zip);
             }
 
             if (class_exists('BJLG_Debug')) {
@@ -2834,48 +2847,53 @@ class BJLG_Restore {
                 ]);
                 set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
 
-                if ($zip->locateName('database.sql') !== false) {
-                    $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
-
-                    if (!array_key_exists('database.sql', $allowed_entries)) {
-                        throw new Exception("Entrée d'archive invalide détectée : database.sql");
-                    }
-
-                    $zip->extractTo($temp_extract_dir, 'database.sql');
-                    $sql_filepath = $temp_extract_dir . '/database.sql';
-
-                    if ($environment === self::ENV_SANDBOX) {
-                        $db_destination = $this->resolve_database_destination($routing_table, $sandbox_context);
-
-                        if ($db_destination === null) {
-                            BJLG_Debug::log('Sandbox : aucun emplacement de base de données défini, export ignoré.');
-                        } else {
-                            $database_directory = dirname($db_destination);
-                            if ($database_directory !== '' && $database_directory !== '.') {
-                                self::ensure_directory_exists_static($database_directory);
-                            }
-
-                            if (!@copy($sql_filepath, $db_destination)) {
-                                throw new Exception("Impossible de copier le dump SQL vers la sandbox.");
-                            }
-
-                            BJLG_Debug::log('Dump SQL copié dans la sandbox : ' . $db_destination);
-                        }
-
-                        $status_text = 'Base de données exportée vers la sandbox.';
-                    } else {
-                        BJLG_Debug::log("Import de la base de données...");
-                        $this->import_database($sql_filepath);
-                        $status_text = 'Base de données restaurée.';
-                    }
-
-                    $current_status = array_merge($current_status, [
-                        'progress' => 50,
-                        'status' => 'running',
-                        'status_text' => $status_text,
-                    ]);
-                    set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
+                if ($zip->locateName('database.sql') === false) {
+                    throw new Exception("La base de données est demandée mais database.sql est absent de l'archive.");
                 }
+
+                $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
+
+                if (!array_key_exists('database.sql', $allowed_entries)) {
+                    throw new Exception("Entrée d'archive invalide détectée : database.sql");
+                }
+
+                $this->extract_zip_entries($zip, $temp_extract_dir, 'database.sql');
+                $sql_filepath = $temp_extract_dir . '/database.sql';
+
+                if (!is_file($sql_filepath)) {
+                    throw new Exception("L'extraction de database.sql a échoué.");
+                }
+
+                if ($environment === self::ENV_SANDBOX) {
+                    $db_destination = $this->resolve_database_destination($routing_table, $sandbox_context);
+
+                    if ($db_destination === null) {
+                        throw new Exception("Sandbox : aucun emplacement de base de données défini pour la restauration.");
+                    }
+
+                    $database_directory = dirname($db_destination);
+                    if ($database_directory !== '' && $database_directory !== '.') {
+                        self::ensure_directory_exists_static($database_directory);
+                    }
+
+                    if (!@copy($sql_filepath, $db_destination)) {
+                        throw new Exception("Impossible de copier le dump SQL vers la sandbox.");
+                    }
+
+                    BJLG_Debug::log('Dump SQL copié dans la sandbox : ' . $db_destination);
+                    $status_text = 'Base de données exportée vers la sandbox.';
+                } else {
+                    BJLG_Debug::log("Import de la base de données...");
+                    $this->import_database($sql_filepath);
+                    $status_text = 'Base de données restaurée.';
+                }
+
+                $current_status = array_merge($current_status, [
+                    'progress' => 50,
+                    'status' => 'running',
+                    'status_text' => $status_text,
+                ]);
+                set_transient($task_id, $current_status, BJLG_Backup::get_task_ttl());
             }
 
             $folders_to_restore = [];
@@ -2888,11 +2906,7 @@ class BJLG_Restore {
                 $destination = $this->resolve_component_destination($component_type, $routing_table, $environment);
 
                 if ($destination === null) {
-                    if (class_exists('BJLG_Debug')) {
-                        BJLG_Debug::log("Destination introuvable pour {$component_type} dans l'environnement {$environment}, composant ignoré.");
-                    }
-
-                    continue;
+                    throw new Exception("Destination introuvable pour {$component_type} dans l'environnement {$environment}.");
                 }
 
                 $folders_to_restore[$component_type] = [
@@ -2939,6 +2953,8 @@ class BJLG_Restore {
                         }
                     }
 
+                    $this->assert_component_files_present($type, $files_to_extract, $is_incremental_backup, $component_deleted);
+
                     if (!empty($files_to_extract)) {
                         $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
 
@@ -2948,12 +2964,16 @@ class BJLG_Restore {
                             }
                         }
 
-                        $zip->extractTo($temp_extract_dir, $files_to_extract);
+                        $this->extract_zip_entries($zip, $temp_extract_dir, $files_to_extract);
 
-                        $this->recursive_copy(
+                        $copied = $this->recursive_copy(
                             $temp_extract_dir . '/' . $source_folder,
                             $destination
                         );
+
+                        if ($copied !== true) {
+                            throw new Exception("La copie des fichiers {$type} a échoué après extraction.");
+                        }
 
                         BJLG_Debug::log("Restauration de {$type} terminée.");
                     }
@@ -3181,6 +3201,8 @@ class BJLG_Restore {
         $temp_extract_dir = bjlg_get_backup_directory() . 'temp_restore_link_' . uniqid('', true);
 
         try {
+            BJLG_Backup_Integrity::verify_file($archive_path, false);
+
             if (substr((string) $working_path, -4) === '.enc') {
                 $encryption = $this->get_encryption_handler();
                 if (!($encryption instanceof BJLG_Encryption)) {
@@ -3281,33 +3303,39 @@ class BJLG_Restore {
         ];
 
         if ($is_incremental_backup) {
-            try {
-                $deleted_paths_by_component = $this->extract_deleted_paths_from_archive($zip);
-            } catch (Throwable $deleted_exception) {
-                BJLG_Debug::log('Impossible de charger la liste des fichiers supprimés : ' . $deleted_exception->getMessage(), 'error');
-            }
+            $deleted_paths_by_component = $this->extract_deleted_paths_from_archive($zip);
         }
 
-        if (in_array('db', $components_to_restore, true) && $zip->locateName('database.sql') !== false) {
+        if (in_array('db', $components_to_restore, true)) {
+            if ($zip->locateName('database.sql') === false) {
+                throw new Exception("La base de données est demandée mais database.sql est absent de l'archive.");
+            }
+
             $allowed_entries = $this->build_allowed_zip_entries($zip, $temp_extract_dir);
             if (!array_key_exists('database.sql', $allowed_entries)) {
                 throw new Exception("Entrée d'archive invalide détectée : database.sql");
             }
 
-            $zip->extractTo($temp_extract_dir, 'database.sql');
+            $this->extract_zip_entries($zip, $temp_extract_dir, 'database.sql');
             $sql_filepath = $temp_extract_dir . '/database.sql';
+
+            if (!is_file($sql_filepath)) {
+                throw new Exception("L'extraction de database.sql a échoué.");
+            }
 
             if ($environment === self::ENV_SANDBOX) {
                 $db_destination = $this->resolve_database_destination($routing_table, $sandbox_context);
-                if ($db_destination !== null) {
-                    $database_directory = dirname($db_destination);
-                    if ($database_directory !== '' && $database_directory !== '.') {
-                        self::ensure_directory_exists_static($database_directory);
-                    }
+                if ($db_destination === null) {
+                    throw new Exception("Sandbox : aucun emplacement de base de données défini pour la restauration.");
+                }
 
-                    if (!@copy($sql_filepath, $db_destination)) {
-                        throw new Exception("Impossible de copier le dump SQL vers la sandbox.");
-                    }
+                $database_directory = dirname($db_destination);
+                if ($database_directory !== '' && $database_directory !== '.') {
+                    self::ensure_directory_exists_static($database_directory);
+                }
+
+                if (!@copy($sql_filepath, $db_destination)) {
+                    throw new Exception("Impossible de copier le dump SQL vers la sandbox.");
                 }
             } else {
                 $this->import_database($sql_filepath);
@@ -3321,7 +3349,7 @@ class BJLG_Restore {
 
             $destination = $this->resolve_component_destination($component_type, $routing_table, $environment);
             if ($destination === null) {
-                continue;
+                throw new Exception("Destination introuvable pour {$component_type} dans l'environnement {$environment}.");
             }
 
             $component_deleted = $deleted_paths_by_component[$component_type] ?? [];
@@ -3338,6 +3366,8 @@ class BJLG_Restore {
                 }
             }
 
+            $this->assert_component_files_present($component_type, $files_to_extract, $is_incremental_backup, $component_deleted);
+
             if (empty($files_to_extract)) {
                 continue;
             }
@@ -3349,14 +3379,58 @@ class BJLG_Restore {
                 }
             }
 
-            $zip->extractTo($temp_extract_dir, $files_to_extract);
-            $this->recursive_copy(
+            $this->extract_zip_entries($zip, $temp_extract_dir, $files_to_extract);
+            $copied = $this->recursive_copy(
                 $temp_extract_dir . '/' . $source_folder,
                 $destination
             );
+
+            if ($copied !== true) {
+                throw new Exception("La copie des fichiers {$component_type} a échoué après extraction.");
+            }
         }
 
         return true;
+    }
+
+    /**
+     * Refuse un succès trompeur quand un composant complet n'a aucun payload.
+     *
+     * @param string             $component_type
+     * @param array<int, string> $files_to_extract
+     * @param bool               $is_incremental
+     * @param array<int, string> $deleted_paths
+     *
+     * @throws Exception
+     */
+    private function assert_component_files_present($component_type, array $files_to_extract, $is_incremental, array $deleted_paths = []) {
+        if (!empty($files_to_extract) || $is_incremental || !empty($deleted_paths)) {
+            return;
+        }
+
+        throw new Exception(
+            sprintf(
+                'Le composant %s est demandé mais aucun fichier n\'est présent dans l\'archive. La restauration est interrompue pour éviter un succès trompeur.',
+                $component_type
+            )
+        );
+    }
+
+    /**
+     * Extrait des entrées ZIP et échoue si l'opération renvoie false.
+     *
+     * @param ZipArchive           $zip
+     * @param string               $destination
+     * @param string|array<int, string> $entries
+     *
+     * @throws Exception
+     */
+    private function extract_zip_entries(ZipArchive $zip, $destination, $entries) {
+        $result = $zip->extractTo($destination, $entries);
+
+        if ($result !== true) {
+            throw new Exception("Impossible d'extraire l'archive (disque plein, permissions ou fichier corrompu).");
+        }
     }
 
     /**
@@ -3381,13 +3455,13 @@ class BJLG_Restore {
         $deleted_json = $zip->getFromIndex($deleted_index);
 
         if ($deleted_json === false) {
-            return $result;
+            throw new Exception("Impossible de lire deleted-files.json dans l'archive incrémentale.");
         }
 
         $decoded = json_decode($deleted_json, true);
 
         if (!is_array($decoded)) {
-            return $result;
+            throw new Exception("deleted-files.json est invalide dans l'archive incrémentale.");
         }
 
         $paths = [];
@@ -3895,9 +3969,7 @@ class BJLG_Restore {
         global $wpdb;
 
         if (!is_object($wpdb) || !method_exists($wpdb, 'query')) {
-            BJLG_Debug::log('Import SQL ignoré : instance $wpdb indisponible.', 'warning');
-
-            return;
+            throw new Exception('Import SQL impossible : connexion à la base de données indisponible.');
         }
 
         if (!file_exists($sql_filepath)) {
@@ -3947,6 +4019,10 @@ class BJLG_Restore {
             }
 
             BJLG_Debug::log("Import SQL terminé : {$queries_executed} requêtes exécutées.");
+
+            if ($queries_executed === 0) {
+                throw new Exception("Aucune requête SQL n'a été exécutée. Le dump est vide ou invalide.");
+            }
 
             if ($transaction_started) {
                 $wpdb->query('COMMIT');

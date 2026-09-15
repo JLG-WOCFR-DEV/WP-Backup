@@ -2358,29 +2358,58 @@ if (!function_exists('wp_schedule_event')) {
     }
 }
 
+if (!function_exists('spawn_cron')) {
+    function spawn_cron($gmt_time = 0) {
+        if (!isset($GLOBALS['bjlg_test_spawn_cron_calls'])) {
+            $GLOBALS['bjlg_test_spawn_cron_calls'] = [];
+        }
+
+        $GLOBALS['bjlg_test_spawn_cron_calls'][] = [
+            'gmt_time' => $gmt_time,
+            'at' => time(),
+        ];
+
+        return true;
+    }
+}
+
 if (!function_exists('wp_next_scheduled')) {
     function wp_next_scheduled($hook, $args = []) {
         $has_args = func_num_args() > 1;
+        $timestamps = [];
 
-        if (empty($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook])) {
-            return false;
-        }
-
-        if ($has_args) {
-            $key = bjlg_build_cron_event_key($hook, $args);
-            if (isset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key])) {
-                return $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key]['timestamp'];
+        if (!empty($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook])) {
+            if ($has_args) {
+                $key = bjlg_build_cron_event_key($hook, $args);
+                if (isset($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key])) {
+                    $timestamps[] = (int) $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook][$key]['timestamp'];
+                }
+            } else {
+                foreach ($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook] as $event) {
+                    $timestamps[] = (int) $event['timestamp'];
+                }
             }
-
-            return false;
         }
 
-        $timestamps = array_map(
-            static function ($event) {
-                return $event['timestamp'];
-            },
-            $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook]
-        );
+        if (!empty($GLOBALS['bjlg_test_scheduled_events']['single'])) {
+            foreach ($GLOBALS['bjlg_test_scheduled_events']['single'] as $event) {
+                if (($event['hook'] ?? '') !== $hook) {
+                    continue;
+                }
+
+                $event_args = isset($event['args']) ? (array) $event['args'] : [];
+
+                if ($has_args) {
+                    if ($event_args != (array) $args) {
+                        continue;
+                    }
+                } elseif (!empty($event_args)) {
+                    continue;
+                }
+
+                $timestamps[] = (int) $event['timestamp'];
+            }
+        }
 
         if (empty($timestamps)) {
             return false;

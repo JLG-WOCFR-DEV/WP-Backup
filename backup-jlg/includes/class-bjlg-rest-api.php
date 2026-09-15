@@ -22,6 +22,9 @@ if (!defined('ABSPATH')) {
 }
 
 require_once __DIR__ . '/class-bjlg-backup-path-resolver.php';
+if (!class_exists(__NAMESPACE__ . '\\BJLG_Backup_Integrity', false)) {
+    require_once __DIR__ . '/class-bjlg-backup-integrity.php';
+}
 require_once __DIR__ . '/class-bjlg-restore.php';
 require_once __DIR__ . '/class-bjlg-settings.php';
 require_once __DIR__ . '/class-bjlg-history.php';
@@ -3921,6 +3924,7 @@ class BJLG_REST_API {
             $compute_status = function () {
                 $backup_directory = bjlg_get_backup_directory();
                 $backup_files = glob($backup_directory . '*.zip*') ?: [];
+                $backup_files = BJLG_Backup_Integrity::filter_archive_paths($backup_files);
                 $disk_space_error = false;
                 $disk_free_space = null;
 
@@ -5471,6 +5475,7 @@ class BJLG_REST_API {
     private function get_total_backup_size() {
         $total = 0;
         $files = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
+        $files = BJLG_Backup_Integrity::filter_archive_paths($files);
 
         foreach ($files as $file) {
             $total += filesize($file);

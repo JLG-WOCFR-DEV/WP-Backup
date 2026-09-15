@@ -8,6 +8,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+if (!class_exists(__NAMESPACE__ . '\\BJLG_Backup_Integrity', false)) {
+    require_once __DIR__ . '/class-bjlg-backup-integrity.php';
+}
+
 /**
  * Actions AJAX (suppression de sauvegarde, etc.)
  */
@@ -179,6 +183,8 @@ class BJLG_Actions {
                 throw new Exception("Impossible de supprimer le fichier.");
             }
 
+            BJLG_Backup_Integrity::delete_sidecar($real_filepath);
+
             if (class_exists(BJLG_History::class)) {
                 BJLG_History::log('backup_deleted', 'success', 'Fichier : ' . $filename);
             }
@@ -215,17 +221,7 @@ class BJLG_Actions {
 
         list($filepath, $transient_key, $delete_after_download) = array_pad($validation, 3, false);
 
-        $this->log_download_event('backup_download_success', 'success', $token, $filepath);
-
-        delete_transient($transient_key);
-
-        self::stream_backup_file($filepath);
-
-        if ($delete_after_download && file_exists($filepath)) {
-            if (!@unlink($filepath)) {
-                BJLG_Debug::error(sprintf('Impossible de supprimer le fichier "%s" après téléchargement.', $filepath));
-            }
-        }
+        $this->deliver_validated_download($token, $filepath, $transient_key, (bool) $delete_after_download);
     }
 
     /**
@@ -255,16 +251,46 @@ class BJLG_Actions {
 
         list($filepath, $transient_key, $delete_after_download) = array_pad($validation, 3, false);
 
+        $this->deliver_validated_download($token, $filepath, $transient_key, (bool) $delete_after_download);
+    }
+
+    /**
+     * Diffuse le fichier après validation, en journalisant le succès seulement si le flux se termine.
+     *
+     * @param string $token
+     * @param string $filepath
+     * @param string $transient_key
+     * @param bool   $delete_after_download
+     * @return void
+     */
+    private function deliver_validated_download($token, $filepath, $transient_key, $delete_after_download) {
+        try {
+            $did_stream = self::stream_backup_file($filepath);
+        } catch (Exception $exception) {
+            $this->log_download_event(
+                'backup_download_failure',
+                'failure',
+                $token,
+                $filepath,
+                'Erreur: ' . $exception->getMessage()
+            );
+
+            throw $exception;
+        }
+
         $this->log_download_event('backup_download_success', 'success', $token, $filepath);
-
         delete_transient($transient_key);
-
-        self::stream_backup_file($filepath);
 
         if ($delete_after_download && file_exists($filepath)) {
             if (!@unlink($filepath)) {
                 BJLG_Debug::error(sprintf('Impossible de supprimer le fichier "%s" après téléchargement.', $filepath));
+            } else {
+                BJLG_Backup_Integrity::delete_sidecar($filepath);
             }
+        }
+
+        if ($did_stream) {
+            exit;
         }
     }
 
@@ -864,7 +890,7 @@ class BJLG_Actions {
         $short_circuit = apply_filters('bjlg_pre_stream_backup', null, $filepath);
 
         if ($short_circuit !== null) {
-            return;
+            return false;
         }
 
         if (!file_exists($filepath) || !is_readable($filepath)) {
@@ -873,7 +899,7 @@ class BJLG_Actions {
         }
 
         if (function_exists('ignore_user_abort')) {
-            ignore_user_abort(true);
+            ignore_user_abort(false);
         }
 
         if (function_exists('set_time_limit')) {
@@ -894,6 +920,19 @@ class BJLG_Actions {
         header('Content-Transfer-Encoding: binary');
         header('Connection: close');
 
+        try {
+            $checksum = BJLG_Backup_Integrity::read_sidecar($filepath);
+            if ($checksum === null && is_readable($filepath)) {
+                $checksum = BJLG_Backup_Integrity::hash_file($filepath);
+            }
+            if (is_string($checksum) && $checksum !== '') {
+                header('X-Checksum-SHA256: ' . $checksum);
+                header('Digest: SHA-256=' . $checksum);
+            }
+        } catch (Exception $exception) {
+            BJLG_Debug::log('Checksum indisponible pour le téléchargement : ' . $exception->getMessage(), 'warning');
+        }
+
         while (ob_get_level()) {
             ob_end_clean();
         }
@@ -904,18 +943,36 @@ class BJLG_Actions {
             wp_die('Impossible de lire le fichier de sauvegarde.', '', ['response' => 500]);
         }
 
+        $aborted = false;
+
         while (!feof($handle)) {
-            echo fread($handle, 8192);
+            if (function_exists('connection_aborted') && connection_aborted()) {
+                $aborted = true;
+                break;
+            }
+
+            $chunk = fread($handle, 8192);
+            if ($chunk === false) {
+                fclose($handle);
+                throw new Exception('Lecture du fichier de sauvegarde interrompue.');
+            }
+
+            echo $chunk;
             flush();
         }
 
         fclose($handle);
+
+        if ($aborted) {
+            throw new Exception('Téléchargement interrompu par le client.');
+        }
 
         if (function_exists('fastcgi_finish_request')) {
             fastcgi_finish_request();
         } else {
             flush();
         }
-        exit;
+
+        return true;
     }
 }

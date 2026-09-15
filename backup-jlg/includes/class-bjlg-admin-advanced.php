@@ -12,6 +12,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+if (!class_exists(__NAMESPACE__ . '\\BJLG_Backup_Integrity', false)) {
+    require_once __DIR__ . '/class-bjlg-backup-integrity.php';
+}
+
 /**
  * Advanced admin functionality (placeholder for future features)
  */
@@ -161,6 +165,10 @@ class BJLG_Admin_Advanced {
         if ($backup_dir && is_dir($backup_dir)) {
             $pattern = trailingslashit($backup_dir) . '*.zip*';
             $files = glob($pattern);
+
+            if (is_array($files) && !empty($files)) {
+                $files = BJLG_Backup_Integrity::filter_archive_paths($files);
+            }
 
             if (is_array($files) && !empty($files)) {
                 $metrics['storage']['backup_count'] = count($files);

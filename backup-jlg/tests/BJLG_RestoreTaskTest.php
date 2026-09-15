@@ -844,6 +844,74 @@ final class BJLG_RestoreTaskTest extends TestCase
         @unlink($incrementalArchive['path']);
     }
 
+    public function test_run_restore_task_errors_when_database_sql_is_missing(): void
+    {
+        $zip_filename = 'missing-db-' . uniqid('', true) . '.zip';
+        $zip_path = bjlg_get_backup_directory() . $zip_filename;
+
+        $zip = new ZipArchive();
+        $this->assertTrue($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true);
+        $zip->addFromString('backup-manifest.json', json_encode([
+            'type' => 'full',
+            'contains' => ['db'],
+        ]));
+        $zip->close();
+
+        $task_id = 'bjlg_restore_' . uniqid('missing-db', true);
+        set_transient($task_id, [
+            'progress' => 0,
+            'status' => 'pending',
+            'filename' => $zip_filename,
+            'filepath' => $zip_path,
+            'components' => ['db'],
+            'start_time' => time(),
+        ], HOUR_IN_SECONDS);
+
+        (new BJLG\BJLG_Restore())->run_restore_task($task_id);
+        $task = get_transient($task_id);
+
+        $this->assertIsArray($task);
+        $this->assertSame('error', $task['status']);
+        $this->assertStringContainsString('database.sql', (string) $task['status_text']);
+
+        @unlink($zip_path);
+        delete_transient($task_id);
+    }
+
+    public function test_run_restore_task_fails_when_full_plugin_component_has_no_files(): void
+    {
+        $zip_filename = 'missing-plugins-' . uniqid('', true) . '.zip';
+        $zip_path = bjlg_get_backup_directory() . $zip_filename;
+
+        $zip = new ZipArchive();
+        $this->assertTrue($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true);
+        $zip->addFromString('backup-manifest.json', json_encode([
+            'type' => 'full',
+            'contains' => ['plugins'],
+        ]));
+        $zip->close();
+
+        $task_id = 'bjlg_restore_' . uniqid('missing-plugins', true);
+        set_transient($task_id, [
+            'progress' => 0,
+            'status' => 'pending',
+            'filename' => $zip_filename,
+            'filepath' => $zip_path,
+            'components' => ['plugins'],
+            'start_time' => time(),
+        ], HOUR_IN_SECONDS);
+
+        (new BJLG\BJLG_Restore())->run_restore_task($task_id);
+        $task = get_transient($task_id);
+
+        $this->assertIsArray($task);
+        $this->assertSame('error', $task['status']);
+        $this->assertStringContainsString('aucun fichier', (string) $task['status_text']);
+
+        @unlink($zip_path);
+        delete_transient($task_id);
+    }
+
     private function removePath(string $path): void
     {
         if (is_file($path) || is_link($path)) {

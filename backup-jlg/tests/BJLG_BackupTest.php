@@ -805,4 +805,85 @@ final class BJLG_BackupTest extends TestCase
 
         $this->assertSame(['google_drive', 'aws_s3'], $queue);
     }
+
+    public function test_run_backup_task_fails_when_requested_encryption_is_not_applied(): void
+    {
+        $encryption = new class extends BJLG\BJLG_Encryption {
+            public function encrypt_backup_file($filepath, $password = null)
+            {
+                return $filepath;
+            }
+        };
+
+        $task_id = 'bjlg_backup_' . md5(uniqid('encrypt-fail', true));
+        set_transient($task_id, [
+            'progress' => 5,
+            'status' => 'pending',
+            'status_text' => 'Initialisation',
+            'components' => ['db'],
+            'encrypt' => true,
+            'incremental' => false,
+            'source' => 'tests',
+            'start_time' => time(),
+        ], HOUR_IN_SECONDS);
+
+        $previous_wpdb = $GLOBALS['wpdb'] ?? null;
+        $GLOBALS['wpdb'] = new class {
+            public $prefix = 'wp_';
+
+            public function get_results($query, $output = OBJECT)
+            {
+                if (stripos((string) $query, 'SHOW TABLES') === 0) {
+                    return [['wp_posts']];
+                }
+
+                return [];
+            }
+
+            public function get_row($query, $output = OBJECT)
+            {
+                if (stripos((string) $query, 'SHOW CREATE TABLE') === 0) {
+                    return ['wp_posts', 'CREATE TABLE `wp_posts` (`ID` bigint(20));'];
+                }
+
+                return null;
+            }
+
+            public function get_var($query)
+            {
+                return 0;
+            }
+        };
+
+        try {
+            $backup = new BJLG\BJLG_Backup(null, $encryption);
+            $backup->run_backup_task($task_id);
+            $task = get_transient($task_id);
+            $this->assertIsArray($task);
+            $this->assertSame('error', $task['status']);
+            $this->assertStringContainsString('chiffrement', strtolower((string) $task['status_text']));
+        } finally {
+            if ($previous_wpdb === null) {
+                unset($GLOBALS['wpdb']);
+            } else {
+                $GLOBALS['wpdb'] = $previous_wpdb;
+            }
+        }
+    }
+
+    public function test_mark_stale_task_if_needed_flags_stuck_backup(): void
+    {
+        $task_id = 'bjlg_backup_' . md5('stale');
+        set_transient($task_id, [
+            'progress' => 40,
+            'status' => 'running',
+            'status_text' => 'En cours',
+            'start_time' => time() - (46 * MINUTE_IN_SECONDS),
+        ], HOUR_IN_SECONDS);
+
+        $updated = BJLG\BJLG_Backup::mark_stale_task_if_needed($task_id, get_transient($task_id), 'sauvegarde');
+        $this->assertSame('error', $updated['status']);
+        $this->assertSame(100, $updated['progress']);
+        $this->assertStringContainsString('bloquée', $updated['status_text']);
+    }
 }

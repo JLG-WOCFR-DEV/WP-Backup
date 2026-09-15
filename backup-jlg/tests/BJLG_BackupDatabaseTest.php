@@ -88,6 +88,57 @@ final class BJLG_BackupDatabaseTest extends TestCase
         }
     }
 
+    public function test_backup_database_fails_when_show_create_table_fails(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+        $zip = new class extends ZipArchive {
+            public function addFile($filepath, $entryname = "", $start = 0, $length = ZipArchive::LENGTH_TO_END, $flags = ZipArchive::FL_OVERWRITE): bool
+            {
+                return true;
+            }
+        };
+
+        $previous_wpdb = $GLOBALS['wpdb'] ?? null;
+        $GLOBALS['wpdb'] = new class {
+            public $prefix = 'wp_';
+
+            public function get_results($query, $output = 'OBJECT')
+            {
+                if (stripos((string) $query, 'SHOW TABLES') === 0) {
+                    return [['wp_broken']];
+                }
+
+                return [];
+            }
+
+            public function get_row($query, $output = 'OBJECT', $y = 0)
+            {
+                return null;
+            }
+
+            public function get_var($query)
+            {
+                return 0;
+            }
+        };
+
+        try {
+            $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'backup_database');
+            $method->setAccessible(true);
+            $method->invokeArgs($backup, [&$zip, false]);
+            $this->fail('SHOW CREATE TABLE silently skipped the table.');
+        } catch (Exception $exception) {
+            $this->assertStringContainsString('SHOW CREATE TABLE a échoué', $exception->getMessage());
+            $this->assertStringContainsString('wp_broken', $exception->getMessage());
+        } finally {
+            if ($previous_wpdb === null) {
+                unset($GLOBALS['wpdb']);
+            } else {
+                $GLOBALS['wpdb'] = $previous_wpdb;
+            }
+        }
+    }
+
     public function test_backup_database_streams_content_into_zip_via_temp_file(): void
     {
         $backup = new BJLG\BJLG_Backup();

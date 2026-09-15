@@ -5,6 +5,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+if (!class_exists(__NAMESPACE__ . '\\BJLG_Backup_Integrity', false)) {
+    require_once __DIR__ . '/class-bjlg-backup-integrity.php';
+}
+
 /**
  * Gère les diagnostics et le bilan de santé du système et du plugin.
  */
@@ -74,39 +78,90 @@ class BJLG_Health_Check {
 
         // Vérifier la tâche de nettoyage
         $cleanup_timestamp = wp_next_scheduled(BJLG_Cleanup::CRON_HOOK);
-        
-        // Vérifier la tâche de sauvegarde planifiée
-        $backup_timestamp = wp_next_scheduled(BJLG_Scheduler::SCHEDULE_HOOK);
-        
+
         $messages = [];
-        
+        $has_error = false;
+        $has_warning = false;
+
         if ($cleanup_timestamp) {
             if ($cleanup_timestamp < time()) {
                 $messages[] = "Nettoyage en retard de " . human_time_diff($cleanup_timestamp, time());
+                $has_warning = true;
             } else {
                 $messages[] = "Nettoyage : " . get_date_from_gmt($this->format_gmt_datetime($cleanup_timestamp), 'd/m/Y H:i');
             }
         }
 
-        if ($backup_timestamp) {
-            if ($backup_timestamp < time()) {
-                $messages[] = "Sauvegarde en retard de " . human_time_diff($backup_timestamp, time());
-            } else {
-                $messages[] = "Sauvegarde : " . get_date_from_gmt($this->format_gmt_datetime($backup_timestamp), 'd/m/Y H:i');
+        $enabled_schedules = 0;
+        $missing_cron = 0;
+
+        if (class_exists(BJLG_Scheduler::class)) {
+            $scheduler = BJLG_Scheduler::instance();
+            $collection = $scheduler->get_schedule_settings();
+            $schedules = isset($collection['schedules']) && is_array($collection['schedules'])
+                ? $collection['schedules']
+                : [];
+
+            foreach ($schedules as $schedule) {
+                if (!is_array($schedule) || empty($schedule['id'])) {
+                    continue;
+                }
+
+                if (($schedule['recurrence'] ?? 'disabled') === 'disabled') {
+                    continue;
+                }
+
+                $enabled_schedules++;
+                $schedule_id = (string) $schedule['id'];
+                $backup_timestamp = wp_next_scheduled(BJLG_Scheduler::SCHEDULE_HOOK, [$schedule_id]);
+
+                if (!$backup_timestamp) {
+                    $missing_cron++;
+                    $has_error = true;
+                    $label = isset($schedule['label']) && is_string($schedule['label']) && $schedule['label'] !== ''
+                        ? $schedule['label']
+                        : $schedule_id;
+                    $messages[] = sprintf('Planification « %s » : aucune tâche cron active.', $label);
+                    continue;
+                }
+
+                $label = isset($schedule['label']) && is_string($schedule['label']) && $schedule['label'] !== ''
+                    ? $schedule['label']
+                    : $schedule_id;
+
+                if ($backup_timestamp < time()) {
+                    $messages[] = sprintf(
+                        'Sauvegarde « %s » en retard de %s',
+                        $label,
+                        human_time_diff($backup_timestamp, time())
+                    );
+                    $has_warning = true;
+                } else {
+                    $messages[] = sprintf(
+                        'Sauvegarde « %s » : %s',
+                        $label,
+                        get_date_from_gmt($this->format_gmt_datetime($backup_timestamp), 'd/m/Y H:i')
+                    );
+                }
             }
         }
-        
+
         if (empty($messages)) {
             return [
                 'status' => 'info',
                 'message' => 'Aucune tâche planifiée active.'
             ];
         }
-        
-        $has_warning = (strpos(implode(' ', $messages), 'retard') !== false);
-        
+
+        $status = 'success';
+        if ($has_error) {
+            $status = 'error';
+        } elseif ($has_warning) {
+            $status = 'warning';
+        }
+
         return [
-            'status' => $has_warning ? 'warning' : 'success',
+            'status' => $status,
             'message' => implode(' | ', $messages)
         ];
     }
@@ -170,6 +225,7 @@ XML;
 
         // Compter les sauvegardes
         $backups = glob(bjlg_get_backup_directory() . '*.zip*') ?: [];
+        $backups = BJLG_Backup_Integrity::filter_archive_paths($backups);
         $count = count($backups);
         $size = 0;
         foreach ($backups as $backup) {

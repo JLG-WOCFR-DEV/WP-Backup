@@ -1,3 +1,83 @@
+(function (root) {
+    'use strict';
+
+    function toNumber(value) {
+        const parsed = Number.parseFloat(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function interpretTaskProgress(data, options) {
+        const settings = options || {};
+        const progress = data && data.progress != null ? toNumber(data.progress) : 0;
+        const status = data && typeof data.status === 'string' ? data.status : '';
+        const statusText = (data && data.status_text) ? String(data.status_text) : '';
+
+        if (status === 'error') {
+            return {
+                done: true,
+                outcome: 'error',
+                message: statusText || settings.errorFallback || 'La tâche a échoué.',
+                progress: Math.max(progress, 100)
+            };
+        }
+
+        if (status === 'complete') {
+            return {
+                done: true,
+                outcome: 'success',
+                message: statusText || settings.successFallback || 'Terminé.',
+                progress: 100
+            };
+        }
+
+        if (status === 'warning' && progress >= 100) {
+            return {
+                done: true,
+                outcome: 'warning',
+                message: statusText || settings.warningFallback || 'Terminé avec des avertissements.',
+                progress: 100
+            };
+        }
+
+        if (progress >= 100 && status !== '' && status !== 'running' && status !== 'pending') {
+            return {
+                done: true,
+                outcome: 'error',
+                message: statusText || 'La tâche s’est arrêtée sans confirmation de succès.',
+                progress: 100
+            };
+        }
+
+        return {
+            done: false,
+            outcome: 'running',
+            message: statusText,
+            progress: progress
+        };
+    }
+
+    function shouldStopPolling(result, consecutiveFailures, elapsedMs, options) {
+        if (result && result.done) {
+            return true;
+        }
+
+        const settings = options || {};
+        const maxFailures = settings.maxFailures != null ? settings.maxFailures : 5;
+        const timeoutMs = settings.timeoutMs != null ? settings.timeoutMs : 45 * 60 * 1000;
+
+        if (consecutiveFailures >= maxFailures) {
+            return true;
+        }
+
+        return elapsedMs >= timeoutMs;
+    }
+
+    root.bjlgTaskProgress = {
+        interpret: interpretTaskProgress,
+        shouldStopPolling: shouldStopPolling
+    };
+})(typeof window !== 'undefined' ? window : globalThis);
+
 jQuery(function($) {
     'use strict';
 
@@ -1214,6 +1294,9 @@ $('#bjlg-backup-creation-form').on('submit.bjlgBackupAjax', function(e) {
                 debugReport += "\n\n--- 2. SUIVI DE LA PROGRESSION ---";
                 $debugOutput.text(debugReport);
             }
+            if (response.data.disk_space && response.data.disk_space.warning) {
+                setBackupStatusText(response.data.disk_space.warning);
+            }
             pollBackupProgress(response.data.task_id);
         } else {
             const errorMessage = response && response.data && response.data.message
@@ -1235,6 +1318,8 @@ $('#bjlg-backup-creation-form').on('submit.bjlgBackupAjax', function(e) {
     });
 
     function pollBackupProgress(taskId) {
+        const startedAt = Date.now();
+        let consecutiveFailures = 0;
         const interval = setInterval(function() {
             $.ajax({
                 url: bjlg_ajax.ajax_url, type: 'POST',
@@ -1242,28 +1327,43 @@ $('#bjlg-backup-creation-form').on('submit.bjlgBackupAjax', function(e) {
             })
             .done(function(response) {
                 if (response.success && response.data) {
+                    consecutiveFailures = 0;
                     const data = response.data;
-                    setBackupStatusText(data.status_text || 'Progression...');
+                    const result = window.bjlgTaskProgress.interpret(data, {
+                        errorFallback: 'La sauvegarde a échoué.',
+                        successFallback: 'Sauvegarde terminée.',
+                        warningFallback: 'Sauvegarde terminée avec des avertissements.'
+                    });
+
+                    setBackupStatusText(result.message || 'Progression...');
                     setBackupBusyState(true);
+                    updateBackupProgress(result.progress);
 
-                    const progressValue = Number.parseFloat(data.progress);
-                    updateBackupProgress(progressValue);
-
-                    if (Number.isFinite(progressValue) && progressValue >= 100) {
+                    if (window.bjlgTaskProgress.shouldStopPolling(result, consecutiveFailures, Date.now() - startedAt)) {
                         clearInterval(interval);
-                        if (data.status === 'error') {
-                            setBackupBusyState(false);
-                            setBackupStatusText('❌ Erreur : ' + (data.status_text || 'La sauvegarde a échoué.'));
-                            $button.prop('disabled', false);
-                        } else {
-                            setBackupBusyState(false);
-                            updateBackupProgress(100);
-                            setBackupStatusText('✔️ Terminé ! La page va se recharger.');
-                            setTimeout(() => window.location.reload(), 2000);
+                        setBackupBusyState(false);
+                        $button.prop('disabled', false);
+
+                        if (result.outcome === 'error') {
+                            setBackupStatusText('❌ Erreur : ' + result.message);
+                            return;
                         }
-                        return;
+
+                        if (result.outcome === 'warning') {
+                            updateBackupProgress(100);
+                            setBackupStatusText('⚠️ ' + result.message);
+                            return;
+                        }
+
+                        updateBackupProgress(100);
+                        setBackupStatusText('✔️ ' + result.message + ' La page va se recharger.');
+                        setTimeout(() => window.location.reload(), 2000);
                     }
-                } else {
+                    return;
+                }
+
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
                     clearInterval(interval);
                     setBackupBusyState(false);
                     setBackupStatusText('❌ Erreur : La tâche de sauvegarde a été perdue.');
@@ -1271,10 +1371,13 @@ $('#bjlg-backup-creation-form').on('submit.bjlgBackupAjax', function(e) {
                 }
             })
             .fail(function() {
-                 clearInterval(interval);
-                 setBackupBusyState(false);
-                 setBackupStatusText('❌ Erreur de communication lors du suivi.');
-                 $button.prop('disabled', false);
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
+                    clearInterval(interval);
+                    setBackupBusyState(false);
+                    setBackupStatusText('❌ Erreur de communication lors du suivi.');
+                    $button.prop('disabled', false);
+                }
             });
         }, 3000);
     }
@@ -1814,6 +1917,8 @@ $('#bjlg-restore-form').on('submit.bjlgRestoreAjax', function(e) {
             nonce: '***',
             task_id: taskId
         });
+        const startedAt = Date.now();
+        let consecutiveFailures = 0;
         const interval = setInterval(function() {
             $.ajax({
                 url: bjlg_ajax.ajax_url,
@@ -1827,32 +1932,47 @@ $('#bjlg-restore-form').on('submit.bjlgRestoreAjax', function(e) {
             .done(function(response) {
                 appendRestoreDebug('Mise à jour progression', response);
                 if (response.success && response.data) {
+                    consecutiveFailures = 0;
                     const data = response.data;
+                    const result = window.bjlgTaskProgress.interpret(data, {
+                        errorFallback: 'La restauration a échoué.',
+                        successFallback: 'Restauration terminée.',
+                        warningFallback: 'Restauration terminée avec des avertissements.'
+                    });
 
-                    if (data.status_text) {
-                        setRestoreStatusText(data.status_text);
+                    if (result.message) {
+                        setRestoreStatusText(result.message);
                     }
 
                     setRestoreBusyState(true);
+                    updateRestoreProgress(result.progress);
 
-                    const progressValue = Number.parseFloat(data.progress);
-                    updateRestoreProgress(progressValue);
-
-                    if (data.status === 'error') {
+                    if (window.bjlgTaskProgress.shouldStopPolling(result, consecutiveFailures, Date.now() - startedAt)) {
                         clearInterval(interval);
-                        const message = data.status_text || 'La restauration a échoué.';
-                        displayRestoreErrors(message, getValidationErrors(data));
                         setRestoreBusyState(false);
-                        setRestoreStatusText('❌ ' + message);
                         $button.prop('disabled', false);
-                    } else if (data.status === 'complete' || (Number.isFinite(progressValue) && progressValue >= 100)) {
-                        clearInterval(interval);
-                        setRestoreBusyState(false);
+
+                        if (result.outcome === 'error') {
+                            displayRestoreErrors(result.message, getValidationErrors(data));
+                            setRestoreStatusText('❌ ' + result.message);
+                            return;
+                        }
+
+                        if (result.outcome === 'warning') {
+                            updateRestoreProgress(100);
+                            setRestoreStatusText('⚠️ ' + result.message);
+                            return;
+                        }
+
                         updateRestoreProgress(100);
-                        setRestoreStatusText('✔️ Restauration terminée ! La page va se recharger.');
+                        setRestoreStatusText('✔️ ' + result.message + ' La page va se recharger.');
                         setTimeout(() => window.location.reload(), 3000);
                     }
-                } else {
+                    return;
+                }
+
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
                     clearInterval(interval);
                     const message = response && response.data && response.data.message
                         ? response.data.message
@@ -1870,10 +1990,13 @@ $('#bjlg-restore-form').on('submit.bjlgRestoreAjax', function(e) {
                         responseText: xhr ? xhr.responseText : 'Aucune réponse'
                     }
                 );
-                clearInterval(interval);
-                setRestoreBusyState(false);
-                setRestoreStatusText('❌ Erreur de communication lors du suivi de la restauration.');
-                $button.prop('disabled', false);
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
+                    clearInterval(interval);
+                    setRestoreBusyState(false);
+                    setRestoreStatusText('❌ Erreur de communication lors du suivi de la restauration.');
+                    $button.prop('disabled', false);
+                }
             });
         }, 3000);
     }

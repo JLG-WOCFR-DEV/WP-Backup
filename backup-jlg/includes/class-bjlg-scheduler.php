@@ -2007,6 +2007,8 @@ class BJLG_Scheduler {
             wp_send_json_error(['message' => $error_message]);
         }
 
+        BJLG_Backup::spawn_scheduled_cron();
+
         if (($schedule['recurrence'] ?? '') === 'custom') {
             $this->schedule_custom_follow_up($schedule);
         }
@@ -2041,47 +2043,51 @@ class BJLG_Scheduler {
             return;
         }
 
-        $task_id = 'bjlg_backup_' . md5(uniqid('scheduled', true));
+        try {
+            $task_id = 'bjlg_backup_' . md5(uniqid('scheduled', true));
 
-        $task_data = [
-            'progress' => 5,
-            'status' => 'pending',
-            'status_text' => 'Initialisation (planifiée)...',
-            'components' => $schedule['components'],
-            'encrypt' => $schedule['encrypt'],
-            'incremental' => $schedule['incremental'],
-            'source' => 'scheduled',
-            'start_time' => time(),
-            'include_patterns' => $schedule['include_patterns'],
-            'exclude_patterns' => $schedule['exclude_patterns'],
-            'post_checks' => $schedule['post_checks'],
-            'secondary_destinations' => $schedule['secondary_destinations'],
-            'secondary_destination_batches' => $schedule['secondary_destination_batches'] ?? [],
-            'schedule_id' => $schedule['id'],
-        ];
+            $task_data = [
+                'progress' => 5,
+                'status' => 'pending',
+                'status_text' => 'Initialisation (planifiée)...',
+                'components' => $schedule['components'],
+                'encrypt' => $schedule['encrypt'],
+                'incremental' => $schedule['incremental'],
+                'source' => 'scheduled',
+                'start_time' => time(),
+                'include_patterns' => $schedule['include_patterns'],
+                'exclude_patterns' => $schedule['exclude_patterns'],
+                'post_checks' => $schedule['post_checks'],
+                'secondary_destinations' => $schedule['secondary_destinations'],
+                'secondary_destination_batches' => $schedule['secondary_destination_batches'] ?? [],
+                'schedule_id' => $schedule['id'],
+            ];
 
-        $transient_set = set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
+            $transient_set = set_transient($task_id, $task_data, BJLG_Backup::get_task_ttl());
 
-        if (!$transient_set) {
-            BJLG_Debug::log("ERREUR : Impossible d'initialiser la tâche de sauvegarde planifiée $task_id.");
-            BJLG_History::log('scheduled_backup', 'failure', "Échec de l'initialisation de la sauvegarde planifiée.");
-            return;
-        }
+            if (!$transient_set) {
+                BJLG_Debug::log("ERREUR : Impossible d'initialiser la tâche de sauvegarde planifiée $task_id.");
+                BJLG_History::log('scheduled_backup', 'failure', "Échec de l'initialisation de la sauvegarde planifiée.");
+                return;
+            }
 
-        $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
+            $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
 
-        if (!$scheduled) {
-            delete_transient($task_id);
-            BJLG_Debug::log("ERREUR : Impossible de planifier l'événement de sauvegarde pour la tâche $task_id.");
-            BJLG_History::log('scheduled_backup', 'failure', "Échec de la planification de la sauvegarde planifiée.");
-            return;
-        }
+            if (!$scheduled) {
+                delete_transient($task_id);
+                BJLG_Debug::log("ERREUR : Impossible de planifier l'événement de sauvegarde pour la tâche $task_id.");
+                BJLG_History::log('scheduled_backup', 'failure', "Échec de la planification de la sauvegarde planifiée.");
+                return;
+            }
 
-        BJLG_Debug::log(sprintf('Sauvegarde planifiée déclenchée automatiquement (%s) - Task ID: %s', $schedule['id'], $task_id));
-        BJLG_History::log('scheduled_backup', 'info', sprintf('Planification "%s" exécutée automatiquement.', $schedule['label'] ?? $schedule['id']));
+            BJLG_Backup::spawn_scheduled_cron();
 
-        if (($schedule['recurrence'] ?? '') === 'custom') {
-            $this->schedule_custom_follow_up($schedule);
+            BJLG_Debug::log(sprintf('Sauvegarde planifiée déclenchée automatiquement (%s) - Task ID: %s', $schedule['id'], $task_id));
+            BJLG_History::log('scheduled_backup', 'info', sprintf('Planification "%s" exécutée automatiquement.', $schedule['label'] ?? $schedule['id']));
+        } finally {
+            if (($schedule['recurrence'] ?? '') === 'custom') {
+                $this->schedule_custom_follow_up($schedule);
+            }
         }
     }
     
@@ -3682,6 +3688,8 @@ class BJLG_Scheduler {
 
             return false;
         }
+
+        BJLG_Backup::spawn_scheduled_cron();
 
         $label = $this->get_trigger_label($trigger_key);
         $sample_preview = '';

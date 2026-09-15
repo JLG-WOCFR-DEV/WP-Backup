@@ -507,6 +507,9 @@ if (!function_exists('bjlg_get_backup_size')) {
         $total_size = 0;
         $files = glob(bjlg_get_backup_directory() . '*.zip*');
         if (!empty($files)) {
+            if (class_exists('\\BJLG\\BJLG_Backup_Integrity')) {
+                $files = \BJLG\BJLG_Backup_Integrity::filter_archive_paths($files);
+            }
             foreach ($files as $file) {
                 if (is_file($file)) {
                     $total_size += filesize($file);
@@ -582,7 +585,7 @@ final class BJLG_Plugin {
 
         $files_to_load = [
             'class-bjlg-debug.php', 'class-bjlg-client-ip-helper.php', 'class-bjlg-history.php', 'class-bjlg-site-context.php', 'class-bjlg-settings.php',
-            'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php',
+            'class-bjlg-backup-integrity.php', 'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php',
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
             'class-bjlg-notification-transport.php', 'class-bjlg-notification-receipts.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-storage-metrics.php', 'class-bjlg-remote-purge-worker.php',
