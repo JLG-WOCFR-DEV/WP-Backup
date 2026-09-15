@@ -697,6 +697,28 @@ final class BJLG_SchedulerTest extends TestCase
         $this->assertArrayNotHasKey($hook, $GLOBALS['bjlg_test_scheduled_events']['recurring']);
     }
 
+    public function test_add_custom_schedules_does_not_recurse_through_wp_get_schedules(): void
+    {
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+
+        $schedules = wp_get_schedules();
+
+        $this->assertIsArray($schedules);
+        $this->assertArrayHasKey('every_five_minutes', $schedules);
+        $this->assertArrayHasKey('hourly', $schedules);
+        $this->assertSame(5 * MINUTE_IN_SECONDS, $schedules['every_five_minutes']['interval']);
+
+        $again = $scheduler->add_custom_schedules([]);
+        $this->assertArrayHasKey('monthly', $again);
+    }
+
+    public function test_scheduler_constructor_is_private(): void
+    {
+        $reflection = new ReflectionClass(BJLG\BJLG_Scheduler::class);
+        $this->assertTrue($reflection->getConstructor()->isPrivate());
+        $this->assertInstanceOf(BJLG\BJLG_Scheduler::class, BJLG\BJLG_Scheduler::instance());
+    }
+
     private function computeExpectedMonthlyTimestamp(\DateTimeImmutable $now, int $dayOfMonth, int $hour, int $minute): int
     {
         $targetDay = min($dayOfMonth, (int) $now->format('t'));

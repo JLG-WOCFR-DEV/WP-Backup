@@ -3940,7 +3940,7 @@ class BJLG_Admin {
         ];
 
         if (class_exists(BJLG_Scheduler::class)) {
-            $scheduler = new BJLG_Scheduler();
+            $scheduler = BJLG_Scheduler::instance();
             if (method_exists($scheduler, 'get_sandbox_schedule_settings')) {
                 $sandbox_settings = $scheduler->get_sandbox_schedule_settings();
             }

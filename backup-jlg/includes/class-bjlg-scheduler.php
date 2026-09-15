@@ -65,6 +65,13 @@ class BJLG_Scheduler {
     private static $sandbox_custom_schedule = null;
 
     /**
+     * Empêche wp_get_schedules() de ré-entrer dans ce filtre.
+     *
+     * @var bool
+     */
+    private static $inside_cron_schedules = false;
+
+    /**
      * Retourne l'instance unique du planificateur.
      *
      * @return BJLG_Scheduler
@@ -562,51 +569,100 @@ class BJLG_Scheduler {
      * Ajoute des intervalles de planification personnalisés
      */
     public function add_custom_schedules($schedules) {
+        if (!is_array($schedules)) {
+            $schedules = [];
+        }
+
+        $schedules = $this->merge_builtin_custom_schedules($schedules);
+
+        if (self::$inside_cron_schedules) {
+            return $schedules;
+        }
+
+        self::$inside_cron_schedules = true;
+
+        try {
+            $sandbox_settings = $this->get_sandbox_schedule_settings();
+            if (isset($sandbox_settings['recurrence']) && $sandbox_settings['recurrence'] === 'custom') {
+                $sandbox_schedule = $this->resolve_sandbox_schedule_slug($sandbox_settings);
+
+                if (!empty($sandbox_schedule['slug']) && !empty($sandbox_schedule['interval'])) {
+                    $label = sprintf(
+                        __('Validation sandbox toutes les %s', 'backup-jlg'),
+                        $this->format_interval_label((int) $sandbox_schedule['interval'])
+                    );
+
+                    $schedules[$sandbox_schedule['slug']] = [
+                        'interval' => (int) $sandbox_schedule['interval'],
+                        'display' => $this->get_schedule_label($label),
+                    ];
+
+                    self::$sandbox_custom_schedule = $sandbox_schedule;
+                }
+            }
+        } finally {
+            self::$inside_cron_schedules = false;
+        }
+
+        return $schedules;
+    }
+
+    /**
+     * Intervalles fournis par le plugin, sans lecture d'options ni wp_get_schedules().
+     *
+     * @param array<string, array<string, mixed>> $schedules
+     * @return array<string, array<string, mixed>>
+     */
+    private function merge_builtin_custom_schedules(array $schedules): array {
         $schedules['every_five_minutes'] = [
             'interval' => 5 * MINUTE_IN_SECONDS,
-            'display' => $this->get_schedule_label('Toutes les 5 minutes')
+            'display' => $this->get_schedule_label('Toutes les 5 minutes'),
         ];
 
         $schedules['every_fifteen_minutes'] = [
             'interval' => 15 * MINUTE_IN_SECONDS,
-            'display' => $this->get_schedule_label('Toutes les 15 minutes')
+            'display' => $this->get_schedule_label('Toutes les 15 minutes'),
         ];
 
         $schedules['weekly'] = [
             'interval' => WEEK_IN_SECONDS,
-            'display' => $this->get_schedule_label('Une fois par semaine')
+            'display' => $this->get_schedule_label('Une fois par semaine'),
         ];
 
         $schedules['monthly'] = [
             'interval' => MONTH_IN_SECONDS,
-            'display' => $this->get_schedule_label('Une fois par mois')
+            'display' => $this->get_schedule_label('Une fois par mois'),
         ];
 
         $schedules['twice_daily'] = [
             'interval' => 12 * HOUR_IN_SECONDS,
-            'display' => $this->get_schedule_label('Deux fois par jour')
+            'display' => $this->get_schedule_label('Deux fois par jour'),
         ];
 
-        $sandbox_settings = $this->get_sandbox_schedule_settings();
-        if (isset($sandbox_settings['recurrence']) && $sandbox_settings['recurrence'] === 'custom') {
-            $sandbox_schedule = $this->resolve_sandbox_schedule_slug($sandbox_settings);
+        return $schedules;
+    }
 
-            if (!empty($sandbox_schedule['slug']) && !empty($sandbox_schedule['interval'])) {
-                $label = sprintf(
-                    __('Validation sandbox toutes les %s', 'backup-jlg'),
-                    $this->format_interval_label((int) $sandbox_schedule['interval'])
-                );
+    /**
+     * Slug WP-Cron pour un intervalle sandbox personnalisé.
+     *
+     * @param array<string, mixed> $settings
+     * @return array{slug: string, interval: int}
+     */
+    private function resolve_sandbox_schedule_slug(array $settings): array {
+        $interval = 0;
 
-                $schedules[$sandbox_schedule['slug']] = [
-                    'interval' => (int) $sandbox_schedule['interval'],
-                    'display' => $this->get_schedule_label($label),
-                ];
-
-                self::$sandbox_custom_schedule = $sandbox_schedule;
-            }
+        if (isset($settings['custom_interval']) && is_numeric($settings['custom_interval'])) {
+            $interval = (int) $settings['custom_interval'];
+        } elseif (isset($settings['custom_interval_minutes']) && is_numeric($settings['custom_interval_minutes'])) {
+            $interval = (int) $settings['custom_interval_minutes'] * MINUTE_IN_SECONDS;
         }
 
-        return $schedules;
+        $interval = max(5 * MINUTE_IN_SECONDS, $interval);
+
+        return [
+            'slug' => 'bjlg_sandbox_every_' . $interval,
+            'interval' => $interval,
+        ];
     }
 
     /**
@@ -2692,7 +2748,7 @@ class BJLG_Scheduler {
         $stored = \bjlg_get_option(self::SANDBOX_SCHEDULE_OPTION, []);
         $sanitized = $this->sanitize_sandbox_schedule_settings($stored);
 
-        if (!is_array($stored) || $stored !== $sanitized) {
+        if (!self::$inside_cron_schedules && (!is_array($stored) || $stored !== $sanitized)) {
             $this->save_sandbox_schedule_settings($sanitized);
         }
 
@@ -2811,15 +2867,21 @@ class BJLG_Scheduler {
 
         $sanitized['enabled'] = !empty($input['enabled']);
 
-        $requested_recurrence = isset($input['recurrence']) ? (string) $input['recurrence'] : $defaults['recurrence'];
-        $allowed = wp_get_schedules();
+        $requested_recurrence = isset($input['recurrence']) ? sanitize_key((string) $input['recurrence']) : $defaults['recurrence'];
+        $allowed = $this->get_known_sandbox_recurrence_slugs();
         if ($requested_recurrence === 'disabled') {
             $sanitized['enabled'] = false;
             $sanitized['recurrence'] = 'disabled';
-        } elseif (isset($allowed[$requested_recurrence])) {
+        } elseif (isset($allowed[$requested_recurrence]) || strpos($requested_recurrence, 'bjlg_sandbox_every_') === 0) {
             $sanitized['recurrence'] = $requested_recurrence;
         } else {
             $sanitized['recurrence'] = $defaults['recurrence'];
+        }
+
+        if (isset($input['custom_interval']) && is_numeric($input['custom_interval'])) {
+            $sanitized['custom_interval'] = max(5 * MINUTE_IN_SECONDS, (int) $input['custom_interval']);
+        } elseif (isset($input['custom_interval_minutes']) && is_numeric($input['custom_interval_minutes'])) {
+            $sanitized['custom_interval'] = max(5 * MINUTE_IN_SECONDS, (int) $input['custom_interval_minutes'] * MINUTE_IN_SECONDS);
         }
 
         if (!empty($input['components']) && is_array($input['components'])) {
@@ -2844,6 +2906,26 @@ class BJLG_Scheduler {
         }
 
         return $sanitized;
+    }
+
+    /**
+     * Recurrences sandbox reconnues sans appeler wp_get_schedules() (filtre cron_schedules).
+     *
+     * @return array<string, bool>
+     */
+    private function get_known_sandbox_recurrence_slugs(): array {
+        return [
+            'disabled' => true,
+            'custom' => true,
+            'hourly' => true,
+            'twicedaily' => true,
+            'twice_daily' => true,
+            'daily' => true,
+            'weekly' => true,
+            'monthly' => true,
+            'every_five_minutes' => true,
+            'every_fifteen_minutes' => true,
+        ];
     }
 
     private function normalize_schedule_settings($settings) {

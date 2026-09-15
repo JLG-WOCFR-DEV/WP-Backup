@@ -511,6 +511,14 @@ if (!defined('DAY_IN_SECONDS')) {
     define('DAY_IN_SECONDS', 86400);
 }
 
+if (!defined('WEEK_IN_SECONDS')) {
+    define('WEEK_IN_SECONDS', 604800);
+}
+
+if (!defined('MONTH_IN_SECONDS')) {
+    define('MONTH_IN_SECONDS', 2592000);
+}
+
 if (!function_exists('absint')) {
     function absint($maybeint) {
         return abs((int) $maybeint);
@@ -1059,6 +1067,11 @@ if (!function_exists('add_filter')) {
 
 if (!function_exists('do_action')) {
     function do_action($hook, ...$args) {
+        if (!isset($GLOBALS['wp_actions']) || !is_array($GLOBALS['wp_actions'])) {
+            $GLOBALS['wp_actions'] = [];
+        }
+        $GLOBALS['wp_actions'][$hook] = (int) ($GLOBALS['wp_actions'][$hook] ?? 0) + 1;
+
         if (empty($GLOBALS['bjlg_test_hooks']['actions'][$hook])) {
             return;
         }
@@ -1072,6 +1085,16 @@ if (!function_exists('do_action')) {
                 call_user_func_array($definition['callback'], $callback_args);
             }
         }
+    }
+}
+
+if (!function_exists('did_action')) {
+    function did_action($hook_name) {
+        if (!isset($GLOBALS['wp_actions']) || !is_array($GLOBALS['wp_actions'])) {
+            return 0;
+        }
+
+        return (int) ($GLOBALS['wp_actions'][$hook_name] ?? 0);
     }
 }
 
@@ -2432,12 +2455,19 @@ if (!function_exists('wp_schedule_event')) {
 
 if (!function_exists('wp_get_schedules')) {
     function wp_get_schedules() {
-        return [
+        $schedules = [
             'hourly' => ['interval' => HOUR_IN_SECONDS, 'display' => 'Once Hourly'],
             'twicedaily' => ['interval' => 12 * HOUR_IN_SECONDS, 'display' => 'Twice Daily'],
             'daily' => ['interval' => DAY_IN_SECONDS, 'display' => 'Once Daily'],
             'weekly' => ['interval' => 7 * DAY_IN_SECONDS, 'display' => 'Once Weekly'],
         ];
+
+        $extra = apply_filters('cron_schedules', []);
+        if (!is_array($extra)) {
+            $extra = [];
+        }
+
+        return array_merge($extra, $schedules);
     }
 }
 
@@ -2624,6 +2654,16 @@ if (!function_exists('add_query_arg')) {
         $queryStr = $parsed_url['query'] ? '?' . $parsed_url['query'] : '';
 
         return $scheme . '://' . $host . $port . $path . $queryStr;
+    }
+}
+
+if (!function_exists('remove_query_arg')) {
+    function remove_query_arg($key, $query = false) {
+        if ($query === false || $query === '') {
+            $query = 'https://example.com/';
+        }
+
+        return add_query_arg($key, false, $query);
     }
 }
 
