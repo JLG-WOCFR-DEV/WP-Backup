@@ -588,8 +588,17 @@ $('.bjlg-settings-form').on('submit', function(e) {
 
 function collectFormData($form) {
     const data = {};
+    const ignoredFields = {
+        option_page: true,
+        _wpnonce: true,
+        _wp_http_referer: true
+    };
 
     $.each($form.serializeArray(), function(_, field) {
+        if (!field || ignoredFields[field.name] || (field.name === 'action' && field.value === 'update')) {
+            return;
+        }
+
         if (Object.prototype.hasOwnProperty.call(data, field.name)) {
             if (!Array.isArray(data[field.name])) {
                 data[field.name] = [data[field.name]];

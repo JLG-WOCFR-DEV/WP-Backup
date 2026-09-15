@@ -148,4 +148,51 @@ final class BJLG_SettingsDefaultsTest extends TestCase
             'email' => ['enabled' => false, 'recipients' => ''],
         ], $stored['reminder']['channels']);
     }
+
+    public function test_register_settings_declares_plugin_options_without_cloud_credentials(): void
+    {
+        $GLOBALS['bjlg_test_registered_settings'] = [];
+
+        $settings = new BJLG_Settings();
+        $settings->register_settings();
+
+        $registered = $GLOBALS['bjlg_test_registered_settings'][BJLG_Settings::SETTINGS_GROUP] ?? [];
+        $option_names = BJLG_Settings::get_settings_api_options();
+
+        $this->assertNotEmpty($option_names);
+        foreach ($option_names as $option_name) {
+            $this->assertArrayHasKey($option_name, $registered);
+            $this->assertFalse($registered[$option_name]['show_in_rest']);
+            $this->assertSame('array', $registered[$option_name]['type']);
+            $this->assertIsCallable($registered[$option_name]['sanitize_callback']);
+        }
+
+        $this->assertContains('bjlg_cleanup_settings', $option_names);
+        $this->assertNotContains('bjlg_s3_settings', $option_names);
+        $this->assertNotContains('bjlg_gdrive_settings', $option_names);
+    }
+
+    public function test_settings_fields_helper_outputs_settings_api_markers(): void
+    {
+        ob_start();
+        BJLG_Settings::render_settings_fields();
+        $html = (string) ob_get_clean();
+
+        $this->assertStringContainsString('name="option_page"', $html);
+        $this->assertStringContainsString('bjlg_plugin_settings', $html);
+        $this->assertStringContainsString('name="action"', $html);
+        $this->assertStringContainsString('value="update"', $html);
+    }
+
+    public function test_sanitize_registered_option_keeps_cleanup_bounds(): void
+    {
+        $settings = new BJLG_Settings();
+        $sanitized = $settings->sanitize_registered_option('bjlg_cleanup_settings', [
+            'by_number' => -4,
+            'by_age' => 12,
+        ]);
+
+        $this->assertSame(0, $sanitized['by_number']);
+        $this->assertSame(12, $sanitized['by_age']);
+    }
 }

@@ -10,6 +10,7 @@
  * Text Domain: backup-jlg
  * Requires PHP: 7.4
  * Requires at least: 5.0
+ * Tested up to: 7.1
  */
 if (!defined('ABSPATH')) exit;
 

@@ -1123,6 +1123,51 @@ if (!function_exists('wp_nonce_field')) {
     }
 }
 
+if (!function_exists('submit_button')) {
+    function submit_button($text = null, $type = 'primary', $name = 'submit', $wrap = true, $other_attributes = null) {
+        $text = $text === null ? 'Save Changes' : (string) $text;
+        $classes = 'button';
+        $type = is_array($type) ? implode(' ', $type) : (string) $type;
+
+        foreach (preg_split('/\s+/', $type) as $token) {
+            if ($token === '') {
+                continue;
+            }
+            $classes .= $token === 'primary' || $token === 'secondary' || $token === 'delete'
+                ? ' button-' . $token
+                : ' ' . $token;
+        }
+
+        $button = '<input type="submit" name="' . esc_attr((string) $name) . '" class="' . esc_attr($classes) . '" value="' . esc_attr($text) . '" />';
+
+        if ($wrap) {
+            $button = '<p class="submit">' . $button . '</p>';
+        }
+
+        echo $button;
+
+        return $button;
+    }
+}
+
+if (!function_exists('register_setting')) {
+    function register_setting($option_group, $option_name, $args = []) {
+        if (!isset($GLOBALS['bjlg_test_registered_settings'])) {
+            $GLOBALS['bjlg_test_registered_settings'] = [];
+        }
+
+        $GLOBALS['bjlg_test_registered_settings'][$option_group][$option_name] = $args;
+    }
+}
+
+if (!function_exists('settings_fields')) {
+    function settings_fields($option_group) {
+        echo '<input type="hidden" name="option_page" value="' . esc_attr($option_group) . '" />';
+        echo '<input type="hidden" name="action" value="update" />';
+        wp_nonce_field($option_group . '-options');
+    }
+}
+
 if (!function_exists('check_ajax_referer')) {
     function check_ajax_referer($action = -1, $query_arg = false, $die = true) {
         return true;

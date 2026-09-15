@@ -15,6 +15,8 @@ class BJLG_Settings {
     /** @var self|null */
     private static $instance = null;
 
+    public const SETTINGS_GROUP = 'bjlg_plugin_settings';
+
     private const VALID_SCHEDULE_RECURRENCES = [
         'disabled',
         'every_five_minutes',
@@ -538,6 +540,7 @@ class BJLG_Settings {
 
         // Initialiser les paramètres par défaut si nécessaire
         add_action('init', [$this, 'init_default_settings']);
+        add_action('admin_init', [$this, 'register_settings']);
     }
 
     /**
@@ -549,6 +552,73 @@ class BJLG_Settings {
         }
 
         return self::$instance;
+    }
+
+    /**
+     * Options déclarées via l’API Réglages WordPress (hors destinations cloud).
+     *
+     * L’enregistrement AJAX reste le chemin opérationnel afin de conserver
+     * le contexte multisite (`bjlg_update_option`) et les effets de bord
+     * (planification, chiffrement). `options.php` n’est pas utilisé.
+     *
+     * @return list<string>
+     */
+    public static function get_settings_api_options(): array {
+        return [
+            'bjlg_cleanup_settings',
+            'bjlg_whitelabel_settings',
+            'bjlg_encryption_settings',
+            'bjlg_incremental_settings',
+            'bjlg_notification_settings',
+            'bjlg_update_guard_settings',
+            'bjlg_performance_settings',
+            'bjlg_monitoring_settings',
+            'bjlg_webhook_settings',
+            'bjlg_advanced_settings',
+        ];
+    }
+
+    /**
+     * Déclare les réglages du plugin auprès de l’API Settings WordPress.
+     */
+    public function register_settings(): void {
+        if (!function_exists('register_setting')) {
+            return;
+        }
+
+        foreach (self::get_settings_api_options() as $option_name) {
+            $option = $option_name;
+            register_setting(self::SETTINGS_GROUP, $option_name, [
+                'type' => 'array',
+                'sanitize_callback' => function ($value) use ($option) {
+                    return $this->sanitize_registered_option($option, $value);
+                },
+                'show_in_rest' => false,
+                'default' => [],
+            ]);
+        }
+    }
+
+    /**
+     * Callback Settings API : réutilise les règles d’import existantes.
+     *
+     * @param string     $option
+     * @param mixed      $value
+     * @return array<string,mixed>
+     */
+    public function sanitize_registered_option($option, $value) {
+        $sanitized = $this->sanitize_imported_option((string) $option, is_array($value) ? $value : []);
+
+        return is_array($sanitized) ? $sanitized : [];
+    }
+
+    /**
+     * Champs Settings API à insérer dans les formulaires de réglages.
+     */
+    public static function render_settings_fields(): void {
+        if (function_exists('settings_fields')) {
+            settings_fields(self::SETTINGS_GROUP);
+        }
     }
     
     /**

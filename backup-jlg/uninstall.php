@@ -64,6 +64,7 @@ if ( ! function_exists( 'bjlg_uninstall_site' ) ) {
             'bjlg_enabled_modules',
             'bjlg_api_keys',
             'bjlg_settings',
+            'bjlg_enable_modern_admin',
             'bjlg_performance_settings',
             'bjlg_performance_stats',
             'bjlg_whitelabel_settings',

@@ -41,7 +41,7 @@ Backup JLG est un plugin WordPress complet de sauvegarde et restauration qui com
 
 ## ⚙️ Dépendances et prérequis
 - PHP ≥ 7.4 avec les fonctions `shell_exec` et `proc_open` disponibles pour tirer parti des optimisations (le plugin fonctionne sans, mais en mode dégradé).
-- WordPress ≥ 5.0 (testé en environnement single-site ; l’utilisation en multisite doit être validée avant production).
+- WordPress ≥ 5.0 (Tested up to 7.1 ; l’utilisation en multisite doit être validée avant production).
 - Base de données MySQL ≥ 5.6 ou équivalent compatible.
 - Mémoire PHP de 256 Mo recommandée et temps d’exécution de 300 s minimum pour les sites volumineux.
 - (Optionnel) Composer pour installer les dépendances facultatives comme Google Drive (`google/apiclient`).
