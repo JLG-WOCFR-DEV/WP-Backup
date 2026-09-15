@@ -586,6 +586,7 @@ final class BJLG_Plugin {
         $files_to_load = [
             'class-bjlg-debug.php', 'class-bjlg-client-ip-helper.php', 'class-bjlg-history.php', 'class-bjlg-site-context.php', 'class-bjlg-settings.php',
             'class-bjlg-backup-integrity.php', 'class-bjlg-backup.php', 'class-bjlg-restore.php', 'class-bjlg-scheduler.php',
+            'class-bjlg-event-triggers.php',
             'class-bjlg-cleanup.php', 'class-bjlg-encryption.php', 'class-bjlg-health-check.php',
             'class-bjlg-diagnostics.php', 'class-bjlg-webhooks.php', 'class-bjlg-incremental.php',
             'class-bjlg-notification-transport.php', 'class-bjlg-notification-receipts.php', 'class-bjlg-notification-queue.php', 'class-bjlg-notifications.php', 'class-bjlg-destination-factory.php', 'class-bjlg-remote-storage-metrics.php', 'class-bjlg-remote-purge-worker.php',
@@ -663,7 +664,9 @@ final class BJLG_Plugin {
         new BJLG\BJLG_Remote_Storage_Metrics();
         new BJLG\BJLG_Restore_Self_Test();
         new BJLG\BJLG_Update_Guard();
-        BJLG\BJLG_Event_Triggers::instance();
+        if (class_exists(BJLG\BJLG_Event_Triggers::class)) {
+            BJLG\BJLG_Event_Triggers::instance();
+        }
     }
 
     public function enqueue_admin_assets($hook) {

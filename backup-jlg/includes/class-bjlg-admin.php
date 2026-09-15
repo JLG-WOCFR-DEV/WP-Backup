@@ -65,16 +65,18 @@ class BJLG_Admin {
 
     /**
      * Retourne le message à afficher quand le SDK Google Drive est manquant.
+     *
+     * @param bool $verbose Message Composer complet (onglet Intégrations).
      */
-    private function get_google_drive_unavailable_notice() {
-        if ($this->google_drive_notice === null) {
-            $this->google_drive_notice = esc_html__(
+    private function get_google_drive_unavailable_notice($verbose = false) {
+        if ($verbose) {
+            return esc_html__(
                 "Le SDK Google n'est pas disponible. Installez les dépendances via Composer pour activer cette destination.",
                 'backup-jlg'
             );
         }
 
-        return $this->google_drive_notice;
+        return esc_html__('Google Drive indisponible (SDK non packagé).', 'backup-jlg');
     }
 
     /**

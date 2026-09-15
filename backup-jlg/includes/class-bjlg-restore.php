@@ -2461,6 +2461,8 @@ class BJLG_Restore {
             $task_data['sandbox'] = $environment_config['sandbox'];
         }
 
+        BJLG_Backup::maybe_complete_pending_inline_lock_owner();
+
         if (!BJLG_Backup::reserve_task_slot($task_id)) {
             if (class_exists('BJLG_Debug')) {
                 BJLG_Debug::log("Impossible de démarrer la restauration {$task_id} : une autre tâche est en cours.");
@@ -2518,7 +2520,7 @@ class BJLG_Restore {
             return;
         }
 
-        BJLG_Backup::spawn_scheduled_cron();
+        BJLG_Backup::dispatch_restore_task($task_id);
 
         BJLG_Backup::release_task_slot($task_id);
 
@@ -2541,6 +2543,14 @@ class BJLG_Restore {
             wp_send_json_error(['message' => 'Tâche non trouvée.']);
         }
 
+        if (BJLG_Backup::should_run_task_inline() && (($progress_data['status'] ?? '') === 'pending')) {
+            $this->run_restore_task($task_id);
+            $progress_data = get_transient($task_id);
+            if ($progress_data === false || !is_array($progress_data)) {
+                wp_send_json_error(['message' => 'Tâche non trouvée.']);
+            }
+        }
+
         $progress_data = BJLG_Backup::mark_stale_task_if_needed($task_id, $progress_data, 'restauration');
 
         wp_send_json_success($progress_data);
@@ -2550,6 +2560,17 @@ class BJLG_Restore {
      * Exécute la tâche de restauration en arrière-plan
      */
     public function run_restore_task($task_id) {
+        $task_id = BJLG_Backup::normalize_task_id($task_id);
+        if ($task_id === '') {
+            return;
+        }
+
+        $existing = get_transient($task_id);
+        if (is_array($existing) && in_array((string) ($existing['status'] ?? ''), ['complete', 'error'], true)) {
+            BJLG_Backup::release_task_slot($task_id);
+            return;
+        }
+
         if (!BJLG_Backup::reserve_task_slot($task_id)) {
             if (class_exists('BJLG_Debug')) {
                 BJLG_Debug::log("Tâche de restauration {$task_id} retardée : un autre processus utilise le verrou.");

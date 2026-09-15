@@ -154,6 +154,120 @@ class BJLG_Backup {
     }
 
     /**
+     * WP-Cron désactivé (wp-config) : spawn_cron() est un no-op.
+     */
+    public static function is_wp_cron_disabled(): bool {
+        return defined('DISABLE_WP_CRON') && DISABLE_WP_CRON;
+    }
+
+    /**
+     * Exécuter la tâche dans la requête courante plutôt que d'attendre wp-cron.
+     */
+    public static function should_run_task_inline(): bool {
+        $inline = self::is_wp_cron_disabled();
+
+        if (function_exists('apply_filters')) {
+            return (bool) apply_filters('bjlg_run_backup_inline', $inline);
+        }
+
+        return $inline;
+    }
+
+    /**
+     * Normalise l'identifiant d'une tâche (args nommés WP-Cron ou scalaire).
+     *
+     * @param mixed $task_id
+     */
+    public static function normalize_task_id($task_id): string {
+        if (is_array($task_id)) {
+            if (isset($task_id['task_id'])) {
+                $task_id = $task_id['task_id'];
+            } elseif (isset($task_id[0])) {
+                $task_id = $task_id[0];
+            } else {
+                $task_id = '';
+            }
+        }
+
+        if (!is_scalar($task_id)) {
+            return '';
+        }
+
+        return trim((string) $task_id);
+    }
+
+    /**
+     * Après planification : spawn_cron, ou exécution inline si WP-Cron est inactif.
+     */
+    public static function dispatch_backup_task($task_id): void {
+        $task_id = self::normalize_task_id($task_id);
+        if ($task_id === '') {
+            return;
+        }
+
+        if (self::should_run_task_inline()) {
+            do_action('bjlg_run_backup_task', $task_id);
+            return;
+        }
+
+        self::spawn_scheduled_cron();
+    }
+
+    /**
+     * Après planification d'une restauration : spawn_cron ou exécution inline.
+     */
+    public static function dispatch_restore_task($task_id): void {
+        $task_id = self::normalize_task_id($task_id);
+        if ($task_id === '') {
+            return;
+        }
+
+        if (self::should_run_task_inline()) {
+            do_action('bjlg_run_restore_task', $task_id);
+            return;
+        }
+
+        self::spawn_scheduled_cron();
+    }
+
+    /**
+     * Si WP-Cron est coupé, termine la tâche pending qui tient encore le verrou global.
+     */
+    public static function maybe_complete_pending_inline_lock_owner(): void {
+        if (!self::should_run_task_inline()) {
+            return;
+        }
+
+        $owner = self::get_task_lock_owner();
+        if (!is_string($owner) || $owner === '') {
+            return;
+        }
+
+        $state = get_transient($owner);
+        if (!is_array($state)) {
+            self::release_task_slot($owner);
+            return;
+        }
+
+        $status = (string) ($state['status'] ?? '');
+        if (in_array($status, ['complete', 'error'], true)) {
+            self::release_task_slot($owner);
+            return;
+        }
+
+        if ($status !== 'pending') {
+            return;
+        }
+
+        if (strpos($owner, 'bjlg_restore_') === 0) {
+            self::dispatch_restore_task($owner);
+            return;
+        }
+
+        self::dispatch_backup_task($owner);
+    }
+
+    /**
      * Liste les tables à inclure dans un dump (préfixe du site par défaut).
      *
      * @param object|null $wpdb
@@ -1186,6 +1300,8 @@ class BJLG_Backup {
             ], 500);
         }
 
+        self::maybe_complete_pending_inline_lock_owner();
+
         if (!self::reserve_task_slot($task_id)) {
             BJLG_Debug::log("Impossible de démarrer la tâche $task_id : une sauvegarde est déjà en cours.");
             wp_send_json_error([
@@ -1226,7 +1342,11 @@ class BJLG_Backup {
             wp_send_json_error(['message' => "Impossible de planifier la tâche de sauvegarde en arrière-plan."], 500);
         }
 
-        self::spawn_scheduled_cron();
+        if (self::should_run_task_inline()) {
+            $this->run_backup_task($task_id);
+        } else {
+            self::spawn_scheduled_cron();
+        }
 
         BJLG_Debug::log("Nouvelle tâche de sauvegarde créée : $task_id");
         BJLG_History::log('backup_started', 'info', 'Composants : ' . implode(', ', $components));
@@ -1291,6 +1411,14 @@ class BJLG_Backup {
             wp_send_json_error(['message' => 'Tâche non trouvée ou expirée.']);
         }
 
+        if (self::should_run_task_inline() && (($progress_data['status'] ?? '') === 'pending')) {
+            $this->run_backup_task($task_id);
+            $progress_data = get_transient($task_id);
+            if ($progress_data === false || !is_array($progress_data)) {
+                wp_send_json_error(['message' => 'Tâche non trouvée ou expirée.']);
+            }
+        }
+
         $progress_data = self::mark_stale_task_if_needed($task_id, $progress_data, 'sauvegarde');
 
         wp_send_json_success($progress_data);
@@ -1309,6 +1437,21 @@ class BJLG_Backup {
      * Exécute la tâche de sauvegarde en arrière-plan
      */
     public function run_backup_task($task_id) {
+        $task_id = self::normalize_task_id($task_id);
+        if ($task_id === '') {
+            return;
+        }
+
+        $existing = get_transient($task_id);
+        if (is_array($existing) && in_array((string) ($existing['status'] ?? ''), ['complete', 'error'], true)) {
+            self::release_task_slot($task_id);
+            return;
+        }
+
+        if (!self::reserve_task_slot($task_id)) {
+            self::maybe_complete_pending_inline_lock_owner();
+        }
+
         if (!self::reserve_task_slot($task_id)) {
             $lock_owner = self::get_task_lock_owner();
 
@@ -1320,13 +1463,15 @@ class BJLG_Backup {
 
             $rescheduled = wp_schedule_single_event(time() + 30, 'bjlg_run_backup_task', ['task_id' => $task_id]);
 
-            if ($rescheduled === false) {
-                BJLG_Debug::log("Échec de la replanification de la tâche $task_id.");
+            if ($rescheduled === false || self::should_run_task_inline()) {
+                if ($rescheduled === false) {
+                    BJLG_Debug::log("Échec de la replanification de la tâche $task_id.");
+                }
                 $this->update_task_progress(
                     $task_id,
                     100,
                     'error',
-                    'Impossible d\'acquérir le verrou de sauvegarde et de replanifier la tâche. Réessayez dans quelques minutes.'
+                    'Impossible d\'acquérir le verrou de sauvegarde. Réessayez dans quelques minutes.'
                 );
             } else {
                 self::spawn_scheduled_cron();

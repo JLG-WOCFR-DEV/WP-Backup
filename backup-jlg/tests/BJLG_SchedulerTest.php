@@ -543,7 +543,13 @@ final class BJLG_SchedulerTest extends TestCase
         $scheduler->handle_event_trigger('filesystem', ['path' => 'file-a']);
         $scheduler->handle_event_trigger('filesystem', ['path' => 'file-b']);
 
-        $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
+        $backup_tasks = array_values(array_filter(
+            $GLOBALS['bjlg_test_scheduled_events']['single'],
+            static function (array $event): bool {
+                return ($event['hook'] ?? '') === 'bjlg_run_backup_task';
+            }
+        ));
+        $this->assertEmpty($backup_tasks, 'Le batch ne doit pas lancer de sauvegarde avant le seuil.');
 
         $state = bjlg_get_option('bjlg_event_trigger_state', []);
         $this->assertArrayHasKey('pending', $state);
@@ -664,6 +670,31 @@ final class BJLG_SchedulerTest extends TestCase
         $hooks = array_column($GLOBALS['bjlg_test_scheduled_events']['single'], 'hook');
         $this->assertContains(BJLG\BJLG_Scheduler::SCHEDULE_HOOK, $hooks);
         $this->assertNotContains('bjlg_run_backup_task', $hooks);
+    }
+
+    public function test_get_default_sandbox_schedule_settings_are_disabled(): void
+    {
+        $defaults = BJLG\BJLG_Scheduler::get_default_sandbox_schedule_settings();
+
+        $this->assertFalse($defaults['enabled']);
+        $this->assertSame('weekly', $defaults['recurrence']);
+        $this->assertContains('db', $defaults['components']);
+    }
+
+    public function test_maybe_schedule_sandbox_validation_clears_disabled_hook(): void
+    {
+        $hook = BJLG\BJLG_Scheduler::SANDBOX_VALIDATION_HOOK;
+        $GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook] = [
+            'default' => [
+                'timestamp' => time() + DAY_IN_SECONDS,
+                'recurrence' => 'daily',
+                'args' => [],
+            ],
+        ];
+
+        BJLG\BJLG_Scheduler::instance()->maybe_schedule_sandbox_validation();
+
+        $this->assertArrayNotHasKey($hook, $GLOBALS['bjlg_test_scheduled_events']['recurring']);
     }
 
     private function computeExpectedMonthlyTimestamp(\DateTimeImmutable $now, int $dayOfMonth, int $hour, int $minute): int

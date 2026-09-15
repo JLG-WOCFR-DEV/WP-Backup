@@ -2558,7 +2558,7 @@ class BJLG_REST_API {
                 ]);
             }
 
-            $regex = new \RegexIterator($iterator, '/(?:\\.zip(?:\\..*)?)$/i');
+            $regex = new \RegexIterator($iterator, '/\\.zip(\\.enc)?$/i');
 
             $component_filters = [];
             if ($type === 'database') {
@@ -2578,6 +2578,12 @@ class BJLG_REST_API {
                 }
 
                 if (!$fileinfo->isFile()) {
+                    continue;
+                }
+
+                if (class_exists(BJLG_Backup_Integrity::class)
+                    && !BJLG_Backup_Integrity::is_backup_archive($fileinfo->getPathname())
+                ) {
                     continue;
                 }
 
@@ -2633,7 +2639,7 @@ class BJLG_REST_API {
 
             $backups = [];
 
-            foreach ($entries as $entry) {
+            foreach ($page_entries as $entry) {
                 $manifest = $entry['manifest'];
 
                 if ($manifest === null && empty($entry['manifest_loaded'])) {
@@ -2757,7 +2763,7 @@ class BJLG_REST_API {
             // Planifier l'exécution
             $scheduled = wp_schedule_single_event(time(), 'bjlg_run_backup_task', ['task_id' => $task_id]);
             if ($scheduled !== false && !is_wp_error($scheduled)) {
-                BJLG_Backup::spawn_scheduled_cron();
+                BJLG_Backup::dispatch_backup_task($task_id);
             }
 
             if ($scheduled === false) {
@@ -3796,7 +3802,7 @@ class BJLG_REST_API {
             // Planifier l'exécution
             $scheduled = wp_schedule_single_event(time(), 'bjlg_run_restore_task', ['task_id' => $task_id]);
             if ($scheduled !== false && !is_wp_error($scheduled)) {
-                BJLG_Backup::spawn_scheduled_cron();
+                BJLG_Backup::dispatch_restore_task($task_id);
             }
 
             if ($scheduled === false || is_wp_error($scheduled)) {

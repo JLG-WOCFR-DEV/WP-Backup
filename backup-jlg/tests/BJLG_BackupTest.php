@@ -6,6 +6,7 @@ use BJLG\BJLG_Encryption;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../includes/class-bjlg-backup.php';
+require_once __DIR__ . '/../includes/class-bjlg-settings.php';
 require_once __DIR__ . '/../includes/destinations/interface-bjlg-destination.php';
 require_once __DIR__ . '/../includes/destinations/class-bjlg-sftp.php';
 require_once __DIR__ . '/../includes/class-bjlg-encryption.php';
@@ -125,6 +126,8 @@ final class BJLG_BackupTest extends TestCase
         $lock_property->setAccessible(true);
         $lock_property->setValue(null, null);
 
+        unset($GLOBALS['bjlg_test_hooks']['filters']['bjlg_run_backup_inline']);
+
         parent::tearDown();
     }
 
@@ -165,7 +168,98 @@ final class BJLG_BackupTest extends TestCase
             $this->assertEmpty($GLOBALS['bjlg_test_scheduled_events']['single']);
 
             $this->assertArrayNotHasKey($captured_task_id, $GLOBALS['bjlg_test_transients']);
-            $this->assertArrayNotHasKey('bjlg_backup_task_lock', $GLOBALS['bjlg_test_transients']);
+        $this->assertArrayNotHasKey('bjlg_backup_task_lock', $GLOBALS['bjlg_test_transients']);
+        }
+    }
+
+    public function test_should_run_task_inline_respects_filter(): void
+    {
+        $this->assertFalse(BJLG\BJLG_Backup::should_run_task_inline());
+
+        add_filter('bjlg_run_backup_inline', static function () {
+            return true;
+        });
+
+        $this->assertTrue(BJLG\BJLG_Backup::should_run_task_inline());
+    }
+
+    public function test_handle_start_backup_task_runs_inline_when_wp_cron_is_disabled(): void
+    {
+        add_filter('bjlg_run_backup_inline', static function () {
+            return true;
+        });
+
+        $backup = new class extends BJLG\BJLG_Backup {
+            public $ran_task_id = null;
+
+            public function run_backup_task($task_id) {
+                $this->ran_task_id = BJLG\BJLG_Backup::normalize_task_id($task_id);
+                $state = get_transient($this->ran_task_id);
+                if (is_array($state)) {
+                    $state['status'] = 'complete';
+                    $state['progress'] = 100;
+                    $state['status_text'] = 'Sauvegarde terminée avec succès !';
+                    set_transient($this->ran_task_id, $state, HOUR_IN_SECONDS);
+                }
+                self::release_task_slot($this->ran_task_id);
+            }
+        };
+
+        $_POST['components'] = ['db'];
+        $_POST['nonce'] = 'test-nonce';
+
+        try {
+            $backup->handle_start_backup_task();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertTrue($response->success);
+            $this->assertIsArray($response->data);
+            $this->assertSame($response->data['task_id'], $backup->ran_task_id);
+            $this->assertNotNull($backup->ran_task_id);
+            $this->assertFalse(BJLG\BJLG_Backup::is_task_locked());
+        }
+    }
+
+    public function test_handle_check_backup_progress_pumps_pending_task_inline(): void
+    {
+        add_filter('bjlg_run_backup_inline', static function () {
+            return true;
+        });
+
+        $task_id = 'bjlg_backup_' . md5('progress-pump');
+        set_transient($task_id, [
+            'progress' => 5,
+            'status' => 'pending',
+            'status_text' => 'Initialisation de la sauvegarde...',
+            'components' => ['db'],
+            'start_time' => time(),
+        ], HOUR_IN_SECONDS);
+
+        $backup = new class extends BJLG\BJLG_Backup {
+            public $ran_task_id = null;
+
+            public function run_backup_task($task_id) {
+                $this->ran_task_id = BJLG\BJLG_Backup::normalize_task_id($task_id);
+                $state = get_transient($this->ran_task_id);
+                if (is_array($state)) {
+                    $state['status'] = 'complete';
+                    $state['progress'] = 100;
+                    set_transient($this->ran_task_id, $state, HOUR_IN_SECONDS);
+                }
+            }
+        };
+
+        $_POST['task_id'] = $task_id;
+        $_POST['nonce'] = 'test-nonce';
+
+        try {
+            $backup->handle_check_backup_progress();
+            $this->fail('Expected BJLG_Test_JSON_Response to be thrown.');
+        } catch (BJLG_Test_JSON_Response $response) {
+            $this->assertTrue($response->success);
+            $this->assertSame($task_id, $backup->ran_task_id);
+            $this->assertSame('complete', $response->data['status']);
+            $this->assertSame(100, $response->data['progress']);
         }
     }
 
@@ -398,9 +492,11 @@ final class BJLG_BackupTest extends TestCase
         $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'perform_post_backup_checks');
         $method->setAccessible(true);
 
+        $previous_settings = bjlg_get_option('bjlg_encryption_settings', null);
+        bjlg_update_option('bjlg_encryption_settings', ['enabled' => true]);
+
         $encryption = new BJLG\BJLG_Encryption();
         $backup = new BJLG\BJLG_Backup(null, $encryption);
-        $previous_settings = bjlg_get_option('bjlg_encryption_settings', null);
 
         $encrypted_path = null;
         $corrupted_zip = null;

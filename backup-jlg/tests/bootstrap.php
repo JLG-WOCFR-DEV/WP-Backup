@@ -511,6 +511,12 @@ if (!defined('DAY_IN_SECONDS')) {
     define('DAY_IN_SECONDS', 86400);
 }
 
+if (!function_exists('absint')) {
+    function absint($maybeint) {
+        return abs((int) $maybeint);
+    }
+}
+
 if (!defined('ARRAY_A')) {
     define('ARRAY_A', 'ARRAY_A');
 }
@@ -972,13 +978,18 @@ if (!class_exists('BJLG_Test_JSON_Response')) {
         /** @var int|null */
         public $status_code;
 
+        /** @var bool|null */
+        public $success;
+
         /**
          * @param mixed     $data
          * @param int|null  $status_code
+         * @param bool|null $success
          */
-        public function __construct($data = null, $status_code = null) {
+        public function __construct($data = null, $status_code = null, $success = null) {
             $this->data = $data;
             $this->status_code = $status_code;
+            $this->success = $success;
             parent::__construct('JSON response');
         }
     }
@@ -1083,6 +1094,44 @@ if (!function_exists('apply_filters')) {
         }
 
         return $all_args[0];
+    }
+}
+
+if (!function_exists('remove_filter')) {
+    function remove_filter($hook, $callback, $priority = 10) {
+        if (empty($GLOBALS['bjlg_test_hooks']['filters'][$hook][$priority])) {
+            return false;
+        }
+
+        $removed = false;
+
+        foreach ($GLOBALS['bjlg_test_hooks']['filters'][$hook][$priority] as $index => $definition) {
+            if ($definition['callback'] === $callback) {
+                unset($GLOBALS['bjlg_test_hooks']['filters'][$hook][$priority][$index]);
+                $removed = true;
+            }
+        }
+
+        return $removed;
+    }
+}
+
+if (!function_exists('remove_action')) {
+    function remove_action($hook, $callback, $priority = 10) {
+        if (empty($GLOBALS['bjlg_test_hooks']['actions'][$hook][$priority])) {
+            return false;
+        }
+
+        $removed = false;
+
+        foreach ($GLOBALS['bjlg_test_hooks']['actions'][$hook][$priority] as $index => $definition) {
+            if ($definition['callback'] === $callback) {
+                unset($GLOBALS['bjlg_test_hooks']['actions'][$hook][$priority][$index]);
+                $removed = true;
+            }
+        }
+
+        return $removed;
     }
 }
 
@@ -1530,6 +1579,29 @@ if (!function_exists('delete_site_option')) {
 if (!function_exists('get_locale')) {
     function get_locale() {
         return 'fr_FR';
+    }
+}
+
+if (!function_exists('wp_timezone')) {
+    function wp_timezone() {
+        if (function_exists('wp_timezone_string')) {
+            $timezone_string = wp_timezone_string();
+            if (is_string($timezone_string) && $timezone_string !== '') {
+                try {
+                    return new DateTimeZone($timezone_string);
+                } catch (Exception $exception) {
+                    // Fall through to UTC.
+                }
+            }
+        }
+
+        return new DateTimeZone('UTC');
+    }
+}
+
+if (!function_exists('wp_timezone_string')) {
+    function wp_timezone_string() {
+        return 'UTC';
     }
 }
 
@@ -2175,7 +2247,7 @@ if (!function_exists('wp_send_json_error')) {
             'status_code' => $status_code,
         ];
 
-        throw new BJLG_Test_JSON_Response($data, $status_code);
+        throw new BJLG_Test_JSON_Response($data, $status_code, false);
     }
 }
 
@@ -2186,7 +2258,7 @@ if (!function_exists('wp_send_json_success')) {
             'status_code' => $status_code,
         ];
 
-        throw new BJLG_Test_JSON_Response($data, $status_code);
+        throw new BJLG_Test_JSON_Response($data, $status_code, true);
     }
 }
 
@@ -2355,6 +2427,35 @@ if (!function_exists('wp_schedule_event')) {
         ];
 
         return true;
+    }
+}
+
+if (!function_exists('wp_get_schedules')) {
+    function wp_get_schedules() {
+        return [
+            'hourly' => ['interval' => HOUR_IN_SECONDS, 'display' => 'Once Hourly'],
+            'twicedaily' => ['interval' => 12 * HOUR_IN_SECONDS, 'display' => 'Twice Daily'],
+            'daily' => ['interval' => DAY_IN_SECONDS, 'display' => 'Once Daily'],
+            'weekly' => ['interval' => 7 * DAY_IN_SECONDS, 'display' => 'Once Weekly'],
+        ];
+    }
+}
+
+if (!function_exists('wp_get_schedule')) {
+    function wp_get_schedule($hook, $args = []) {
+        $has_args = func_num_args() > 1;
+
+        if (!empty($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook])) {
+            foreach ($GLOBALS['bjlg_test_scheduled_events']['recurring'][$hook] as $event) {
+                if ($has_args && ($event['args'] ?? []) !== (array) $args) {
+                    continue;
+                }
+
+                return $event['recurrence'] ?? false;
+            }
+        }
+
+        return false;
     }
 }
 

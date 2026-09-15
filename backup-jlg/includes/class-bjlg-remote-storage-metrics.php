@@ -352,6 +352,10 @@ class BJLG_Remote_Storage_Metrics {
                 $backups = $destination->list_remote_backups();
             } catch (\Throwable $exception) {
                 $entry['errors'][] = $exception->getMessage();
+                if ($entry['used_bytes'] === null) {
+                    $entry['used_bytes'] = 0;
+                    $entry['used_human'] = size_format(0);
+                }
             }
 
             if (function_exists('is_wp_error') && is_wp_error($backups)) {
@@ -434,6 +438,82 @@ class BJLG_Remote_Storage_Metrics {
         self::maybe_dispatch_error_alert($destination_id, $entry);
 
         return $entry;
+    }
+
+    /**
+     * Dernier échantillon de quota connu pour une destination.
+     *
+     * @return array{used_bytes:?int,quota_bytes:?int,free_bytes:?int,ratio:?float}
+     */
+    public static function get_quota_sample_for_destination(string $destination_id): array
+    {
+        $empty = [
+            'used_bytes' => null,
+            'quota_bytes' => null,
+            'free_bytes' => null,
+            'ratio' => null,
+        ];
+
+        $snapshot = \bjlg_get_option(self::OPTION_KEY, []);
+        if (is_array($snapshot) && !empty($snapshot['destinations']) && is_array($snapshot['destinations'])) {
+            foreach ($snapshot['destinations'] as $destination) {
+                if (!is_array($destination)) {
+                    continue;
+                }
+
+                $id = (string) ($destination['id'] ?? '');
+                if ($id !== $destination_id) {
+                    continue;
+                }
+
+                $sample = [];
+                if (!empty($destination['quota_samples']) && is_array($destination['quota_samples'])) {
+                    $sample = $destination['quota_samples'];
+                    if (isset($sample[0]) && is_array($sample[0])) {
+                        $sample = $sample[count($sample) - 1];
+                    }
+                }
+
+                $used = self::sanitize_bytes($sample['used_bytes'] ?? $destination['used_bytes'] ?? null);
+                $quota = self::sanitize_bytes($sample['quota_bytes'] ?? $destination['quota_bytes'] ?? null);
+                $free = self::sanitize_bytes($sample['free_bytes'] ?? $destination['free_bytes'] ?? null);
+                $ratio = null;
+                if (isset($sample['ratio']) && is_numeric($sample['ratio'])) {
+                    $ratio = max(0.0, min(1.0, (float) $sample['ratio']));
+                } elseif ($quota !== null && $quota > 0 && $used !== null) {
+                    $ratio = max(0.0, min(1.0, $used / $quota));
+                }
+
+                return [
+                    'used_bytes' => $used,
+                    'quota_bytes' => $quota,
+                    'free_bytes' => $free,
+                    'ratio' => $ratio,
+                ];
+            }
+        }
+
+        $purge_metrics = \bjlg_get_option('bjlg_remote_purge_destination_metrics', []);
+        if (is_array($purge_metrics)) {
+            $destinations = $purge_metrics['destinations'] ?? $purge_metrics;
+            if (is_array($destinations) && isset($destinations[$destination_id]) && is_array($destinations[$destination_id])) {
+                $entry = $destinations[$destination_id];
+                $history = isset($entry['history']) && is_array($entry['history']) ? $entry['history'] : [];
+                $latest = !empty($history) ? $history[count($history) - 1] : $entry;
+                if (is_array($latest)) {
+                    return [
+                        'used_bytes' => self::sanitize_bytes($latest['used_bytes'] ?? null),
+                        'quota_bytes' => self::sanitize_bytes($latest['quota_bytes'] ?? null),
+                        'free_bytes' => self::sanitize_bytes($latest['free_bytes'] ?? null),
+                        'ratio' => isset($latest['ratio']) && is_numeric($latest['ratio'])
+                            ? max(0.0, min(1.0, (float) $latest['ratio']))
+                            : null,
+                    ];
+                }
+            }
+        }
+
+        return $empty;
     }
 
     /**

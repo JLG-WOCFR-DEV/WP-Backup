@@ -660,5 +660,16 @@ namespace {
 
             self::assertStringContainsString('wp_12_bjlg_history', $wpdb->last_prepared_query);
         }
+
+        public function test_get_table_name_is_callable_from_other_classes(): void
+        {
+            $wpdb = new BJLG_Test_History_WPDB([]);
+            $GLOBALS['wpdb'] = $wpdb;
+
+            $name = \BJLG\BJLG_History::get_table_name();
+
+            self::assertIsString($name);
+            self::assertStringContainsString('bjlg_history', $name);
+        }
     }
 }

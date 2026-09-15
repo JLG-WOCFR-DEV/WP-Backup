@@ -110,16 +110,7 @@ class BJLG_Scheduler {
             wp_schedule_event($start, $recurrence, $hook);
         }
 
-        $sandbox_hook = self::SANDBOX_VALIDATION_HOOK;
-        if (!wp_next_scheduled($sandbox_hook)) {
-            $start = time() + (int) apply_filters('bjlg_sandbox_validation_delay', DAY_IN_SECONDS);
-            $recurrence = apply_filters('bjlg_sandbox_validation_recurrence', 'daily');
-            if (!is_string($recurrence) || $recurrence === '') {
-                $recurrence = 'daily';
-            }
-
-            wp_schedule_event($start, $recurrence, $sandbox_hook);
-        }
+        self::instance()->maybe_schedule_sandbox_validation();
 
         self::sync_sandbox_automation_schedule();
     }
@@ -2007,7 +1998,7 @@ class BJLG_Scheduler {
             wp_send_json_error(['message' => $error_message]);
         }
 
-        BJLG_Backup::spawn_scheduled_cron();
+        BJLG_Backup::dispatch_backup_task($task_id);
 
         if (($schedule['recurrence'] ?? '') === 'custom') {
             $this->schedule_custom_follow_up($schedule);
@@ -2080,7 +2071,7 @@ class BJLG_Scheduler {
                 return;
             }
 
-            BJLG_Backup::spawn_scheduled_cron();
+            BJLG_Backup::dispatch_backup_task($task_id);
 
             BJLG_Debug::log(sprintf('Sauvegarde planifiée déclenchée automatiquement (%s) - Task ID: %s', $schedule['id'], $task_id));
             BJLG_History::log('scheduled_backup', 'info', sprintf('Planification "%s" exécutée automatiquement.', $schedule['label'] ?? $schedule['id']));
@@ -2719,11 +2710,11 @@ class BJLG_Scheduler {
     }
 
     /**
-     * Valeurs par défaut pour la planification sandbox.
+     * Valeurs par défaut pour la planification sandbox (appel statique depuis l'admin).
      *
      * @return array<string,mixed>
      */
-    private function get_sandbox_defaults(): array
+    public static function get_default_sandbox_schedule_settings(): array
     {
         return [
             'enabled' => false,
@@ -2733,6 +2724,77 @@ class BJLG_Scheduler {
             'last_run' => null,
             'last_status' => '',
         ];
+    }
+
+    /**
+     * Valeurs par défaut pour la planification sandbox.
+     *
+     * @return array<string,mixed>
+     */
+    private function get_sandbox_defaults(): array
+    {
+        return self::get_default_sandbox_schedule_settings();
+    }
+
+    /**
+     * Active ou désactive le cron de validation sandbox selon les réglages.
+     */
+    public function maybe_schedule_sandbox_validation(): void
+    {
+        $this->sync_sandbox_validation_schedule($this->get_sandbox_schedule_settings());
+    }
+
+    /**
+     * Synchronise l'événement WP-Cron de validation sandbox.
+     *
+     * @param array<string,mixed>|null $settings
+     */
+    private function sync_sandbox_validation_schedule(?array $settings = null): void
+    {
+        $settings = is_array($settings) ? $settings : $this->get_sandbox_schedule_settings();
+        $hook = self::SANDBOX_VALIDATION_HOOK;
+        $enabled = !empty($settings['enabled']) && (($settings['recurrence'] ?? 'disabled') !== 'disabled');
+
+        if (!$enabled) {
+            if (function_exists('wp_clear_scheduled_hook')) {
+                wp_clear_scheduled_hook($hook);
+            }
+
+            return;
+        }
+
+        $recurrence = isset($settings['recurrence']) ? (string) $settings['recurrence'] : 'weekly';
+        $allowed = function_exists('wp_get_schedules') ? wp_get_schedules() : [];
+        if (!is_array($allowed) || !isset($allowed[$recurrence])) {
+            $recurrence = 'weekly';
+        }
+
+        $next = function_exists('wp_next_scheduled') ? wp_next_scheduled($hook) : false;
+        $current = '';
+        if (function_exists('wp_get_schedule')) {
+            $schedule = wp_get_schedule($hook);
+            if (is_string($schedule)) {
+                $current = $schedule;
+            }
+        }
+
+        if ($next && $current === $recurrence) {
+            return;
+        }
+
+        if (function_exists('wp_clear_scheduled_hook')) {
+            wp_clear_scheduled_hook($hook);
+        }
+
+        $delay = DAY_IN_SECONDS;
+        if (function_exists('apply_filters')) {
+            $filtered_delay = apply_filters('bjlg_sandbox_validation_delay', $delay);
+            if (is_numeric($filtered_delay) && (int) $filtered_delay > 0) {
+                $delay = (int) $filtered_delay;
+            }
+        }
+
+        wp_schedule_event(time() + $delay, $recurrence, $hook);
     }
 
     /**
@@ -3689,7 +3751,7 @@ class BJLG_Scheduler {
             return false;
         }
 
-        BJLG_Backup::spawn_scheduled_cron();
+        BJLG_Backup::dispatch_backup_task($task_id);
 
         $label = $this->get_trigger_label($trigger_key);
         $sample_preview = '';

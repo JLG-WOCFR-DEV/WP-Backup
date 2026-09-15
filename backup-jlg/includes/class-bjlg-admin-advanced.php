@@ -191,6 +191,19 @@ class BJLG_Admin_Advanced {
             }
         }
 
+        if (empty($metrics['history']['last_backup']) && !empty($metrics['storage']['latest_backup']) && is_array($metrics['storage']['latest_backup'])) {
+            $latest = $metrics['storage']['latest_backup'];
+            $mtime = isset($latest['timestamp']) ? (int) $latest['timestamp'] : 0;
+            $metrics['history']['last_backup'] = [
+                'timestamp' => $mtime > 0 ? gmdate('Y-m-d H:i:s', $mtime) : '',
+                'formatted' => $latest['formatted'] ?? '',
+                'relative' => $latest['relative'] ?? '',
+                'status' => 'success',
+                'details' => $latest['filename'] ?? '',
+                'source' => 'disk',
+            ];
+        }
+
         $remote_snapshot = $this->collect_remote_storage_metrics();
         $metrics['storage']['remote_destinations'] = $remote_snapshot['destinations'];
         $metrics['storage']['remote_last_refreshed'] = $remote_snapshot['generated_at'];
