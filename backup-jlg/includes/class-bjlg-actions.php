@@ -927,7 +927,10 @@ class BJLG_Actions {
             }
             if (is_string($checksum) && $checksum !== '') {
                 header('X-Checksum-SHA256: ' . $checksum);
-                header('Digest: SHA-256=' . $checksum);
+                $digest = BJLG_Backup_Integrity::digest_header_value($checksum);
+                if ($digest !== null) {
+                    header('Digest: ' . $digest);
+                }
             }
         } catch (Exception $exception) {
             BJLG_Debug::log('Checksum indisponible pour le téléchargement : ' . $exception->getMessage(), 'warning');

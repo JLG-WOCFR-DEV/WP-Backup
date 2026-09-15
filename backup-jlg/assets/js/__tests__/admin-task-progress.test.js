@@ -55,4 +55,23 @@ describe('bjlgTaskProgress', () => {
     expect(window.bjlgTaskProgress.shouldStopPolling(null, 1, 1000, { maxFailures: 5, timeoutMs: 500 })).toBe(true);
     expect(window.bjlgTaskProgress.shouldStopPolling(null, 1, 100, { maxFailures: 5, timeoutMs: 5000 })).toBe(false);
   });
+
+  it('treats a running timeout as timeout, not success', () => {
+    const running = window.bjlgTaskProgress.interpret({
+      progress: 41,
+      status: 'running',
+      status_text: 'Restauration des fichiers'
+    });
+
+    expect(running.done).toBe(false);
+    expect(running.outcome).toBe('running');
+    expect(window.bjlgTaskProgress.getPollingStopReason(running, 0, 45 * 60 * 1000)).toBe('timeout');
+    expect(window.bjlgTaskProgress.getPollingStopReason(running, 0, 1000)).toBeNull();
+    expect(window.bjlgTaskProgress.getPollingStopReason({
+      done: true,
+      outcome: 'success',
+      message: 'Terminé',
+      progress: 100
+    }, 0, 45 * 60 * 1000)).toBe('success');
+  });
 });

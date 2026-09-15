@@ -982,4 +982,56 @@ final class BJLG_BackupTest extends TestCase
         $this->assertSame(100, $updated['progress']);
         $this->assertStringContainsString('bloquée', $updated['status_text']);
     }
+
+    public function test_mark_stale_task_if_needed_keeps_long_running_backup_with_recent_heartbeat(): void
+    {
+        $task_id = 'bjlg_backup_' . md5('long-running');
+        $payload = [
+            'progress' => 62,
+            'status' => 'running',
+            'status_text' => 'Dump SQL en cours',
+            'start_time' => time() - (90 * MINUTE_IN_SECONDS),
+            'updated_at' => time() - MINUTE_IN_SECONDS,
+        ];
+        set_transient($task_id, $payload, HOUR_IN_SECONDS);
+
+        $updated = BJLG\BJLG_Backup::mark_stale_task_if_needed($task_id, $payload, 'sauvegarde');
+        $this->assertSame('running', $updated['status']);
+        $this->assertSame(62, $updated['progress']);
+        $this->assertSame('Dump SQL en cours', $updated['status_text']);
+    }
+
+    public function test_mark_stale_task_if_needed_flags_inactive_heartbeat(): void
+    {
+        $task_id = 'bjlg_backup_' . md5('inactive-heartbeat');
+        $payload = [
+            'progress' => 18,
+            'status' => 'running',
+            'status_text' => 'En cours',
+            'start_time' => time() - (10 * MINUTE_IN_SECONDS),
+            'updated_at' => time() - (46 * MINUTE_IN_SECONDS),
+        ];
+        set_transient($task_id, $payload, HOUR_IN_SECONDS);
+
+        $updated = BJLG\BJLG_Backup::mark_stale_task_if_needed($task_id, $payload, 'sauvegarde');
+        $this->assertSame('error', $updated['status']);
+        $this->assertSame(100, $updated['progress']);
+    }
+
+    public function test_save_task_state_stamps_heartbeat(): void
+    {
+        $task_id = 'bjlg_backup_' . md5('heartbeat-stamp');
+        $this->assertTrue(BJLG\BJLG_Backup::save_task_state($task_id, [
+            'progress' => 10,
+            'status' => 'running',
+            'start_time' => time() - HOUR_IN_SECONDS,
+        ]));
+
+        $stored = get_transient($task_id);
+        $this->assertIsArray($stored);
+        $this->assertArrayHasKey('updated_at', $stored);
+        $this->assertEqualsWithDelta(time(), (int) $stored['updated_at'], 2);
+        unset($GLOBALS['bjlg_test_transients'][$task_id]);
+        BJLG\BJLG_Backup::release_task_slot($task_id);
+    }
 }

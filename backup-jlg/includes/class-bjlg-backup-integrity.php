@@ -129,6 +129,25 @@ class BJLG_Backup_Integrity {
     }
 
     /**
+     * RFC 3230 / RFC 5843 Digest header value for a hexadecimal SHA-256 checksum.
+     *
+     * @param string $hex_checksum
+     * @return string|null `SHA-256=` followed by the base64 raw digest, or null when invalid.
+     */
+    public static function digest_header_value($hex_checksum) {
+        if (!is_string($hex_checksum) || !preg_match('/^[a-f0-9]{64}$/i', $hex_checksum)) {
+            return null;
+        }
+
+        $raw = hex2bin(strtolower($hex_checksum));
+        if ($raw === false || strlen($raw) !== 32) {
+            return null;
+        }
+
+        return 'SHA-256=' . base64_encode($raw);
+    }
+
+    /**
      * Verify an archive against its sidecar when present.
      *
      * @param string $filepath

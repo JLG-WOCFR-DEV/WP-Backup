@@ -59,4 +59,15 @@ final class BJLG_BackupIntegrityTest extends TestCase
             @unlink($file);
         }
     }
+
+    public function test_digest_header_value_is_base64_of_raw_sha256(): void
+    {
+        $hex = str_repeat('ab', 32);
+        $this->assertSame(
+            'SHA-256=' . base64_encode(hex2bin($hex)),
+            BJLG_Backup_Integrity::digest_header_value($hex)
+        );
+        $this->assertNull(BJLG_Backup_Integrity::digest_header_value('not-a-hash'));
+        $this->assertNull(BJLG_Backup_Integrity::digest_header_value(str_repeat('g', 64)));
+    }
 }

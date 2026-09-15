@@ -56,24 +56,33 @@
         };
     }
 
-    function shouldStopPolling(result, consecutiveFailures, elapsedMs, options) {
-        if (result && result.done) {
-            return true;
-        }
-
+    function getPollingStopReason(result, consecutiveFailures, elapsedMs, options) {
         const settings = options || {};
         const maxFailures = settings.maxFailures != null ? settings.maxFailures : 5;
         const timeoutMs = settings.timeoutMs != null ? settings.timeoutMs : 45 * 60 * 1000;
 
-        if (consecutiveFailures >= maxFailures) {
-            return true;
+        if (result && result.done) {
+            return result.outcome || 'done';
         }
 
-        return elapsedMs >= timeoutMs;
+        if (consecutiveFailures >= maxFailures) {
+            return 'transport';
+        }
+
+        if (elapsedMs >= timeoutMs) {
+            return 'timeout';
+        }
+
+        return null;
+    }
+
+    function shouldStopPolling(result, consecutiveFailures, elapsedMs, options) {
+        return getPollingStopReason(result, consecutiveFailures, elapsedMs, options) !== null;
     }
 
     root.bjlgTaskProgress = {
         interpret: interpretTaskProgress,
+        getPollingStopReason: getPollingStopReason,
         shouldStopPolling: shouldStopPolling
     };
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -1339,17 +1348,27 @@ $('#bjlg-backup-creation-form').on('submit.bjlgBackupAjax', function(e) {
                     setBackupBusyState(true);
                     updateBackupProgress(result.progress);
 
-                    if (window.bjlgTaskProgress.shouldStopPolling(result, consecutiveFailures, Date.now() - startedAt)) {
+                    const stopReason = window.bjlgTaskProgress.getPollingStopReason(
+                        result,
+                        consecutiveFailures,
+                        Date.now() - startedAt
+                    );
+                    if (stopReason) {
                         clearInterval(interval);
                         setBackupBusyState(false);
                         $button.prop('disabled', false);
 
-                        if (result.outcome === 'error') {
-                            setBackupStatusText('❌ Erreur : ' + result.message);
+                        if (stopReason === 'timeout') {
+                            setBackupStatusText('❌ Le suivi a expiré alors que la sauvegarde est encore en cours. Vérifiez l’historique avant de recharger.');
                             return;
                         }
 
-                        if (result.outcome === 'warning') {
+                        if (stopReason === 'error' || stopReason === 'transport') {
+                            setBackupStatusText('❌ Erreur : ' + (result.message || 'La sauvegarde a échoué.'));
+                            return;
+                        }
+
+                        if (stopReason === 'warning') {
                             updateBackupProgress(100);
                             setBackupStatusText('⚠️ ' + result.message);
                             return;
@@ -1947,18 +1966,30 @@ $('#bjlg-restore-form').on('submit.bjlgRestoreAjax', function(e) {
                     setRestoreBusyState(true);
                     updateRestoreProgress(result.progress);
 
-                    if (window.bjlgTaskProgress.shouldStopPolling(result, consecutiveFailures, Date.now() - startedAt)) {
+                    const stopReason = window.bjlgTaskProgress.getPollingStopReason(
+                        result,
+                        consecutiveFailures,
+                        Date.now() - startedAt
+                    );
+                    if (stopReason) {
                         clearInterval(interval);
                         setRestoreBusyState(false);
                         $button.prop('disabled', false);
 
-                        if (result.outcome === 'error') {
+                        if (stopReason === 'timeout') {
+                            const timeoutMessage = 'Le suivi a expiré alors que la restauration est encore en cours. Ne rechargez pas la page tant que le statut n’est pas confirmé dans l’historique.';
+                            displayRestoreErrors(timeoutMessage, getValidationErrors(data));
+                            setRestoreStatusText('❌ ' + timeoutMessage);
+                            return;
+                        }
+
+                        if (stopReason === 'error' || stopReason === 'transport') {
                             displayRestoreErrors(result.message, getValidationErrors(data));
                             setRestoreStatusText('❌ ' + result.message);
                             return;
                         }
 
-                        if (result.outcome === 'warning') {
+                        if (stopReason === 'warning') {
                             updateRestoreProgress(100);
                             setRestoreStatusText('⚠️ ' + result.message);
                             return;

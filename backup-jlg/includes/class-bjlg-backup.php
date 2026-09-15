@@ -317,6 +317,7 @@ class BJLG_Backup {
      * @return bool
      */
     public static function save_task_state($task_id, array $task_data) {
+        $task_data = self::stamp_task_heartbeat($task_data);
         $saved = set_transient($task_id, $task_data, self::get_task_ttl());
 
         if ($saved) {
@@ -325,6 +326,45 @@ class BJLG_Backup {
         }
 
         return $saved;
+    }
+
+    /**
+     * Enregistre un horodatage d'activité pour détecter l'inactivité, pas la durée totale.
+     *
+     * @param array<string, mixed> $task_data
+     * @return array<string, mixed>
+     */
+    public static function stamp_task_heartbeat(array $task_data) {
+        $task_data['updated_at'] = time();
+
+        return $task_data;
+    }
+
+    /**
+     * Dernière activité connue d'une tâche (heartbeat / progression), pas l'heure de démarrage.
+     *
+     * @param array<string, mixed> $task_data
+     * @return int
+     */
+    public static function get_task_heartbeat_timestamp(array $task_data) {
+        $candidates = [];
+
+        foreach (['updated_at', 'heartbeat_at', 'last_progress_at'] as $key) {
+            if (!isset($task_data[$key]) || !is_numeric($task_data[$key])) {
+                continue;
+            }
+
+            $timestamp = (int) $task_data[$key];
+            if ($timestamp > 0) {
+                $candidates[] = $timestamp;
+            }
+        }
+
+        if ($candidates !== []) {
+            return max($candidates);
+        }
+
+        return isset($task_data['start_time']) ? (int) $task_data['start_time'] : 0;
     }
 
     /**
@@ -347,8 +387,8 @@ class BJLG_Backup {
             return $task_data;
         }
 
-        $start_time = isset($task_data['start_time']) ? (int) $task_data['start_time'] : 0;
-        if ($start_time <= 0) {
+        $heartbeat = self::get_task_heartbeat_timestamp($task_data);
+        if ($heartbeat <= 0) {
             return $task_data;
         }
 
@@ -360,7 +400,7 @@ class BJLG_Backup {
             }
         }
 
-        if ((time() - $start_time) < $stale_after) {
+        if ((time() - $heartbeat) < $stale_after) {
             return $task_data;
         }
 
