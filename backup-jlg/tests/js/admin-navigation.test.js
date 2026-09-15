@@ -2,20 +2,15 @@ describe('Admin navigation accessibility events', () => {
   beforeEach(() => {
     jest.resetModules();
     document.body.innerHTML = `
-      <div id="bjlg-main-content" class="wrap bjlg-wrap" data-active-section="monitoring"></div>
-      <div class="bjlg-admin-shell" data-active-section="monitoring">
-        <aside class="bjlg-admin-shell__sidebar" id="bjlg-shell-sidebar">
-          <a class="bjlg-sidebar__nav-link is-active" data-section="monitoring" href="#monitoring">Monitoring</a>
-          <a class="bjlg-sidebar__nav-link" data-section="settings" href="#settings">Settings</a>
-        </aside>
-        <div class="bjlg-admin-shell__main">
-          <div id="bjlg-section-announcer"></div>
-          <div id="bjlg-admin-app" data-active-section="monitoring">
-            <div class="bjlg-admin-app__panels">
-              <section class="bjlg-shell-section" data-section="monitoring" aria-hidden="false" tabindex="0"></section>
-              <section class="bjlg-shell-section" data-section="settings" aria-hidden="true" hidden="hidden"></section>
-            </div>
-          </div>
+      <div id="bjlg-main-content" class="wrap bjlg-wrap" data-active-section="monitoring">
+        <nav class="nav-tab-wrapper">
+          <a class="nav-tab nav-tab-active" data-section="monitoring" href="#monitoring">Monitoring</a>
+          <a class="nav-tab" data-section="settings" href="#settings">Settings</a>
+        </nav>
+        <div id="bjlg-section-announcer"></div>
+        <div id="bjlg-admin-app" data-active-section="monitoring">
+          <section class="bjlg-shell-section" data-section="monitoring" aria-hidden="false" tabindex="0"></section>
+          <section class="bjlg-shell-section" data-section="settings" aria-hidden="true" hidden="hidden"></section>
         </div>
       </div>
     `;
@@ -55,14 +50,15 @@ describe('Admin navigation accessibility events', () => {
     expect(settingsPanel.hasAttribute('hidden')).toBe(false);
   });
 
-  it('updates the active section when clicking a sidebar link', () => {
+  it('updates the active section when clicking a nav-tab', () => {
     const handler = jest.fn();
     document.addEventListener('bjlg:section-activated', handler);
 
-    const link = document.querySelector('.bjlg-sidebar__nav-link[data-section="settings"]');
+    const link = document.querySelector('.nav-tab[data-section="settings"]');
     link.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
 
     expect(handler).toHaveBeenCalled();
     expect(window.bjlgAdmin.getActiveSection()).toBe('settings');
+    expect(link.classList.contains('nav-tab-active')).toBe(true);
   });
 });

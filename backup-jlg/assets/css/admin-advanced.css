@@ -1023,29 +1023,3 @@ pre.code-block {
     color: #b91c1c;
 }
 
-.bjlg-wrap.is-dark .bjlg-advanced-panel {
-    background-color: #1f2937;
-    border-color: #374151;
-}
-
-.bjlg-wrap.is-dark .bjlg-advanced-panel__content {
-    background-color: #111827;
-}
-
-.bjlg-wrap.is-dark .bjlg-pattern-suggestions__item {
-    background-color: rgba(129, 140, 248, 0.25);
-    border-color: rgba(165, 180, 252, 0.45);
-    color: #e5e7eb;
-}
-
-.bjlg-wrap.is-dark .bjlg-pattern-suggestions__item:hover {
-    background-color: rgba(129, 140, 248, 0.45);
-}
-
-.bjlg-wrap.is-dark .bjlg-pattern-feedback.is-error {
-    color: #f87171;
-}
-
-.bjlg-wrap.is-dark .bjlg-pattern-feedback.is-valid {
-    color: #6ee7b7;
-}

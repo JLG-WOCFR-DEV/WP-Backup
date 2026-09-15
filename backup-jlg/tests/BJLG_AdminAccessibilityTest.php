@@ -4,6 +4,7 @@ declare(strict_types=1);
 use BJLG\BJLG_Admin;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/../includes/class-bjlg-site-context.php';
 require_once __DIR__ . '/../includes/class-bjlg-admin.php';
 
 if (!defined('BJLG_VERSION')) {
@@ -71,6 +72,38 @@ final class BJLG_AdminAccessibilityTest extends TestCase
         return $this->createXPathFromHtml($html);
     }
 
+    private function renderAdminPageHtml(): string
+    {
+        $_GET['tab'] = 'history';
+
+        $admin = new class extends BJLG_Admin {
+            protected function render_section_content($section_key, $active_section, array $metrics, array $onboarding_payload) {
+                echo '<div class="bjlg-test-section-stub" data-section="' . esc_attr((string) $section_key) . '">';
+                if ($section_key === 'backup') {
+                    echo '<div id="bjlg-backup-progress-bar"></div>';
+                }
+                if ($section_key === 'restore') {
+                    echo '<div id="bjlg-restore-progress-bar"></div>';
+                }
+                if ($section_key === 'settings') {
+                    BJLG\BJLG_Settings::render_settings_fields();
+                }
+                echo '</div>';
+            }
+        };
+        $advancedProperty = new ReflectionProperty(BJLG_Admin::class, 'advanced_admin');
+        $advancedProperty->setAccessible(true);
+        $advancedProperty->setValue($admin, null);
+
+        ob_start();
+        $admin->render_admin_page();
+        $html = (string) ob_get_clean();
+
+        unset($_GET['tab']);
+
+        return $html;
+    }
+
     private function assertProgressAccessibility(\DOMXPath $xpath, string $progressId, string $statusId): void
     {
         $progress = $xpath->query('//*[@id="' . $progressId . '"]')->item(0);
@@ -111,45 +144,53 @@ final class BJLG_AdminAccessibilityTest extends TestCase
         $this->assertProgressAccessibility($xpath, 'bjlg-restore-progress-bar', 'bjlg-restore-status-text');
     }
 
-    public function test_admin_tabs_render_accessible_tablist(): void
+    public function test_admin_page_uses_a_single_native_wp_admin_ui(): void
     {
-        $_GET['tab'] = 'history';
-
-        $admin = new BJLG_Admin();
-        $advancedProperty = new ReflectionProperty(BJLG_Admin::class, 'advanced_admin');
-        $advancedProperty->setAccessible(true);
-        $advancedProperty->setValue($admin, null);
-
-        ob_start();
-        $admin->render_admin_page();
-        $html = (string) ob_get_clean();
-
-        unset($_GET['tab']);
-
+        $html = $this->renderAdminPageHtml();
         $xpath = $this->createXPathFromHtml($html);
 
-        $root = $xpath->query('//*[@id="bjlg-modern-admin-root"]').item(0);
-        $this->assertInstanceOf(\DOMElement::class, $root, 'Modern admin root not found.');
-        /** @var \DOMElement $root */
-        $this->assertNotSame('', $root->getAttribute('data-bjlg-active-section'), 'Active section attribute missing.');
+        $this->assertStringNotContainsString('bjlg-modern-admin-root', $html);
+        $this->assertStringNotContainsString('bjlg-modern-admin-templates', $html);
+        $this->assertStringNotContainsString('bjlg-contrast-toggle', $html);
+        $this->assertStringNotContainsString('data-bjlg-theme', $html);
+        $this->assertStringNotContainsString('bjlg-admin-shell__sidebar', $html);
 
-        $status = $xpath->query('//*[@id="bjlg-admin-status"]').item(0);
+        $wrap = $xpath->query('//*[@id="bjlg-main-content"]')->item(0);
+        $this->assertInstanceOf(\DOMElement::class, $wrap);
+        /** @var \DOMElement $wrap */
+        $this->assertNotFalse(strpos($wrap->getAttribute('class'), 'wrap'));
+
+        $tabs = $xpath->query('//nav[contains(@class, "nav-tab-wrapper")]/a[contains(@class, "nav-tab")]');
+        $this->assertGreaterThan(1, $tabs->length, 'Native nav-tab links missing.');
+
+        $status = $xpath->query('//*[@id="bjlg-admin-status"]')->item(0);
         $this->assertInstanceOf(\DOMElement::class, $status, 'Status region missing.');
         /** @var \DOMElement $status */
         $this->assertSame('status', $status->getAttribute('role'));
         $this->assertSame('polite', $status->getAttribute('aria-live'));
 
-        $templates = $xpath->query('//*[@id="bjlg-modern-admin-templates"]/section');
-        $this->assertGreaterThan(0, $templates->length, 'No section templates were rendered.');
+        $panels = $xpath->query('//*[@id="bjlg-admin-app"]/section[@data-section]');
+        $this->assertGreaterThan(0, $panels->length, 'No section panels were rendered.');
 
-        foreach ($templates as $templateElement) {
-            $this->assertInstanceOf(\DOMElement::class, $templateElement);
-            /** @var \DOMElement $template */
-            $template = $templateElement;
+        foreach ($panels as $panelElement) {
+            $this->assertInstanceOf(\DOMElement::class, $panelElement);
+            /** @var \DOMElement $panel */
+            $panel = $panelElement;
+            $this->assertNotSame('', $panel->getAttribute('id'));
+            $this->assertNotSame('', $panel->getAttribute('data-section'));
+        }
 
-            $this->assertNotSame('', $template->getAttribute('id'), 'Template section must declare an id.');
-            $this->assertNotSame('', $template->getAttribute('data-section'), 'Template section must declare its key.');
+        $this->assertNotNull($xpath->query('//*[@id="bjlg-backup-progress-bar"]')->item(0));
+        $this->assertNotNull($xpath->query('//*[@id="bjlg-restore-progress-bar"]')->item(0));
+        $this->assertStringContainsString('option_page', $html);
+        $this->assertStringContainsString('bjlg_plugin_settings', $html);
+    }
 
+    public function test_plugin_header_declares_tested_up_to_71(): void
+    {
+        $plugin_file = dirname(__DIR__) . '/backup-jlg.php';
+        $contents = (string) file_get_contents($plugin_file);
 
+        $this->assertMatchesRegularExpression('/^\s*\*\s*Tested up to:\s*7\.1\s*$/m', $contents);
     }
 }

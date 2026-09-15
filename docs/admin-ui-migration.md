@@ -1,19 +1,15 @@
-# Migration de la console d’administration
+# Console d’administration
 
-La console principale de Backup JLG est désormais segmentée en cinq écrans dédiés (Monitoring, Sauvegarde, Restauration, Réglages et Intégrations) rendus via les composants WordPress (`@wordpress/components`). L’interface embarque un menu latéral responsive, des cartes normalisées (`Card`) et un suivi vocal accessible (`role="status"` + `wp.a11y.speak`).
+Backup JLG expose **une seule** interface d’administration, alignée sur wp-admin : `div.wrap`, `h1.wp-heading-inline`, `nav-tab-wrapper` et notices WordPress.
 
-## Activation progressive
+Les écrans restent segmentés (Monitoring, Sauvegarde, Restauration, Réglages, Intégrations). La navigation se fait par onglets natifs, pas par un shell moderne/legacy.
 
-Pour limiter les régressions, l’interface moderne est livrée derrière le flag `bjlg_enable_modern_admin_shell`. Elle est activée par défaut mais peut être désactivée au besoin :
+## Compatibilité
 
-```php
-add_filter('bjlg_enable_modern_admin_shell', '__return_false');
-```
+Les anciens leviers (`bjlg_enable_modern_admin_shell`, `bjlg_enable_modern_admin`, `?bjlg_legacy=1`, `BJLG_ENABLE_LEGACY_ADMIN`) ne changent plus le rendu. `BJLG_Admin::render_legacy_admin_page()` appelle la page unique.
 
-Une option persistance (`bjlg_enable_modern_admin`) est également lue si vous devez piloter l’activation dans un environnement multi-sites.
+Les retours accessibles (`role="status"`, `wp.a11y.speak`) restent en place.
 
-## Rappels pour les contributeurs
+## Réglages
 
-- Utiliser les tokens de design WordPress (couleurs, ombres, espacements) pour toute évolution du back-office.
-- Préférer les composants standards (`Button`, `Card`, `Notice`, `TabPanel`, etc.) afin de conserver la cohérence visuelle.
-- Conserver les retours accessibles (`role="status"`, `wp.a11y.speak`) lors de l’ajout d’actions ou de notifications.
+Les options métier sont déclarées via `register_setting()` (groupe `bjlg_plugin_settings`). La sauvegarde opérationnelle continue de passer par AJAX (`bjlg_save_settings`) pour ne pas casser le contexte multisite ni la planification.

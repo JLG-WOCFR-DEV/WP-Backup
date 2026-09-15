@@ -9,9 +9,12 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-require_once __DIR__ . '/class-bjlg-history.php';
 require_once __DIR__ . '/class-bjlg-restore.php';
 require_once __DIR__ . '/class-bjlg-settings.php';
+
+if (!class_exists(__NAMESPACE__ . '\\BJLG_History', false)) {
+    require_once __DIR__ . '/class-bjlg-history.php';
+}
 
 /**
  * Gère la planification avancée des sauvegardes automatiques.
