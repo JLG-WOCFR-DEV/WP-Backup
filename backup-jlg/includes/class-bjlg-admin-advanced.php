@@ -2467,6 +2467,15 @@ class BJLG_Admin_Advanced {
                 }
             }
 
+            $days_to_threshold = null;
+            if (isset($destination['days_to_threshold']) && is_numeric($destination['days_to_threshold'])) {
+                $days_to_threshold = (float) $destination['days_to_threshold'];
+            }
+
+            $projection_intent = isset($destination['projection_intent'])
+                ? strtolower((string) $destination['projection_intent'])
+                : 'neutral';
+
             if ($destination_id !== '') {
                 if ($ratio !== null && $ratio >= $threshold_ratio) {
                     $destination['badge'] = 'critical';
