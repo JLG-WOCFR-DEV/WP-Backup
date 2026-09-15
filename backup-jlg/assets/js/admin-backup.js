@@ -192,13 +192,27 @@ jQuery(function($) {
         }
     }
 
-    function showError(message) {
-        if ($feedback.length) {
-            $feedback
-                .attr('class', 'notice notice-error')
-                .text(message)
-                .show();
+    function showNotice(type, message) {
+        if (!$feedback.length) {
+            return;
         }
+
+        const classMap = {
+            success: 'notice notice-success',
+            warning: 'notice notice-warning',
+            info: 'notice notice-info',
+            error: 'notice notice-error'
+        };
+        const className = classMap[type] || classMap.error;
+
+        $feedback
+            .attr('class', className)
+            .text(message)
+            .show();
+    }
+
+    function showError(message) {
+        showNotice('error', message);
     }
 
     function setControlsDisabled(disabled) {
@@ -396,6 +410,7 @@ jQuery(function($) {
 
             $('<button/>', {
                 class: 'button button-primary bjlg-restore-button',
+                type: 'button',
                 text: 'Restaurer',
                 'data-filename': filename
             }).appendTo($actionsWrapper);
@@ -409,6 +424,7 @@ jQuery(function($) {
 
             $('<button/>', {
                 class: 'button button-link-delete bjlg-delete-button',
+                type: 'button',
                 text: 'Supprimer',
                 'data-filename': filename
             }).appendTo($actionsWrapper);
@@ -582,6 +598,303 @@ jQuery(function($) {
         }
         state.page = Math.max(1, target);
         requestBackups();
+    });
+
+    function getListActionFilename($button) {
+        const raw = $button.attr('data-filename');
+        return typeof raw === 'string' ? raw.trim() : '';
+    }
+
+    function getAjaxErrorMessage(jqXHR, fallback) {
+        if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.data && jqXHR.responseJSON.data.message) {
+            return jqXHR.responseJSON.data.message;
+        }
+        if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.message) {
+            return jqXHR.responseJSON.message;
+        }
+        return fallback;
+    }
+
+    function startBrowserDownload(url, filename) {
+        const link = document.createElement('a');
+        link.className = 'bjlg-generated-download-link';
+        link.href = url;
+        if (filename) {
+            link.setAttribute('download', filename);
+        }
+        link.rel = 'noopener';
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    function prepareBackupDownload(filename, $button) {
+        if (!filename) {
+            showError('Nom de fichier manquant.');
+            return;
+        }
+
+        if (!restSettings.ajax_url || !restSettings.nonce) {
+            showError('Configuration AJAX indisponible.');
+            return;
+        }
+
+        $button.prop('disabled', true);
+
+        $.ajax({
+            url: restSettings.ajax_url,
+            type: 'POST',
+            dataType: 'json',
+            data: {
+                action: 'bjlg_prepare_download',
+                nonce: restSettings.nonce,
+                filename: filename
+            }
+        })
+        .done(function(response) {
+            const data = response && response.data ? response.data : {};
+            if (response && response.success && data.download_url) {
+                startBrowserDownload(data.download_url, filename);
+                showNotice('success', 'Téléchargement lancé.');
+                return;
+            }
+
+            showError((data && data.message) ? data.message : 'Impossible de préparer le téléchargement.');
+        })
+        .fail(function(jqXHR) {
+            showError(getAjaxErrorMessage(jqXHR, 'Erreur de communication lors du téléchargement.'));
+        })
+        .always(function() {
+            $button.prop('disabled', false);
+        });
+    }
+
+    function deleteBackupFromList(filename, $button) {
+        if (!filename) {
+            showError('Nom de fichier manquant.');
+            return;
+        }
+
+        if (!restSettings.ajax_url || !restSettings.nonce) {
+            showError('Configuration AJAX indisponible.');
+            return;
+        }
+
+        $button.prop('disabled', true);
+
+        $.ajax({
+            url: restSettings.ajax_url,
+            type: 'POST',
+            dataType: 'json',
+            data: {
+                action: 'bjlg_delete_backup',
+                nonce: restSettings.nonce,
+                filename: filename
+            }
+        })
+        .done(function(response) {
+            const data = response && response.data ? response.data : {};
+            if (response && response.success) {
+                showNotice('success', (data && data.message) ? data.message : 'Fichier supprimé avec succès.');
+                requestBackups();
+                return;
+            }
+
+            showError((data && data.message) ? data.message : 'Impossible de supprimer la sauvegarde.');
+        })
+        .fail(function(jqXHR) {
+            showError(getAjaxErrorMessage(jqXHR, 'Erreur de communication lors de la suppression.'));
+        })
+        .always(function() {
+            $button.prop('disabled', false);
+        });
+    }
+
+    function updateRestoreProgressFromList(progressValue, message) {
+        const $statusWrapper = $('#bjlg-restore-status');
+        const $statusText = $('#bjlg-restore-status-text');
+        const $progressBar = $('#bjlg-restore-progress-bar');
+
+        if ($statusWrapper.length) {
+            $statusWrapper.show();
+        }
+        if ($statusText.length && message) {
+            $statusText.text(message);
+        }
+        if ($progressBar.length && Number.isFinite(progressValue)) {
+            const clamped = Math.max(0, Math.min(100, progressValue));
+            const percentText = String(clamped) + '%';
+            $progressBar
+                .css('width', percentText)
+                .text(percentText)
+                .attr('aria-valuenow', String(clamped))
+                .attr('aria-valuetext', percentText);
+        }
+    }
+
+    function pollRestoreFromList(taskId, $button) {
+        const startedAt = Date.now();
+        let consecutiveFailures = 0;
+        const interval = setInterval(function() {
+            $.ajax({
+                url: restSettings.ajax_url,
+                type: 'POST',
+                dataType: 'json',
+                data: {
+                    action: 'bjlg_check_restore_progress',
+                    nonce: restSettings.nonce,
+                    task_id: taskId
+                }
+            })
+            .done(function(response) {
+                if (response && response.success && response.data) {
+                    consecutiveFailures = 0;
+                    const result = window.bjlgTaskProgress
+                        ? window.bjlgTaskProgress.interpret(response.data, {
+                            errorFallback: 'La restauration a échoué.',
+                            successFallback: 'Restauration terminée.',
+                            warningFallback: 'Restauration terminée avec des avertissements.'
+                        })
+                        : { done: false, outcome: 'running', message: '', progress: 0 };
+
+                    updateRestoreProgressFromList(result.progress, result.message);
+
+                    const stopReason = window.bjlgTaskProgress
+                        ? window.bjlgTaskProgress.getPollingStopReason(result, consecutiveFailures, Date.now() - startedAt)
+                        : null;
+
+                    if (!stopReason) {
+                        return;
+                    }
+
+                    clearInterval(interval);
+                    $button.prop('disabled', false);
+
+                    if (stopReason === 'success' || stopReason === 'warning') {
+                        updateRestoreProgressFromList(100, result.message);
+                        showNotice(stopReason === 'warning' ? 'warning' : 'success', result.message || 'Restauration terminée.');
+                        return;
+                    }
+
+                    showError(result.message || 'La restauration a échoué.');
+                    return;
+                }
+
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress && window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
+                    clearInterval(interval);
+                    $button.prop('disabled', false);
+                    showError('Tâche de restauration introuvable.');
+                }
+            })
+            .fail(function() {
+                consecutiveFailures += 1;
+                if (window.bjlgTaskProgress && window.bjlgTaskProgress.shouldStopPolling(null, consecutiveFailures, Date.now() - startedAt)) {
+                    clearInterval(interval);
+                    $button.prop('disabled', false);
+                    showError('Erreur de communication lors du suivi de la restauration.');
+                }
+            });
+        }, 3000);
+    }
+
+    function restoreBackupFromList(filename, $button) {
+        if (!filename) {
+            showError('Nom de fichier manquant.');
+            return;
+        }
+
+        if (!restSettings.ajax_url || !restSettings.nonce) {
+            showError('Configuration AJAX indisponible.');
+            return;
+        }
+
+        if (window.bjlgAdmin && typeof window.bjlgAdmin.setActiveSection === 'function') {
+            window.bjlgAdmin.setActiveSection('restore', true);
+        }
+
+        const $restoreForm = $('#bjlg-restore-form');
+        let $hidden = $restoreForm.find('input[name="restore_filename"]');
+        if ($restoreForm.length && !$hidden.length) {
+            $hidden = $('<input>', { type: 'hidden', name: 'restore_filename' }).appendTo($restoreForm);
+        }
+        if ($hidden.length) {
+            $hidden.val(filename);
+        }
+
+        const createRestorePoint = $restoreForm.find('input[name="create_backup_before_restore"]').is(':checked');
+        const password = ($('#bjlg-restore-password').val() || '').toString();
+        const sandboxEnabled = $restoreForm.find('input[name="restore_to_sandbox"]').is(':checked');
+        const sandboxPath = ($restoreForm.find('input[name="sandbox_path"]').val() || '').toString().trim();
+
+        $button.prop('disabled', true);
+        updateRestoreProgressFromList(0, 'Initialisation de la restauration...');
+
+        const requestData = {
+            action: 'bjlg_run_restore',
+            nonce: restSettings.nonce,
+            filename: filename,
+            create_backup_before_restore: createRestorePoint ? 1 : 0,
+            password: password,
+            restore_environment: sandboxEnabled ? 'sandbox' : 'production'
+        };
+
+        if (sandboxEnabled) {
+            requestData.sandbox_path = sandboxPath;
+        }
+
+        $.ajax({
+            url: restSettings.ajax_url,
+            type: 'POST',
+            dataType: 'json',
+            data: requestData
+        })
+        .done(function(response) {
+            const data = response && response.data ? response.data : {};
+            if (response && response.success && data.task_id) {
+                pollRestoreFromList(data.task_id, $button);
+                return;
+            }
+
+            $button.prop('disabled', false);
+            showError((data && data.message) ? data.message : 'Impossible de démarrer la restauration.');
+        })
+        .fail(function(jqXHR) {
+            $button.prop('disabled', false);
+            showError(getAjaxErrorMessage(jqXHR, 'Erreur de communication lors de la restauration.'));
+        });
+    }
+
+    $section.on('click', '.bjlg-download-button', function(e) {
+        e.preventDefault();
+        prepareBackupDownload(getListActionFilename($(this)), $(this));
+    });
+
+    $section.on('click', '.bjlg-delete-button', function(e) {
+        e.preventDefault();
+        const filename = getListActionFilename($(this));
+        if (!filename) {
+            showError('Nom de fichier manquant.');
+            return;
+        }
+        if (!window.confirm('Supprimer définitivement cette sauvegarde ?')) {
+            return;
+        }
+        deleteBackupFromList(filename, $(this));
+    });
+
+    $section.on('click', '.bjlg-restore-button', function(e) {
+        e.preventDefault();
+        const filename = getListActionFilename($(this));
+        if (!filename) {
+            showError('Nom de fichier manquant.');
+            return;
+        }
+        if (!window.confirm('Restaurer cette sauvegarde maintenant ? Le site va être modifié.')) {
+            return;
+        }
+        restoreBackupFromList(filename, $(this));
     });
 
     requestBackups();
