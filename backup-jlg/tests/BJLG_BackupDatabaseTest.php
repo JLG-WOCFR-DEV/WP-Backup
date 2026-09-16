@@ -894,4 +894,175 @@ final class BJLG_BackupDatabaseTest extends TestCase
         $this->assertStringContainsString("(2, 'Second', 0)", $contents);
         $this->assertStringContainsString(";\n\n", $contents);
     }
+
+    public function test_fwrite_or_fail_throws_when_the_stream_cannot_be_written(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+        $method = new ReflectionMethod(BJLG\BJLG_Backup::class, 'fwrite_or_fail');
+        $method->setAccessible(true);
+
+        $handle = fopen('php://memory', 'r');
+        $this->assertIsResource($handle);
+
+        try {
+            $method->invoke($backup, $handle, 'dump-sql');
+            $this->fail('fwrite_or_fail should throw when the write fails.');
+        } catch (PHPUnit\Framework\AssertionFailedError $exception) {
+            throw $exception;
+        } catch (Exception $exception) {
+            $this->assertStringContainsString('Écriture du dump SQL interrompue', $exception->getMessage());
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    public function test_dump_database_fails_when_show_create_table_fails(): void
+    {
+        $backup = new BJLG\BJLG_Backup();
+        $path = sys_get_temp_dir() . '/bjlg-dump-show-create-' . uniqid('', true) . '.sql';
+        $previous_wpdb = $GLOBALS['wpdb'] ?? null;
+        $GLOBALS['wpdb'] = new class {
+            public $prefix = 'wp_';
+
+            public function get_results($query, $output = 'OBJECT')
+            {
+                if (stripos((string) $query, 'SHOW TABLES') === 0) {
+                    return [['wp_broken']];
+                }
+
+                return [];
+            }
+
+            public function get_row($query, $output = 'OBJECT', $y = 0)
+            {
+                return null;
+            }
+
+            public function get_var($query)
+            {
+                return 0;
+            }
+        };
+
+        try {
+            $backup->dump_database($path);
+            $this->fail('SHOW CREATE TABLE silently skipped the table.');
+        } catch (PHPUnit\Framework\AssertionFailedError $exception) {
+            throw $exception;
+        } catch (Exception $exception) {
+            $this->assertStringContainsString('SHOW CREATE TABLE a échoué', $exception->getMessage());
+            $this->assertStringContainsString('wp_broken', $exception->getMessage());
+        } finally {
+            if ($previous_wpdb === null) {
+                unset($GLOBALS['wpdb']);
+            } else {
+                $GLOBALS['wpdb'] = $previous_wpdb;
+            }
+
+            if (file_exists($path)) {
+                @unlink($path);
+            }
+        }
+    }
+
+    public function test_dump_database_fails_when_fwrite_returns_false(): void
+    {
+        if (in_array('bjlgfailwrite', stream_get_wrappers(), true)) {
+            stream_wrapper_unregister('bjlgfailwrite');
+        }
+
+        stream_wrapper_register('bjlgfailwrite', BJLG_FailingWriteStreamWrapper::class);
+
+        $backup = new BJLG\BJLG_Backup();
+        $previous_wpdb = $GLOBALS['wpdb'] ?? null;
+        $GLOBALS['wpdb'] = new class {
+            public $prefix = 'wp_';
+
+            public function get_results($query, $output = 'OBJECT')
+            {
+                return [['wp_posts']];
+            }
+
+            public function get_row($query, $output = 'OBJECT', $y = 0)
+            {
+                return ['wp_posts', 'CREATE TABLE `wp_posts` (`ID` bigint(20))'];
+            }
+
+            public function get_var($query)
+            {
+                return 0;
+            }
+        };
+
+        try {
+            $backup->dump_database('bjlgfailwrite://dump.sql');
+            $this->fail('dump_database should fail when fwrite returns false.');
+        } catch (PHPUnit\Framework\AssertionFailedError $exception) {
+            throw $exception;
+        } catch (Exception $exception) {
+            $this->assertStringContainsString('Écriture du dump SQL interrompue', $exception->getMessage());
+        } finally {
+            if ($previous_wpdb === null) {
+                unset($GLOBALS['wpdb']);
+            } else {
+                $GLOBALS['wpdb'] = $previous_wpdb;
+            }
+
+            stream_wrapper_unregister('bjlgfailwrite');
+        }
+    }
+}
+
+class BJLG_FailingWriteStreamWrapper
+{
+    /** @var resource|null */
+    public $context;
+
+    public function stream_open($path, $mode, $options, &$opened_path): bool
+    {
+        return true;
+    }
+
+    public function stream_write($data)
+    {
+        return false;
+    }
+
+    public function stream_flush(): bool
+    {
+        return true;
+    }
+
+    public function stream_close(): void
+    {
+    }
+
+    public function stream_eof(): bool
+    {
+        return true;
+    }
+
+    public function stream_stat(): array
+    {
+        return [];
+    }
+
+    public function url_stat($path, $flags): array
+    {
+        return [
+            'dev' => 0,
+            'ino' => 0,
+            'mode' => 0100666,
+            'nlink' => 1,
+            'uid' => 0,
+            'gid' => 0,
+            'rdev' => 0,
+            'size' => 0,
+            'atime' => time(),
+            'mtime' => time(),
+            'ctime' => time(),
+            'blksize' => 4096,
+            'blocks' => 0,
+        ];
+    }
 }

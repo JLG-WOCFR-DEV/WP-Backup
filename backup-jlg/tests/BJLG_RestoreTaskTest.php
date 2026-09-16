@@ -110,6 +110,13 @@ final class BJLG_RestoreTaskTest extends TestCase
         };
 
         $GLOBALS['bjlg_test_transients'] = [];
+        unset(
+            $GLOBALS['bjlg_test_options']['_transient_bjlg_backup_task_lock'],
+            $GLOBALS['bjlg_test_options']['_transient_timeout_bjlg_backup_task_lock']
+        );
+        $lock_property = new ReflectionProperty(BJLG\BJLG_Backup::class, 'in_memory_lock');
+        $lock_property->setAccessible(true);
+        $lock_property->setValue(null, null);
     }
 
     protected function tearDown(): void
@@ -910,6 +917,62 @@ final class BJLG_RestoreTaskTest extends TestCase
 
         @unlink($zip_path);
         delete_transient($task_id);
+    }
+
+    public function test_extract_zip_entries_throws_when_extract_to_returns_false(): void
+    {
+        $restore = new BJLG\BJLG_Restore();
+        $method = new ReflectionMethod(BJLG\BJLG_Restore::class, 'extract_zip_entries');
+        $method->setAccessible(true);
+
+        $zip = new class extends ZipArchive {
+            public function extractTo(string $pathto, array|string|null $files = null): bool
+            {
+                return false;
+            }
+        };
+
+        $destination = sys_get_temp_dir() . '/bjlg-extract-false-' . uniqid('', true);
+        mkdir($destination, 0777, true);
+
+        try {
+            $method->invoke($restore, $zip, $destination, 'database.sql');
+            $this->fail('extractTo false should fail the restore.');
+        } catch (PHPUnit\Framework\AssertionFailedError $exception) {
+            throw $exception;
+        } catch (Exception $exception) {
+            $this->assertStringContainsString("Impossible d'extraire l'archive", $exception->getMessage());
+        } finally {
+            @rmdir($destination);
+        }
+    }
+
+    public function test_extract_zip_entries_throws_when_extract_to_succeeds_but_file_is_missing(): void
+    {
+        $restore = new BJLG\BJLG_Restore();
+        $method = new ReflectionMethod(BJLG\BJLG_Restore::class, 'extract_zip_entries');
+        $method->setAccessible(true);
+
+        $zip = new class extends ZipArchive {
+            public function extractTo(string $pathto, array|string|null $files = null): bool
+            {
+                return true;
+            }
+        };
+
+        $destination = sys_get_temp_dir() . '/bjlg-extract-missing-' . uniqid('', true);
+        mkdir($destination, 0777, true);
+
+        try {
+            $method->invoke($restore, $zip, $destination, 'database.sql');
+            $this->fail('A successful extractTo without the expected file should fail the restore.');
+        } catch (PHPUnit\Framework\AssertionFailedError $exception) {
+            throw $exception;
+        } catch (Exception $exception) {
+            $this->assertStringContainsString('database.sql', $exception->getMessage());
+        } finally {
+            @rmdir($destination);
+        }
     }
 
     private function removePath(string $path): void

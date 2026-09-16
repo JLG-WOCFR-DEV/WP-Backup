@@ -1988,6 +1988,8 @@ class BJLG_Backup {
                     $success_message .= ' ' . $destination_failure_notice;
                 }
                 $this->update_task_progress($task_id, 100, 'error', $success_message);
+            } elseif (!empty($destination_results['failures'])) {
+                $this->update_task_progress($task_id, 100, 'warning', $success_message);
             } else {
                 $this->update_task_progress($task_id, 100, 'complete', $success_message);
             }
@@ -4515,50 +4517,57 @@ class BJLG_Backup {
         if (!$handle) {
             throw new Exception("Impossible de créer le fichier SQL");
         }
-        
-        // Header
-        fwrite($handle, "-- Backup JLG Database Dump\n");
-        fwrite($handle, "-- Date: " . date('Y-m-d H:i:s') . "\n\n");
-        fwrite($handle, "SET NAMES utf8mb4;\n");
-        fwrite($handle, "SET FOREIGN_KEY_CHECKS=0;\n\n");
-        
-        // Tables du site (préfixe $wpdb->prefix)
-        $tables = self::list_backup_tables($wpdb);
-        
-        foreach ($tables as $table) {
-            $table = (string) $table;
-            if ($table === '' || !preg_match('/^[A-Za-z0-9_]+$/', $table)) {
-                continue;
-            }
-            
-            // Structure
-            $create = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
-            if (!is_array($create) || empty($create[1])) {
-                continue;
-            }
-            fwrite($handle, "DROP TABLE IF EXISTS `{$table}`;\n");
-            fwrite($handle, $create[1] . ";\n\n");
-            
-            // Données
-            $row_count = $wpdb->get_var("SELECT COUNT(*) FROM `{$table}`");
-            
-            if ($row_count > 0) {
-                $batch_size = 1000;
-                
-                for ($offset = 0; $offset < $row_count; $offset += $batch_size) {
-                    $rows = $wpdb->get_results(
-                        "SELECT * FROM `{$table}` LIMIT {$offset}, {$batch_size}",
-                        ARRAY_A
-                    );
-                    
-                    if ($rows) {
-                        $this->write_insert_statement($handle, $table, $rows);
+
+        try {
+            $this->fwrite_or_fail($handle, "-- Backup JLG Database Dump\n");
+            $this->fwrite_or_fail($handle, "-- Date: " . date('Y-m-d H:i:s') . "\n\n");
+            $this->fwrite_or_fail($handle, "SET NAMES utf8mb4;\n");
+            $this->fwrite_or_fail($handle, "SET FOREIGN_KEY_CHECKS=0;\n\n");
+
+            $tables = self::list_backup_tables($wpdb);
+            $exported_tables = 0;
+
+            foreach ($tables as $table) {
+                $table = (string) $table;
+                if ($table === '' || !preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+                    continue;
+                }
+
+                $create = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
+                if (!is_array($create) || empty($create[1])) {
+                    throw new Exception("SHOW CREATE TABLE a échoué pour la table {$table}. La sauvegarde est interrompue pour éviter un dump incomplet.");
+                }
+
+                $this->fwrite_or_fail($handle, "DROP TABLE IF EXISTS `{$table}`;\n");
+                $this->fwrite_or_fail($handle, $create[1] . ";\n\n");
+
+                $row_count = $wpdb->get_var("SELECT COUNT(*) FROM `{$table}`");
+
+                if ($row_count > 0) {
+                    $batch_size = 1000;
+
+                    for ($offset = 0; $offset < $row_count; $offset += $batch_size) {
+                        $rows = $wpdb->get_results(
+                            "SELECT * FROM `{$table}` LIMIT {$offset}, {$batch_size}",
+                            ARRAY_A
+                        );
+
+                        if ($rows) {
+                            $this->write_insert_statement($handle, $table, $rows);
+                        }
                     }
                 }
+
+                $exported_tables++;
             }
+
+            if ($exported_tables === 0) {
+                throw new Exception("Aucune table n'a pu être exportée. La sauvegarde de la base est incomplète.");
+            }
+
+            $this->fwrite_or_fail($handle, "\nSET FOREIGN_KEY_CHECKS=1;\n");
+        } finally {
+            fclose($handle);
         }
-        
-        fwrite($handle, "\nSET FOREIGN_KEY_CHECKS=1;\n");
-        fclose($handle);
     }
 }

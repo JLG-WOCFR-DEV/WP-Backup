@@ -510,6 +510,7 @@ final class BJLG_SchedulerTest extends TestCase
         $event = end($scheduled);
         $this->assertSame('bjlg_run_backup_task', $event['hook']);
         $this->assertArrayHasKey('task_id', $event['args']);
+        $this->assertNotEmpty($GLOBALS['bjlg_test_spawn_cron_calls']);
 
         $state = bjlg_get_option('bjlg_event_trigger_state', []);
         $this->assertArrayHasKey('pending', $state);
@@ -662,6 +663,39 @@ final class BJLG_SchedulerTest extends TestCase
 
         $GLOBALS['bjlg_test_set_transient_mock'] = static function () {
             return false;
+        };
+        $GLOBALS['bjlg_test_scheduled_events']['single'] = [];
+
+        $scheduler->run_scheduled_backup($schedule['id']);
+
+        $hooks = array_column($GLOBALS['bjlg_test_scheduled_events']['single'], 'hook');
+        $this->assertContains(BJLG\BJLG_Scheduler::SCHEDULE_HOOK, $hooks);
+        $this->assertNotContains('bjlg_run_backup_task', $hooks);
+    }
+
+    public function test_run_scheduled_backup_rearms_custom_follow_up_on_task_schedule_failure(): void
+    {
+        bjlg_update_option('bjlg_schedule_settings', [
+            'id' => 'sched-custom-dispatch',
+            'label' => 'Cron custom dispatch',
+            'recurrence' => 'custom',
+            'custom_cron' => '0 * * * *',
+            'components' => ['db'],
+            'encrypt' => false,
+            'incremental' => false,
+        ]);
+
+        $scheduler = BJLG\BJLG_Scheduler::instance();
+        $collection = $scheduler->get_schedule_settings();
+        $schedule = $collection['schedules'][0];
+        $this->assertSame('custom', $schedule['recurrence']);
+
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = static function ($timestamp, $hook, $args = []) {
+            if ($hook === 'bjlg_run_backup_task') {
+                return false;
+            }
+
+            return true;
         };
         $GLOBALS['bjlg_test_scheduled_events']['single'] = [];
 

@@ -1034,4 +1034,45 @@ final class BJLG_BackupTest extends TestCase
         unset($GLOBALS['bjlg_test_transients'][$task_id]);
         BJLG\BJLG_Backup::release_task_slot($task_id);
     }
+
+    public function test_run_backup_task_errors_when_lock_reschedule_fails(): void
+    {
+        $owner = 'bjlg_backup_' . md5('lock-owner');
+        $task_id = 'bjlg_backup_' . md5('lock-blocked');
+
+        $this->assertTrue(BJLG\BJLG_Backup::reserve_task_slot($owner));
+        set_transient($owner, [
+            'progress' => 40,
+            'status' => 'running',
+            'status_text' => 'En cours',
+            'start_time' => time(),
+        ], HOUR_IN_SECONDS);
+        set_transient($task_id, [
+            'progress' => 5,
+            'status' => 'pending',
+            'status_text' => 'Initialisation',
+            'components' => ['db'],
+            'encrypt' => false,
+            'start_time' => time(),
+        ], HOUR_IN_SECONDS);
+
+        $GLOBALS['bjlg_test_schedule_single_event_mock'] = static function () {
+            return false;
+        };
+        add_filter('bjlg_run_backup_inline', static function () {
+            return false;
+        });
+
+        try {
+            (new BJLG\BJLG_Backup())->run_backup_task($task_id);
+            $task = get_transient($task_id);
+            $this->assertIsArray($task);
+            $this->assertSame('error', $task['status']);
+            $this->assertSame(100, $task['progress']);
+            $this->assertStringContainsString('verrou', strtolower((string) $task['status_text']));
+        } finally {
+            BJLG\BJLG_Backup::release_task_slot($owner);
+            unset($GLOBALS['bjlg_test_transients'][$owner], $GLOBALS['bjlg_test_transients'][$task_id]);
+        }
+    }
 }

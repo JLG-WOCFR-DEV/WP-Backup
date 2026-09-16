@@ -72,6 +72,15 @@ final class BJLG_RestoreSecurityTest extends TestCase
         ];
         $GLOBALS['bjlg_test_set_transient_mock'] = null;
         $GLOBALS['bjlg_test_schedule_single_event_mock'] = null;
+        unset(
+            $GLOBALS['bjlg_test_options']['_transient_bjlg_backup_task_lock'],
+            $GLOBALS['bjlg_test_options']['_transient_timeout_bjlg_backup_task_lock']
+        );
+        if (class_exists(BJLG\BJLG_Backup::class)) {
+            $lock_property = new ReflectionProperty(BJLG\BJLG_Backup::class, 'in_memory_lock');
+            $lock_property->setAccessible(true);
+            $lock_property->setValue(null, null);
+        }
 
         $_POST = [];
         $this->additionalBackupPaths = [];
@@ -625,6 +634,7 @@ final class BJLG_RestoreSecurityTest extends TestCase
         ];
 
         $zip->addFromString('backup-manifest.json', json_encode($manifest));
+        $zip->addFromString('database.sql', "CREATE TABLE `wp_test` (id INT);\n");
         $zip->close();
 
         $encryption = new BJLG\BJLG_Encryption();
@@ -636,6 +646,17 @@ final class BJLG_RestoreSecurityTest extends TestCase
 
         $restore = new BJLG\BJLG_Restore();
         $task_id = 'bjlg_restore_' . uniqid();
+        $previous_wpdb = $GLOBALS['wpdb'] ?? null;
+        $GLOBALS['wpdb'] = new class {
+            public $last_error = '';
+
+            public function query($query)
+            {
+                $this->last_error = '';
+
+                return 1;
+            }
+        };
 
         set_transient($task_id, [
             'progress' => 0,
@@ -644,24 +665,33 @@ final class BJLG_RestoreSecurityTest extends TestCase
             'filename' => basename($encrypted_path),
             'filepath' => $encrypted_path,
             'password_encrypted' => null,
+            'components' => ['db'],
         ], defined('HOUR_IN_SECONDS') ? HOUR_IN_SECONDS : 3600);
 
-        $restore->run_restore_task($task_id);
+        try {
+            $restore->run_restore_task($task_id);
 
-        $task_data = get_transient($task_id);
-        $this->assertIsArray($task_data);
-        $this->assertSame('complete', $task_data['status']);
+            $task_data = get_transient($task_id);
+            $this->assertIsArray($task_data);
+            $this->assertSame('complete', $task_data['status'], (string) ($task_data['status_text'] ?? ''));
 
-        $this->assertFileExists($encrypted_path);
-        $this->assertFileDoesNotExist($decrypted_path);
+            $this->assertFileExists($encrypted_path);
+            $this->assertFileDoesNotExist($decrypted_path);
+        } finally {
+            if ($previous_wpdb === null) {
+                unset($GLOBALS['wpdb']);
+            } else {
+                $GLOBALS['wpdb'] = $previous_wpdb;
+            }
 
-        if (file_exists($encrypted_path)) {
-            unlink($encrypted_path);
+            if (file_exists($encrypted_path)) {
+                unlink($encrypted_path);
+            }
+            if (file_exists($decrypted_path)) {
+                unlink($decrypted_path);
+            }
+
+            bjlg_update_option('bjlg_encryption_settings', ['enabled' => false]);
         }
-        if (file_exists($decrypted_path)) {
-            unlink($decrypted_path);
-        }
-
-        bjlg_update_option('bjlg_encryption_settings', ['enabled' => false]);
     }
 }

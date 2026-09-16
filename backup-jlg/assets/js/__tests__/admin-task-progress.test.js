@@ -50,6 +50,18 @@ describe('bjlgTaskProgress', () => {
     expect(failure.message).toContain('Disque plein');
   });
 
+  it('treats warning at 100 percent as warning, not success', () => {
+    const warning = window.bjlgTaskProgress.interpret({
+      progress: 100,
+      status: 'warning',
+      status_text: 'Envois distants partiels'
+    });
+
+    expect(warning.done).toBe(true);
+    expect(warning.outcome).toBe('warning');
+    expect(warning.message).toContain('Envois distants partiels');
+  });
+
   it('stops polling after repeated failures or timeout', () => {
     expect(window.bjlgTaskProgress.shouldStopPolling(null, 5, 1000)).toBe(true);
     expect(window.bjlgTaskProgress.shouldStopPolling(null, 1, 1000, { maxFailures: 5, timeoutMs: 500 })).toBe(true);
