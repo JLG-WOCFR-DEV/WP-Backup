@@ -35,6 +35,10 @@ final class BJLG_BackupRestoreRoundTripTest extends TestCase
             'single' => [],
         ];
         $GLOBALS['bjlg_test_headers'] = [];
+        unset(
+            $GLOBALS['bjlg_test_options']['_transient_bjlg_backup_task_lock'],
+            $GLOBALS['bjlg_test_options']['_transient_timeout_bjlg_backup_task_lock']
+        );
 
         $lock_property = new ReflectionProperty(BJLG_Backup::class, 'in_memory_lock');
         $lock_property->setAccessible(true);
@@ -259,6 +263,7 @@ final class BJLG_BackupRestoreRoundTripTest extends TestCase
             }
         ));
         $this->assertNotEmpty($sql_queries, 'La restauration SQL doit exécuter CREATE/INSERT.');
+        $this->assertSame($expected_hash, $restore_task['checksum'] ?? null);
     }
 
     public function test_restore_rejects_checksum_mismatch(): void

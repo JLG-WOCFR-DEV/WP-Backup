@@ -551,51 +551,76 @@ class BJLG_Performance {
         if (!$handle) {
             throw new Exception("Impossible de créer le fichier SQL");
         }
-        
-        // Header
-        fwrite($handle, "-- Backup JLG Optimized Database Dump\n");
-        fwrite($handle, "-- Date: " . date('Y-m-d H:i:s') . "\n\n");
-        fwrite($handle, "SET NAMES utf8mb4;\n");
-        fwrite($handle, "SET FOREIGN_KEY_CHECKS=0;\n\n");
-        
-        // Tables
-        $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
-        
-        foreach ($tables as $table_array) {
-            $table = $table_array[0];
-            
-            // Structure
-            $create = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
-            fwrite($handle, "DROP TABLE IF EXISTS `{$table}`;\n");
-            fwrite($handle, $create[1] . ";\n\n");
-            
-            // Données par lots
-            $row_count = $wpdb->get_var("SELECT COUNT(*) FROM `{$table}`");
-            
-            if ($row_count > 0) {
-                $batch_size = 1000;
-                
-                for ($offset = 0; $offset < $row_count; $offset += $batch_size) {
-                    $rows = $wpdb->get_results(
-                        "SELECT * FROM `{$table}` LIMIT {$offset}, {$batch_size}",
-                        ARRAY_A
-                    );
-                    
-                    if ($rows) {
-                        $this->write_insert_batch($handle, $table, $rows);
-                    }
-                    
-                    unset($rows);
-                    
-                    if ($offset % 10000 == 0 && $offset > 0) {
-                        gc_collect_cycles();
+
+        try {
+            $this->fwrite_or_fail($handle, "-- Backup JLG Optimized Database Dump\n");
+            $this->fwrite_or_fail($handle, "-- Date: " . date('Y-m-d H:i:s') . "\n\n");
+            $this->fwrite_or_fail($handle, "SET NAMES utf8mb4;\n");
+            $this->fwrite_or_fail($handle, "SET FOREIGN_KEY_CHECKS=0;\n\n");
+
+            $tables = class_exists(BJLG_Backup::class)
+                ? BJLG_Backup::list_backup_tables($wpdb)
+                : [];
+
+            if ($tables === [] && !class_exists(BJLG_Backup::class)) {
+                $raw_tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
+                foreach ((array) $raw_tables as $table_array) {
+                    if (!empty($table_array[0])) {
+                        $tables[] = (string) $table_array[0];
                     }
                 }
             }
+
+            $exported_tables = 0;
+
+            foreach ($tables as $table) {
+                $table = (string) $table;
+                if ($table === '' || !preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+                    continue;
+                }
+
+                $create = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
+                if (!is_array($create) || empty($create[1])) {
+                    throw new Exception("SHOW CREATE TABLE a échoué pour la table {$table}. La sauvegarde est interrompue pour éviter un dump incomplet.");
+                }
+
+                $this->fwrite_or_fail($handle, "DROP TABLE IF EXISTS `{$table}`;\n");
+                $this->fwrite_or_fail($handle, $create[1] . ";\n\n");
+
+                $row_count = $wpdb->get_var("SELECT COUNT(*) FROM `{$table}`");
+
+                if ($row_count > 0) {
+                    $batch_size = 1000;
+
+                    for ($offset = 0; $offset < $row_count; $offset += $batch_size) {
+                        $rows = $wpdb->get_results(
+                            "SELECT * FROM `{$table}` LIMIT {$offset}, {$batch_size}",
+                            ARRAY_A
+                        );
+
+                        if ($rows) {
+                            $this->write_insert_batch($handle, $table, $rows);
+                        }
+
+                        unset($rows);
+
+                        if ($offset % 10000 == 0 && $offset > 0) {
+                            gc_collect_cycles();
+                        }
+                    }
+                }
+
+                $exported_tables++;
+            }
+
+            if ($exported_tables === 0) {
+                throw new Exception("Aucune table n'a pu être exportée. La sauvegarde de la base est incomplète.");
+            }
+
+            $this->fwrite_or_fail($handle, "\nSET FOREIGN_KEY_CHECKS=1;\n");
+        } finally {
+            fclose($handle);
         }
-        
-        fwrite($handle, "\nSET FOREIGN_KEY_CHECKS=1;\n");
-        fclose($handle);
         
         // Compresser si possible
         if ($this->compression_level > 0) {
@@ -630,7 +655,30 @@ class BJLG_Performance {
         $insert = "INSERT INTO `{$table}` ({$columns_str}) VALUES\n";
         $insert .= implode(",\n", $values) . ";\n\n";
 
-        fwrite($handle, $insert);
+        $this->fwrite_or_fail($handle, $insert);
+    }
+
+    /**
+     * Écrit dans un flux et échoue clairement en cas d'erreur disque.
+     *
+     * @param resource $handle
+     * @param string   $data
+     *
+     * @throws Exception
+     */
+    private function fwrite_or_fail($handle, $data) {
+        $data = (string) $data;
+        $length = strlen($data);
+
+        if ($length === 0) {
+            return;
+        }
+
+        $written = fwrite($handle, $data);
+
+        if ($written === false || $written < $length) {
+            throw new Exception("Écriture du dump SQL interrompue (disque plein ou permissions insuffisantes).");
+        }
     }
 
     /**
@@ -877,7 +925,16 @@ class BJLG_Performance {
         }
 
         while (!gzeof($source)) {
-            fwrite($destination, gzread($source, 1024 * 512));
+            $chunk = gzread($source, 1024 * 512);
+            if ($chunk === false) {
+                gzclose($source);
+                fclose($destination);
+                @unlink($temp);
+
+                return null;
+            }
+
+            $this->fwrite_or_fail($destination, $chunk);
         }
 
         gzclose($source);
@@ -924,7 +981,15 @@ class BJLG_Performance {
             }
 
             while (!feof($stream)) {
-                fwrite($destination_handle, fread($stream, 1024 * 512));
+                $chunk = fread($stream, 1024 * 512);
+                if ($chunk === false) {
+                    fclose($stream);
+                    fclose($destination_handle);
+                    @unlink($temp);
+                    continue 2;
+                }
+
+                $this->fwrite_or_fail($destination_handle, $chunk);
             }
 
             fclose($stream);

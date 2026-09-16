@@ -3452,6 +3452,30 @@ class BJLG_Restore {
         if ($result !== true) {
             throw new Exception("Impossible d'extraire l'archive (disque plein, permissions ou fichier corrompu).");
         }
+
+        $list = is_array($entries) ? array_values($entries) : [(string) $entries];
+        $destination = rtrim(str_replace('\\', '/', (string) $destination), '/');
+
+        foreach ($list as $entry) {
+            if (!is_string($entry) || $entry === '') {
+                continue;
+            }
+
+            $normalized = ltrim(str_replace('\\', '/', $entry), '/');
+            if ($normalized === '' || substr($normalized, -1) === '/') {
+                continue;
+            }
+
+            $extracted = $destination . '/' . $normalized;
+            if (!is_file($extracted)) {
+                throw new Exception(
+                    sprintf(
+                        "L'extraction a échoué : le fichier « %s » est introuvable après extractTo.",
+                        $entry
+                    )
+                );
+            }
+        }
     }
 
     /**
